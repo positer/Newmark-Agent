@@ -1,5 +1,22 @@
 # Newmark Agent Overview
 
+## 2026-08-28 dev-0.5.10 PC 固定玻璃源绘制修复
+
+- `DESKTOP/src/ui/index.html`：固定玻璃按钮浮起时使用 `.liquid-fixed-source-covered` 停止源按钮的文字、子节点、背景/渐变、边框、阴影和伪元素绘制，不再追加近似背景遮罩；源元素本身不设 `visibility:hidden` 或 `opacity:0`，布局与命中框保持不变。
+- 同一交互事务增加重复结束保护，以及 pointer cancel、窗口失焦、页面卸载和超时清理。完整落下清理并恢复源按钮后才执行原始 `click()`，避免重影与组件永久消失。
+- `DESKTOP/src/tests/pcGlassMigrationVerify.ts`：新增唯一浮块/源停绘/清理先于点击的负向回归契约。
+- `DESKTOP/scripts/verify-fixed-liquid-source.cjs`：连接 Electron DevTools，实际按住 `#left-ws-add`，检查计算样式、浮块可见性及松开清理；运行页面确认是 `DESKTOP/dist/ui/index.html`。
+- 验证：`npm run build`、`node dist/tests/pcGlassMigrationVerify.js` 通过；实际 Electron 按住帧验证通过，截图为 `archive/20260828-fixed-liquid-source-held.png`。
+
+## 2026-08-28 dev-0.5.10 全移动浮动玻璃灵动响应与 PC 安装
+
+- `android/.../components/LiquidGlass.kt`：新增共享 `resistedLiquidBoundaryPosition`。全部 `glassButtonSurface` 已有玻璃按钮在按住拖动时保持完整浮起，沿任意方向产生最多 4dp 的平方根阻尼位移，并按拖动主轴轻微拉伸/正交压缩；松开归零后完成 165ms 落下。
+- `RightSidebar.kt`、`MemoryLabScreen.kt`、`Sidebar.kt`、`ChatScreen.kt`：右栏分页、Memory Lab 分页、折叠/展开工具栏、远程/本地对话排序与输入菜单浮块的边界硬截断接入共享阻尼函数。提交位置仍被严格限制在合法目标，受阻位移只影响视觉浮块。
+- 测试：Android 定向玻璃/侧栏契约与全量 JVM 测试通过；`lintVitalRelease`、R8、`assembleRelease` 通过。
+- Android APK：`android/app/build/outputs/apk/release/app-release.apk`，52,717,704 bytes，SHA-256 `AEAA50709EEBD6860AA863F00D88EB00E4AE12CC7C153467C0D843582756C59F`，签名者 `C=US, O=Android, CN=Android Debug`。
+- Windows MSI：`release/Newmark-Agent-0.5.10-x64.msi`，226,412,624 bytes，SHA-256 `C3D74F3460B7FDF50B2438783851E0EAF921631533C37BA43E1160AA8994FD9B`。安装版注册表为 `0.5.10.0`，CLI 返回 `0.5.10`，GUI 实际启动并保持响应；安装目录 `app.asar` 与打包产物 SHA-256 完全相同。
+- Windows ZIP：`release/Newmark-Agent-0.5.10-win-unpacked-x64.zip`，292,554,468 bytes，SHA-256 `7F4BDC0EE43B7A3FD9706867D3DF75BAB1148A4D7E49B0A1447E57AAE7CE28E3`。
+
 ## 2026-08-27 dev-0.5.9 全平台发布状态
 
 `npm run release` 已通过 Desktop full release、Android JVM/Vital Lint/R8/Release assembly，并生成 Windows MSI/ZIP、Linux AppImage/deb/ZIP、Android APK 六资产。Windows MSI/ZIP 完成独立打包态 smoke；Linux 三包在 Ubuntu 24.04 WSL 环境完成真实 GUI 启动、Bash/sh 终端回环和进程退出验证。APK 为 v2 签名，签名者 `C=US, O=Android, CN=Android Debug`；Windows 未做 Authenticode 签名。
@@ -3264,3 +3281,13 @@ Agent 上下文循环原本会正确追加 assistant tool call 与匹配 call id
 供应商参数归一化阶段。新组装器先保留可解析的标准增量，失败时折叠累计快照并选择最新合法对象；
 执行器再以严格解析兜底。动态工具轨迹只追加在消息尾部，不改写稳定 system/bootstrap 或已有前缀，
 因此修复连续性的同时维持 PC/移动端 prompt cache 友好结构。
+## 2026-08-28 dev-0.5.10 设置页浮块合成边界
+
+`DESKTOP/src/ui/index.html` 的 PC Kyant 玻璃仍复用离屏 WebGL renderer、shader、窗口截图纹理与 uniform 缓存，但可见 `liquid-selection-canvas` 改为每次浮块获取 renderer 时独立创建，并在每次绘制时显式绑定当前浮块 CSS 宽高。释放浮块会同时移除并清空该 display canvas 引用，避免 Windows Electron/Chromium 将较大浮块曾使用过的 promoted canvas layer 边界带入设置标签等小浮块，生成覆盖弹窗的白色矩形。设置页 DOM、布局、主题、浮块尺寸公式、折射材质及起落动效未改。
+
+`DESKTOP/scripts/repro-settings-liquid-corruption.cjs` 覆盖浅色主题、缓存过期后窗口背景重捕获、1708×760 大浮块预热、设置标签五次往返拖动以及按住/释放截图；`DESKTOP/src/tests/pcGlassMigrationVerify.ts` 锁定每浮块独立 display canvas、显式 CSS 尺寸和释放清理契约。
+## 2026-08-28 dev-0.5.10 移动端液态响应与回到底部画布
+
+`android/app/src/main/java/com/newmark/mobile/ui/components/LiquidGlass.kt` 将共享移动速度形变从最大 1.075/0.965 小幅增强到 1.09/0.958，并把固定玻璃受阻方向的轴向延展/正交收缩从 2.5%/1.2% 调至 3.2%/1.5%；平方根阻尼、4dp 最大位移、浮起/移动/落地生命周期及布局均未改变。所有调用共享 deformation/`glassButtonSurface` 的既有移动玻璃组件同步获得更清晰但受控的液态感。
+
+`android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` 的“回到底部”浮动按钮从直接在 40dp 节点绘制玻璃，改为复用 `GlassButtonCanvas`。外层仍占 40dp 并保持原右下角 14dp 间距、点击语义和 22dp 图标；仅内部光学 RenderNode 四边获得 8dp 透明外扩，容纳浮起放大、7dp 边缘、模糊和阴影，避免被按钮画布截断。契约位于 `GlassButtonCanvasOutsetContractTest` 与 `LiquidGlassContractTest`。

@@ -143,6 +143,7 @@ import com.newmark.mobile.ui.components.liquidMotionDeformation
 import com.newmark.mobile.ui.components.liquidSelectionMorph
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
 import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
+import com.newmark.mobile.ui.components.resistedLiquidBoundaryPosition
 import com.newmark.mobile.ui.components.LocalSidebarGestureLock
 import com.newmark.mobile.ui.theme.LocalNewmarkColors
 import com.newmark.mobile.ui.theme.LocalGlassMode
@@ -1269,9 +1270,11 @@ private fun CollapsedUtilityButtons(
                     moving = true
                     lifting = false
                     activeIndex = (position.y / itemPx).toInt().coerceIn(actions.indices)
-                    glassTopPx = (position.y - halfFloatPx).coerceIn(
-                        topInsetPx,
-                        itemPx * actions.size - bottomInsetPx,
+                    glassTopPx = resistedLiquidBoundaryPosition(
+                        raw = position.y - halfFloatPx,
+                        minimum = topInsetPx,
+                        maximum = itemPx * actions.size - bottomInsetPx,
+                        maxDisplacement = with(density) { 4.dp.toPx() },
                     )
                     glassVelocityY = delta.y * 60f
                 },
@@ -1429,7 +1432,12 @@ private fun ExpandedUtilityButtons(
                     moving = true
                     lifting = false
                     activeIndex = (position.y / itemPx).toInt().coerceIn(actions.indices)
-                    glassTopPx = (position.y - itemPx / 2f).coerceIn(0f, itemPx * (actions.size - 1))
+                    glassTopPx = resistedLiquidBoundaryPosition(
+                        raw = position.y - itemPx / 2f,
+                        minimum = 0f,
+                        maximum = itemPx * (actions.size - 1),
+                        maxDisplacement = with(density) { 4.dp.toPx() },
+                    )
                     glassVelocityY = delta.y * 60f
                 },
                 onHoldEnd = { _, _ ->
@@ -2350,7 +2358,12 @@ internal fun clampConversationDragDelta(
     if (sourceIndex !in 0 until itemCount || itemHeightPx <= 0f) return 0f
     val minimum = -(sourceIndex + 1) * itemHeightPx
     val maximum = (itemCount - sourceIndex) * itemHeightPx
-    return pointerDeltaY.coerceIn(minimum, maximum)
+    return resistedLiquidBoundaryPosition(
+        raw = pointerDeltaY,
+        minimum = minimum,
+        maximum = maximum,
+        maxDisplacement = itemHeightPx * 0.085f,
+    )
 }
 
 internal fun rebaseConversationBounds(

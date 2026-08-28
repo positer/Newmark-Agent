@@ -119,6 +119,7 @@ import com.newmark.mobile.ui.components.MobileInteractionGlassEdge
 import com.newmark.mobile.ui.components.liquidMotionDeformation
 import com.newmark.mobile.ui.components.liquidSelectionMorph
 import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
+import com.newmark.mobile.ui.components.resistedLiquidBoundaryPosition
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
 import com.newmark.mobile.ui.components.LocalSidebarGestureLock
 import com.kyant.backdrop.backdrops.layerBackdrop
@@ -522,9 +523,11 @@ private fun RightTabs(
                                 draggingGlass = true
                                 activeIndex = indexAt(position.x)
                                 draggedGlassX = with(density) {
-                                    (position.x - floatWidth.toPx() / 2f).coerceIn(
-                                        -6.dp.toPx(),
-                                        tabs.size * slotWidth.toPx() - floatWidth.toPx() + 6.dp.toPx(),
+                                    resistedLiquidBoundaryPosition(
+                                        raw = position.x - floatWidth.toPx() / 2f,
+                                        minimum = -6.dp.toPx(),
+                                        maximum = tabs.size * slotWidth.toPx() - floatWidth.toPx() + 6.dp.toPx(),
+                                        maxDisplacement = 4.dp.toPx(),
                                     )
                                 }
                                 draggedGlassVelocityX = delta.x * 60f

@@ -1,5 +1,15 @@
 # Newmark Agent dev-0.5.8 TODO
 
+## 2026-08-28 dev-0.5.10 全移动玻璃响应与 Windows 安装
+
+- [x] 所有既有 `glassButtonSurface` 组件获得按住拖动的液态阻尼位移。
+- [x] 右栏、Memory Lab、左右工具栏、对话胶囊和输入菜单边界接入共享阻尼函数。
+- [x] 不扩大逻辑拖动/提交范围，松开归零并完整落下。
+- [x] Android 定向与全量 JVM、Vital Lint、R8、Release APK 通过。
+- [x] 版本同步为 `0.5.10` / `versionCode=510`。
+- [x] Windows MSI/ZIP 生成并通过打包态 smoke。
+- [x] MSI 本机安装，安装版 CLI/GUI/app.asar 边界通过。
+
 ## 2026-08-27 dev-0.5.9 全平台发布
 
 - [x] 版本同步为 `0.5.9` / `versionCode=509`。
@@ -684,3 +694,22 @@
 - [x] GitHub prerelease 发布六资产；npm `newmark-agent@0.5.8` 发布成功。
 - [x] GitHub Windows/Linux/Android release workflow 与 npm workflow 全部通过。
 - [x] 从 GitHub 重新下载恰好六资产，大小/SHA-256 一致，Windows MSI/ZIP 与 Linux 三包 smoke 全部通过。
+## 2026-08-28 dev-0.5.10 设置页拖动浮块合成层
+
+- [x] 浅色主题、连续往返拖动、缓存过期和大浮块预热运行态复现。
+- [x] 确认浮块 DOM 约 66×43px、Canvas backing 约 99×65，设置布局本身未失控。
+- [x] 可见 Canvas 改为每个浮块独享，并显式绑定当前浮块 CSS 宽高。
+- [x] `npm run build` 与 `pcGlassMigrationVerify` 通过。
+- [x] 修复后 Electron 截图无白块，释放后 popover/float 均为 0。
+- [x] 打包 MSI、替换同版本安装并核验已安装 app.asar、CLI、用户状态与 GUI。
+## 2026-08-28 dev-0.5.10 移动端液态增强与画布
+
+- [x] 回到底部按钮接入 8dp 透明光学外扩画布。
+- [x] 保持按钮 40dp 布局/点击区和 22dp 图标不变。
+- [x] 小幅增强共享速度形变与受阻轴向延展，保持 4dp 位移上限。
+- [x] 更新画布和液态参数契约测试。
+- [x] 全量 JVM、Vital Lint、R8、Release APK 构建通过。
+- [ ] ADB 设备接入后补回到底部按钮浮起截图与拖动手感实测。
+- [ ] npm login 后发布 `newmark-agent@0.5.10`（当前 `npm whoami` 401）。
+- [ ] 在真实 Android 设备复测 GPU；修复 stress variant 的 minSdk/D8 与 queue benchmark fixture 后补绿门禁。
+- [ ] 在 macOS 主机执行 `npm run dist:mac` 生成 DMG。

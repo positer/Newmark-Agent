@@ -96,6 +96,7 @@ import com.newmark.mobile.ui.components.MobileInteractionGlassEdge
 import com.newmark.mobile.ui.components.liquidMotionDeformation
 import com.newmark.mobile.ui.components.liquidSelectionMorph
 import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
+import com.newmark.mobile.ui.components.resistedLiquidBoundaryPosition
 import com.newmark.mobile.ui.components.DialogBackdropBlur
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.components.glassButtonSurface
@@ -447,9 +448,11 @@ private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
                     draggingGlass = true
                     activeIndex = indexAt(position.x)
                     draggedGlassX = with(density) {
-                        (position.x - floatWidth.toPx() / 2f).coerceIn(
-                            -6.dp.toPx(),
-                            options.size * slotWidth.toPx() - floatWidth.toPx() + 6.dp.toPx(),
+                        resistedLiquidBoundaryPosition(
+                            raw = position.x - floatWidth.toPx() / 2f,
+                            minimum = -6.dp.toPx(),
+                            maximum = options.size * slotWidth.toPx() - floatWidth.toPx() + 6.dp.toPx(),
+                            maxDisplacement = 4.dp.toPx(),
                         )
                     }
                     draggedGlassVelocityX = delta.x * 60f

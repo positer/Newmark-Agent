@@ -34,8 +34,8 @@ class LiquidGlassContractTest {
         assertTrue(source.contains("val MobileInteractionGlassEdge = 7.dp"))
         assertTrue(source.contains("val MobileConversationGlassHorizontalEdge = 14.dp"))
         assertTrue(source.contains("(speedDpPerSecond - 8f) / 650f"))
-        assertTrue(source.contains("amount * 0.075f"))
-        assertTrue(source.contains("amount * 0.035f"))
+        assertTrue(source.contains("amount * 0.09f"))
+        assertTrue(source.contains("amount * 0.042f"))
         assertTrue(source.contains("refractionHeight: Dp = MobileInteractionGlassEdge"))
         assertTrue(source.contains("refractionAmount: Dp = 8.dp"))
     }
@@ -223,6 +223,29 @@ class LiquidGlassContractTest {
         assertTrue(terminal.substringAfter("BasicTextField(").contains("glassButtonSurface(CircleShape, p.accent"))
         assertTrue(memoryLab.substringAfter("// 视图 tab + Reindex").contains("glassButtonSurface("))
         assertTrue(settings.substringAfter("private fun PairingPage(").contains("glassButtonSurface("))
+    }
+
+    @Test
+    fun everyExistingLiquidFloatUsesSharedBlockedDirectionResistance() {
+        val sourceRoot = File("src/main/java/com/newmark/mobile/ui")
+        val liquid = File(sourceRoot, "components/LiquidGlass.kt").readText()
+        val sidebar = File(sourceRoot, "Sidebar.kt").readText()
+        val right = File(sourceRoot, "RightSidebar.kt").readText()
+        val memory = File(sourceRoot, "MemoryLabScreen.kt").readText()
+        val chat = File(sourceRoot, "ChatScreen.kt").readText()
+
+        assertTrue(liquid.contains("\"shared_glass_buttons\""))
+        assertTrue(liquid.contains("internal fun resistedLiquidBoundaryPosition("))
+        assertTrue(liquid.contains("sqrt(abs(blocked)) * response"))
+        assertTrue(liquid.contains("maxDisplacement"))
+        assertTrue(right.contains("resistedLiquidBoundaryPosition("))
+        assertTrue(memory.contains("resistedLiquidBoundaryPosition("))
+        assertTrue(sidebar.split("resistedLiquidBoundaryPosition(").size - 1 >= 2)
+        assertTrue(chat.contains("heldBoundaryOffsetPx"))
+        assertTrue(chat.contains("resistedLiquidBoundaryPosition("))
+        assertTrue(chat.contains("activeOffsetPx.value + heldBoundaryOffsetPx"))
+        assertTrue(liquid.contains("horizontalShare * 0.032f - verticalShare * 0.015f"))
+        assertTrue(liquid.contains("verticalShare * 0.032f - horizontalShare * 0.015f"))
     }
 
     @Test

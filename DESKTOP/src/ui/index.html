@@ -1102,6 +1102,9 @@ button.left-ws-item {
 }
 .conversation-selection-float.conversation-drag-following {
   transition: opacity 120ms var(--ease-out-expo) !important;
+  transform-origin: center;
+  translate: 0 var(--liquid-boundary-y, 0px);
+  scale: calc(1 + var(--liquid-boundary-pull, 0) * .06) calc(1 - var(--liquid-boundary-pull, 0) * .025);
 }
 .conversation-drag-content {
   position: absolute;
@@ -3575,11 +3578,32 @@ button.todo-item { background: transparent; }
 #right-tabs { position: relative; }
 .left-nav-icon.liquid-tool-active,
 .lt-item.liquid-tool-active { background: var(--control-hover-bg); color: var(--text-bright); }
+.left-nav-icon.liquid-selection-covered,
+.lt-item.liquid-selection-covered,
+.left-ws-item.liquid-selection-covered,
+.tab-btn.liquid-selection-covered,
+.stab-btn.liquid-selection-covered,
+.mode-toggle-btn.liquid-selection-covered,
+.memory-lab-view-menu button.liquid-selection-covered {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+.left-nav-icon:active,
+.lt-item:active,
+.left-ws-item:active,
+.tab-btn:active,
+.stab-btn:active,
+.mode-toggle-btn:active,
+.memory-lab-view-menu button:active { transform: none !important; scale: 1 !important; }
 .liquid-selection-float {
   --liquid-lift-scale: .94;
   --liquid-motion-angle: 0rad;
   --liquid-motion-stretch: 1;
   --liquid-motion-squash: 1;
+  --liquid-boundary-x: 0px;
+  --liquid-boundary-y: 0px;
+  --liquid-boundary-pull: 0;
   position: absolute;
   z-index: 4;
   display: flex;
@@ -3599,15 +3623,17 @@ button.todo-item { background: transparent; }
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.22), inset 0 -1px 0 rgba(0,0,0,0.18), 0 9px 24px rgba(0,0,0,0.28);
-  transition: top 240ms var(--ease-out-expo), left 240ms var(--ease-out-expo), width 240ms var(--ease-out-expo), height 240ms var(--ease-out-expo), opacity 80ms var(--ease-out-expo), transform 24ms linear;
+  transition: top 240ms var(--ease-out-expo), left 240ms var(--ease-out-expo), width 240ms var(--ease-out-expo), height 240ms var(--ease-out-expo), opacity 80ms var(--ease-out-expo), transform 24ms linear, translate 110ms var(--ease-out-expo), scale 80ms linear;
   will-change: top, left, width, height, transform;
+  translate: var(--liquid-boundary-x) var(--liquid-boundary-y);
+  scale: calc(1 + var(--liquid-boundary-pull) * .06) calc(1 - var(--liquid-boundary-pull) * .025);
 }
 .liquid-selection-float.visible { opacity: 1; --liquid-lift-scale: 1; }
 .liquid-selection-float.liquid-selection-landing {
   opacity: 0;
   --liquid-lift-scale: .86;
   transform: scale(var(--liquid-lift-scale)) rotate(var(--liquid-motion-angle)) scaleX(var(--liquid-motion-stretch)) scaleY(var(--liquid-motion-squash)) rotate(calc(-1 * var(--liquid-motion-angle)));
-  transition: opacity 120ms var(--ease-out-expo), transform 120ms var(--ease-out-expo) !important;
+  transition: opacity 180ms var(--ease-out-expo), transform 180ms var(--ease-out-expo) !important;
 }
 .liquid-selection-float.liquid-selection-viewport {
   position: fixed;
@@ -3617,6 +3643,51 @@ button.todo-item { background: transparent; }
   border: 0;
 }
 .liquid-selection-float.liquid-selection-primed { transition: none !important; }
+.liquid-selection-float.liquid-fixed-control-float {
+  color: var(--text);
+  box-shadow: var(--liquid-top-highlight), var(--liquid-inner-shadow), 0 5px 16px rgba(0,0,0,.14);
+}
+.liquid-selection-float.liquid-fixed-control-float.liquid-selection-primed {
+  box-shadow: none;
+}
+.liquid-fixed-control-content {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: inherit;
+  pointer-events: none;
+}
+.liquid-fixed-control-content * { color: inherit !important; }
+.liquid-fixed-control-content svg { fill: none; stroke: currentColor !important; }
+.liquid-fixed-source-covered {
+  color: transparent !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+.liquid-fixed-source-covered > * { visibility: hidden !important; }
+.liquid-fixed-source-covered::before,
+.liquid-fixed-source-covered::after {
+  content: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+[data-theme="light"] .liquid-selection-float.liquid-fixed-control-float {
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.7), inset 0 -1px 0 rgba(42,52,82,.05), 0 4px 13px rgba(42,52,82,.08);
+}
+[data-theme="light"] .liquid-selection-float.liquid-fixed-control-float.liquid-selection-primed {
+  box-shadow: none;
+}
 .liquid-selection-float.liquid-selection-viewport:popover-open { display: flex; }
 .liquid-selection-float::-webkit-scrollbar { display: none; }
 .liquid-selection-canvas {
@@ -3883,6 +3954,8 @@ button.todo-item { background: transparent; }
 
 #submit-btn:hover { transform: scale(1.08); box-shadow: 0 4px 20px rgba(91,120,255,0.5); }
 #submit-btn:active { transform: scale(0.92); transition: transform 80ms var(--ease-out-expo); }
+#submit-btn::after { display: none !important; }
+#submit-btn:active { transform: none; scale: 1; }
 
 #submit-btn.working {
   background: linear-gradient(135deg, #3a3a60 0%, #4a4a70 100%);
@@ -5733,6 +5806,26 @@ button:active:not(:disabled) {
 button:active:not(:disabled)::after { opacity: 1; }
 button:disabled { opacity: 0.5; }
 
+/* Unified glass controls are rendered by a real top-layer float. Their local
+   pseudo glass is disabled so the original color block cannot look like a
+   second, legacy press surface under the carried glass. */
+.left-nav-icon::after,
+.lt-item::after,
+.left-ws-item::after,
+.tab-btn::after,
+.stab-btn::after,
+.mode-toggle-btn::after,
+.memory-lab-view-menu button::after,
+.left-collapse-btn::after,
+.sec-btn::after,
+.right-open-btn::after,
+.shell-btn::after,
+.option-btn::after,
+.stack-icon-btn::after { display: none !important; }
+#left-ws-add::after { display: none !important; }
+#left-ws-add:active,
+.left-collapse-btn:active { transform: none !important; scale: 1 !important; }
+
 /* Borderless utility actions stay visually quiet; they never gain a glass plate. */
 .msg-action-btn::after,
 .top-btn::after,
@@ -5799,7 +5892,25 @@ input[type="checkbox"].liquid-switch-dragging::before {
   box-shadow: var(--liquid-top-highlight), var(--liquid-inner-shadow), 0 7px 18px rgba(0,0,0,.32);
   transform: translateX(var(--liquid-switch-x)) translateY(-2px) scale(1.22);
   transition: none;
+  opacity: 0;
 }
+.liquid-switch-float {
+  position: fixed;
+  z-index: 1200;
+  pointer-events: none;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  background: var(--liquid-refraction);
+  backdrop-filter: blur(calc(var(--glass-blur-3) * 4)) saturate(145%);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur-3) * 4)) saturate(145%);
+  box-shadow: var(--liquid-top-highlight), var(--liquid-inner-shadow), 0 7px 18px rgba(0,0,0,.32);
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(.86);
+  transition: opacity 105ms var(--ease-out-expo), transform 105ms var(--ease-out-expo);
+}
+.liquid-switch-float.visible { opacity: 1; transform: translate(-50%, -50%) scale(1.22); }
+.liquid-switch-float.landing { opacity: 0; transform: translate(-50%, -50%) scale(.86); }
 
 /* Center composer and terminal stay solid. Only their left/right edge catches
    light so the glass sidebars remain the visual frame. */
@@ -13108,10 +13219,6 @@ var liquidKyantFragmentSource = '#version 300 es\nprecision highp float;\n' +
 
 function createKyantLiquidRenderer() {
   var canvas = document.createElement('canvas');
-  var displayCanvas = document.createElement('canvas');
-  displayCanvas.className = 'liquid-selection-canvas';
-  var displayContext = displayCanvas.getContext('2d', { alpha:true });
-  if (!displayContext) return null;
   var gl = canvas.getContext('webgl2', { alpha:true, antialias:false, premultipliedAlpha:true, powerPreference:'high-performance' });
   if (!gl) return null;
   var vs = compileLiquidShader(gl, gl.VERTEX_SHADER, liquidKyantVertexSource);
@@ -13151,8 +13258,8 @@ function createKyantLiquidRenderer() {
   gl.uniform1i(uniforms.content, 0);
   var renderer = {
     canvas: canvas,
-    displayCanvas: displayCanvas,
-    displayContext: displayContext,
+    displayCanvas: null,
+    displayContext: null,
     gl: gl,
     program: program,
     texture: texture,
@@ -13191,7 +13298,20 @@ function acquireKyantLiquidRenderer(float) {
   renderer.generation += 1;
   if (renderer.renderFrame) cancelAnimationFrame(renderer.renderFrame);
   renderer.renderFrame = 0;
-  renderer.displayCanvas.remove();
+  if (renderer.displayCanvas) renderer.displayCanvas.remove();
+  // The WebGL program/texture may be pooled, but the visible 2D canvas must
+  // never move between floats. Chromium can retain the old promoted-layer
+  // bounds when the same canvas is detached from a large float and mounted
+  // into a smaller popover, producing modal-sized white compositor planes.
+  var displayCanvas = document.createElement('canvas');
+  displayCanvas.className = 'liquid-selection-canvas';
+  var displayContext = displayCanvas.getContext('2d', { alpha:true });
+  if (!displayContext) {
+    renderer.owner = null;
+    return null;
+  }
+  renderer.displayCanvas = displayCanvas;
+  renderer.displayContext = displayContext;
   renderer.lastGeometry = null;
   renderer.pendingGeometry = null;
   return renderer;
@@ -13205,6 +13325,10 @@ function uploadKyantLiquidFrame(renderer, frame) {
   gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,frame.bitmap);
   renderer.textureReady = true;
   renderer.frameId = frame.id;
+  // A new backdrop must be copied into the visible canvas even when the
+  // float geometry has not changed. Otherwise the geometry cache skips the
+  // draw and leaves the previously captured backdrop on screen.
+  renderer.lastGeometry = null;
   return true;
 }
 
@@ -13228,6 +13352,7 @@ function attachKyantLiquidRenderer(float, frame) {
   var canvas = renderer.canvas;
   var displayCanvas = renderer.displayCanvas;
   var displayContext = renderer.displayContext;
+  if (!displayCanvas || !displayContext) { float.dataset.kyantRenderer = 'display-unavailable'; return; }
   var gl = renderer.gl;
   var program = renderer.program;
   var texture = renderer.texture;
@@ -13235,8 +13360,11 @@ function attachKyantLiquidRenderer(float, frame) {
   var generation = renderer.generation;
   float.dataset.kyantRenderer = 'webgl2';
   float._kyantTextureReady = false;
-  float._kyantDrawReady = false;
-  delete float.dataset.kyantDrawReady;
+  var hasVisibleDraw = float._kyantDrawReady === true && displayCanvas.parentNode === float;
+  if (!hasVisibleDraw) {
+    float._kyantDrawReady = false;
+    delete float.dataset.kyantDrawReady;
+  }
   float._renderKyantGlass = function(geometry, immediate) {
     renderer.pendingGeometry = geometry || null;
     if (!renderer.textureReady || renderer.owner !== float || !float.isConnected) return;
@@ -13266,6 +13394,8 @@ function attachKyantLiquidRenderer(float, frame) {
       if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
       if (displayCanvas.width !== pixelWidth) displayCanvas.width = pixelWidth;
       if (displayCanvas.height !== pixelHeight) displayCanvas.height = pixelHeight;
+      displayCanvas.style.width = width + 'px';
+      displayCanvas.style.height = height + 'px';
       gl.viewport(0,0,pixelWidth,pixelHeight);
       gl.useProgram(program);
       function uniformChanged(key, values, apply) {
@@ -13306,6 +13436,8 @@ function attachKyantLiquidRenderer(float, frame) {
     renderer.lastGeometry = null;
     renderer.pendingGeometry = null;
     displayCanvas.remove();
+    renderer.displayCanvas = null;
+    renderer.displayContext = null;
     delete float._kyantRendererRef;
   };
   if (frame && frame.bitmap && renderer.owner === float && renderer.generation === generation && float.isConnected) {
@@ -13433,13 +13565,25 @@ function landLiquidSelectionFloat(float, cleanup, onComplete) {
   if (!float) { cleanup(); if (onComplete) onComplete(); return; }
   var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (!float.isConnected) { cleanup(); if (onComplete) onComplete(); return; }
+  var liftStartedAt = Number(float._liquidLiftStartedAt || performance.now());
+  var remainingLift = reducedMotion ? 0 : Math.max(0, 360 - (performance.now() - liftStartedAt));
+  if (remainingLift > 0) {
+    setTimeout(function() { landLiquidSelectionFloat(float, cleanup, onComplete); }, remainingLift);
+    return;
+  }
   stopLiquidMotionTracking(float);
   float.classList.add('liquid-selection-landing');
   float._liquidLandingTimer = setTimeout(function() {
     cleanup();
     scheduleLiquidBackdropPrime();
     if (onComplete) onComplete();
-  }, reducedMotion ? 0 : 120);
+  }, reducedMotion ? 0 : 180);
+}
+
+function beginLiquidSelectionLift(float) {
+  if (!float) return;
+  if (!float._liquidLiftStartedAt) float._liquidLiftStartedAt = performance.now();
+  float.classList.add('visible');
 }
 
 function wireLiquidMenuInteractions(menu) {
@@ -13571,7 +13715,7 @@ function wireLiquidMenuInteractions(menu) {
       if (float._liquidLandingTimer) clearTimeout(float._liquidLandingTimer);
       float._liquidLandingTimer = 0;
       float.classList.remove('liquid-selection-landing');
-      float.classList.add('visible');
+      beginLiquidSelectionLift(float);
       position(target);
     } else {
       var selected = menu.querySelector('button.model-select-menu-option.selected, button.newmark-select-option.selected');
@@ -13587,7 +13731,7 @@ function wireLiquidMenuInteractions(menu) {
       requestAnimationFrame(function() {
         if (!float) return;
         float.classList.remove('liquid-selection-primed');
-        float.classList.add('visible');
+        beginLiquidSelectionLift(float);
         requestAnimationFrame(function() { if (float) position(target); });
       });
     }
@@ -13622,6 +13766,16 @@ function wireLiquidRailInteractions(container, selector) {
   }
   function position(item) {
     if (!item || !float) return;
+    float.style.setProperty('--liquid-boundary-x', '0px');
+    float.style.setProperty('--liquid-boundary-y', '0px');
+    float.style.setProperty('--liquid-boundary-pull', '0');
+    if (float._liquidCovered && float._liquidCovered !== item) {
+      float._liquidCovered.classList.remove('liquid-selection-covered');
+    }
+    if (item !== source) {
+      item.classList.add('liquid-selection-covered');
+      float._liquidCovered = item;
+    }
     if (float.classList.contains('liquid-selection-viewport')) {
       var rect = item.getBoundingClientRect();
       var edge = liquidInteractionEdgePx();
@@ -13666,6 +13820,8 @@ function wireLiquidRailInteractions(container, selector) {
     var minCenter = Math.min.apply(null, centers);
     var maxCenter = Math.max.apply(null, centers);
     var projectedCenter = Math.max(minCenter, Math.min(maxCenter, pointerAxis));
+    var blockedDelta = pointerAxis < minCenter ? pointerAxis - minCenter : pointerAxis > maxCenter ? pointerAxis - maxCenter : 0;
+    var resisted = Math.sign(blockedDelta) * Math.sqrt(Math.abs(blockedDelta)) * 0.6;
     var edge = liquidInteractionEdgePx();
     var left = horizontal ? projectedCenter - rect.width / 2 - edge : rect.left - edge;
     var top = horizontal ? rect.top - edge : projectedCenter - rect.height / 2 - edge;
@@ -13673,6 +13829,14 @@ function wireLiquidRailInteractions(container, selector) {
     float.style.top = top + 'px';
     float.style.width = (rect.width + edge * 2) + 'px';
     float.style.height = (rect.height + edge * 2) + 'px';
+    float.style.setProperty('--liquid-boundary-x', horizontal ? resisted.toFixed(2) + 'px' : '0px');
+    float.style.setProperty('--liquid-boundary-y', horizontal ? '0px' : resisted.toFixed(2) + 'px');
+    float.style.setProperty('--liquid-boundary-pull', Math.min(1, Math.abs(resisted) / 28).toFixed(3));
+    if (target && target !== source) {
+      if (float._liquidCovered && float._liquidCovered !== target) float._liquidCovered.classList.remove('liquid-selection-covered');
+      target.classList.add('liquid-selection-covered');
+      float._liquidCovered = target;
+    }
   }
   function detachWindowTracking() {
     window.removeEventListener('pointermove', onPointerMove, true);
@@ -13682,6 +13846,7 @@ function wireLiquidRailInteractions(container, selector) {
   function clear() {
     detachWindowTracking();
     if (source) source.classList.remove('liquid-selection-source');
+    if (float && float._liquidCovered) float._liquidCovered.classList.remove('liquid-selection-covered');
     stopLiquidMotionTracking(float);
     if (float && float._liquidLandingTimer) clearTimeout(float._liquidLandingTimer);
     if (float && float._releaseKyantGlass) float._releaseKyantGlass();
@@ -13705,6 +13870,9 @@ function wireLiquidRailInteractions(container, selector) {
     try { container.releasePointerCapture(pointer); } catch (_) {}
     pointer = null;
     if (commit) {
+      float.style.setProperty('--liquid-boundary-x', '0px');
+      float.style.setProperty('--liquid-boundary-y', '0px');
+      float.style.setProperty('--liquid-boundary-pull', '0');
       position(commit);
     }
     waitForLiquidSelectionArrival(float, function() {
@@ -13741,7 +13909,7 @@ function wireLiquidRailInteractions(container, selector) {
       if (float._liquidLandingTimer) clearTimeout(float._liquidLandingTimer);
       float._liquidLandingTimer = 0;
       float.classList.remove('liquid-selection-landing');
-      float.classList.add('visible');
+      beginLiquidSelectionLift(float);
       position(target);
     } else {
       source = container.querySelector('.liquid-tool-active') || container.querySelector(selector + '.active') || pressed;
@@ -13756,7 +13924,7 @@ function wireLiquidRailInteractions(container, selector) {
       requestAnimationFrame(function() {
         if (!float) return;
         float.classList.remove('liquid-selection-primed');
-        float.classList.add('visible');
+        beginLiquidSelectionLift(float);
         requestAnimationFrame(function() { if (float) position(target); });
       });
     }
@@ -13771,12 +13939,238 @@ function wireLiquidRailInteractions(container, selector) {
   }, true);
 }
 
+// Legacy glass buttons used to rely on local :active scaling. Bridge only the
+// explicitly glass interaction classes to the same single-float lifecycle as
+// rails and menus; structural/content buttons are intentionally excluded.
+function wireLegacyLiquidButtons() {
+  // Disabled: the broad document-level bridge could leave source controls
+  // hidden when their click rebuilt or closed the owning surface. Fixed
+  // controls are migrated individually instead of mutating every matching
+  // button through one global capture listener.
+  return;
+  var selector = [
+    '.top-btn', '#left-ws-add', '.left-collapse-btn', '.sec-btn', '.right-open-btn', '#submit-btn',
+    '.shell-btn', '.option-btn', '.stack-icon-btn'
+  ].join(',');
+  var active = null;
+  function clearFloat(commit) {
+    if (!active) return;
+    var item = active;
+    active = null;
+    landLiquidSelectionFloat(item.float, function() {
+      item.source.classList.remove('liquid-click-source');
+      item.source.style.removeProperty('visibility');
+      delete item.source.dataset.liquidClickPending;
+      if (item.float._releaseKyantGlass) item.float._releaseKyantGlass();
+      if (item.float.parentNode) item.float.parentNode.removeChild(item.float);
+    }, function() {
+      if (!commit || !item.source.isConnected) return;
+      item.source.dataset.liquidClickReplayed = 'true';
+      item.source.click();
+    });
+  }
+  document.addEventListener('pointerdown', function(event) {
+    var source = event.target && event.target.closest ? event.target.closest(selector) : null;
+    if (!source || source.disabled || event.button !== 0 ||
+        source.closest('.liquid-selection-float, #mode-toggle, #left-tool-surface, #left-thumb, #left-ws-list, #right-tabs, .model-select-menu, .newmark-select-menu')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (active) clearFloat(false);
+    var rect = source.getBoundingClientRect();
+    var edge = liquidInteractionEdgePx();
+    var float = document.createElement('div');
+    float.className = 'liquid-selection-float liquid-selection-primed';
+    var floatContent = document.createElement('div');
+    floatContent.className = 'liquid-click-content';
+    Array.from(source.childNodes).forEach(function(node) {
+      floatContent.appendChild(node.cloneNode(true));
+    });
+    float.appendChild(floatContent);
+    float.style.left = (rect.left - edge) + 'px';
+    float.style.top = (rect.top - edge) + 'px';
+    float.style.width = (rect.width + edge * 2) + 'px';
+    float.style.height = (rect.height + edge * 2) + 'px';
+    float._liquidTargetRect = { left: rect.left - edge, top: rect.top - edge, width: rect.width + edge * 2, height: rect.height + edge * 2 };
+    mountLiquidViewportFloat(float);
+    active = { source: source, float: float, pointer: event.pointerId, rect: rect, startX: event.clientX, startY: event.clientY };
+    source.dataset.liquidClickPending = 'true';
+    source.classList.add('liquid-click-source');
+    showLiquidViewportFloat(float);
+    requestAnimationFrame(function() {
+      if (!active || active.float !== float) return;
+      float.classList.remove('liquid-selection-primed');
+      beginLiquidSelectionLift(float);
+    });
+    function onMove(move) {
+      if (!active || active.float !== float || move.pointerId !== event.pointerId) return;
+      var dx = move.clientX - active.startX;
+      var dy = move.clientY - active.startY;
+      var distance = Math.hypot(dx, dy);
+      if (distance < 2) return;
+      move.preventDefault();
+      var resistedDistance = Math.min(4.5, Math.sqrt(distance) * 0.625);
+      var ratio = resistedDistance / Math.max(1, distance);
+      float.style.setProperty('--liquid-boundary-x', (dx * ratio).toFixed(2) + 'px');
+      float.style.setProperty('--liquid-boundary-y', (dy * ratio).toFixed(2) + 'px');
+      float.style.setProperty('--liquid-boundary-pull', Math.min(1, resistedDistance / 18).toFixed(3));
+    }
+    function finish(commit) {
+      document.removeEventListener('pointermove', onMove, true);
+      document.removeEventListener('pointerup', onUp, true);
+      document.removeEventListener('pointercancel', onCancel, true);
+      float.style.setProperty('--liquid-boundary-x', '0px');
+      float.style.setProperty('--liquid-boundary-y', '0px');
+      float.style.setProperty('--liquid-boundary-pull', '0');
+      clearFloat(commit);
+    }
+    function onUp(up) { if (up.pointerId === event.pointerId) finish(true); }
+    function onCancel(cancel) { if (cancel.pointerId === event.pointerId) finish(false); }
+    document.addEventListener('pointermove', onMove, true);
+    document.addEventListener('pointerup', onUp, true);
+    document.addEventListener('pointercancel', onCancel, true);
+  }, true);
+  document.addEventListener('click', function(event) {
+    var source = event.target && event.target.closest ? event.target.closest(selector) : null;
+    if (!source) return;
+    if (source.dataset.liquidClickReplayed === 'true') {
+      delete source.dataset.liquidClickReplayed;
+      return;
+    }
+    if (source.dataset.liquidClickPending === 'true') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (active && active.source === source) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
+}
+
+function wireFixedPrimaryLiquidButtons() {
+  if (document.documentElement.dataset.fixedPrimaryLiquidWired === 'true') return;
+  document.documentElement.dataset.fixedPrimaryLiquidWired = 'true';
+  var selector = [
+    '#left-ws-add', '.left-collapse-btn', '.sec-btn', '.et-btn.primary',
+    '.right-open-btn', '.shell-btn', '.option-btn', '.stack-icon-btn',
+    '#submit-btn'
+  ].join(',');
+  var excludedSelector = [
+    '.msg-action-btn', '.conv-more-btn', '.provider-icon-btn',
+    '.work-review-toggle', '.conversation-work-run-head',
+    '.shell-block-header', '.diff-block-header', '.work-review-head',
+    '.message-edit-submit', '.message-edit-cancel'
+  ].join(',');
+  document.addEventListener('pointerdown', function(event) {
+    var source = event.target && event.target.closest ? event.target.closest(selector) : null;
+    if (!source || source.matches(excludedSelector) || source.disabled || event.button !== 0 || source.dataset.fixedLiquidActive === 'true') return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    source.dataset.fixedLiquidActive = 'true';
+    var rect = source.getBoundingClientRect();
+    var edge = liquidInteractionEdgePx();
+    var float = document.createElement('div');
+    float.className = 'liquid-selection-float liquid-selection-primed liquid-fixed-control-float';
+    var content = document.createElement('div');
+    content.className = 'liquid-fixed-control-content';
+    Array.from(source.childNodes).forEach(function(node) { content.appendChild(node.cloneNode(true)); });
+    float.appendChild(content);
+    float.style.left = (rect.left - edge) + 'px';
+    float.style.top = (rect.top - edge) + 'px';
+    float.style.width = (rect.width + edge * 2) + 'px';
+    float.style.height = (rect.height + edge * 2) + 'px';
+    float._liquidTargetRect = { left: rect.left - edge, top: rect.top - edge, width: rect.width + edge * 2, height: rect.height + edge * 2 };
+    mountLiquidViewportFloat(float);
+    showLiquidViewportFloat(float);
+    source.classList.add('liquid-fixed-source-covered');
+    requestAnimationFrame(function() {
+      if (!float.isConnected) return;
+      float.classList.remove('liquid-selection-primed');
+      beginLiquidSelectionLift(float);
+    });
+    var startX = event.clientX;
+    var startY = event.clientY;
+    var finishing = false;
+    function move(value) {
+      if (value.pointerId !== event.pointerId || !float.isConnected) return;
+      var dx = value.clientX - startX;
+      var dy = value.clientY - startY;
+      var distance = Math.hypot(dx, dy);
+      if (distance < 2) return;
+      value.preventDefault();
+      var resistedDistance = Math.min(4.5, Math.sqrt(distance) * .625);
+      var ratio = resistedDistance / Math.max(1, distance);
+      float.style.setProperty('--liquid-boundary-x', (dx * ratio).toFixed(2) + 'px');
+      float.style.setProperty('--liquid-boundary-y', (dy * ratio).toFixed(2) + 'px');
+      float.style.setProperty('--liquid-boundary-pull', Math.min(1, resistedDistance / 18).toFixed(3));
+    }
+    function finish(commit) {
+      if (finishing) return;
+      finishing = true;
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', cancel, true);
+      window.removeEventListener('blur', blur, true);
+      window.removeEventListener('pagehide', pagehide, true);
+      float.style.setProperty('--liquid-boundary-x', '0px');
+      float.style.setProperty('--liquid-boundary-y', '0px');
+      float.style.setProperty('--liquid-boundary-pull', '0');
+      landLiquidSelectionFloat(float, function() {
+        source.classList.remove('liquid-fixed-source-covered');
+        delete source.dataset.fixedLiquidActive;
+        if (float._releaseKyantGlass) float._releaseKyantGlass();
+        if (float.parentNode) float.parentNode.removeChild(float);
+      }, function() {
+        if (!commit || !source.isConnected) return;
+        source.dataset.fixedLiquidReplay = 'true';
+        source.click();
+      });
+    }
+    function up(value) { if (value.pointerId === event.pointerId) finish(true); }
+    function cancel(value) { if (value.pointerId === event.pointerId) finish(false); }
+    function blur() { finish(false); }
+    function pagehide() { finish(false); }
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', cancel, true);
+    window.addEventListener('blur', blur, true);
+    window.addEventListener('pagehide', pagehide, true);
+    setTimeout(function() {
+      if (source.dataset.fixedLiquidActive !== 'true') return;
+      finish(false);
+    }, 1200);
+  }, true);
+  document.addEventListener('click', function(event) {
+    var source = event.target && event.target.closest ? event.target.closest(selector) : null;
+    if (!source) return;
+    if (source.dataset.fixedLiquidReplay === 'true') {
+      delete source.dataset.fixedLiquidReplay;
+      return;
+    }
+    if (source.dataset.fixedLiquidActive === 'true') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
+}
+
 requestAnimationFrame(function() {
+  document.querySelectorAll('.liquid-click-source').forEach(function(source) {
+    source.classList.remove('liquid-click-source');
+    source.style.removeProperty('visibility');
+    source.style.removeProperty('opacity');
+  });
+  document.querySelectorAll('[data-liquid-click-pending]').forEach(function(source) {
+    delete source.dataset.liquidClickPending;
+  });
   wireLiquidRailInteractions(document.getElementById('mode-toggle'), '.mode-toggle-btn[data-mode]');
   wireLiquidRailInteractions(document.getElementById('left-tool-surface'), '.left-nav-icon');
   wireLiquidRailInteractions(document.getElementById('left-thumb'), '.lt-item');
   wireLiquidRailInteractions(document.getElementById('left-ws-list'), '.left-ws-item');
   wireLiquidRailInteractions(document.getElementById('right-tabs'), '.tab-btn[data-tab]');
+  wireLegacyLiquidButtons();
+  wireFixedPrimaryLiquidButtons();
 });
 
 // Checkbox switches use one pointer-captured glass thumb that follows the
@@ -21033,9 +21427,15 @@ function followConversationDragPointer() {
   var minTop = firstRect.top - rowRect.height;
   var maxTop = Math.max(minTop, lastRect.bottom);
   var trackTop = Math.max(minTop, Math.min(maxTop, projectedTop));
+  // Keep the reorder anchor fixed at the edge, but give a held glass float a
+  // damped visual pull so blocked dragging still feels elastic and alive.
+  var blockedDelta = projectedTop < minTop ? projectedTop - minTop : projectedTop > maxTop ? projectedTop - maxTop : 0;
+  var resisted = Math.sign(blockedDelta) * Math.sqrt(Math.abs(blockedDelta)) * 0.6;
   var edge = liquidInteractionEdgePx();
   drag.float.style.left = (rowRect.left - edge) + 'px';
   drag.float.style.top = (trackTop - edge) + 'px';
+  drag.float.style.setProperty('--liquid-boundary-y', resisted.toFixed(2) + 'px');
+  drag.float.style.setProperty('--liquid-boundary-pull', Math.min(1, Math.abs(resisted) / 28).toFixed(3));
   if (drag.float._renderKyantGlass) drag.float._renderKyantGlass();
 }
 
@@ -21146,7 +21546,7 @@ window.animateConversationGlassTo = function(target, options) {
     requestAnimationFrame(function() {
       if (conversationGlassFlight.generation !== generation || !float.isConnected) return;
       float.classList.remove('liquid-selection-primed');
-      float.classList.add('visible');
+      beginLiquidSelectionLift(float);
       place(target);
     });
     window.setLiquidSidebarGestureLock('conversation-flight', true);

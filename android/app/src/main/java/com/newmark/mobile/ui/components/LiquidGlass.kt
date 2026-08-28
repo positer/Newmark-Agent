@@ -69,6 +69,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.sign
+import kotlin.math.sqrt
 
 /**
  * Transparent layout space reserved around every compact glass control.
@@ -151,12 +154,33 @@ fun GlassButtonCanvas(
 
 /** Audited existing float classes. This is an allow-list, not a conversion list. */
 internal val ExistingLiquidFloatInventory = setOf(
+    "shared_glass_buttons",
     "conversation_capsules",
     "sidebar_utility_selectors",
     "right_sidebar_tabs",
     "memory_lab_pager",
     "composer_selection_menus",
 )
+
+/**
+ * Visual-only resistance for a liquid float whose logical position is clamped.
+ * The anchor stays inside [minimum, maximum], while increasingly distant input
+ * produces a small square-root pull capped to one safe optical envelope.
+ */
+internal fun resistedLiquidBoundaryPosition(
+    raw: Float,
+    minimum: Float,
+    maximum: Float,
+    maxDisplacement: Float,
+    response: Float = 0.25f,
+): Float {
+    if (minimum > maximum) return raw
+    val clamped = raw.coerceIn(minimum, maximum)
+    val blocked = raw - clamped
+    if (blocked == 0f || maxDisplacement <= 0f) return clamped
+    val resisted = sign(blocked) * sqrt(abs(blocked)) * response
+    return clamped + resisted.coerceIn(-maxDisplacement, maxDisplacement)
+}
 
 /**
  * PC-parity material/position coordinator.
@@ -345,8 +369,10 @@ internal fun liquidMotionScale(
     val speedDpPerSecond = kotlin.math.hypot(velocityX, velocityY) / density.coerceAtLeast(0.1f)
     val amount = ((speedDpPerSecond - 8f) / 650f).coerceIn(0f, 1f)
     if (amount <= 0f) return LiquidMotionScale(1f, 1f)
-    val stretch = 1f + amount * 0.075f
-    val squash = 1f - amount * 0.035f
+    // Keep the same velocity curve and axis ownership, but let motion read a
+    // little more clearly on a touch screen without increasing travel.
+    val stretch = 1f + amount * 0.09f
+    val squash = 1f - amount * 0.042f
     return if (kotlin.math.abs(velocityX) >= kotlin.math.abs(velocityY)) {
         LiquidMotionScale(stretch, squash)
     } else {
@@ -401,6 +427,7 @@ fun Modifier.glassButtonSurface(
     val edgeColor = lerp(surfaceColor ?: p.textPrimary, p.accent, 0.16f)
     val pressProgress = remember { androidx.compose.animation.core.Animatable(0f) }
     val pressCycles = remember { Channel<CompletableDeferred<Unit>>(Channel.UNLIMITED) }
+    var boundaryPull by remember { mutableStateOf(Offset.Zero) }
     androidx.compose.runtime.LaunchedEffect(pressCycles) {
         for (release in pressCycles) {
             // Every tap owns a complete cycle. Travel or the click action may
@@ -414,10 +441,17 @@ fun Modifier.glassButtonSurface(
     val pressScale = 1f + 0.065f * pressProgress.value
     val pressLift = (-1.25).dp * pressProgress.value
     val edgeEmphasis = 0.82f * pressProgress.value
+    val boundaryDistance = boundaryPull.getDistance()
+    val boundaryAmount = (boundaryDistance / with(LocalDensity.current) { 4.dp.toPx() }).coerceIn(0f, 1f)
+    val horizontalShare = if (boundaryDistance > 0.001f) abs(boundaryPull.x) / boundaryDistance else 0f
+    val verticalShare = if (boundaryDistance > 0.001f) abs(boundaryPull.y) / boundaryDistance else 0f
     return this
         .graphicsLayer {
             clip = false
-            translationY = pressLift.toPx()
+            translationX = boundaryPull.x
+            translationY = pressLift.toPx() + boundaryPull.y
+            scaleX = 1f + boundaryAmount * (horizontalShare * 0.032f - verticalShare * 0.015f)
+            scaleY = 1f + boundaryAmount * (verticalShare * 0.032f - horizontalShare * 0.015f)
             this.alpha = 0.985f + edgeEmphasis * 0.015f
         }
         .kyantGlassEdge(
@@ -429,10 +463,27 @@ fun Modifier.glassButtonSurface(
         )
         .pointerInput(Unit) {
             awaitEachGesture {
-                awaitFirstDown(requireUnconsumed = false)
+                val down = awaitFirstDown(requireUnconsumed = false)
                 val release = CompletableDeferred<Unit>()
                 pressCycles.trySend(release)
-                waitForUpOrCancellation()
+                var current = down.position
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    current = change.position
+                    val raw = current - down.position
+                    val maxPull = 4.dp.toPx()
+                    val distance = raw.getDistance()
+                    boundaryPull = if (distance <= viewConfiguration.touchSlop) {
+                        Offset.Zero
+                    } else {
+                        val resisted = (sqrt(distance - viewConfiguration.touchSlop) * 0.25f)
+                            .coerceAtMost(maxPull)
+                        raw / distance * resisted
+                    }
+                    if (!change.pressed) break
+                }
+                boundaryPull = Offset.Zero
                 release.complete(Unit)
             }
         }
@@ -539,18 +590,23 @@ fun LiquidGlassSwitch(
     val p = LocalNewmarkColors.current
     var pressed by remember { mutableStateOf(false) }
     var draggedFraction by remember { mutableStateOf<Float?>(null) }
+    // Boundary overscroll is visual only: the switch's committed value never
+    // leaves [0, 1], while a held glass thumb can still lean into a blocked
+    // direction with increasing, damped displacement.
+    var boundaryOverscroll by remember { mutableStateOf(0f) }
     val settledFraction by animateFloatAsState(
         targetValue = if (checked) 1f else 0f,
         animationSpec = tween(durationMillis = 180),
         label = "liquid-switch-settle",
     )
     val fraction = draggedFraction ?: settledFraction
+    val visualFraction = (fraction + boundaryOverscroll).coerceIn(-0.34f, 1.34f)
     val thumbWidth by animateDpAsState(
         targetValue = if (pressed) 30.dp else 24.dp,
         animationSpec = tween(durationMillis = 120),
         label = "liquid-switch-capsule-width",
     )
-    val thumbOffset = 14.dp + 20.dp * fraction - thumbWidth / 2
+    val thumbOffset = 14.dp + 20.dp * visualFraction - thumbWidth / 2
     val thumbScale by animateFloatAsState(
         targetValue = if (pressed) 1.22f else 1f,
         animationSpec = tween(durationMillis = 100),
@@ -591,6 +647,7 @@ fun LiquidGlassSwitch(
                     fun fractionAt(x: Float) = ((x - startPx) / travelPx).coerceIn(0f, 1f)
                     val initialFraction = if (checked) 1f else 0f
                     var releaseFraction = initialFraction
+                    var lastRawFraction = initialFraction
                     var dragging = false
                     var verticalScroll = false
                     while (true) {
@@ -606,14 +663,29 @@ fun LiquidGlassSwitch(
                             }
                         }
                         if (dragging) {
-                            releaseFraction = fractionAt(change.position.x)
+                            lastRawFraction = (change.position.x - startPx) / travelPx
+                            releaseFraction = lastRawFraction.coerceIn(0f, 1f)
                             draggedFraction = releaseFraction
+                            val blockedPull = when {
+                                initialFraction <= 0f && lastRawFraction < 0f -> lastRawFraction
+                                initialFraction >= 1f && lastRawFraction > 1f -> lastRawFraction - 1f
+                                releaseFraction <= 0f && lastRawFraction < 0f -> lastRawFraction
+                                releaseFraction >= 1f && lastRawFraction > 1f -> lastRawFraction - 1f
+                                else -> 0f
+                            }
+                            // Resistance keeps the anchor fixed while making a
+                            // long pull visibly travel farther (square-root
+                            // response, capped to a safe optical envelope).
+                            val resistedPull = kotlin.math.sign(blockedPull) *
+                                kotlin.math.sqrt(kotlin.math.abs(blockedPull)) * 0.075f
+                            boundaryOverscroll = resistedPull.coerceIn(-0.085f, 0.085f)
                             change.consume()
                         }
                         if (!change.pressed) break
                     }
                     pressed = false
                     draggedFraction = null
+                    boundaryOverscroll = 0f
                     if (!verticalScroll) {
                         onCheckedChange(liquidSwitchReleaseValue(checked, dragging, releaseFraction))
                     }
@@ -639,8 +711,9 @@ fun LiquidGlassSwitch(
             Modifier
                 .size(width = thumbWidth, height = 24.dp)
                 .graphicsLayer {
-                    scaleX = thumbScale
-                    scaleY = thumbScale
+                    val pull = kotlin.math.abs(boundaryOverscroll)
+                    scaleX = thumbScale * (1f + pull * 0.22f)
+                    scaleY = thumbScale * (1f - pull * 0.10f)
                     translationX = thumbOffset.toPx()
                     translationY = if (pressed) 0f else 2.dp.toPx()
                 }

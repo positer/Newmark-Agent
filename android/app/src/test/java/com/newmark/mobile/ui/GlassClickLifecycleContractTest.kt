@@ -21,6 +21,11 @@ class GlassClickLifecycleContractTest {
         assertTrue(surface.indexOf("release.await()") < surface.indexOf("pressProgress.animateTo(0f"))
         assertTrue(surface.contains("Channel.UNLIMITED"))
         assertTrue(surface.contains("clip = false"))
+        assertTrue(surface.contains("var boundaryPull by remember { mutableStateOf(Offset.Zero) }"))
+        assertTrue(surface.contains("translationX = boundaryPull.x"))
+        assertTrue(surface.contains("translationY = pressLift.toPx() + boundaryPull.y"))
+        assertTrue(surface.contains("sqrt(distance - viewConfiguration.touchSlop) * 0.25f"))
+        assertTrue(surface.contains("boundaryPull = Offset.Zero"))
 
         assertTrue(chat.contains("private fun CircleButton("))
         assertTrue(chat.contains("private fun PlusCombo("))

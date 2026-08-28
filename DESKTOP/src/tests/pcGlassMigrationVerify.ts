@@ -187,11 +187,15 @@ function main(): void {
     !html.includes('desynchronized:true'),
     'PC 透明 WebGL 使用标准预乘 alpha 并禁用可能丢失 alpha 的 desynchronized swap chain');
   check(html.includes("displayCanvas.className = 'liquid-selection-canvas'") &&
-    html.includes('renderer.displayCanvas.remove();') &&
+    html.includes("var displayCanvas = document.createElement('canvas')") &&
+    html.includes('renderer.displayCanvas = null') &&
+    html.includes("displayCanvas.style.width = width + 'px'") &&
+    html.includes("displayCanvas.style.height = height + 'px'") &&
+    html.includes('if (renderer.displayCanvas) renderer.displayCanvas.remove();') &&
     html.includes('if (displayCanvas.parentNode !== float) float.appendChild(displayCanvas)') &&
     html.indexOf("gl.drawArrays(gl.TRIANGLES,0,6)") < html.indexOf('displayContext.drawImage(canvas,0,0)') &&
     html.includes('displayContext.drawImage(canvas,0,0)'),
-    'PC WebGL 离屏着色后同步复制到透明 2D surface，避开 Windows 重挂载 WebGL 黑帧');
+    'PC WebGL 离屏着色后为每个浮块创建独立且尺寸锁定的透明 2D surface，避免 Windows 跨浮块重挂载污染合成边界');
   check(html.includes('gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)') &&
     html.includes('1.-cssCoord.y/viewport.y'),
     'PC backdrop 恢复原纹理上传与 shader 坐标流程');
@@ -214,7 +218,7 @@ function main(): void {
     html.includes('waitForLiquidSelectionArrival(float, function()') &&
     !html.includes('remainingClickFlight') &&
     !html.includes('liquid-selection-click-paced') &&
-    /\.liquid-selection-float\.liquid-selection-landing\s*\{[^}]*opacity:\s*0[^}]*--liquid-lift-scale:\s*\.86[^}]*--liquid-motion-stretch[^}]*120ms/s.test(html) &&
+    /\.liquid-selection-float\.liquid-selection-landing\s*\{[^}]*opacity:\s*0[^}]*--liquid-lift-scale:\s*\.86[^}]*--liquid-motion-stretch[^}]*180ms/s.test(html) &&
     html.indexOf('stopLiquidMotionTracking(float);', html.indexOf('function landLiquidSelectionFloat')) < html.indexOf("float.classList.add('liquid-selection-landing')", html.indexOf('function landLiquidSelectionFloat')) &&
     html.includes('landLiquidSelectionFloat(float, clear, function()') &&
     html.includes('if (!event.isTrusted || !float || !float.isConnected) return') &&
@@ -233,8 +237,21 @@ function main(): void {
     'PC 弹窗/栏轨在完整移动落地后才派发命令，弹窗和页面不会提前卸载');
   check(/\.model-select-menu-option::after,[\s\S]*\.mode-toggle-btn\[data-mode\]::after,[\s\S]*\.memory-lab-view-menu button\[data-memory-view\]::after\s*\{[^}]*display:\s*none\s*!important/s.test(html),
     '统一移动选择控件禁用按钮自身伪玻璃，交互期间始终只有一个浮块');
+  const fixedPrimaryStart = html.indexOf('function wireFixedPrimaryLiquidButtons()');
+  const fixedPrimaryEnd = html.indexOf('\n}\n\nrequestAnimationFrame(function()', fixedPrimaryStart);
+  const fixedPrimaryBlock = html.slice(fixedPrimaryStart, fixedPrimaryEnd);
+  check(/\.liquid-fixed-source-covered\s*\{[^}]*color:\s*transparent\s*!important[^}]*background:\s*transparent\s*!important[^}]*border-color:\s*transparent\s*!important[^}]*box-shadow:\s*none\s*!important/s.test(html) &&
+    /\.liquid-fixed-source-covered\s*>\s*\*\s*\{\s*visibility:\s*hidden\s*!important/.test(html) &&
+    /\.liquid-fixed-source-covered::before,[\s\S]*\.liquid-fixed-source-covered::after\s*\{[^}]*content:\s*none\s*!important/s.test(html) &&
+    fixedPrimaryBlock.includes("source.classList.add('liquid-fixed-source-covered')") &&
+    fixedPrimaryBlock.indexOf("source.classList.remove('liquid-fixed-source-covered')") < fixedPrimaryBlock.indexOf('source.click()') &&
+    !html.includes('liquid-fixed-source-mask') &&
+    !fixedPrimaryBlock.includes("source.style.visibility = 'hidden'") &&
+    !fixedPrimaryBlock.includes("source.style.opacity = '0'"),
+    'PC 固定玻璃浮起时原文字、色块、边框和伪元素停止绘制，清理源按钮后才执行点击');
   check(html.includes('document.elementFromPoint(event.clientX, event.clientY)') &&
-    !html.includes('float.innerHTML = source.innerHTML'),
+    !html.includes('float.innerHTML = source.innerHTML') &&
+    !html.slice(html.indexOf('function wireLegacyLiquidButtons()'), html.indexOf('requestAnimationFrame(function()', html.indexOf('function wireLegacyLiquidButtons()'))).includes('source.cloneNode'),
     'pointer capture 后按坐标命中目标行，普通浮块不复制内部内容');
   check(html.includes('function wireLiquidRailInteractions(container, selector)') &&
     html.includes("wireLiquidRailInteractions(document.getElementById('left-ws-list'), '.left-ws-item')") &&

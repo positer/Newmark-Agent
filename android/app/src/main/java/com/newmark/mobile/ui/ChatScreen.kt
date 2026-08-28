@@ -169,6 +169,7 @@ import com.newmark.mobile.ui.components.liquidHoldDragGesture
 import com.newmark.mobile.ui.components.liquidMotionDeformationDeferred
 import com.newmark.mobile.ui.components.liquidSelectionMorph
 import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
+import com.newmark.mobile.ui.components.resistedLiquidBoundaryPosition
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
 import com.newmark.mobile.ui.components.LocalSidebarGestureLock
 import com.kyant.backdrop.Backdrop
@@ -839,17 +840,18 @@ private fun ChatContent(
         }
         // Floating scroll-to-bottom button, PC `#scroll-bottom-btn` 同款。
         if (!atBottom && items.isNotEmpty()) {
-            Box(
+            GlassButtonCanvas(
+                visualSize = 40.dp,
+                shape = CircleShape,
+                surfaceColor = p.bgQuaternary,
+                alpha = 0.72f,
+                onClick = {
+                    chatScope.launch { listState.scrollToItem(transcriptEndIndex) }
+                },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 14.dp, bottom = 14.dp)
-                    .size(40.dp)
-                    .glassButtonSurface(CircleShape, p.bgQuaternary, alpha = 0.72f)
-                    .border(1.dp, p.border2, CircleShape)
-                    .clickable {
-                        chatScope.launch { listState.scrollToItem(transcriptEndIndex) }
-                    },
-                contentAlignment = Alignment.Center,
+                    .padding(end = 14.dp, bottom = 14.dp),
+                visualModifier = Modifier.border(1.dp, p.border2, CircleShape),
             ) {
                 Icon(
                     imageVector = Icons.Filled.KeyboardArrowDown,
@@ -2952,6 +2954,7 @@ private fun LiquidMenuList(
     var moving by remember(entrySet) { mutableStateOf(false) }
     var lifting by remember(entrySet) { mutableStateOf(false) }
     var landing by remember(entrySet) { mutableStateOf(false) }
+    var heldBoundaryOffsetPx by remember(entrySet) { mutableFloatStateOf(0f) }
     val activeOffsetPx = remember { Animatable(0f) }
     LaunchedEffect(selectedIndex, offsets, density.density) {
         if (!moving && selectedIndex >= 0) {
@@ -2984,6 +2987,7 @@ private fun LiquidMenuList(
     fun landSelection(index: Int) {
         flightScheduler.cancel()
         flightScheduler.job = interactionScope.launch {
+            heldBoundaryOffsetPx = 0f
             runOverlappedLiquidFlight(
                 lift = {},
                 move = { activeOffsetPx.animateTo(with(density) { offsets.getOrElse(index) { 0.dp }.toPx() }, tween(durationMillis = 120, easing = PcQueueEase)) },
@@ -3064,6 +3068,19 @@ private fun LiquidMenuList(
                     beginHeldSelection(interactiveIndexAt(position.y, density.density))
                 },
                 onDrag = { position, _ ->
+                    val firstInteractive = entries.indices.firstOrNull { !entries[it].header }
+                    val lastInteractive = entries.indices.lastOrNull { !entries[it].header }
+                    if (firstInteractive != null && lastInteractive != null) {
+                        val minimum = with(density) { offsets[firstInteractive].toPx() }
+                        val maximum = with(density) { offsets[lastInteractive].toPx() }
+                        val raw = position.y - with(density) { rowHeight.toPx() / 2f }
+                        heldBoundaryOffsetPx = resistedLiquidBoundaryPosition(
+                            raw = raw,
+                            minimum = minimum,
+                            maximum = maximum,
+                            maxDisplacement = with(density) { 4.dp.toPx() },
+                        ) - raw.coerceIn(minimum, maximum)
+                    }
                     interactiveIndexAt(position.y, density.density)
                         .takeIf { it >= 0 && it != flightScheduler.activeIndex }
                         ?.let { index ->
@@ -3086,6 +3103,7 @@ private fun LiquidMenuList(
                 },
                 onCancel = {
                     flightScheduler.cancel()
+                    heldBoundaryOffsetPx = 0f
                     moving = false
                     lifting = false
                     landing = false
@@ -3098,7 +3116,7 @@ private fun LiquidMenuList(
                     .fillMaxWidth()
                     .height(rowHeight)
                     .graphicsLayer {
-                        translationY = activeOffsetPx.value
+                        translationY = activeOffsetPx.value + heldBoundaryOffsetPx
                     }
                     .liquidMotionDeformationDeferred(
                         velocityX = { 0f },

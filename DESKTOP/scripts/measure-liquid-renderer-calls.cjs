@@ -53,12 +53,19 @@ function createGl() {
 
 function createCanvas() {
   counts.canvases += 1;
-  const gl = createGl();
+  let gl = null;
   let width = 0;
   let height = 0;
   return {
-    className: '', parentNode: null,
-    getContext: () => gl,
+    className: '', parentNode: null, style: {},
+    getContext: kind => {
+      if (kind === 'webgl2') {
+        if (!gl) gl = createGl();
+        return gl;
+      }
+      if (kind === '2d') return { clearRect: () => {}, drawImage: () => {} };
+      return null;
+    },
     addEventListener: () => {},
     remove: function() { this.parentNode = null; },
     get width() { return width; },
@@ -66,13 +73,6 @@ function createCanvas() {
     get height() { return height; },
     set height(value) { counts.canvasResizes += 1; height = value; },
   };
-}
-
-class ImmediateImage {
-  set src(value) {
-    this._src = value;
-    if (this.onload) this.onload();
-  }
 }
 
 let nextFrameId = 1;
@@ -86,7 +86,6 @@ function flushAnimationFrame() {
 const context = {
   console,
   Float32Array,
-  Image: ImmediateImage,
   window: { devicePixelRatio: 1, innerWidth: 1280, innerHeight: 720 },
   document: { createElement: tag => {
     if (tag !== 'canvas') throw new Error(`unexpected element ${tag}`);
@@ -105,13 +104,13 @@ vm.runInContext(rendererSource, context);
 
 for (let interaction = 0; interaction < 10; interaction += 1) {
   const float = {
-    dataset: {}, isConnected: true,
+    dataset: {}, style: {}, isConnected: true,
     appendChild(canvas) { canvas.parentNode = this; this.canvas = canvas; },
     getBoundingClientRect() { return { left: 100, top: 100, width: 180, height: 54 }; },
   };
-  context.attachKyantLiquidRenderer(float, { dataUrl: `data:image/png;base64,${interaction}` });
+  context.attachKyantLiquidRenderer(float, { id: `frame-${interaction}`, bitmap: {} });
   for (let frame = 0; frame < 20; frame += 1) {
-    float._renderKyantGlass();
+    float._renderKyantGlass({ left: 100 + frame, top: 100, width: 180, height: 54 });
     flushAnimationFrame();
   }
   if (float._releaseKyantGlass) float._releaseKyantGlass();
@@ -124,5 +123,7 @@ if (counts.contexts > 2 || counts.shaderCompiles > 4 || counts.programLinks > 2)
   throw new Error(`WebGL program resources are being rebuilt per interaction: ${JSON.stringify(counts)}`);
 }
 if (counts.uniformLookups > 18) throw new Error(`uniform locations are not cached: ${JSON.stringify(counts)}`);
-if (counts.canvasResizes > 4) throw new Error(`drawing buffer is being redundantly reallocated: ${JSON.stringify(counts)}`);
+// The pooled WebGL buffer allocates once, while every interaction deliberately
+// receives a fresh visible 2D canvas to avoid stale Chromium layer bounds.
+if (counts.canvasResizes !== 22) throw new Error(`drawing buffer lifecycle changed: ${JSON.stringify(counts)}`);
 process.stdout.write(`${JSON.stringify(counts)}\n`);

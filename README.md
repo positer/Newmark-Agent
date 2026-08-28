@@ -2,7 +2,11 @@
 
 Newmark Agent 是面向本地工作区的多端 AI Agent。它把对话、Build/Plan/Goal/Flow、文件与终端、浏览器、Memory Lab、自动化和多 Agent 协作整合在同一套本地状态模型中，并提供 Windows/Linux 桌面端、终端界面、CLI 与 Android 客户端。
 
-当前开发版本：`dev-0.5.9`。移动端本地 Agent 工具 help 已改为独立、闭合且可直接执行的 JSON Schema：`settings_update` 直接接收 `providers`/`active` 结构，不再要求把对象嵌套转义到 `json` 字符串；旧调用仍兼容。普通、Plan、共享文件、应用列表、Root/Shizuku/ADB 高权限工具均带完整用途、参数、必填项、权限前置条件与输出语义。provider 空响应恢复仅在明确失效时执行：首次失效后等待 200ms、800ms、2s、10s、60s 进行 5 次重试，第 5 次仍明确失效才终止；持续等待、静默连接、EOF、超时或流关闭不视为空响应。在 Android 上，思考、正文、工具调用或其他有效流式活动都会立即清零计数。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本，默认 Release 同时发布 Windows、Linux 和 Android。
+当前开发版本：`dev-0.5.10`。PC 固定玻璃按钮使用唯一 top-layer 浮块并在浮起期间停止源按钮全部绘制；Android 所有既有浮动玻璃按钮、侧栏工具、分页、对话胶囊和输入菜单统一获得受阻方向液态拖动，逻辑位置保持边界内，视觉浮块以最多 4dp 的平方根阻尼位移和轻微轴向形变表达持续拉力。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本。
+
+dev-0.5.10 的 PC 固定玻璃按钮已改为唯一浮块绘制：按住期间源按钮仅保留布局与命中框，原文字、图标、实体/渐变色块、边框、阴影及前后伪元素全部停止绘制；完整浮起和落下结束、源按钮恢复后才派发原点击。该事务在取消、失焦、页面卸载和超时路径都执行幂等清理，避免浮窗重建后按钮永久消失。
+
+本机已生成并安装 `Newmark-Agent-0.5.10-x64.msi`；安装版注册表、CLI、GUI 和 `app.asar` 边界均通过验证。Android Release APK 已通过 JVM、Vital Lint、R8 和签名验证；当前 APK 使用工程既有 Android Debug 证书，不属于商店正式签名。
 
 ### dev-0.5.9 移动端工具 help 与 settings_update 修复
 
@@ -467,3 +471,9 @@ GitHub Models 兼容流均按 tool index 隔离并行调用。Android 工具执�
 下一轮工具结果接续及 45 个 PC 工具子轮缓存压力。Android 187 项 JVM 测试、Vital Lint、R8 与
 Release 构建通过。APK：`APK/Newmark-Agent-0.5.8-context-continuity.apk`，SHA-256
 `F514C919411DD2D84214B54024D7CF6D9EB25692E35F7D5465FF8FC08188325F`。
+### dev-0.5.10 Windows 设置页玻璃稳定性
+
+Windows Electron 的玻璃浮块现在为每次交互使用独立的可见合成画布，避免从大浮块切换到设置分页等小浮块时继承旧 GPU 图层边界并出现整块白色覆盖。折射外观、浮起移动落下逻辑和设置页展示保持不变。
+### dev-0.5.10 移动端液态细节
+
+移动端玻璃浮块的速度拉伸与边界拉力形变已小幅增强，同时保持原 4dp 阻尼位移上限。对话区“回到底部”按钮现使用独立透明光学外扩画布，浮起时的玻璃边缘、阴影和放大不再被 40dp 按钮节点截断，按钮布局和点击范围保持不变。

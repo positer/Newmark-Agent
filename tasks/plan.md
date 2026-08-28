@@ -1,5 +1,13 @@
 # Implementation Plan: Newmark Agent dev-0.5.8 连续空响应恢复与无动效历史展开
 
+## 2026-08-28 dev-0.5.10 全移动玻璃响应与 Windows 安装
+
+1. 完成：审计全部现有移动端浮动玻璃入口，新增共享受阻方向阻尼位移。
+2. 完成：让固定玻璃按钮、侧栏工具、分页、对话排序和输入菜单统一保持浮起并响应越界拉力。
+3. 完成：通过 Android 定向与全量 JVM、Vital Lint、R8、Release APK 构建。
+4. 完成：同步 PC/Android/root 至 `0.5.10` / `versionCode=510`，生成 Windows MSI/ZIP。
+5. 完成：安装 MSI，验证注册表、CLI、GUI 与安装/打包 `app.asar` 一致。
+
 ## 2026-08-27 dev-0.5.9 全平台发布
 
 1. 完成：同步桌面、Android 与根版本为 `0.5.9` / `versionCode=509`。
@@ -1058,3 +1066,20 @@ dev-0.5.7 聚焦 11 项已确认问题：Android 远程非当前对话长按闪�
 5. 完成：APK v2 签名校验；记录 Android Debug 证书、Windows 未签名与未连接 ADB 设备边界。
 6. 完成：提交与带注释标签已推送；GitHub prerelease、npm `0.5.8` 和三平台 Actions 发布成功，六个远端资产经重新下载、哈希比对和 packaged smoke 验证通过。
 7. 保留边界：macOS DMG 需要 macOS 构建主机，不属于当前六资产矩阵；本次无 ADB 设备，未声明 Android 实机闭环。
+## 2026-08-28 dev-0.5.10 设置页拖动浮块合成层修复
+
+1. 完成：依据用户浅色主题截图，隔离复现设置分页往返拖动并记录浮块、Canvas、弹窗几何与截图。
+2. 完成：增加缓存过期重捕获和 1708×760 大浮块预热，排除设置 DOM/布局尺寸失控。
+3. 完成：隔离可见 2D Canvas 生命周期；WebGL 程序/纹理继续复用，但每个浮块使用独立且显式锁定尺寸的合成 surface。
+4. 完成：保留 shader、色彩、几何、浮起/移动/落地时序和设置展示逻辑不变。
+5. 完成：Windows 0.5.10 打包、精确卸载旧同版本 ProductCode、UAC 安装、ASAR/CLI/用户状态与已安装 Electron 运行态验证。
+## 2026-08-28 dev-0.5.10 移动端液态增强与回到底部画布修复
+
+1. 完成：确认回到底部按钮直接在 40dp 节点使用 `glassButtonSurface`，未接入共享透明光学外扩画布。
+2. 完成：按钮改用 `GlassButtonCanvas`，保留原 40dp 位置、点击区、图标、边框与颜色，光学层获得四周 8dp 外扩。
+3. 完成：共享速度形变由最大 7.5%/3.5% 小幅提高为 9%/4.2%，受阻方向轴向形变由 2.5%/1.2% 提高为 3.2%/1.5%；位移上限仍为 4dp。
+4. 完成：针对性契约、全量 JVM、Vital Lint、R8、Release APK 与 v2 签名验证。
+5. 保留边界：当前无 ADB 设备，未声明真机视觉验证。
+- [x] 2026-08-28 dev-0.5.10 PC Electron GPU 压测通过；修复新 backdrop 纹理重绘与重复 attach ready 状态；完整 360ms 浮起 + 180ms 落地时序门禁通过。
+- [x] 2026-08-28 dev-0.5.10 Windows/Linux/Android 六资产本地打包完成；Windows MSI/ZIP 独立 smoke 通过，Linux 资产由 WSL 构建，APK v2/Debug 证书校验通过。
+- [ ] 2026-08-28 移动端综合 stress 仍受 stress variant D8(minSdk24 + POI/Log4j) 与 queue benchmark fixture 阻断；真实 Android GPU 仅有模拟器数据，npm 需重新认证，macOS 需 macOS 主机。

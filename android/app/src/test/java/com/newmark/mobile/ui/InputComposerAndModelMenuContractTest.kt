@@ -10,6 +10,22 @@ import org.junit.Test
 
 class InputComposerAndModelMenuContractTest {
     @Test
+    fun submitButtonHasThreeIndependentPcParityStates() {
+        assertEquals(SubmitButtonMode.IdleSend, submitButtonMode(running = false, hasText = false))
+        assertEquals(SubmitButtonMode.IdleSend, submitButtonMode(running = false, hasText = true))
+        assertEquals(SubmitButtonMode.RunningStop, submitButtonMode(running = true, hasText = false))
+        assertEquals(SubmitButtonMode.RunningSend, submitButtonMode(running = true, hasText = true))
+
+        val source = File("src/main/java/com/newmark/mobile/ui/ChatScreen.kt").readText()
+        val runningSend = source.substringAfter("SubmitButtonMode.RunningSend ->")
+            .substringBefore("SubmitButtonMode.IdleSend ->")
+        assertTrue(runningSend.contains("MarqueeBorder("))
+        assertTrue(runningSend.contains("contentAlignment = Alignment.Center"))
+        assertTrue(runningSend.contains("imageVector = LucideIcons.Send"))
+        assertTrue(runningSend.contains("onClick = onClick"))
+    }
+
+    @Test
     fun composerKeepsItsRoundedShapeStopsGrowingAfterFiveLinesAndOpticallyCentersOneLine() {
         assertEquals(5, InputComposerMaxLines)
         assertEquals(24.dp, InputComposerCornerRadius)

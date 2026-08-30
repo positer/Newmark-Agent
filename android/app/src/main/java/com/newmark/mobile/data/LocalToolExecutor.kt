@@ -2,6 +2,7 @@ package com.newmark.mobile.data
 
 import android.content.Context
 import android.content.ContentResolver
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.MediaStore
 import android.provider.DocumentsContract
@@ -84,9 +85,14 @@ internal fun applyTextMutation(existing: String, args: JSONObject): Result<Strin
 }
 
 /** 本地工具执行结果 */
-data class ToolResult(val ok: Boolean, val output: String) {
+data class ToolResult(
+    val ok: Boolean,
+    val output: String,
+    val displayImage: WorkDisplayImage? = null,
+) {
     companion object {
-        fun ok(output: String) = ToolResult(true, output)
+        fun ok(output: String, displayImage: WorkDisplayImage? = null) =
+            ToolResult(true, output, displayImage)
         fun err(output: String) = ToolResult(false, output)
     }
 }
@@ -150,6 +156,7 @@ class LocalToolExecutor(
                 "write_file" -> writeFileArgs(args)
                 "list_dir" -> ls(args.optString("path"))
                 "recent_files" -> recentFiles(args)
+                "image_display" -> imageDisplay(args)
                 "terminal_exec" -> terminalExec(args.optString("command"))
                 "memory_lab_read" -> mlRead(args.optString("component"))
                 "memory_lab_query" -> mlQuery(args.optString("query"))
@@ -183,6 +190,49 @@ class LocalToolExecutor(
     private fun terminalExec(command: String): ToolResult {
         if (command.isBlank()) return ToolResult.err("terminal_exec 需要 command")
         return execute(command)
+    }
+
+    private fun imageDisplay(args: JSONObject): ToolResult {
+        val path = args.optString("path")
+        if (path.isBlank()) return ToolResult.err("image_display 需要 path")
+        val file = resolve(path)
+        if (!file.isFile) return ToolResult.err("图片不存在或不是文件：$path")
+        if (file.length() <= 0L || file.length() > 10L * 1024L * 1024L) {
+            return ToolResult.err("图片必须大于 0 且不超过 10 MiB")
+        }
+        val bytes = file.readBytes()
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val mime = bounds.outMimeType.orEmpty().lowercase().replace("image/jpg", "image/jpeg")
+        if (mime !in setOf("image/png", "image/jpeg") || bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return ToolResult.err("image_display 仅支持有效 PNG/JPEG")
+        }
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+        val caption = args.optString("caption").trim().take(160)
+            .ifBlank { file.nameWithoutExtension.ifBlank { file.name } }
+        val image = WorkDisplayImage(
+            id = "mobile-display-${digest.take(24)}",
+            origin = "agent",
+            name = file.name,
+            caption = caption,
+            mimeType = mime,
+            dataUrl = "data:$mime;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP),
+            width = bounds.outWidth,
+            height = bounds.outHeight,
+        )
+        val receipt = JSONObject()
+            .put("ok", true)
+            .put("image", JSONObject()
+                .put("id", image.id)
+                .put("origin", image.origin)
+                .put("name", image.name)
+                .put("caption", image.caption)
+                .put("mimeType", image.mimeType)
+                .put("width", image.width)
+                .put("height", image.height))
+            .toString()
+        return ToolResult.ok(receipt, image)
     }
 
     private fun fetch(url: String): String {

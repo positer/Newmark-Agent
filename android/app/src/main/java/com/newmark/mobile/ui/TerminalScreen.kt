@@ -35,7 +35,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -191,7 +190,7 @@ fun TerminalScreen(onBack: () -> Unit) {
                     .clickable { if (input.isNotBlank()) runCommand(input.trim()) },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.Send, contentDescription = "执行", tint = Color.White, modifier = Modifier.size(14.dp))
+                Icon(Icons.Filled.Send, contentDescription = "执行", tint = p.textPrimary, modifier = Modifier.size(14.dp))
             }
         }
     }

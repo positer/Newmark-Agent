@@ -15,6 +15,8 @@ export interface RuntimeLifecycleState {
 }
 
 const processStates = new Map<string, RuntimeLifecycleState>();
+const preparedPreviousStates = new Map<string, Array<Partial<RuntimeLifecycleState>>>();
+const lifecyclePreparations = new Map<string, Promise<Array<Partial<RuntimeLifecycleState>>>>();
 
 function stateKey(root: string, role: RuntimeLifecycleRole): string {
   return `${path.resolve(root)}\u0000${role}`;
@@ -66,6 +68,44 @@ function readActiveStates(root: string, role: RuntimeLifecycleRole): Array<Parti
   }
 }
 
+/** Prepare crash-recovery markers asynchronously after the startup shell is visible. */
+export function prepareRuntimeLifecycle(root: string, role: RuntimeLifecycleRole = 'main'): Promise<void> {
+  const key = stateKey(root, role);
+  if (processStates.has(key) || preparedPreviousStates.has(key)) return Promise.resolve();
+  const current = lifecyclePreparations.get(key);
+  if (current) return current.then(() => undefined);
+  const preparation = (async (): Promise<Array<Partial<RuntimeLifecycleState>>> => {
+    const directory = path.join(root, '.newmark-runtime');
+    let files: string[];
+    try {
+      files = (await fs.promises.readdir(directory))
+        .filter(file => file.startsWith(`lifecycle-${role}`) && file.endsWith('.json'));
+    } catch {
+      return [];
+    }
+    const active: Array<Partial<RuntimeLifecycleState>> = [];
+    for (let offset = 0; offset < files.length; offset += 24) {
+      const states = await Promise.all(files.slice(offset, offset + 24).map(async file => {
+        const filePath = path.join(directory, file);
+        try {
+          const state = JSON.parse(await fs.promises.readFile(filePath, 'utf-8')) as Partial<RuntimeLifecycleState>;
+          if (state?.active === true) return state;
+        } catch {
+          // A corrupt marker cannot establish a live owner.
+        }
+        await fs.promises.unlink(filePath).catch(() => undefined);
+        return null;
+      }));
+      for (const state of states) if (state) active.push(state);
+    }
+    return active;
+  })();
+  lifecyclePreparations.set(key, preparation);
+  return preparation.then(states => {
+    preparedPreviousStates.set(key, states);
+  }).finally(() => lifecyclePreparations.delete(key));
+}
+
 /**
  * Claim this process/role as the current runtime owner.
  *
@@ -77,7 +117,8 @@ export function beginRuntimeLifecycle(root: string, role: RuntimeLifecycleRole =
   const key = stateKey(root, role);
   const existingProcessState = processStates.get(key);
   if (existingProcessState) return existingProcessState;
-  const previousStates = readActiveStates(root, role);
+  const previousStates = preparedPreviousStates.get(key) || readActiveStates(root, role);
+  preparedPreviousStates.delete(key);
   const previousOwnerAlive = previousStates.some(previous => isRuntimeProcessAlive(Number(previous.pid)));
   const state: RuntimeLifecycleState = {
     role,
@@ -104,14 +145,14 @@ export function markRuntimeLifecycleClean(root: string, role: RuntimeLifecycleRo
   const current = processStates.get(key);
   if (!current) return;
   try {
-    writeState(root, role, {
-      ...current,
-      active: false,
-      cleanExitAt: new Date().toISOString(),
-    });
+    fs.unlinkSync(statePath(root, role, current.ownerId));
   } catch {
-    // Leaving the marker active is safer than claiming a clean exit after a
-    // failed durable write.
+    try {
+      writeState(root, role, { ...current, active: false, cleanExitAt: new Date().toISOString() });
+    } catch {
+      // Leaving the marker active is safer than claiming a clean exit after a
+      // failed durable write.
+    }
   }
 }
 

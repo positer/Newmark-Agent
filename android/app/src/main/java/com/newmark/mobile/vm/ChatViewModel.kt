@@ -732,9 +732,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun addModel(providerId: String, name: String) {
         val n = name.trim()
         if (n.isEmpty()) return
+        upsertModel(providerId, ModelConfig(name = n))
+    }
+
+    fun upsertModel(providerId: String, model: ModelConfig) {
+        val normalized = model.copy(name = model.name.trim())
+        if (normalized.name.isEmpty()) return
         updateProviderModels(providerId) { p ->
-            if (p.models.any { it.name == n }) p
-            else p.copy(models = p.models + ModelConfig(name = n))
+            val index = p.models.indexOfFirst { it.name.equals(normalized.name, ignoreCase = true) }
+            if (index < 0) p.copy(models = p.models + normalized)
+            else p.copy(models = p.models.toMutableList().also { it[index] = normalized })
         }
     }
 
@@ -1508,6 +1515,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             toolName: String = "",
             toolArgs: String = "",
             durationMs: Long = 0,
+            displayImage: com.newmark.mobile.data.WorkDisplayImage? = null,
         ): LocalWorkEvent = LocalWorkEvent(
             type = type,
             id = "$runId:$sequence:$type",
@@ -1518,6 +1526,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             timestamp = System.currentTimeMillis(),
             sequence = sequence++,
             durationMs = durationMs,
+            displayImage = displayImage,
         )
         val thoughtContinuation = MobileThoughtContinuation(events) { type, content, durationMs ->
             event(type = type, content = content, durationMs = durationMs)
@@ -1767,6 +1776,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     toolCallId = call.id,
                     toolName = call.name,
                     durationMs = tcMs,
+                    displayImage = result.displayImage,
                 ))
                 messages += ChatMessage(role = "tool", content = result.output, toolCallId = call.id)
             }

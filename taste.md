@@ -2,6 +2,9 @@
 
 ## Product and interaction principles
 
+- Provider onboarding must always offer three peer paths: explicit manual creation, fuzzy discovery, and import from a connected device. Manual providers and provider-owned models reuse the canonical PC-compatible store; never hide basic creation behind discovery or introduce a parallel mobile-only schema.
+- Mobile submit controls are a three-state protocol, not a boolean skin: idle send, running stop with empty input, and running send/Next with non-empty input must each retain the PC action semantics and material. Center icon geometry inside animated borders explicitly; never rely on a container's default top-start alignment.
+- Memory Lab glass actions obey the same layout-invariant optical-canvas rule as composer controls. Text pills and circular navigation buttons keep their nominal hit boxes while refraction, blur, shadow and lift render in a transparent outset child.
 - Reliability state must be explicit, scoped, resettable, and covered by boundary tests. Do not infer retry semantics from a loop-local variable name.
 - A consecutive-failure threshold counts consecutive provider outcomes. Any valid provider activity, including reasoning/thought, assistant text, or a tool call, resets the empty-response streak immediately.
 - Content disclosure in the conversation transcript is a plain information operation, not a selection or decorative interaction. Build/history disclosure must change state immediately on click or keyboard activation, without glass, floating layers, scaling, fading, sliding, easing, delayed commit, or animated chevrons.
@@ -53,6 +56,13 @@
 - Update `README.md` for public release intent and `OVERVIEW.md` for code map, file responsibilities, tests, and current project state.
 - A release-ready claim must name the exact host-built asset matrix, verify every asset independently, record byte size and SHA-256, disclose signing identity, and separate local packaging from external publication. Never imply a macOS artifact was built from Windows or that an APK signed by the Android Debug certificate is store-ready.
 - Treat Windows Installer exit `0` as necessary but not sufficient for same-version repair. When a required packaged file is already absent, verify the installed boundary explicitly; if repair leaves it absent, use one elevated uninstall-plus-fresh-install transaction and require installed/package ASAR equality, CLI version success, preserved user-state hashes, and a responsive GUI process set.
+
+## Desktop startup performance style
+
+- Show a lightweight, responsive startup surface before expensive state construction. Keep the same `BrowserWindow` and navigate/promote it after required state and renderer hydration are ready; do not create a second visible window or load the full renderer merely to cover it.
+- Never perform an unbounded synchronous directory scan or JSON parse loop on Electron's main thread during cold start. Historical runtime markers must be processed asynchronously in bounded batches before `Agent` construction.
+- Runtime lifecycle metadata must remain self-pruning: clean shutdown deletes its own marker, while only genuinely active prior markers participate in crash recovery. Startup cost must not grow linearly with launch count.
+- Startup optimization claims require both phase timings and responsiveness evidence under an inflated historical-state fixture. Record shell, navigation and writable-input time, `Process.Responding` samples, and remaining marker count; measurement fixtures must live under the system temp directory and never clean the user's real runtime root.
 # Terminal rendering style
 
 终端高频输出优先采用有界缓冲、时间窗合并和逐帧增量渲染；禁止在热路径使用 `innerHTML +=` 或每个数据包强制布局滚动。
@@ -106,3 +116,28 @@ as a compatibility path, but help and system guidance must recommend the smalles
 Context continuity and cacheability are complementary: preserve the existing byte-stable system/bootstrap, tool schema,
 and durable message prefix, then append the assistant tool call and matching tool result at the frontier. Retry or parser
 diagnostics must not rewrite the prefix, enter durable summaries, or create a synthetic memory node.
+
+# Mobile provider settings style
+
+模型与供应商设置域使用 44dp 单行胶囊作为唯一内容单元：标签、值、能力、状态与操作应在一行内完成，不回退到混合卡片或多行表单。页面导航必须复用左侧栏三个按钮同款的纵向胶囊玻璃浮块与色块起终点形变；协议枚举使用同一材质语言的横向胶囊玻璃滑块。浮块负责起飞、沿轨拖动、液态形变和落回目标色块，`LazyColumn` 仍负责快速滚动；浮块移动不得扩大内容点击范围或改变保存边界。
+
+设置页不绘制独立纵向轨道、轨道槽或无功能占位；胶囊列表本身就是纵向浮块的运动表面。任何会切换子页或删除父级数据的点击，都必须在浮块完整落地后提交。横向协议浮块与纵向导航浮块属于同一互斥运动域，不能同时显示或响应；协议横轨是纵向轨迹的硬边界，跨区只能通过边界两侧两个完整起落事务完成，禁止视觉穿越。
+
+输入胶囊属于内容控件而不是纵向玻璃落点：必须同时从可选索引、手势起点和初始选择/色块中排除，并保留原生输入、选字与长按。点击飞行必须连续动画坐标，禁止“坐标赋值 + 延时”伪装移动；位移与完整浮起/落下材质生命周期并发，二者都完成后才能提交导航。
+
+同一行中的多个操作按钮也不是整行选择目标。每个按钮拥有与自身命中框一致的独立光学玻璃，点击在完整起落后提交，拖动只产生按钮边界内的阻尼形变。纵向命中必须按实际 slot 区间计算，不能用中心四舍五入将上半区映射到下一项；中断动画必须从当前 `Animatable` 帧续接，禁止 snap 回逻辑索引。远程设备操作同时展示连接状态并在 UI 与 ViewModel 两层拒绝离线目标，所有一次性迁移请求必须有有界超时。图标颜色必须使用主题语义色，不固定为白色。
+
+Windows 同版本安装必须明确区分“MSI 已构建/已验证”“UAC 已触发”和“安装已完成”。UAC 拒绝或取消后不得循环重试、绕过提升或声称安装成功；复核注册表与安装路径，保留现有响应进程，并等待用户明确要求再次触发。
+
+# Release candidate boundary
+
+“全平台 Release”在 Windows 主机上表示从同一版本源码生成并逐件验证 Windows、Linux 与 Android 的本地候选资产；macOS 制品只允许在 macOS 主机原生生成。构建成功、签名状态、黑盒运行、远端上传和商店可分发性必须分别陈述。标准输出被外部进程占用时，优先采用隔离输出并核对哈希，不关闭不明进程或覆盖用户正在使用的制品。
+
+# Mobile image evidence style
+
+用户图片属于其对应输入消息，必须在文字正文上方展示，并在本地/远程历史间复用同一附件投影。Agent 展示图片属于公开 Build 证据，工具回执只返回元数据，图片字节不得进入后续模型工具结果。图片路径、格式、来源、尺寸与大小必须先校验；预览可展开，但不得引入与现有时间线竞争的新卡片语言。
+
+紧凑玻璃按钮的静止边框、浮起折射边缘和落下恢复必须由同一光学层绘制。禁止在内容层额外叠加静态 `border`，否则边框不会随玻璃起落与形变同步；名义布局、语义和命中框继续与透明光学外扩分离。
+# Mobile conversation layout alignment
+
+用户消息附件与用户正文同向右对齐；Agent 展示图与 Agent 正文同向左对齐。对话底部避让必须由输入上方浮层的实时测量高度驱动，而不是固定预留值；Markdown/LaTeX 阅读器复用同一文字安全边界，避免窄屏出格。

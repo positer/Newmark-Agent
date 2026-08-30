@@ -714,3 +714,106 @@
 - [ ] 在真实 Android 设备复测 GPU；修复 stress variant 的 minSdk/D8 与 queue benchmark fixture 后补绿门禁。
 - [ ] 在 macOS 主机执行 `npm run dist:mac` 生成 DMG。
 - [x] 从 GitHub 重新下载六资产并逐个核对大小/SHA-256；Windows MSI/ZIP、Linux AppImage/deb/ZIP 打包态冒烟全部通过，下载 APK v2/Debug 证书复核通过。
+## 2026-08-29 dev-0.5.11 Memory Lab 与发送按钮
+
+- [x] Memory Lab 返回键和文字玻璃操作按钮使用透明外扩光学画布。
+- [x] 发送按钮工作态图标在 36dp 控件内居中。
+- [x] `running && hasText` 使用独立 PC 同款 running-send 第三态。
+- [x] 添加三态映射与 Memory Lab 不截断回归契约。
+- [x] Android 全量 205 项 JVM 测试、Vital Lint、R8、Release 编译与版本一致性检查通过。
+- [x] 归档最终命令、结果与 APK 指纹。
+
+## 2026-08-29 dev-0.5.11 手动供应商与模型
+
+- [x] 供应商列表提供常规“新建供应商”入口。
+- [x] 支持名称、协议、API 接口和可选 API Key。
+- [x] 新建供应商后直接进入详情。
+- [x] 供应商详情提供独立“新建模型”入口。
+- [x] 支持模型标识、显示名、上下文长度、描述、视觉和思考能力。
+- [x] 复用 ProviderStore 并覆盖重复模型标识。
+- [x] Android 209 项 JVM 测试、Vital Lint、R8 和 Release assembly 通过。
+
+## 2026-08-29 dev-0.5.11 模型供应商胶囊滑轨
+
+- [x] 五个模型与供应商子设置页全部改为 44dp 单行胶囊。
+- [x] 页面复用左侧栏三个按钮同款纵向胶囊玻璃浮块，支持起终点色块形变、点击定位及长按上下拖动。
+- [x] 新建供应商协议改为横向胶囊玻璃滑轨。
+- [x] 模糊注入协议改为横向胶囊玻璃滑轨。
+- [x] 保留列表快速滚动、原保存/发现/远程拉取行为和无 ripple 交互。
+- [x] Android 212 项 JVM 测试、Vital Lint、R8 和 Release assembly 通过。
+
+## 2026-08-29 dev-0.5.11 PC 启动响应优化
+
+- [x] 读取历史启动日志并记录 Agent 8122ms、主界面 14974ms 基线。
+- [x] 将生命周期 marker 扫描移出同步 Agent 构造路径，按 24 个一批异步处理。
+- [x] 先显示轻量启动页，再在同一 BrowserWindow 导航并提升主界面。
+- [x] 正常退出直接删除当前 marker；异常退出 marker 继续用于恢复。
+- [x] 1000 marker 压测达到 shell 721ms、index 2567ms、interactive 2772ms、0 次无响应、剩余 1 marker。
+- [x] `npm run test:full-release`、`npm run test:startup-responsiveness`、`npm run release:version-check` 通过。
+- [x] Android APK 已构建并记录 52,750,472 bytes 与 SHA-256。
+- [ ] 本轮未生成或安装 Windows MSI/ZIP；安装版启动性能需在后续打包任务中复核。
+
+## 2026-08-29 dev-0.5.11 模型供应商浮块交互补正
+
+- [x] 删除独立纵向轨道、4dp 轨道槽和左侧占位。
+- [x] 点击供应商、新建供应商、模糊注入、新建模型均在完整落地后导航。
+- [x] 横向协议选择补齐完整浮起、并行移动和落下。
+- [x] 横纵浮块共享互斥协调器，禁止同时起飞。
+- [x] 协议横轨成为纵向硬边界，纵向浮块不能跨越。
+- [x] 213 tests / 61 suites、Vital Lint、R8、Release assembly 通过。
+- [ ] 当前无设备运行态截图；未声明真机动画验收。
+- [x] 用户要求重新打包 APK：完整 Android 发布门禁复核通过，产物 v2 签名与 SHA-256 已确认。
+
+## 2026-08-29 dev-0.5.11 输入胶囊排除与首页飞行动画
+
+- [x] 输入字段从纵向浮块目标、手势起点和初始高亮中排除。
+- [x] 输入框文字输入、选择与长按不再触发父级纵向浮块。
+- [x] 首页点击使用真实 380ms `Animatable` 位移，不再瞬时赋值后等待。
+- [x] 位移和浮起/落下并行执行，均完成后才导航。
+- [x] 214 tests / 61 suites、Vital Lint、R8、隔离 Release assembly 通过。
+- [x] APK v2/Debug 证书、版本 0.5.11/511、大小与 SHA-256 已复核。
+- [ ] 当前无 ADB 设备，仍需真机确认最终触感与逐帧视觉效果。
+
+## 2026-08-29 dev-0.5.11 模型供应商五项交互补正
+
+- [x] 创建/取消双按钮从整行纵向浮块目标和手势起点排除。
+- [x] 每个按钮接入自身尺寸玻璃，完整浮起落下后执行并支持 4dp 阻尼拖动形变。
+- [x] 首页点击索引按实际行区间计算，修复向下一项偏移。
+- [x] 快速长按释放等待旧动画取消并从当前帧连续吸附落地。
+- [x] 拉取弹窗居中并展示在线/离线；离线设备禁用，ViewModel 增加连接校验和 8 秒超时。
+- [x] 亮色模式命令行发送图标使用主题前景色。
+- [x] 218 tests / 61 suites、Vital Lint、R8、隔离 Release assembly、版本和 v2 签名通过。
+- [ ] 当前无 ADB 设备，需真机复核按钮拖动手感、弹窗布局和快速松手逐帧效果。
+
+## 2026-08-29 dev-0.5.11 PC 启动优化 MSI
+
+- [x] `test:startup-responsiveness` 通过，0 次无响应采样，最终 1 个 lifecycle marker。
+- [x] 隔离构建 `Newmark-Agent-0.5.11-x64.msi`。
+- [x] MSI 行政解包及 34 项功能断言通过，打包态 CLI/TUI/上下文压力门禁通过。
+- [x] 记录 MSI 大小、SHA-256 与未签名边界。
+- [x] 已触发 UAC 安装。
+- [x] 识别 `REINSTALL=ALL` 维护模式假成功，并成功卸载旧 0.5.10；关键用户状态哈希不变。
+- [x] 再次触发全新安装 UAC；0.5.11 注册表、CLI、ASAR 与用户状态边界通过。
+- [x] 安装版启动响应验收：shell 603ms、Agent 1959ms、主界面 4288ms，113 样本 0 次无响应。
+
+## dev-0.5.11 全平台发布后续
+
+- [x] Windows、Linux、Android 六个本地 0.5.11 候选资产已构建并逐件冒烟。
+- [ ] 在 macOS 主机执行 `npm run dist:mac` 并验证 DMG；Windows 主机不得替代声明。
+- [ ] 使用正式 Windows 代码签名证书和 Android Release keystore 重新签名生产候选。
+- [ ] 用户明确授权发布后再上传远端 Release；当前未上传 GitHub/商店。
+- [ ] 连接 Android 设备后补做模型供应商玻璃交互与弹窗的真机视觉验收。
+
+## dev-0.5.11 移动端图片与回到底部玻璃
+
+- [x] 本地 Agent 提供 PC 同名 `image_display`，展示记录进入 Build 历史。
+- [x] 本地/远程用户图片显示在对应文字上方并支持展开。
+- [x] 回到底部的静态边框与动态玻璃使用同一光学层。
+- [x] 220 tests / 62 suites、Vital Lint、R8、隔离 Release APK 与 v2 签名通过。
+- [ ] 当前无 ADB 设备，仍需真机确认大图展开、长历史滚动和玻璃边框逐帧观感。
+## dev-0.5.11 发布收尾
+
+- [x] 移动端图片方向与对话底部动态避让修复。
+- [x] Markdown/LaTeX 阅读器安全边界修复。
+- [ ] GitHub `dev-0.5.11` 六资产上传并回下载校验。
+- [ ] 记录 macOS、生产签名和真机视觉验收边界。

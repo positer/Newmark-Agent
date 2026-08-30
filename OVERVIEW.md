@@ -1,5 +1,36 @@
 # Newmark Agent Overview
 
+## 2026-08-29 dev-0.5.11 模型供应商浮块生命周期与轴互斥
+
+- `android/app/src/main/java/com/newmark/mobile/ui/components/ProviderSettingsCapsules.kt`：新增 `ProviderRailMotionCoordinator`，横向协议浮块与纵向胶囊浮块共享单一轴占用；点击均执行完整浮起、并行移动、落下生命周期。协议行作为纵向不可穿越边界，跨区选择在边界两侧分段起落。
+- 同文件删除原 28dp 左侧轨道区域、4dp 轨道绘制和相关占位；纵向手势、语义与浮块直接覆盖全宽胶囊列表。
+- `android/app/src/main/java/com/newmark/mobile/ui/SettingsScreen.kt`：供应商、新建供应商、模糊注入、新建模型和详情页的导航操作不再由胶囊自身 `clickable` 绕过动画；供应商详情的新建模型和删除供应商均在纵向浮块落地后执行。
+- `ProviderSettingsCapsuleRailContractTest`：增加无遗留轨道、横纵互斥、协议边界和落地后导航契约。全量 Android 213 tests / 61 suites、Vital Lint、R8 与 Release assembly 通过。
+- APK：52,750,472 bytes，SHA-256 `E88BF45E495726A952AA4C209C759EFC0AEC21886F0B4DAFC1D97A61AD65B8E0`。
+
+## 2026-08-29 dev-0.5.11 PC 启动响应优化
+
+- `DESKTOP/src/core/runtimeLifecycle.ts`：新增启动前异步生命周期预处理，以 24 个 marker 为一批读取和清理 inactive/corrupt 历史记录；active marker 继续用于异常退出恢复。正常退出优先删除当前 marker，删除失败才回退写 inactive 状态。
+- `DESKTOP/src/main.ts`：桌面模式先显示轻量 `startup.html`，待生命周期预处理和 Agent 初始化完成后，使用同一个 `BrowserWindow` 导航到 `index.html` 并提升为主窗口；自动化唤醒模式仍保持无窗口执行。
+- `DESKTOP/src/tests/runtimeLifecycleStartupVerify.ts`：用 1000 个 inactive marker 和 1 个 crashed marker 验证清理、异常恢复与正常退出删除。
+- `DESKTOP/src/tests/startupPrewarmVerify.ts`、`DESKTOP/src/tests/verify.ts`：锁定轻量启动页先显示、同窗导航、Agent 构造前预处理以及托盘/自动化唤醒契约。
+- `DESKTOP/scripts/measure-startup-responsiveness.cjs`：在临时根目录构造 1000 个旧 marker，复用统一 CDP 主界面可交互门禁并采样 Windows `Process.Responding`；不触碰用户真实运行目录。
+- 历史基线：Agent ready 8122ms、main UI ready 14974ms。最新实测：startup shell 721ms、index navigation 2567ms、interactive 2772ms、nonResponding 0、remaining markers 1。
+- 验证：`npm run test:full-release` 全套通过；`npm run test:startup-responsiveness`、`npm run release:version-check` 通过。Android Release APK 为 52,750,472 bytes，SHA-256 `9E10F3FB8E20EB138FE7E16C699BC5767534865FD065BE27B9115673453D2EBC`。
+
+## 2026-08-29 dev-0.5.11 模型与供应商单行胶囊及液态滑轨
+
+- `android/app/src/main/java/com/newmark/mobile/ui/components/ProviderSettingsCapsules.kt`：集中定义 44dp 单行胶囊行、字段、纵向设置滑轨和横向协议滑轨；两个滑轨均使用真实 `GlassButtonCanvas` 浮块、共享 300ms 长按拖动和 4dp 边界阻尼契约。
+- `android/app/src/main/java/com/newmark/mobile/ui/SettingsScreen.kt`：模型与供应商列表、供应商详情、新建供应商、新建模型、模糊注入五页全部迁移为单行胶囊；纵向滑轨可点击/拖动定位，协议选择使用横向玻璃浮块，原持久化、远程拉取与模糊发现行为保持不变。
+- `ProviderSettingsCapsuleRailContractTest` 约束五页接入、协议滑轨、单行输入和共享液态手势。全量 Android 212 项 JVM 测试、Vital Lint、R8 与 Release assembly 通过。
+
+## 2026-08-29 dev-0.5.11 移动端手动新建供应商与模型
+
+- `android/app/src/main/java/com/newmark/mobile/ui/SettingsScreen.kt`：模型与供应商列表新增“＋ 新建供应商”；创建页覆盖名称、协议、接口与 API Key，保存后进入供应商详情。详情页原单字段添加框升级为“＋ 新建模型”入口，模型页覆盖标识、显示名、上下文长度、描述、视觉与思考能力。
+- `android/app/src/main/java/com/newmark/mobile/data/ProviderConfig.kt`：`createManualProviderConfig` 与 `createManualModelConfig` 负责裁剪、验证和 PC 兼容默认值；GitHub Models 使用 PC 同款 `https://models.github.ai` 默认接口。
+- `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt`：新增 `upsertModel`，供应商和模型继续写入现有 `ProviderStore`；模糊注入和远程目录合并保持不变。
+- `ManualProviderModelCreationTest` 覆盖供应商形状、默认接口、模型能力字段与页面导航/持久化绑定。全量 Android 209 项 JVM 测试、Vital Lint、R8 与 Release assembly 通过。
+
 ## 2026-08-28 dev-0.5.10 PC 固定玻璃源绘制修复
 
 - `DESKTOP/src/ui/index.html`：固定玻璃按钮浮起时使用 `.liquid-fixed-source-covered` 停止源按钮的文字、子节点、背景/渐变、边框、阴影和伪元素绘制，不再追加近似背景遮罩；源元素本身不设 `visibility:hidden` 或 `opacity:0`，布局与命中框保持不变。
@@ -3291,3 +3322,70 @@ Agent 上下文循环原本会正确追加 assistant tool call 与匹配 call id
 `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidGlass.kt` 将共享移动速度形变从最大 1.075/0.965 小幅增强到 1.09/0.958，并把固定玻璃受阻方向的轴向延展/正交收缩从 2.5%/1.2% 调至 3.2%/1.5%；平方根阻尼、4dp 最大位移、浮起/移动/落地生命周期及布局均未改变。所有调用共享 deformation/`glassButtonSurface` 的既有移动玻璃组件同步获得更清晰但受控的液态感。
 
 `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` 的“回到底部”浮动按钮从直接在 40dp 节点绘制玻璃，改为复用 `GlassButtonCanvas`。外层仍占 40dp 并保持原右下角 14dp 间距、点击语义和 22dp 图标；仅内部光学 RenderNode 四边获得 8dp 透明外扩，容纳浮起放大、7dp 边缘、模糊和阴影，避免被按钮画布截断。契约位于 `GlassButtonCanvasOutsetContractTest` 与 `LiquidGlassContractTest`。
+## 2026-08-29 dev-0.5.11 移动端 Memory Lab 与发送按钮三态
+
+- `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidGlass.kt`：新增矩形 `GlassButtonCanvas` 重载，名义宽高承载布局/语义/命中，四边 8dp 仅供光学 RenderNode 外扩。
+- `android/app/src/main/java/com/newmark/mobile/ui/MemoryLabScreen.kt`：返回键、顶部新增/重建与图谱关系/清除/重置胶囊均进入共享透明光学画布；不再直接在按钮等大节点上调用 `glassButtonSurface`。
+- `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt`：`SubmitButtonMode` 显式建模 `IdleSend`、`RunningStop`、`RunningSend`。运行中且有输入采用 PC `running-action + send` 第三态；停止态和第三态的 marquee 内容均强制中心对齐。
+- `android/app/src/main/java/com/newmark/mobile/ui/components/Marquee.kt`：支持调用方声明内容对齐，默认行为保持不变。
+- 回归契约位于 `InputComposerAndModelMenuContractTest` 与 `GlassButtonCanvasOutsetContractTest`；详细执行证据见 `archive/20260829-dev-0.5.11-mobile-memorylab-submit-states.md`。
+
+## 2026-08-29 dev-0.5.11 模型供应商输入排除与点击飞行
+
+`android/app/src/main/java/com/newmark/mobile/ui/components/ProviderSettingsCapsules.kt` 的纵向浮块通过 `selectableIndices` 只接受操作型胶囊；字段胶囊和协议横轨既不是落点，也不能成为父级长按/拖动起点。`LiquidHoldGesture.kt` 的 `canStartAt` 在首次按下处保留输入控件的完整手势所有权。新建供应商、模糊注入与新建模型页的初始纵向选择也固定在首个可操作胶囊，避免输入行获得静态高亮。
+
+首页点击飞行不再直接改写浮块坐标后等待 380ms，而由 `Animatable.animateTo` 连续更新位置。位移 Job 与材质起落 Job 同时启动，并在导航回调前分别 `join`；因此 380ms 位移与 100ms 浮起、240ms 落下均完整完成。跨协议横轨仍按硬边界分段落地与重新起飞，横纵协调器继续保证两轴互斥。
+
+## 2026-08-29 dev-0.5.11 模型供应商交互与设备拉取补正
+
+- `ProviderSettingsCapsules.kt`：纵向点击命中从中心四舍五入改为按 44dp 胶囊加 6dp 间隔的实际区间取整；快速长按释放先取消并等待旧飞行 Job，再从 `Animatable.value` 连续完成 180ms 吸附和完整落地。新增按钮尺寸 `ProviderCapsuleAction`，复用共享玻璃的 105ms 浮起、165ms 落下和 4dp 拖动阻尼。
+- `SettingsScreen.kt`：新建供应商、模糊注入、新建模型的创建/取消行从纵向 `selectableIndices` 排除，并改用两个独立 action glass。设备选择 Dialog 使用全屏窗口内居中 88% 宽面板，显示在线/离线和主机地址，仅当前已连接设备可拉取。
+- `DesktopLinkViewModel.kt`：供应商目录拉取在 ViewModel 边界再次验证当前连接目标，并以 8 秒超时终止失联或无响应请求。
+- `TerminalScreen.kt`：执行按钮图标由固定白色改为主题 `textPrimary`。
+- 回归集中在 `ProviderSettingsCapsuleRailContractTest`；全量结果为 218 tests / 61 suites，Vital Lint、R8 和隔离 Release assembly 通过。
+
+## 2026-08-29 dev-0.5.11 PC 启动优化 MSI 候选
+
+`DESKTOP` 启动响应门禁重新验证 runtime marker 分批预处理和轻量启动页路径：startup shell 2536ms、index navigation 5092ms、interactive 11614ms，`nonRespondingSamples=0`、`Process.Responding=true`、最终 marker 1 个。独立输出 `release-0.5.11-startup-msi/Newmark-Agent-0.5.11-x64.msi` 通过 Windows MSI 行政解包、34 项功能断言、真实 loopback SSH/PTTY、亮色主题、4 轮重启、CLI、上下文压缩和 console wrapper 边界检查。MSI 未做 Authenticode 签名。
+
+首次 UAC 被取消；重试维护安装返回 0，但 `REINSTALL=ALL` 使 0.5.11 进入 maintenance mode 并跳过 `RemoveExistingProducts`，边界核验仍为 0.5.10。之后旧产品代码 `{915C1DC5-C994-4EB1-8318-0A4AD0F91DB5}` 成功卸载，最终 UAC 全新安装产品代码 `{224D0740-4008-47BF-BE96-4E955D6114AD}`。注册表为 0.5.11.0，CLI 为 0.5.11，安装 `app.asar` 与候选大小和 SHA-256 完全一致，关键用户状态聚合哈希保持不变。安装版启动日志为 shell 603ms、Agent 1959ms、主界面 4288ms；113 个 Windows 进程响应样本无无响应记录。
+
+## 2026-08-30 dev-0.5.11 全平台本地发布目录
+
+```text
+release-0.5.11-full-platform/
+├─ Newmark-Agent-0.5.11-x64.msi                 # Windows x64 安装包
+├─ Newmark-Agent-0.5.11-win-unpacked-x64.zip    # Windows x64 便携解包包
+├─ Newmark-Agent-0.5.11-x86_64.AppImage         # Linux x64 AppImage
+├─ Newmark-Agent-0.5.11-amd64.deb               # Debian/Ubuntu x64 包
+├─ Newmark-Agent-0.5.11-linux-unpacked-x64.zip  # Linux x64 解包包
+└─ Newmark-Agent-0.5.11-android.apk              # Android 0.5.11 / versionCode 511
+```
+
+桌面全量门禁在 TUI ConPTY 首轮遇到 Windows `AttachConsole failed` 瞬态后，专项重跑全部通过，并从失败点继续完成模式/对话、跨平台、SSH、WSL、CLI 和三端共享后端门禁。Windows 资产验证打包态 CLI、上下文压缩、控制台参数边界和功能/安全契约；Linux 资产由 Ubuntu 24.04 WSL 原生构建并分别完成 xvfb GUI 与双 shell 回环。Android 标准 APK 输出被外部进程占用，安全改用 `android/isolated-release-build/` 构建并复制到发布目录，未关闭用户进程或覆盖已打开文件。
+
+当前主机只闭合 Windows、Linux、Android 六资产；macOS DMG 仍需 macOS 主机。Windows 未做 Authenticode，Android 为 Debug v2 证书，目录尚未上传到任何远端发布渠道。
+
+## 2026-08-30 dev-0.5.11 移动端图片显示增量
+
+```text
+android/app/src/main/java/com/newmark/mobile/
+├─ data/LocalToolCatalog.kt       # Build/Plan 暴露 image_display
+├─ data/LocalTools.kt             # PC 同名图片展示 schema
+├─ data/LocalToolExecutor.kt      # 安全工作区 PNG/JPEG 校验、回执与展示载荷
+├─ vm/ChatViewModel.kt            # tool_result 绑定持久 WorkDisplayImage
+├─ ui/NewmarkApp.kt               # 本地用户图片投影为统一历史附件
+├─ ui/ChatScreen.kt               # 图片位于用户文字上方；回到底部使用一体玻璃边框
+└─ ui/components/LiquidGlass.kt   # 静态边框与动态玻璃共享光学层
+android/app/src/test/java/com/newmark/mobile/ui/
+└─ MobileImageDisplayContractTest.kt
+release-0.5.11-mobile-images-glass/
+└─ Newmark-Agent-0.5.11-android.apk
+```
+
+`image_display` 只读取 `files/newmark/workspace` 内有效、非空且不超过 10 MiB 的 PNG/JPEG；工具结果只返回有界元数据，Base64 仅进入公开展示事件，不回灌模型工具结果。远程附件、本地附件和 Agent 展示图继续使用既有 `RemoteConversationImage`/`WorkDisplayImage`，没有建立第二套图片历史模型。
+## 2026-08-30 dev-0.5.11 移动端布局与发布增量
+
+- `ui/ChatScreen.kt`：用户图片右对齐、Agent 展示图左对齐；输入上方浮层高度实时进入对话底部避让。
+- `ui/RightSidebar.kt`：Markdown/LaTeX 阅读预览复用对话文字安全边界，窄屏保持可读区不出格。
+- `archive/20260830-dev-0.5.11-mobile-layout-release.md`：本轮修复、门禁与发布边界记录。

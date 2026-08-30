@@ -543,7 +543,11 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Pull a paired device's provider catalog for explicit local migration. */
     suspend fun providerCatalog(pair: PairInfo): Result<List<com.newmark.mobile.data.ProviderConfig>> {
-        val response = api.exportProviderCatalog(pair).getOrElse { return Result.failure(it) }
+        val connectedTarget = activeDevice?.host == pair.host && isConnected && linkStatus == LinkStatus.Connected
+        if (!connectedTarget) return Result.failure(IllegalStateException("设备未连接，无法拉取供应商配置"))
+        val responseResult = withTimeoutOrNull(8_000L) { api.exportProviderCatalog(pair) }
+            ?: return Result.failure(IllegalStateException("拉取超时，请确认设备仍在线"))
+        val response = responseResult.getOrElse { return Result.failure(it) }
         val providers = withContext(Dispatchers.Default) {
             runCatching {
                 val type = object : TypeToken<List<com.newmark.mobile.data.ProviderConfig>>() {}.type

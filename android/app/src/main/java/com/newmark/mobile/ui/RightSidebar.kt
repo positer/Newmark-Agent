@@ -779,7 +779,17 @@ private fun EditorPanel(vm: DesktopLinkViewModel) {
                 label = "editorMarkdownPreview",
             ) { preview ->
                 if (preview) {
-                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(
+                                start = MobileReadableStartInset,
+                                end = MobileReadableEndInset,
+                                top = 12.dp,
+                                bottom = 12.dp,
+                            ),
+                    ) {
                         if (vm.rightSidebarEditorContent.isBlank()) {
                             Text("从文件树打开 Markdown 文件即可在这里预览。", color = p.textTertiary, fontSize = 11.sp)
                         } else {

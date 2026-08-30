@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -71,6 +72,7 @@ fun MarqueeBorder(
     cornerRadius: Dp,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    contentAlignment: Alignment = Alignment.TopStart,
     content: @Composable () -> Unit,
 ) {
     val animation = rememberMarqueeAnimation()
@@ -88,6 +90,7 @@ fun MarqueeBorder(
                 )
             }
         } else Modifier),
+        contentAlignment = contentAlignment,
     ) {
         content()
     }

@@ -114,6 +114,7 @@ fun GlassButtonCanvas(
     visualSize: Dp,
     shape: Shape,
     surfaceColor: Color? = null,
+    restingBorderColor: Color? = null,
     alpha: Float = 0.12f,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -140,11 +141,62 @@ fun GlassButtonCanvas(
         Box(
             modifier = Modifier
                 .requiredSize(visualSize + GlassButtonCanvasOutset * 2)
-                .glassButtonSurface(opticalShape, surfaceColor, alpha),
+                .glassButtonSurface(opticalShape, surfaceColor, alpha, restingBorderColor),
         )
         Box(
             modifier = visualModifier
                 .size(visualSize),
+            contentAlignment = Alignment.Center,
+        ) {
+            content()
+        }
+    }
+}
+
+/**
+ * Rectangular counterpart for compact glass actions whose label determines a
+ * stable nominal width. The optical layer gets the same transparent outset as
+ * circular controls while layout, semantics and pointer input stay on the
+ * requested [visualWidth] x [visualHeight] hit box.
+ */
+@Composable
+fun GlassButtonCanvas(
+    visualWidth: Dp,
+    visualHeight: Dp,
+    shape: Shape,
+    surfaceColor: Color? = null,
+    restingBorderColor: Color? = null,
+    alpha: Float = 0.12f,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    visualModifier: Modifier = Modifier,
+    interactionSource: MutableInteractionSource? = null,
+    content: @Composable () -> Unit,
+) {
+    val opticalShape = remember(shape) { CenteredInsetShape(shape, GlassButtonCanvasOutset) }
+    val resolvedInteraction = interactionSource ?: remember { MutableInteractionSource() }
+    Box(
+        modifier = modifier
+            .size(visualWidth, visualHeight)
+            .clickable(
+                enabled = enabled,
+                interactionSource = resolvedInteraction,
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .requiredSize(
+                    visualWidth + GlassButtonCanvasOutset * 2,
+                    visualHeight + GlassButtonCanvasOutset * 2,
+                )
+                .glassButtonSurface(opticalShape, surfaceColor, alpha, restingBorderColor),
+        )
+        Box(
+            modifier = visualModifier.size(visualWidth, visualHeight),
             contentAlignment = Alignment.Center,
         ) {
             content()
@@ -160,6 +212,7 @@ internal val ExistingLiquidFloatInventory = setOf(
     "right_sidebar_tabs",
     "memory_lab_pager",
     "composer_selection_menus",
+    "provider_settings_capsule_rails",
 )
 
 /**
@@ -421,6 +474,7 @@ fun Modifier.glassButtonSurface(
     shape: Shape,
     surfaceColor: Color? = null,
     alpha: Float = 0.12f,
+    restingBorderColor: Color? = null,
 ): Modifier {
     val materialAlpha = alpha
     val p = LocalNewmarkColors.current
@@ -457,6 +511,7 @@ fun Modifier.glassButtonSurface(
         .kyantGlassEdge(
             shape = shape,
             edgeColor = edgeColor,
+            restingBorderColor = restingBorderColor,
             emphasis = (edgeEmphasis + materialAlpha * 0.22f).coerceAtMost(1f),
             scale = pressScale,
             enabled = pressProgress.value > 0.001f,
@@ -494,14 +549,19 @@ fun Modifier.glassButtonSurface(
 fun Modifier.kyantGlassEdge(
     shape: Shape,
     edgeColor: Color,
+    restingBorderColor: Color? = null,
     emphasis: Float = 0f,
     scale: Float = 1f,
     enabled: Boolean = true,
 ): Modifier {
     if (!enabled) {
-        return this
-            .border(2.dp, Color.Black.copy(alpha = 0.12f), shape)
-            .border(1.5.dp, Color.White.copy(alpha = 0.28f), shape)
+        return if (restingBorderColor != null) {
+            this.border(1.dp, restingBorderColor, shape)
+        } else {
+            this
+                .border(2.dp, Color.Black.copy(alpha = 0.12f), shape)
+                .border(1.5.dp, Color.White.copy(alpha = 0.28f), shape)
+        }
     }
     val refractedShade = lerp(Color.Black, edgeColor, 0.18f)
     return drawBackdrop(

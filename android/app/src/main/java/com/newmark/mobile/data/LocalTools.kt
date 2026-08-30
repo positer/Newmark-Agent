@@ -174,6 +174,15 @@ object LocalTools {
             emptyList(),
         ),
         function(
+            "image_display",
+            "把当前移动端安全工作区内的一张 PNG 或 JPEG 作为持久视觉证据展示在当前 Build block。路径必须位于 files/newmark/workspace；图片不超过 10 MiB，展示记录会随对话历史保留，点击预览可展开",
+            mapOf(
+                "path" to prop("string", "安全工作区内 PNG/JPEG 的相对路径；绝对路径也必须仍位于安全工作区"),
+                "caption" to prop("string", "可选的简短图片说明，最多保留 160 个字符；省略时使用文件名"),
+            ),
+            listOf("path"),
+        ),
+        function(
             "terminal_exec",
             "执行移动端本地受控终端命令。与命令行页面复用同一套 80+ 内置命令和 files/newmark/workspace 安全目录；可先执行 help 查看完整命令，支持 date/time、文件、检索、哈希、编码、Memory Lab 与设置命令，但不提供 Android 系统 shell。",
             mapOf("command" to prop("string", "要执行的一行终端命令，例如 date、pwd、ls、grep 关键词 文件、sha256sum 文件")),

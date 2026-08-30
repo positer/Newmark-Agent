@@ -46,10 +46,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.LaunchedEffect
@@ -86,6 +88,8 @@ import com.newmark.mobile.data.MobilePluginStore
 import com.newmark.mobile.data.PrivilegedToolBridge
 import com.newmark.mobile.data.ModelConfig
 import com.newmark.mobile.data.ProviderConfig
+import com.newmark.mobile.data.createManualModelConfig
+import com.newmark.mobile.data.createManualProviderConfig
 import com.newmark.mobile.ui.components.NewmarkShapeLarge
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
@@ -94,6 +98,12 @@ import com.newmark.mobile.ui.components.glassButtonSurface
 import com.newmark.mobile.ui.components.LiquidGlassSwitch
 import com.newmark.mobile.ui.components.DialogBackdropBlur
 import com.newmark.mobile.ui.components.MobilePopupShape
+import com.newmark.mobile.ui.components.ProviderCapsuleField
+import com.newmark.mobile.ui.components.ProviderCapsuleAction
+import com.newmark.mobile.ui.components.ProviderCapsuleRow
+import com.newmark.mobile.ui.components.ProviderProtocolRail
+import com.newmark.mobile.ui.components.ProviderVerticalCapsuleRail
+import com.newmark.mobile.ui.components.rememberProviderRailMotionCoordinator
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.newmark.mobile.ui.theme.LocalNewmarkColors
 import com.newmark.mobile.ui.theme.LocalThemeMode
@@ -109,6 +119,7 @@ import com.newmark.mobile.ui.theme.NewmarkTextSecondary
 import com.newmark.mobile.ui.theme.NewmarkTextTertiary
 import com.newmark.mobile.vm.ChatViewModel
 import com.newmark.mobile.vm.DesktopLinkViewModel
+import com.newmark.mobile.vm.LinkStatus
 import kotlinx.coroutines.launch
 
 /** 设置页内部导航：主设置 / 模型与供应商 / 供应商详情（三级菜单） */
@@ -116,10 +127,12 @@ private sealed interface SettingsPage {
     data object Main : SettingsPage
     data object DeviceManage : SettingsPage
     data object Providers : SettingsPage
+    data object NewProvider : SettingsPage
     data object FuzzyInject : SettingsPage
     data object Capabilities : SettingsPage
     data object Plugins : SettingsPage
     data class ProviderDetail(val providerId: String) : SettingsPage
+    data class NewModel(val providerId: String) : SettingsPage
 }
 
 @Composable
@@ -137,10 +150,12 @@ fun SettingsScreen(
                 is SettingsPage.Main -> onBack()
                 is SettingsPage.DeviceManage -> page = SettingsPage.Main
                 is SettingsPage.Providers -> page = SettingsPage.Main
+                is SettingsPage.NewProvider -> page = SettingsPage.Providers
                 is SettingsPage.FuzzyInject -> page = SettingsPage.Providers
                 is SettingsPage.Capabilities -> page = SettingsPage.Main
                 is SettingsPage.Plugins -> page = SettingsPage.Main
                 is SettingsPage.ProviderDetail -> page = SettingsPage.Providers
+                is SettingsPage.NewModel -> page = SettingsPage.ProviderDetail((page as SettingsPage.NewModel).providerId)
             }
         },
         retainProgressOnCommit = page is SettingsPage.Main,
@@ -171,10 +186,12 @@ fun SettingsScreen(
                             is SettingsPage.Main -> onBack()
                             is SettingsPage.DeviceManage -> page = SettingsPage.Main
                             is SettingsPage.Providers -> page = SettingsPage.Main
+                            is SettingsPage.NewProvider -> page = SettingsPage.Providers
                             is SettingsPage.FuzzyInject -> page = SettingsPage.Providers
                             is SettingsPage.Capabilities -> page = SettingsPage.Main
                             is SettingsPage.Plugins -> page = SettingsPage.Main
                             is SettingsPage.ProviderDetail -> page = SettingsPage.Providers
+                            is SettingsPage.NewModel -> page = SettingsPage.ProviderDetail((page as SettingsPage.NewModel).providerId)
                         }
                     },
                 contentAlignment = Alignment.Center,
@@ -191,10 +208,12 @@ fun SettingsScreen(
                     is SettingsPage.Main -> "设置"
                     is SettingsPage.DeviceManage -> "设备管理"
                     is SettingsPage.Providers -> "模型与供应商"
+                    is SettingsPage.NewProvider -> "新建供应商"
                     is SettingsPage.FuzzyInject -> "模糊注入"
                     is SettingsPage.Capabilities -> "移动端权限"
                     is SettingsPage.Plugins -> "插件"
                     is SettingsPage.ProviderDetail -> vm.providers.find { it.id == (page as SettingsPage.ProviderDetail).providerId }?.label ?: "供应商"
+                    is SettingsPage.NewModel -> "新建模型"
                 },
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -224,7 +243,15 @@ fun SettingsScreen(
                     vm = vm,
                     linkVm = linkVm,
                     onOpenProvider = { page = SettingsPage.ProviderDetail(it) },
+                    onCreateProvider = { page = SettingsPage.NewProvider },
                     onOpenFuzzy = { page = SettingsPage.FuzzyInject },
+                )
+                is SettingsPage.NewProvider -> ManualProviderPage(
+                    onSave = { provider ->
+                        vm.upsertProvider(provider)
+                        page = SettingsPage.ProviderDetail(provider.id)
+                    },
+                    onCancel = { page = SettingsPage.Providers },
                 )
                 is SettingsPage.FuzzyInject -> FuzzyInjectPage(
                     onSave = { new ->
@@ -239,6 +266,15 @@ fun SettingsScreen(
                     vm = vm,
                     providerId = target.providerId,
                     onBack = { page = SettingsPage.Providers },
+                    onCreateModel = { page = SettingsPage.NewModel(target.providerId) },
+                )
+                is SettingsPage.NewModel -> ManualModelPage(
+                    provider = vm.providers.find { it.id == target.providerId },
+                    onSave = { model ->
+                        vm.upsertModel(target.providerId, model)
+                        page = SettingsPage.ProviderDetail(target.providerId)
+                    },
+                    onCancel = { page = SettingsPage.ProviderDetail(target.providerId) },
                 )
             }
         }
@@ -734,6 +770,7 @@ private fun ProvidersPage(
     vm: ChatViewModel,
     linkVm: DesktopLinkViewModel,
     onOpenProvider: (String) -> Unit,
+    onCreateProvider: () -> Unit,
     onOpenFuzzy: () -> Unit,
 ) {
     val p = LocalNewmarkColors.current
@@ -741,97 +778,75 @@ private fun ProvidersPage(
     var showDevicePicker by remember { mutableStateOf(false) }
     var pullingHost by remember { mutableStateOf("") }
     var pullStatus by remember { mutableStateOf("") }
+    var railSelected by remember { mutableIntStateOf(0) }
+    val emptyOffset = if (vm.providers.isEmpty()) 1 else 0
+    val createIndex = emptyOffset + vm.providers.size
+    val fuzzyIndex = createIndex + 1
+    val pullIndex = fuzzyIndex + 1
+    val statusIndex = if (pullStatus.isNotBlank()) pullIndex + 1 else -1
+    val railCount = pullIndex + 1 + if (statusIndex >= 0) 1 else 0
+
+    fun activateRail(index: Int) {
+        railSelected = index
+        when {
+            vm.providers.isEmpty() && index == 0 -> Unit
+            index in emptyOffset until createIndex -> onOpenProvider(vm.providers[index - emptyOffset].id)
+            index == createIndex -> onCreateProvider()
+            index == fuzzyIndex -> onOpenFuzzy()
+            index == pullIndex -> {
+                if (linkVm.pairedDevices.isEmpty()) pullStatus = "暂无已连接设备"
+                else showDevicePicker = true
+            }
+        }
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (vm.providers.isEmpty()) {
-            item {
-                Text(
-                    text = "暂无供应商，点击下方「模糊注入」添加",
-                    fontSize = 11.sp,
-                    color = p.textTertiary,
-                    modifier = Modifier.padding(vertical = 8.dp),
-                )
-            }
-        } else {
-            items(vm.providers, key = { it.id }) { provider ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(NewmarkShapeLarge)
-                        .background(p.bgSecondary)
-                        .clickable { onOpenProvider(provider.id) }
-                        .padding(14.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                text = provider.label,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = p.textPrimary,
-                            )
-                            Text(
-                                text = "${provider.models.count { it.enabled }} / ${provider.models.size} 个模型启用 · ${provider.baseUrl}",
-                                fontSize = 10.5.sp,
-                                color = p.textTertiary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        Text(text = "›", fontSize = 16.sp, color = p.textTertiary)
+        item {
+            ProviderVerticalCapsuleRail(
+                itemCount = railCount,
+                selectedIndex = railSelected.coerceIn(0, railCount - 1),
+                onSelected = ::activateRail,
+            ) {
+                when {
+                    vm.providers.isEmpty() && it == 0 -> ProviderCapsuleRow(
+                        label = "暂无供应商",
+                        detail = "可手动新建、模糊注入或远程拉取",
+                        active = railSelected == it,
+                    )
+                    it in emptyOffset until createIndex -> {
+                        val provider = vm.providers[it - emptyOffset]
+                        ProviderCapsuleRow(
+                            label = provider.label,
+                            detail = "${provider.models.count { model -> model.enabled }}/${provider.models.size} · ${provider.baseUrl}",
+                            active = railSelected == it,
+                        ) { Text("›", fontSize = 16.sp, color = p.textTertiary) }
                     }
+                    it == createIndex -> ProviderCapsuleRow("＋ 新建供应商", active = railSelected == it)
+                    it == fuzzyIndex -> ProviderCapsuleRow("＋ 模糊注入", active = railSelected == it)
+                    it == pullIndex -> ProviderCapsuleRow(
+                        if (pullingHost.isBlank()) "从连接设备拉取" else "正在拉取...",
+                        active = railSelected == it,
+                        enabled = pullingHost.isBlank(),
+                    )
+                    it == statusIndex -> ProviderCapsuleRow("拉取状态", detail = pullStatus, active = railSelected == it)
                 }
             }
-        }
-        item {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(NewmarkShapeLarge)
-                    .background(p.accentSoft)
-                    .clickable(onClick = onOpenFuzzy)
-                    .padding(14.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("＋ 模糊注入", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = p.accent)
-            }
-        }
-        item {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(NewmarkShapeLarge)
-                    .background(p.accentSoft)
-                    .clickable(enabled = pullingHost.isBlank()) {
-                        if (linkVm.pairedDevices.isEmpty()) pullStatus = "暂无已连接设备"
-                        else showDevicePicker = true
-                    }
-                    .padding(14.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    if (pullingHost.isBlank()) "从连接设备拉取" else "正在拉取...",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = p.accent,
-                )
-            }
-        }
-        if (pullStatus.isNotBlank()) {
-            item { Text(pullStatus, fontSize = 11.sp, color = p.textSecondary) }
         }
     }
     if (showDevicePicker) {
         val backdrop = rememberLiquidBackdrop()
-        Dialog(onDismissRequest = { if (pullingHost.isBlank()) showDevicePicker = false }) {
+        Dialog(
+            onDismissRequest = { if (pullingHost.isBlank()) showDevicePicker = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
             DialogBackdropBlur(42.dp)
-            Box(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().layerBackdrop(backdrop))
-            Column(
-                Modifier.fillMaxWidth()
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxSize().layerBackdrop(backdrop))
+                Column(
+                    Modifier.fillMaxWidth(.88f)
                     .liquidGlassModifier(
                         backdrop = backdrop,
                         shape = MobilePopupShape,
@@ -846,32 +861,118 @@ private fun ProvidersPage(
             ) {
                 Text("选择连接设备", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = p.textPrimary)
                 linkVm.pairedDevices.forEach { device ->
-                    Row(
-                        Modifier.fillMaxWidth().clip(NewmarkShapeMedium).background(p.bgQuaternary)
-                            .clickable(enabled = pullingHost.isBlank()) {
-                                pullingHost = device.host
-                                scope.launch {
-                                    linkVm.providerCatalog(device).onSuccess { catalog ->
-                                        val (providersAdded, modelsAdded) = vm.mergeProviderCatalog(catalog)
-                                        pullStatus = "已从 ${device.displayName} 合并 API 配置：新增 $providersAdded 个供应商、$modelsAdded 个模型"
-                                        showDevicePicker = false
-                                    }.onFailure {
-                                        pullStatus = "拉取失败：${it.message ?: "未知错误"}"
-                                    }
-                                    pullingHost = ""
+                    val connected = linkVm.activeDevice?.host == device.host &&
+                        linkVm.isConnected && linkVm.linkStatus == LinkStatus.Connected
+                    ProviderCapsuleRow(
+                        label = device.displayName,
+                        detail = "${if (connected) "已连接" else "未连接"} · ${device.host}",
+                        enabled = pullingHost.isBlank() && connected,
+                        onClick = {
+                            pullingHost = device.host
+                            scope.launch {
+                                linkVm.providerCatalog(device).onSuccess { catalog ->
+                                    val (providersAdded, modelsAdded) = vm.mergeProviderCatalog(catalog)
+                                    pullStatus = "已从 ${device.displayName} 合并 API 配置：新增 $providersAdded 个供应商、$modelsAdded 个模型"
+                                    showDevicePicker = false
+                                }.onFailure {
+                                    pullStatus = "拉取失败：${it.message ?: "未知错误"}"
                                 }
-                            }.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                                pullingHost = ""
+                            }
+                        },
                     ) {
-                        Icon(Icons.Filled.Computer, null, tint = p.accent, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(device.displayName, fontSize = 12.sp, color = p.textPrimary)
-                            Text(device.host, fontSize = 10.sp, color = p.textTertiary)
-                        }
+                        Text(
+                            if (connected) "在线" else "离线",
+                            fontSize = 10.sp,
+                            color = if (connected) p.green else p.textTertiary,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Icon(Icons.Filled.Computer, null, tint = if (connected) p.accent else p.textTertiary, modifier = Modifier.size(18.dp))
                     }
                 }
+            }
         }
+    }
+}
+}
+
+// ---- 基础新建供应商（与 PC addProvider 字段一致） ----
+@Composable
+private fun ManualProviderPage(onSave: (ProviderConfig) -> Unit, onCancel: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var protocol by remember { mutableStateOf("openai") }
+    var endpoint by remember { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf("") }
+    var railSelected by remember { mutableIntStateOf(5) }
+    val railCoordinator = rememberProviderRailMotionCoordinator()
+    val railCount = 5 + if (status.isNotBlank()) 1 else 0
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            ProviderVerticalCapsuleRail(
+                itemCount = railCount,
+                selectedIndex = railSelected.coerceIn(0, railCount - 1),
+                onSelected = { railSelected = it },
+                coordinator = railCoordinator,
+                horizontalBarrierIndices = setOf(1),
+                selectableIndices = buildSet {
+                    if (status.isNotBlank()) add(5)
+                },
+            ) { index ->
+                when (index) {
+                    0 -> ProviderCapsuleField("供应商名称", name, { name = it }, "例如 OpenAI")
+                    1 -> ProviderProtocolRail(
+                        options = listOf(
+                            "openai" to "OpenAI 兼容",
+                            "anthropic" to "Anthropic",
+                            "github_models" to "GitHub Models",
+                        ),
+                        value = protocol,
+                        coordinator = railCoordinator,
+                        onValueChange = {
+                            protocol = it
+                            if (it == "github_models" && endpoint.isBlank()) endpoint = "https://models.github.ai"
+                        },
+                    )
+                    2 -> ProviderCapsuleField(
+                        "API 接口",
+                        endpoint,
+                        { endpoint = it },
+                        if (protocol == "github_models") "https://models.github.ai" else "https://api.example.com/v1",
+                    )
+                    3 -> ProviderCapsuleField("API Key", apiKey, { apiKey = it }, "可留空，之后再配置", password = true)
+                    4 -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ProviderCapsuleAction(
+                            label = "创建并继续添加模型",
+                            active = true,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                runCatching {
+                                    createManualProviderConfig(
+                                        id = "manual-${java.util.UUID.randomUUID()}",
+                                        name = name,
+                                        baseUrl = endpoint,
+                                        apiKey = apiKey,
+                                        protocol = protocol,
+                                    )
+                                }.onSuccess(onSave).onFailure {
+                                    status = when {
+                                        name.isBlank() -> "请输入供应商名称"
+                                        endpoint.isBlank() && protocol != "github_models" -> "请输入 API 接口"
+                                        else -> it.message ?: "无法创建供应商"
+                                    }
+                                }
+                            },
+                        )
+                        ProviderCapsuleAction("取消", modifier = Modifier.weight(1f), onClick = onCancel)
+                    }
+                    else -> ProviderCapsuleRow("校验提示", detail = status, active = railSelected == index)
+                }
             }
         }
     }
@@ -885,8 +986,11 @@ private fun FuzzyInjectPage(onSave: (ProviderConfig) -> Unit, onCancel: () -> Un
     var protocol by remember { mutableStateOf("auto") }
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var railSelected by remember { mutableIntStateOf(3) }
     val scope = rememberCoroutineScope()
     val fuzzy = remember { FuzzyClient() }
+    val railCoordinator = rememberProviderRailMotionCoordinator()
+    val railCount = 4 + if (status.isNotBlank()) 1 else 0
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -894,69 +998,42 @@ private fun FuzzyInjectPage(onSave: (ProviderConfig) -> Unit, onCancel: () -> Un
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            SectionCard(title = "模糊注入") {
-                Text("API key / 供应商信息", fontSize = 10.5.sp, color = p.textTertiary)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 4.dp)
-                        .clip(NewmarkShapeMedium)
-                        .background(p.bgPrimary)
-                        .padding(10.dp),
-                ) {
-                    BasicTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        textStyle = TextStyle(color = p.textPrimary, fontSize = 12.sp, lineHeight = 17.sp),
-                        decorationBox = { inner ->
-                            if (input.isEmpty()) {
-                                Text(
-                                    text = "输入供应商名称、接口和 API key。若供应商已存在，可以省略 API key 和接口。",
-                                    fontSize = 12.sp,
-                                    color = p.textTertiary,
-                                )
-                            }
-                            inner()
-                        },
+            ProviderVerticalCapsuleRail(
+                itemCount = railCount,
+                selectedIndex = railSelected.coerceIn(0, railCount - 1),
+                onSelected = { railSelected = it },
+                coordinator = railCoordinator,
+                horizontalBarrierIndices = setOf(1),
+                selectableIndices = buildSet {
+                    add(3)
+                    if (status.isNotBlank()) add(4)
+                },
+            ) { index ->
+                when (index) {
+                    0 -> ProviderCapsuleField(
+                        "注入信息",
+                        input,
+                        { input = it },
+                        "供应商名称、接口与 API key",
+                        password = true,
                     )
-                }
-                Spacer(Modifier.height(12.dp))
-                Text("协议", fontSize = 10.5.sp, color = p.textTertiary)
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(top = 4.dp),
-                ) {
-                    listOf(
-                        "auto" to "自动检测",
-                        "openai" to "OpenAI 兼容",
-                        "anthropic" to "Anthropic 兼容",
-                    ).forEach { (value, label) ->
-                        Box(
-                            modifier = Modifier
-                                .glassButtonSurface(
-                                    NewmarkShapeMedium,
-                                    if (protocol == value) p.accentSoft else p.bgQuaternary,
-                                )
-                                .clickable { protocol = value }
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                        ) {
-                            Text(
-                                text = label,
-                                fontSize = 11.sp,
-                                color = if (protocol == value) p.accent else p.textSecondary,
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(NewmarkShapeMedium)
-                            .background(p.accentSoft)
-                            .clickable(enabled = !busy) {
+                    1 -> ProviderProtocolRail(
+                        options = listOf(
+                            "auto" to "自动检测",
+                            "openai" to "OpenAI 兼容",
+                            "anthropic" to "Anthropic 兼容",
+                        ),
+                        value = protocol,
+                        coordinator = railCoordinator,
+                        onValueChange = { protocol = it },
+                    )
+                    2 -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ProviderCapsuleAction(
+                            label = if (busy) "导入中..." else "创建",
+                            active = true,
+                            enabled = !busy,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
                                 val parsed = FuzzyClient.parseFuzzyInput(input.trim())
                                 when {
                                     parsed.url.isBlank() -> status = "❌ 需要供应商接口 URL"
@@ -989,43 +1066,102 @@ private fun FuzzyInjectPage(onSave: (ProviderConfig) -> Unit, onCancel: () -> Un
                                         }
                                     }
                                 }
-                            }
-                            .padding(vertical = 10.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = if (busy) "导入中..." else "创建",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = p.accent,
+                            },
                         )
+                        ProviderCapsuleAction("取消", modifier = Modifier.weight(1f), onClick = onCancel)
                     }
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(NewmarkShapeMedium)
-                            .background(p.bgQuaternary)
-                            .clickable(onClick = onCancel)
-                            .padding(vertical = 10.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("取消", fontSize = 12.sp, color = p.textPrimary)
-                    }
-                }
-                if (status.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = status,
-                        fontSize = 11.sp,
-                        color = if (status.startsWith("✅")) p.green else p.textSecondary,
+                    3 -> ProviderCapsuleRow("发现策略", detail = "发现、导入并校验可用模型", active = railSelected == index)
+                    else -> ProviderCapsuleRow(
+                        "导入状态",
+                        detail = status,
+                        active = railSelected == index || status.startsWith("✅"),
                     )
                 }
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    text = "Newmark 会使用可用模型导入并校验模型。已有供应商在省略时复用已保存的接口和 API key。",
-                    fontSize = 10.5.sp,
-                    color = p.textTertiary,
-                )
+            }
+        }
+    }
+}
+
+// ---- 供应商内基础新建模型（与 PC addModel 的核心字段一致） ----
+@Composable
+private fun ManualModelPage(
+    provider: ProviderConfig?,
+    onSave: (ModelConfig) -> Unit,
+    onCancel: () -> Unit,
+) {
+    val p = LocalNewmarkColors.current
+    var name by remember { mutableStateOf("") }
+    var display by remember { mutableStateOf("") }
+    var maxTokens by remember { mutableStateOf("128000") }
+    var description by remember { mutableStateOf("") }
+    var vision by remember { mutableStateOf(false) }
+    var thinking by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
+    var railSelected by remember { mutableIntStateOf(4) }
+    val railCount = 7 + if (status.isNotBlank()) 1 else 0
+
+    if (provider == null) {
+        LaunchedEffect(Unit) { onCancel() }
+        return
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            ProviderVerticalCapsuleRail(
+                itemCount = railCount,
+                selectedIndex = railSelected.coerceIn(0, railCount - 1),
+                onSelected = { railSelected = it },
+                selectableIndices = buildSet {
+                    add(4)
+                    add(5)
+                    if (status.isNotBlank()) add(7)
+                },
+            ) { index ->
+                when (index) {
+                    0 -> ProviderCapsuleField("模型标识", name, { name = it }, "例如 gpt-4o")
+                    1 -> ProviderCapsuleField("显示名称", display, { display = it }, "留空则使用模型标识")
+                    2 -> ProviderCapsuleField("上下文长度", maxTokens, { maxTokens = it.filter(Char::isDigit) }, "128000")
+                    3 -> ProviderCapsuleField("描述", description, { description = it }, "可选")
+                    4 -> ProviderCapsuleRow("视觉能力", active = railSelected == index) {
+                        LiquidGlassSwitch(checked = vision, onCheckedChange = { vision = it }, modifier = Modifier.scale(.8f))
+                    }
+                    5 -> ProviderCapsuleRow("思考能力", active = railSelected == index) {
+                        LiquidGlassSwitch(checked = thinking, onCheckedChange = { thinking = it }, modifier = Modifier.scale(.8f))
+                    }
+                    6 -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ProviderCapsuleAction(
+                            label = "创建模型",
+                            active = true,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                val parsedMaxTokens = maxTokens.toIntOrNull()
+                                if (provider.models.any { it.name.equals(name.trim(), ignoreCase = true) }) {
+                                    status = "该模型标识已存在"
+                                } else runCatching {
+                                    createManualModelConfig(
+                                        name = name,
+                                        display = display,
+                                        description = description,
+                                        maxTokens = parsedMaxTokens ?: 0,
+                                        vision = vision,
+                                        thinking = thinking,
+                                    )
+                                }.onSuccess(onSave).onFailure {
+                                    status = when {
+                                        name.isBlank() -> "请输入模型标识"
+                                        parsedMaxTokens == null || parsedMaxTokens <= 0 -> "上下文长度必须是正整数"
+                                        else -> it.message ?: "无法创建模型"
+                                    }
+                                }
+                            },
+                        )
+                        ProviderCapsuleAction("取消", modifier = Modifier.weight(1f), onClick = onCancel)
+                    }
+                    else -> ProviderCapsuleRow("校验提示", detail = status, active = railSelected == index)
+                }
             }
         }
     }
@@ -1033,15 +1169,25 @@ private fun FuzzyInjectPage(onSave: (ProviderConfig) -> Unit, onCancel: () -> Un
 
 // ---- 供应商详情（三级菜单：配置所属模型） ----
 @Composable
-private fun ProviderDetailPage(vm: ChatViewModel, providerId: String, onBack: () -> Unit) {
+private fun ProviderDetailPage(
+    vm: ChatViewModel,
+    providerId: String,
+    onBack: () -> Unit,
+    onCreateModel: () -> Unit,
+) {
     val p = LocalNewmarkColors.current
     val provider = vm.providers.find { it.id == providerId }
-    var newModelName by remember { mutableStateOf("") }
+    var railSelected by remember { mutableIntStateOf(0) }
 
     if (provider == null) {
         LaunchedEffect(Unit) { onBack() }
         return
     }
+
+    val emptyOffset = if (provider.models.isEmpty()) 1 else 0
+    val modelStart = 4 + emptyOffset
+    val deleteIndex = modelStart + provider.models.size
+    val railCount = deleteIndex + 1
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1049,139 +1195,62 @@ private fun ProviderDetailPage(vm: ChatViewModel, providerId: String, onBack: ()
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            SectionCard(title = "供应商信息") {
-                Text(
-                    text = provider.label,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = p.textPrimary,
-                )
-                Text(
-                    text = provider.baseUrl.ifBlank { "未配置接口" },
-                    fontSize = 11.sp,
-                    color = p.textSecondary,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-                Text(
-                    text = "协议 ${provider.protocol} · API Key ${if (provider.apiKey.isNotBlank()) "已配置" else "未配置"}",
-                    fontSize = 10.5.sp,
-                    color = p.textTertiary,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
-        }
-
-        item {
-            SectionCard(title = "添加模型") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(NewmarkShapeMedium)
-                            .background(p.bgPrimary)
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                    ) {
-                        BasicTextField(
-                            value = newModelName,
-                            onValueChange = { newModelName = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            textStyle = TextStyle(color = p.textPrimary, fontSize = 12.sp),
-                            singleLine = true,
-                            decorationBox = { inner ->
-                                if (newModelName.isEmpty()) {
-                                    Text("模型名（如 gpt-4o）", fontSize = 12.sp, color = p.textTertiary)
-                                }
-                                inner()
-                            },
-                        )
+            ProviderVerticalCapsuleRail(
+                itemCount = railCount,
+                selectedIndex = railSelected.coerceIn(0, railCount - 1),
+                onSelected = {
+                    railSelected = it
+                    when (it) {
+                        3 -> onCreateModel()
+                        deleteIndex -> {
+                            vm.removeProvider(provider.id)
+                            onBack()
+                        }
                     }
-                    Spacer(Modifier.width(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .glassButtonSurface(NewmarkShapeMedium, p.accentSoft, alpha = 0.64f)
-                            .clickable {
-                                vm.addModel(provider.id, newModelName)
-                                newModelName = ""
-                            }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                    ) {
-                        Text("添加", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = p.accent)
-                    }
-                }
-            }
-        }
-
-        item {
-            SectionCard(title = "所属模型") {
-                if (provider.models.isEmpty()) {
-                    Text("暂无模型，点击上方「添加模型」", fontSize = 11.sp, color = p.textTertiary, modifier = Modifier.padding(vertical = 6.dp))
-                }
-            }
-        }
-
-        items(provider.models, key = { it.name }) { model ->
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(NewmarkShapeLarge)
-                    .background(p.bgSecondary)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                },
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = model.label,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = p.textPrimary,
-                        )
+                when {
+                    it == 0 -> ProviderCapsuleRow("供应商", detail = provider.label, active = railSelected == it)
+                    it == 1 -> ProviderCapsuleRow("API 接口", detail = provider.baseUrl.ifBlank { "未配置接口" }, active = railSelected == it)
+                    it == 2 -> ProviderCapsuleRow(
+                        "连接协议",
+                        detail = "${provider.protocol} · Key ${if (provider.apiKey.isNotBlank()) "已配置" else "未配置"}",
+                        active = railSelected == it,
+                    )
+                    it == 3 -> ProviderCapsuleRow("＋ 新建模型", active = true)
+                    emptyOffset == 1 && it == 4 -> ProviderCapsuleRow("暂无模型", detail = "请新建供应商内模型", active = railSelected == it)
+                    it in modelStart until deleteIndex -> {
+                        val model = provider.models[it - modelStart]
                         val caps = buildList {
                             if (model.thinking) add("思考")
                             if (model.vision) add("视觉")
                             if (model.maxTokens > 0) add("${model.maxTokens / 1000}K")
                             if (model.capabilityRating.isNotBlank()) add(model.capabilityRating)
                         }.joinToString(" · ")
-                        Text(
-                            text = caps.ifBlank { model.name },
-                            fontSize = 10.5.sp,
-                            color = p.textTertiary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        ProviderCapsuleRow(
+                            label = model.label,
+                            detail = caps.ifBlank { model.name },
+                            active = railSelected == it,
+                        ) {
+                            LiquidGlassSwitch(
+                                checked = model.enabled,
+                                onCheckedChange = { vm.toggleModel(provider.id, model.name) },
+                                modifier = Modifier.scale(0.8f),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Icon(
+                                imageVector = Icons.Filled.Delete,
+                                contentDescription = "删除模型",
+                                tint = p.red,
+                                modifier = Modifier.size(28.dp).clickable { vm.removeModel(provider.id, model.name) }.padding(6.dp),
+                            )
+                        }
                     }
-                    LiquidGlassSwitch(
-                        checked = model.enabled,
-                        onCheckedChange = { vm.toggleModel(provider.id, model.name) },
-                        modifier = Modifier.scale(0.8f),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Icon(
-                        imageVector = Icons.Filled.Delete,
-                        contentDescription = "删除模型",
-                        tint = p.red,
-                        modifier = Modifier
-                            .size(30.dp)
-                            .glassButtonSurface(CircleShape, p.bgQuaternary)
-                            .clickable { vm.removeModel(provider.id, model.name) }
-                            .padding(6.dp),
-                    )
+                    it == deleteIndex -> ProviderCapsuleRow(
+                        "删除供应商",
+                        active = railSelected == it,
+                    ) { Text("删除", fontSize = 11.sp, color = p.red) }
                 }
-            }
-        }
-
-        item {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .glassButtonSurface(NewmarkShapeLarge, p.bgSecondary, alpha = 0.58f)
-                    .clickable {
-                        vm.removeProvider(provider.id)
-                        onBack()
-                    }
-                    .padding(14.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("删除供应商", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = p.red)
             }
         }
     }

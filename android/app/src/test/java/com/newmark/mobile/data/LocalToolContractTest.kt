@@ -175,7 +175,7 @@ class LocalToolContractTest {
     fun buildExposesEverySupportedLocalAgentCapability() {
         assertEquals(
             setOf(
-                "read_file", "write_file", "list_dir", "recent_files",
+                "read_file", "write_file", "list_dir", "recent_files", "image_display",
                 "terminal_exec",
                 "memory_lab_read", "memory_lab_query", "memory_lab_update", "memory_lab_delete", "memory_lab_reindex",
                 "settings_read", "settings_update",
@@ -254,7 +254,7 @@ class LocalToolContractTest {
     @Test
     fun planKeepsOnlyReadOnlyToolsAndReadOnlyBrowserActions() {
         assertEquals(setOf(
-            "read_file", "list_dir", "recent_files", "memory_lab_read", "memory_lab_query", "settings_read",
+            "read_file", "list_dir", "recent_files", "image_display", "memory_lab_read", "memory_lab_query", "settings_read",
             "web_search", "web_fetch", "browser_use", "task_read", "calendar_read",
         ), LocalToolCatalog.planNames)
         assertEquals(setOf("observe", "navigate", "wait", "extract"), LocalToolCatalog.planBrowserActions)

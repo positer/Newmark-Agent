@@ -165,10 +165,12 @@ function verifyDesktopContracts(): void {
     && mainTs.includes("'disable-sync'")
     && mainTs.includes("'no-first-run'")
     && mainTs.includes('app.commandLine.appendSwitch(startupSwitch)'), 'Electron disables only built-in background services while Newmark keeps its explicit deferred update path');
-  ok(mainTs.includes('startupAttempt = 1')
-    && mainTs.includes('startupWindow = createDesktopWindow(true, true, startupAttempt)')
+  ok(mainTs.includes('startupAttempt = 0')
+    && mainTs.includes('startupWindow = createDesktopWindow(false, true)')
     && !mainTs.includes('createDesktopWindow!(true, false, attemptId)')
-    && mainTs.includes('const startupUiWindow = startupWindow'), 'startup creates exactly one visible BrowserWindow and loads attempt-one index.html directly');
+    && mainTs.includes('const startupUiWindow = startupWindow'), 'startup creates exactly one visible BrowserWindow, paints the light shell first, then navigates the same window to index.html');
+  ok(mainTs.includes("await prepareRuntimeLifecycle(root, 'main')")
+    && mainTs.indexOf("await prepareRuntimeLifecycle(root, 'main')") < mainTs.indexOf('agent = new Agent(root)'), 'legacy lifecycle marker cleanup completes asynchronously before Agent construction');
   ok(mainTs.includes("show: false") && mainTs.includes("startup:uiReady") && mainTs.includes('runStartupPrewarmBarrier'), 'same-window UI readiness remains gated by the startup barrier and renderer handshake');
   ok(mainTs.includes('devTools: true'), 'the single startup webContents remains inspectable after navigating from splash to the final UI');
   ok(startupHtml.includes('id="startup-icon"')
@@ -418,7 +420,7 @@ function verifyDesktopContracts(): void {
   const backendBarrierSource = backendBarrierStart >= 0 && backendBarrierEnd > backendBarrierStart
     ? mainTs.slice(backendBarrierStart, backendBarrierEnd)
     : '';
-  const firstWindowCreateIndex = mainTs.indexOf('startupWindow = createDesktopWindow(true, true, startupAttempt)');
+  const firstWindowCreateIndex = mainTs.indexOf('startupWindow = createDesktopWindow(false, true)');
   ok(backendBarrierStart >= 0
     && backendBarrierStart < firstWindowCreateIndex
     && backendBarrierSource.includes('await Promise.all([')

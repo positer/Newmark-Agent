@@ -72,6 +72,58 @@ data class ProviderCatalogMergeResult(
     val addedModels: Int,
 )
 
+internal fun createManualProviderConfig(
+    id: String,
+    name: String,
+    baseUrl: String,
+    apiKey: String,
+    protocol: String,
+): ProviderConfig {
+    val normalizedName = name.trim()
+    val normalizedProtocol = protocol.trim().lowercase().ifBlank { "openai" }
+    require(normalizedName.isNotBlank()) { "provider name is required" }
+    require(normalizedProtocol in setOf("openai", "anthropic", "github_models")) {
+        "unsupported provider protocol: $normalizedProtocol"
+    }
+    val normalizedUrl = baseUrl.trim().ifBlank {
+        if (normalizedProtocol == "github_models") "https://models.github.ai" else ""
+    }.trimEnd('/')
+    require(normalizedUrl.isNotBlank()) { "provider endpoint is required" }
+    require(id.isNotBlank()) { "provider id is required" }
+    return ProviderConfig(
+        id = id,
+        name = normalizedName,
+        baseUrl = normalizedUrl,
+        apiKey = apiKey.trim(),
+        protocol = normalizedProtocol,
+        enabled = true,
+        hasApiKey = apiKey.trim().isNotBlank(),
+        models = emptyList(),
+    )
+}
+
+internal fun createManualModelConfig(
+    name: String,
+    display: String,
+    description: String,
+    maxTokens: Int,
+    vision: Boolean,
+    thinking: Boolean,
+): ModelConfig {
+    val normalizedName = name.trim()
+    require(normalizedName.isNotBlank()) { "model name is required" }
+    require(maxTokens > 0) { "max tokens must be positive" }
+    return ModelConfig(
+        name = normalizedName,
+        display = display.trim().ifBlank { normalizedName },
+        description = description.trim(),
+        maxTokens = maxTokens,
+        vision = vision,
+        thinking = thinking,
+        enabled = true,
+    )
+}
+
 /**
  * Merge an explicitly exported provider catalog into local settings. Existing
  * local credentials win; a previously redacted pull is repaired from the new

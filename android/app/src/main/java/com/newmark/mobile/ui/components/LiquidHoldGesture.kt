@@ -19,6 +19,7 @@ import kotlinx.coroutines.CancellationException
 fun Modifier.liquidHoldDragGesture(
     vararg keys: Any?,
     holdMillis: Long = 300L,
+    canStartAt: (Offset) -> Boolean = { true },
     onCandidateStart: () -> Unit = {},
     onCandidateEnd: () -> Unit = {},
     onTap: (Offset) -> Unit,
@@ -29,6 +30,7 @@ fun Modifier.liquidHoldDragGesture(
 ): Modifier = pointerInput(*keys) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)
+        if (!canStartAt(down.position)) return@awaitEachGesture
         onCandidateStart()
         var holdOwned = false
         var holdFinished = false

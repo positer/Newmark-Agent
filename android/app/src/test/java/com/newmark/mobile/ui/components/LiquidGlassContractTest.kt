@@ -211,7 +211,7 @@ class LiquidGlassContractTest {
         assertTrue(edgeGlow.contains("blurRadius = 0.5.dp + 0.15.dp * emphasis"))
         assertTrue(edgeGlow.contains("onDrawSurface = null"))
         listOf(chat, sidebar, right, settings, memoryLab, terminal).forEach { source ->
-            assertTrue(source.contains("glassButtonSurface("))
+            assertTrue(source.contains("glassButtonSurface(") || source.contains("GlassButtonCanvas("))
         }
         assertTrue(chat.substringAfter("private fun SubmitButton(").contains("GlassButtonCanvas("))
         val inputBody = chat
@@ -221,7 +221,9 @@ class LiquidGlassContractTest {
         assertFalse(inputBody.contains("kyantGlassEdge("))
         assertFalse(inputBody.contains("drawBackdrop("))
         assertTrue(terminal.substringAfter("BasicTextField(").contains("glassButtonSurface(CircleShape, p.accent"))
-        assertTrue(memoryLab.substringAfter("// 视图 tab + Reindex").contains("glassButtonSurface("))
+        val memoryActions = memoryLab.substringAfter("// 视图 tab + Reindex")
+        assertTrue(memoryActions.contains("GlassButtonCanvas("))
+        assertFalse(memoryLab.substringAfter("private fun MemoryLabGlassAction(").contains("glassButtonSurface("))
         assertTrue(settings.substringAfter("private fun PairingPage(").contains("glassButtonSurface("))
     }
 

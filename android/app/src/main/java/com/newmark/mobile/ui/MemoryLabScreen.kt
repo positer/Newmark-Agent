@@ -99,7 +99,7 @@ import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
 import com.newmark.mobile.ui.components.resistedLiquidBoundaryPosition
 import com.newmark.mobile.ui.components.DialogBackdropBlur
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
-import com.newmark.mobile.ui.components.glassButtonSurface
+import com.newmark.mobile.ui.components.GlassButtonCanvas
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
 import com.newmark.mobile.ui.components.liquidGlassModifier
 import com.newmark.mobile.ui.components.liquidHoldDragGesture
@@ -187,12 +187,11 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
                 .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .glassButtonSurface(CircleShape, p.bgQuaternary)
-                    .clickable(onClick = onBack),
-                contentAlignment = Alignment.Center,
+            GlassButtonCanvas(
+                visualSize = 36.dp,
+                shape = CircleShape,
+                surfaceColor = p.bgQuaternary,
+                onClick = onBack,
             ) {
                 Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = p.textPrimary, modifier = Modifier.size(20.dp))
             }
@@ -831,20 +830,25 @@ private fun MemoryLabGlassAction(
     val shape = RoundedCornerShape(50)
     val interaction = remember { MutableInteractionSource() }
     val surface = if (accent) p.accentSoft else p.bgQuaternary.copy(alpha = 0.72f)
-    Box(
-        modifier = Modifier
-            .height(if (compact) 32.dp else 34.dp)
-            .widthIn(min = if (compact) 52.dp else 58.dp)
-            .background(surface.copy(alpha = if (enabled) surface.alpha else surface.alpha * 0.45f), shape)
-            .glassButtonSurface(shape, if (accent) p.accent else p.bgQuaternary, alpha = if (accent) 0.28f else 0.16f)
-            .clickable(
-                enabled = enabled,
-                interactionSource = interaction,
-                indication = null,
-                onClick = onClick,
-            )
-            .padding(horizontal = if (compact) 11.dp else 13.dp),
-        contentAlignment = Alignment.Center,
+    val visualWidth = when {
+        compact -> 52.dp
+        label.length <= 2 -> 58.dp
+        else -> 80.dp
+    }
+    val visualHeight = if (compact) 32.dp else 34.dp
+    GlassButtonCanvas(
+        visualWidth = visualWidth,
+        visualHeight = visualHeight,
+        shape = shape,
+        surfaceColor = if (accent) p.accent else p.bgQuaternary,
+        alpha = if (accent) 0.28f else 0.16f,
+        enabled = enabled,
+        onClick = onClick,
+        interactionSource = interaction,
+        visualModifier = Modifier.background(
+            surface.copy(alpha = if (enabled) surface.alpha else surface.alpha * 0.45f),
+            shape,
+        ),
     ) {
         Text(
             text = label,

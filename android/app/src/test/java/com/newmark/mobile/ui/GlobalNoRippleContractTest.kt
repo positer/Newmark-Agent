@@ -20,6 +20,10 @@ class GlobalNoRippleContractTest {
         assertFalse(settings.contains("LocalSettingsIndication"))
         assertFalse(rightSidebar.contains("indication = androidx.compose.foundation.LocalIndication.current"))
         assertTrue(memoryLab.contains("private fun MemoryLabGlassAction"))
-        assertTrue(memoryLab.contains("indication = null"))
+        val memoryAction = memoryLab.substringAfter("private fun MemoryLabGlassAction")
+        assertTrue(memoryAction.contains("GlassButtonCanvas("))
+        assertTrue(memoryAction.contains("interactionSource = interaction"))
+        val glassCanvas = java.io.File("src/main/java/com/newmark/mobile/ui/components/LiquidGlass.kt").readText()
+        assertTrue(glassCanvas.contains("indication = null"))
     }
 }

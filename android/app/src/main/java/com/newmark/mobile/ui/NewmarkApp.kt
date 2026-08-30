@@ -81,6 +81,7 @@ import com.newmark.mobile.data.LocalWorkRun
 import com.newmark.mobile.ui.QueueMessageUi
 import com.newmark.mobile.data.ModelOption
 import com.newmark.mobile.data.RemoteConversation
+import com.newmark.mobile.data.RemoteConversationImage
 import com.newmark.mobile.data.RemoteFlowTakeover
 import com.newmark.mobile.data.RemoteGoal
 import com.newmark.mobile.data.WorkDisplayImage
@@ -1672,6 +1673,17 @@ private fun projectLocalConversationItems(vm: ChatViewModel): List<ChatItem> {
             keyHint = message.messageId.ifBlank { "l:$index:${message.timestamp}" },
             messageId = message.messageId,
             messageIndex = index,
+            attachments = message.imageAttachments.map { image ->
+                RemoteConversationImage(
+                    id = image.id,
+                    origin = "user",
+                    name = image.name,
+                    mimeType = image.mimeType,
+                    dataUrl = image.dataUrl,
+                    width = image.width,
+                    height = image.height,
+                )
+            },
             branchPager = pager?.let {
                 ConversationBranchPagerUi(
                     groupId = it.groupId,

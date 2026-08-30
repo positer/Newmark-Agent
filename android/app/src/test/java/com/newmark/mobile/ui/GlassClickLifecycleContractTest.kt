@@ -33,7 +33,11 @@ class GlassClickLifecycleContractTest {
         assertTrue(chat.substringAfter("private fun PlusCombo(").substringBefore("private fun SubmitButton").contains("GlassButtonCanvas("))
         assertFalse(chat.substringAfter("// 单行：+（模式/文件）").substringBefore("verticalAlignment = Alignment.Bottom").contains(".clip(inputShape)"))
         assertTrue(memory.contains("private fun MemoryLabGlassAction("))
-        assertTrue(memory.substringAfter("private fun MemoryLabGlassAction(").contains(".glassButtonSurface("))
+        val memoryAction = memory.substringAfter("private fun MemoryLabGlassAction(")
+        assertTrue(memoryAction.contains("GlassButtonCanvas("))
+        assertTrue(memoryAction.contains("visualWidth = visualWidth"))
+        assertTrue(memoryAction.contains("visualHeight = visualHeight"))
+        assertFalse(memoryAction.contains(".glassButtonSurface("))
         assertTrue(sidebar.substringAfter("SectionLabel(\"本地对话\")").substringBefore("ConversationList(").contains("GlassButtonCanvas("))
     }
 }

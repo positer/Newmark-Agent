@@ -49,6 +49,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -206,6 +207,8 @@ private enum class InputCompositeMenu { PlusMain, PlusModes, ModelMain, Models, 
 private val ChatAreaHorizontalInset = 24.dp
 private val WorkRunContentStartInset = 24.dp
 private val WorkRunRightSafeInset = 34.dp
+internal val MobileReadableStartInset = 24.dp
+internal val MobileReadableEndInset = 34.dp
 internal const val InputComposerMaxLines = 5
 internal val InputComposerCornerRadius = 24.dp
 internal val InputComposerSingleLineOpticalOffset = (-1).dp
@@ -398,6 +401,7 @@ fun ChatScreen(
     val plusMenuAnchor = remember { mutableStateOf<Rect?>(null) }
     val modelMenuAnchor = remember { mutableStateOf<Rect?>(null) }
     var inputAreaHeight by remember { mutableIntStateOf(0) }
+    var inputStackHeight by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var pendingFileUpload by remember {
@@ -540,6 +544,7 @@ fun ChatScreen(
                 ChatContent(
                 items = items,
                 isSending = isSending,
+                bottomAvoidancePx = inputStackHeight,
                 onInspectBranch = onInspectBranch,
                 onEditUserMessage = onEditUserMessage,
                 onOpenWebLink = onOpenWebLink,
@@ -592,7 +597,8 @@ fun ChatScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .offset { IntOffset(0, -inputAreaHeight) }
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .onSizeChanged { inputStackHeight = it.height },
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 flow?.takeIf { it.running }?.let {
@@ -737,6 +743,7 @@ private fun CircleButton(onClick: () -> Unit, content: @Composable () -> Unit) {
 private fun ChatContent(
     items: List<ChatItem>,
     isSending: Boolean,
+    bottomAvoidancePx: Int,
     onInspectBranch: (String, Int) -> Unit,
     onEditUserMessage: (Int, String) -> Unit,
     onOpenWebLink: (String) -> Unit,
@@ -746,6 +753,8 @@ private fun ChatContent(
     val pc = LocalPcColors.current
     val listState = rememberLazyListState()
     val chatScope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val bottomAvoidanceDp = with(density) { bottomAvoidancePx.toDp() }
     var viewportHeightPx by remember { mutableIntStateOf(0) }
     // A live Build keeps one LazyColumn row while its internal event stream
     // grows.  Key scrolling to that stream as well as the outer item count;
@@ -782,7 +791,12 @@ private fun ChatContent(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = ChatAreaHorizontalInset, vertical = 16.dp)
+                .padding(
+                    start = ChatAreaHorizontalInset,
+                    end = ChatAreaHorizontalInset,
+                    top = 16.dp,
+                    bottom = 16.dp + bottomAvoidanceDp,
+                )
             .drawBehind {
                 // PC #chat-area owns two continuous timeline rails. The
                 // message rows only provide the colored 11dp node circles.
@@ -844,6 +858,7 @@ private fun ChatContent(
                 visualSize = 40.dp,
                 shape = CircleShape,
                 surfaceColor = p.bgQuaternary,
+                restingBorderColor = p.border2,
                 alpha = 0.72f,
                 onClick = {
                     chatScope.launch { listState.scrollToItem(transcriptEndIndex) }
@@ -851,7 +866,6 @@ private fun ChatContent(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 14.dp, bottom = 14.dp),
-                visualModifier = Modifier.border(1.dp, p.border2, CircleShape),
             ) {
                 Icon(
                     imageVector = Icons.Filled.KeyboardArrowDown,
@@ -1059,6 +1073,7 @@ private fun ChatMessageRow(
                 },
                 onEdit = if (isUser && messageIndex >= 0) ({ editing = true }) else null,
             )
+            if (isUser) ConversationImageAttachments(attachments)
             if (editing) {
                 MessageInlineEditor(
                     value = editedText,
@@ -1084,7 +1099,6 @@ private fun ChatMessageRow(
                     onLinkClick = onOpenWebLink,
                 )
             }
-            ConversationImageAttachments(attachments)
             branchPager?.let { pager ->
                 ConversationBranchPager(
                     pager = pager,
@@ -1122,6 +1136,7 @@ private fun ConversationImageAttachments(attachments: List<RemoteConversationIma
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 6.dp)
+                .wrapContentWidth(Alignment.End)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -1132,7 +1147,7 @@ private fun ConversationImageAttachments(attachments: List<RemoteConversationIma
                 contentDescription = attachment.name.ifBlank { "已提交图片" },
                 contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .widthIn(max = 280.dp)
                     .height(if (expanded) 260.dp else 104.dp)
                     .clip(NewmarkShapeSmall),
             )
@@ -1142,7 +1157,10 @@ private fun ConversationImageAttachments(attachments: List<RemoteConversationIma
                 color = LocalPcColors.current.textDim,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 2.dp),
+                modifier = Modifier
+                    .widthIn(max = 280.dp)
+                    .align(Alignment.End)
+                    .padding(top = 2.dp),
             )
         }
     }
@@ -1823,7 +1841,8 @@ private fun WorkDisplayImagePreview(image: com.newmark.mobile.data.WorkDisplayIm
             contentDescription = safe.caption.ifBlank { safe.name.ifBlank { "示意图" } },
             contentScale = androidx.compose.ui.layout.ContentScale.Fit,
             modifier = Modifier
-                .fillMaxWidth()
+                .widthIn(max = 280.dp)
+                .align(Alignment.Start)
                 .height(if (expanded) 260.dp else 108.dp)
                 .clip(NewmarkShapeSmall),
         )
@@ -1994,7 +2013,9 @@ private fun WorkGuideImageAttachments(attachments: List<com.newmark.mobile.data.
             contentScale = androidx.compose.ui.layout.ContentScale.Fit,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 24.dp, top = 5.dp)
+                .wrapContentWidth(Alignment.End)
+                .widthIn(max = 280.dp)
+                .padding(top = 5.dp)
                 .height(if (expanded) 260.dp else 104.dp)
                 .clip(NewmarkShapeSmall)
                 .clickable(
@@ -3236,6 +3257,18 @@ private fun PlusCombo(
     }
 }
 
+internal enum class SubmitButtonMode {
+    IdleSend,
+    RunningStop,
+    RunningSend,
+}
+
+internal fun submitButtonMode(running: Boolean, hasText: Boolean): SubmitButtonMode = when {
+    !running -> SubmitButtonMode.IdleSend
+    hasText -> SubmitButtonMode.RunningSend
+    else -> SubmitButtonMode.RunningStop
+}
+
 @Composable
 private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit, onStop: () -> Unit, escalating: Boolean = false) {
     val p = LocalNewmarkColors.current
@@ -3249,7 +3282,8 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
     )
     val shape = CircleShape
     val isDark = LocalPcColors.current == PcColorsDark
-    if (running && !hasText) {
+    when (submitButtonMode(running, hasText)) {
+    SubmitButtonMode.RunningStop -> {
         // 三形态之「运行中/强制停止」（对齐 PC #submit-btn.running-action + .marquee-border）：
         // 背景 rgba(14,16,24,.88) + border rgba(255,255,255,.08) + 白图标；escalating=octagon-x，否则 square
         GlassButtonCanvas(
@@ -3267,6 +3301,7 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
             MarqueeBorder(
                 cornerRadius = 18.dp,
                 modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = if (escalating) LucideIcons.OctagonX else LucideIcons.Square,
@@ -3276,7 +3311,37 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
                 )
             }
         }
-    } else {
+    }
+    SubmitButtonMode.RunningSend -> {
+        // PC 独立第三态：Agent 正在运行但输入非空。保持 running-action
+        // 深色/浅色表面和旋转边框，图标与点击语义切换为 Send/Next。
+        GlassButtonCanvas(
+            visualSize = InputComposerEdgeControlSize,
+            shape = shape,
+            surfaceColor = if (isDark) Color(0xFF0E1018) else Color.White,
+            alpha = if (isDark) 0.88f else 0.72f,
+            onClick = onClick,
+            interactionSource = interaction,
+            visualModifier = Modifier.graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            },
+        ) {
+            MarqueeBorder(
+                cornerRadius = 18.dp,
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = LucideIcons.Send,
+                    contentDescription = "发送下一条",
+                    tint = if (isDark) Color.White else Color(0xFF0A0A1A),
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
+    }
+    SubmitButtonMode.IdleSend -> {
         // idle（对齐 PC #submit-btn）：暗色 = 135deg 渐变 #5b78ff→#7b93ff + 白图标；
         // 亮色 = PC [data-theme=light] 白色 0.72 底 + 深色图标
         val iconTint = if (isDark) Color.White else Color(0xFF0A0A1A)
@@ -3306,5 +3371,6 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
                 modifier = Modifier.size(14.dp),
             )
         }
+    }
     }
 }

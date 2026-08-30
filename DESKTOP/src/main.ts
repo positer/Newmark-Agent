@@ -57,7 +57,7 @@ import {
   startupUpdatePromptContent,
 } from './core/startupPrewarm';
 import { runRuntimeShutdownBarrier } from './core/runtimeShutdown';
-import { markRuntimeLifecycleClean } from './core/runtimeLifecycle';
+import { markRuntimeLifecycleClean, prepareRuntimeLifecycle } from './core/runtimeLifecycle';
 import { discoverPluginManifests } from './core/compat';
 import { discoverDshCompatibility, installDshBundle, setDshBundleEnabled, uninstallDshBundle } from './core/dshCompatibility';
 import { McpManager } from './core/mcpManager';
@@ -1765,12 +1765,10 @@ if (isViewerArg) {
 
     let firstRunInitialized = false;
     if (!automationWakeMode) {
-      // Attempt one loads the real desktop immediately. The renderer keeps a
-      // startup cover above it until the main-process readiness acknowledgement,
-      // avoiding a startup.html -> index.html renderer navigation on the hot path.
-      startupAttempt = 1;
-      startupShellLoadedAt = Date.now();
-      startupWindow = createDesktopWindow(true, true, startupAttempt);
+      // Keep Chromium's heavy index renderer off the event loop until the
+      // lightweight startup shell is painted and durable recovery is ready.
+      startupAttempt = 0;
+      startupWindow = createDesktopWindow(false, true);
       mainWindow = startupWindow;
       createTray();
     }
@@ -1860,6 +1858,8 @@ if (isViewerArg) {
         recordStartup('first-run-init');
       }
       if (!agent) {
+        await prepareRuntimeLifecycle(root, 'main');
+        recordStartup('runtime-lifecycle-prepared');
         agent = new Agent(root);
         mcpManager = new McpManager(root);
         activeAgentBackendMode = process.platform === 'win32' && agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows';

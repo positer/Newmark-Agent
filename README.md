@@ -513,4 +513,4 @@ PC 启动优化版 dev-0.5.11 Windows x64 MSI 已构建到独立目录 `release-
 
 用户输入图片现在右对齐，Agent 展示/查看图片左对齐，并分别与对应正文保持同一文字边界。对话区会持续测量输入上方的 Goal/Flow/Queue 浮层，把变化后的高度实时纳入滚动内容底部避让；Markdown/LaTeX 阅读预览复用同一左右安全边界，窄屏不会被时间线或编辑器边缘裁切。
 
-本轮最新 Android APK 已重新绑定到 `release-0.5.11-full-platform/`，并与 Windows x64 MSI/ZIP、Linux AppImage/deb/ZIP 一起发布为 GitHub `dev-0.5.11` prerelease。macOS DMG 仍需 macOS 主机，Windows MSI 未签名，Android 使用工程 Debug v2 证书。
+本轮最新 Android APK 已重新绑定到 `release-0.5.11-full-platform/`，并与 Windows x64 MSI/ZIP、Linux AppImage/deb/ZIP 一起发布为 GitHub [`dev-0.5.11` prerelease](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.5.11)。GitHub 回下载逐字节核对六项 SHA-256 均通过。macOS DMG 仍需 macOS 主机，Windows MSI 未签名，Android 使用工程 Debug v2 证书。

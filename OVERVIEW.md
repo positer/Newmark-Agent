@@ -3364,7 +3364,7 @@ release-0.5.11-full-platform/
 
 桌面全量门禁在 TUI ConPTY 首轮遇到 Windows `AttachConsole failed` 瞬态后，专项重跑全部通过，并从失败点继续完成模式/对话、跨平台、SSH、WSL、CLI 和三端共享后端门禁。Windows 资产验证打包态 CLI、上下文压缩、控制台参数边界和功能/安全契约；Linux 资产由 Ubuntu 24.04 WSL 原生构建并分别完成 xvfb GUI 与双 shell 回环。Android 标准 APK 输出被外部进程占用，安全改用 `android/isolated-release-build/` 构建并复制到发布目录，未关闭用户进程或覆盖已打开文件。
 
-当前主机只闭合 Windows、Linux、Android 六资产；macOS DMG 仍需 macOS 主机。Windows 未做 Authenticode，Android 为 Debug v2 证书，目录尚未上传到任何远端发布渠道。
+当前主机闭合并发布了 Windows、Linux、Android 六资产；macOS DMG 仍需 macOS 主机。Windows 未做 Authenticode，Android 为 Debug v2 证书。GitHub `dev-0.5.11` prerelease 已从标签提交发布，六项资产已回下载并逐字节核对。
 
 ## 2026-08-30 dev-0.5.11 移动端图片显示增量
 

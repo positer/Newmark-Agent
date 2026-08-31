@@ -806,4 +806,4 @@ val MobileInteractionGlassEdge = 7.dp
 
 /** Fixed capture outset for the semicircular ends of conversation pills. */
 val MobileConversationGlassHorizontalEdge = 14.dp
-val MobilePopupShape = RoundedCornerShape(22.dp)
+val MobilePopupShape = RoundedCornerShape(26.dp)

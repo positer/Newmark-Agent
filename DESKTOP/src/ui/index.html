@@ -1545,6 +1545,7 @@ button.left-ws-item {
   font-size: 12px;
 }
 .md-rendered pre {
+  position: relative;
   margin: 8px 0;
   padding: 10px 12px;
   overflow-x: auto;
@@ -2138,6 +2139,19 @@ button.left-ws-item {
   /* Opaque theme-tinted foundation below the transcript, rails and glass. */
   background-color: var(--chat-canvas);
 }
+.md-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 7px;
+  border: 1px solid var(--glass-border-1);
+  border-radius: 4px;
+  background: var(--glass-bg-2);
+  color: var(--text-dim);
+  padding: 2px 6px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.md-code-copy:hover { color: var(--text); }
 
 #chat-area {
   flex: 1;
@@ -2512,6 +2526,33 @@ button.left-ws-item {
   overflow: visible;
 }
 
+/* Build Block transcript is a plain timeline, never a glass surface.  Keep
+   this explicit and high-priority so broad chat/panel material rules cannot
+   reintroduce a rounded white compositor plane around an expanded run. */
+.work-run-message,
+.conversation-work-run,
+.conversation-work-run-head,
+.conversation-work-run-body {
+  background: transparent !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.work-run-message::before,
+.work-run-message::after,
+.conversation-work-run-head::before,
+.conversation-work-run-head::after,
+.conversation-work-run-body::before,
+.conversation-work-run-body::after {
+  content: none !important;
+  display: none !important;
+}
+
 .conversation-work-run::before {
   content: "";
   position: absolute;
@@ -2589,8 +2630,8 @@ button.left-ws-item {
 .conversation-work-activity-list { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 5px 24px; padding: 0; border: 0; }
 .conversation-work-activity-item { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; align-items: start; min-height: 24px; color: var(--text-dim); font: 400 11px/1.5 var(--font-ui); }
 .conversation-work-activity-item .nm-icon { margin-top: 2px; }
-.conversation-work-display-image { display:grid; gap:6px; width:min(100%, 640px); margin:7px 0 3px 24px; padding:0; border:0; background:transparent; color:var(--text-dim); text-align:left; cursor:pointer; }
-.conversation-work-display-image img { display:block; width:100%; max-height:420px; object-fit:contain; object-position:left center; border:1px solid var(--glass-border-2); border-radius:var(--radius-md); background:rgba(0,0,0,.18); }
+.conversation-work-display-image { display:inline-grid; justify-items:start; gap:6px; width:fit-content !important; max-width:min(100%, 640px); margin:7px 0 3px 24px; padding:0; border:0; border-radius:0 !important; background:transparent; color:var(--text-dim); text-align:left; cursor:pointer; }
+.conversation-work-display-image img { display:block; width:auto; max-width:100%; height:auto; max-height:420px; object-fit:contain; object-position:left center; border:1px solid var(--glass-border-2); border-radius:var(--radius-sm); background:rgba(0,0,0,.18); }
 .conversation-work-display-image span { font:10px/1.4 var(--font-ui); }
 .conversation-work-display-image:hover span, .conversation-work-display-image:focus-visible span { color:var(--accent); }
 .work-run-collapsed-images { display:none; flex-direction:column; gap:8px; margin:0 34px 8px 0; }
@@ -4823,20 +4864,28 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
 }
 
 .conversation-image-attachments {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(132px, 190px));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-start;
   gap: 8px;
   margin-top: 9px;
 }
+.chat-msg.user .conversation-image-attachments { justify-content: flex-end; }
+.chat-msg.assistant .conversation-image-attachments,
+.chat-msg.workflow .conversation-image-attachments { justify-content: flex-start; }
 
 .conversation-image-attachment {
   min-width: 0;
-  display: flex;
+  width: fit-content !important;
+  max-width: min(100%, 280px);
+  display: inline-flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 5px;
   padding: 6px;
   border: 1px solid var(--glass-border-2);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm) !important;
   background: var(--glass-bg-1);
   color: var(--text);
   font: 11px/1.35 var(--font-ui);
@@ -4851,8 +4900,11 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
 }
 
 .conversation-image-attachment img {
-  width: 100%;
-  height: 112px;
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 180px;
   border-radius: var(--radius-sm);
   object-fit: contain;
   background: rgba(0,0,0,.18);
@@ -8377,7 +8429,7 @@ function renderMarkdownBlocks(text) {
       var code = codeLines.join('\n');
       var normalizedLanguage = lang ? normalizeCodeLanguage(lang) : 'text';
       var highlighted = normalizedLanguage === 'text' ? esc(code) : highlightCodeByLanguage(code, normalizedLanguage);
-      html += '<pre><code' + (lang ? ' data-lang="' + escAttr(lang) + '"' : '') + ' class="md-code-block language-' + escAttr(normalizedLanguage) + '">' + highlighted + '</code></pre>';
+      html += '<pre><button class="md-code-copy" type="button" title="' + escAttr(t('common.copy')) + '" data-code="' + escAttr(code) + '" onclick="window.copyMarkdownCode(this)">' + esc(t('common.copy')) + '</button><code' + (lang ? ' data-lang="' + escAttr(lang) + '"' : '') + ' class="md-code-block language-' + escAttr(normalizedLanguage) + '">' + highlighted + '</code></pre>';
       continue;
     }
     if (trimmed === '$$' || trimmed === '\\[') {
@@ -9453,6 +9505,19 @@ function workReviewRunIds(runId, aliases) {
   });
   return ids;
 }
+
+window.copyMarkdownCode = async function(button) {
+  var value = String(button && button.getAttribute('data-code') || '');
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(value);
+    else {
+      var helper = document.createElement('textarea');
+      helper.value = value; helper.style.position = 'fixed'; helper.style.opacity = '0';
+      document.body.appendChild(helper); helper.select(); document.execCommand('copy'); helper.remove();
+    }
+    if (button) { button.textContent = t('common.copied'); setTimeout(function() { button.textContent = t('common.copy'); }, 1200); }
+  } catch (e) {}
+};
 
 function upsertWorkReviewRecord(ui, diffs, runId, aliases) {
   if (!ui) return null;
@@ -11922,6 +11987,33 @@ function replayActiveAgentWorkEvents() {
 }
 
 var _conversationsRenderPending = false;
+var _contextWindowRefreshTimer = null;
+var _contextWindowRefreshInFlight = false;
+var _contextWindowRefreshTargetKey = '';
+
+function scheduleActiveContextWindowRefresh(target) {
+  if (!api.getState || !target || !isActiveConversationTarget(target)) return;
+  var targetKey = runtimeKeyFor(target.workspaceId, target.conversationId);
+  _contextWindowRefreshTargetKey = targetKey;
+  if (_contextWindowRefreshTimer !== null) return;
+  _contextWindowRefreshTimer = window.setTimeout(function() {
+    _contextWindowRefreshTimer = null;
+    if (_contextWindowRefreshInFlight || !isActiveConversationTarget(target)) return;
+    _contextWindowRefreshInFlight = true;
+    api.getState(target).then(function(snapshot) {
+      if (!snapshot || !isActiveConversationTarget(target) || _contextWindowRefreshTargetKey !== targetKey) return;
+      if (snapshot.contextWindow !== undefined) {
+        state.contextWindow = snapshot.contextWindow;
+        window.renderContextWindow();
+      }
+      if (snapshot.contextCompression !== undefined) state.contextCompression = snapshot.contextCompression;
+      if (state.rightTab === 'status') window.renderRightStatusPanel();
+    }).catch(function(){}).then(function() {
+      _contextWindowRefreshInFlight = false;
+    });
+  }, 120);
+}
+
 function scheduleConversationsRender() {
   if (_conversationsRenderPending) return;
   _conversationsRenderPending = true;
@@ -11989,6 +12081,15 @@ function appendAgentWorkEvent(event) {
   if (active) {
     setWorking(!!runningConversationRecord(activeConversationId()) || currentFlowRunning());
     updateSubmitButtonState();
+    // Refresh snapshots only at semantic boundaries. Text/thought deltas can
+    // arrive hundreds of times per second; issuing IPC snapshots for each
+    // delta creates avoidable renderer/runtime contention and used to make a
+    // healthy utility runtime look like a mysteriously interrupted run.
+    var refreshableLiveEvent = event.type === 'status'
+      || event.type === 'tool_result'
+      || event.type === 'usage'
+      || event.type === 'message_end';
+    if (refreshableLiveEvent) scheduleActiveContextWindowRefresh(target);
   }
   if (active && event.type === 'tool_result' && ['linked_plan', 'task_read', 'task_create', 'task', 'subagent_create', 'SubAgent', 'subagent_send', 'subagent_read', 'subagent_close'].indexOf(String(event.toolName || '')) >= 0 && api.getState) {
     var eventWorkspaceKey = currentWorkspaceKey();
@@ -12004,6 +12105,12 @@ function appendAgentWorkEvent(event) {
     var terminalWorkspaceKey = currentWorkspaceKey();
     api.getState(target).then(function(snapshot) {
       if (!isActiveConversationTarget(target) || terminalWorkspaceKey !== currentWorkspaceKey()) return;
+      if (snapshot && snapshot.contextWindow !== undefined) {
+        state.contextWindow = snapshot.contextWindow;
+        window.renderContextWindow();
+      }
+      if (snapshot && snapshot.contextCompression !== undefined) state.contextCompression = snapshot.contextCompression;
+      if (state.rightTab === 'status') window.renderRightStatusPanel();
       // Backend-owned Goal continuations have no renderer send promise to
       // return the final snapshot. Refresh on the terminal work event so a
       // completed Goal clears its bar and restores Build immediately.
@@ -21126,6 +21233,18 @@ function initializeBrowserGuest(view) {
         }
         addMsg('assistant', '[Browser] Load failed: ' + e.errorDescription, 'error', '');
       }
+    });
+    // Keep target=_blank/window.open inside the embedded browser. Electron's
+    // webview otherwise creates an external window that has no address bar or
+    // reload control, so a popup page could not be refreshed in-place.
+    view.addEventListener('new-window', function(e) {
+      var popupUrl = String(e && e.url || '').trim();
+      if (!popupUrl || !/^(?:https?:|about:blank|newmark-preview:)/i.test(popupUrl)) return;
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+      rememberBrowserUrl(popupUrl, true, target);
+      var input = els['browser-url'];
+      if (input && isActiveConversationTarget(target)) input.value = popupUrl;
+      navigateBrowserView(view, popupUrl);
     });
     var current = '';
     try { current = view.getURL ? view.getURL() : ''; } catch { current = ''; }

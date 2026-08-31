@@ -17,7 +17,7 @@ object LocalToolCatalog {
         "read_file", "list_dir", "recent_files", "image_display", "memory_lab_read", "memory_lab_query", "settings_read",
         "web_search", "web_fetch", "browser_use", "task_read", "calendar_read",
     )
-    val chatNames: Set<String> = linkedSetOf("web_search", "web_fetch")
+    val chatNames: Set<String> = linkedSetOf("web_search", "web_fetch", "terminal_exec")
     val buildBrowserActions: Set<String> = linkedSetOf(
         "observe", "navigate", "wait", "extract", "back", "forward", "reload",
     )

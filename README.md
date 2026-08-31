@@ -1,8 +1,29 @@
 # Newmark Agent
 
+### dev-0.5.12 全平台预发布
+
+2026-08-31 已发布 [dev-0.5.12](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.5.12)。Windows MSI/ZIP、Linux AppImage/deb/ZIP 与 Android APK 共六个资产均通过版本和打包态门禁，并从 GitHub Release 回下载逐项复核 SHA-256。Windows 资产未做 Authenticode 签名；Android APK 使用工程既有 Android Debug 证书并通过 v2 签名验证，因此本版本保持 prerelease。
+
+| 资产 | 大小（bytes） | SHA-256 |
+| --- | ---: | --- |
+| `Newmark-Agent-0.5.12-x64.msi` | 226,408,528 | `9DE63C48F2A0C8697F19914DA3D57E675293F5701D107A68ED22414FCA6AC3A7` |
+| `Newmark-Agent-0.5.12-win-unpacked-x64.zip` | 292,565,363 | `C58044D6E31DD4D5AA16E9957778BB015E5BD66DB3BDA5E1D1C6B0F53757CFED` |
+| `Newmark-Agent-0.5.12-x86_64.AppImage` | 176,667,824 | `76079D996F06C90336E32CEFD2D12E527E4293F0AFBFB0565941BD8C18D3F9EA` |
+| `Newmark-Agent-0.5.12-amd64.deb` | 136,046,472 | `ABCFDD787C2DE341E8426C0AA848CDEC4D8585F89BDD9D8476BDA95081BF7E7F` |
+| `Newmark-Agent-0.5.12-linux-unpacked-x64.zip` | 172,791,270 | `6241FC007ED19B07366086179F357271214E79E7EFD74D28A66D2D83346B3845` |
+| `Newmark-Agent-0.5.12-android.apk` | 52,761,506 | `65241093432AFD18B167B9A7C48FB059E568BF7763B1624D5267D2329082C000` |
+
+### dev-0.5.12 队列用户输入可见性修复
+
+排队后自动执行的真实用户输入不再继承 Agent 内部续接的隐藏标记；消费队列时保留普通用户可见语义，同时继续隐藏无 client id 的内部自动续接指令。
+
+### dev-0.5.12 压缩后连续图片输入
+
+内部上下文压缩后，近期窗口内连续提交的多张用户图片全部保留，避免视觉模型只收到最后一张图片。
+
 Newmark Agent 是面向本地工作区的多端 AI Agent。它把对话、Build/Plan/Goal/Flow、文件与终端、浏览器、Memory Lab、自动化和多 Agent 协作整合在同一套本地状态模型中，并提供 Windows/Linux 桌面端、终端界面、CLI 与 Android 客户端。
 
-当前开发版本：`dev-0.5.11`。移动端 Memory Lab 的返回键与文字操作胶囊统一使用四边 8dp 透明光学画布，玻璃浮起、折射边缘和阴影不再被按钮自身 RenderNode 截断；发送按钮按 PC 契约显式区分空闲发送、运行中停止、运行中继续发送三态，并修正工作态图标居中。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本。
+当前开发版本：`dev-0.5.12`。移动端右侧栏折叠态统一改为仅支持右缘左滑展开；新建本地对话默认 Chat；Chat 模式复用既有 `terminal_exec` 权限，并在执行边界只允许 `date`、`time`、`now` 获取本地时间，不新增工具；模式/模型选择弹窗圆角与内部玻璃浮块匹配。移动端 Memory Lab 的返回键与文字操作胶囊统一使用四边 8dp 透明光学画布，玻璃浮起、折射边缘和阴影不再被按钮自身 RenderNode 截断；发送按钮按 PC 契约显式区分空闲发送、运行中停止、运行中继续发送三态，并修正工作态图标居中。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本。
 
 dev-0.5.11 同时优化 PC 冷启动。历史生命周期 marker 不再由 `Agent` 构造函数同步逐个读取，而是在轻量启动页显示后按批异步清理；正常退出直接删除当前 marker，避免运行目录随启动次数线性增长。历史日志基线为 Agent 8.122s、主界面 14.974s；在 1000 个旧 marker 压力下，当前实测轻量启动页 721ms、主页面导航 2567ms、输入可用 2772ms，Windows 进程无响应采样为 0，目录最终仅保留当前进程 1 个 marker。
 
@@ -514,3 +535,19 @@ PC 启动优化版 dev-0.5.11 Windows x64 MSI 已构建到独立目录 `release-
 用户输入图片现在右对齐，Agent 展示/查看图片左对齐，并分别与对应正文保持同一文字边界。对话区会持续测量输入上方的 Goal/Flow/Queue 浮层，把变化后的高度实时纳入滚动内容底部避让；Markdown/LaTeX 阅读预览复用同一左右安全边界，窄屏不会被时间线或编辑器边缘裁切。
 
 本轮最新 Android APK 已重新绑定到 `release-0.5.11-full-platform/`，并与 Windows x64 MSI/ZIP、Linux AppImage/deb/ZIP 一起发布为 GitHub [`dev-0.5.11` prerelease](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.5.11)。GitHub 回下载逐字节核对六项 SHA-256 均通过。macOS DMG 仍需 macOS 主机，Windows MSI 未签名，Android 使用工程 Debug v2 证书。
+
+## 2026-08-30 内核响应中断排查
+
+确认用户配置 `agent.process_timeout_ms=0`、`terminal.interrupt_timeout_ms=0`，稳定 API 的流式读取不会因空闲等待被误判超时；`providerTimeoutRecoveryVerify`、`agentRuntimeV2Verify`、`runtimeIsolationVerify`、`streamUnlimitedTimeoutStressVerify` 与桌面构建均通过。修复运行中上下文快照仅在 status/tool_result/usage/message_end 等语义边界刷新，避免高频文本/思考增量触发 IPC 竞争。Abort 入口增加诊断原因标记（如 `user_stop`、`process_timeout_*`），便于区分用户停止、超时和外部运行时故障。
+## 2026-08-30 PC Build Block 纯时间线修复
+
+修正回归：Build Block 展开区域曾被通用材质规则绘制成粗糙的白色圆角底板。现在 Build Block 外层、标题、正文及伪元素均明确禁止背景、backdrop-filter、边框、圆角、阴影与滤镜，仅保留原有时间线内容。`pcGlassMigrationVerify` 新增并通过该门禁。
+## 2026-08-30 内置浏览器弹出页刷新
+
+PC 内置 Browser 将 `target=_blank`/`window.open` 页面拦截并导航到当前嵌入标签，保留地址栏与 Reload。移动端 WebView 开启多窗口回调，将弹出页安全导回同一 `BrowserSessionState`，因此移动端弹出页面同样可使用刷新。PC 构建与 UI/浏览器回归通过；移动端新增会话刷新断言。
+### dev-0.5.12 PC 图片交互边界
+
+PC 用户上传图片与 Agent 展示图片的点击组件均按图片自然尺寸收敛，不再强制胶囊形命中区域；用户附件右对齐，Agent/Build 图片左对齐，与各自正文一致。图片查看仍通过玻璃子窗口打开。
+### dev-0.5.12 自动续接循环与缓存命中复核
+
+Conversation Kernel 为自动 Guide/Goal/隐藏续接记录最近一次 Agent 文本指纹；provider 在没有新用户输入或工具进展时重复返回完全相同内容，会停止剩余自动续接并写入运行状态，避免“自说自话”轮回。真实用户 follow-up 不参与该保护。缓存压力测试确认 cacheRead token、命中率及跨请求稳定前缀均保持正确。

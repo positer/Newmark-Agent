@@ -205,8 +205,8 @@ data class LocalConversation(
     val updatedAt: Long = System.currentTimeMillis(),
     val pinned: Boolean = false,
     val archived: Boolean = false,
-    /** 本地输入模式：仅 Build / Plan；按对话持久化，切换对话不串状态。 */
-    val mode: String = "build",
+    /** 本地输入模式；新建对话默认 Chat，按对话持久化。 */
+    val mode: String = "chat",
     /** 本地模式的 task/plan 不是临时 UI 状态，必须随对应对话保存和恢复。 */
     val planItems: List<LocalPlanItem> = emptyList(),
     /** PC Next panel 的本地对应物；队列及暂停状态严格按对话持久化。 */

@@ -1217,8 +1217,11 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
                     settings.allowFileAccess = false
                     settings.allowContentAccess = false
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                    settings.javaScriptCanOpenWindowsAutomatically = false
-                    settings.setSupportMultipleWindows(false)
+                    // Route target=_blank/window.open into this conversation's
+                    // single browser session so the resulting page keeps the
+                    // address bar and Reload action.
+                    settings.javaScriptCanOpenWindowsAutomatically = true
+                    settings.setSupportMultipleWindows(true)
                     settings.setGeolocationEnabled(false)
                     settings.mediaPlaybackRequiresUserGesture = true
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -1270,6 +1273,39 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
                         }
                     }
                     webChromeClient = object : WebChromeClient() {
+                        override fun onCreateWindow(
+                            view: WebView,
+                            isDialog: Boolean,
+                            isUserGesture: Boolean,
+                            resultMsg: android.os.Message,
+                        ): Boolean {
+                            val popup = WebView(context).apply {
+                                settings.javaScriptEnabled = view.settings.javaScriptEnabled
+                                settings.domStorageEnabled = view.settings.domStorageEnabled
+                                webViewClient = object : WebViewClient() {
+                                    override fun onPageStarted(popupView: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                                        BrowserUrlPolicy.normalizeNavigation(url)?.let {
+                                            session.navigate(it)
+                                            popupView.stopLoading()
+                                            popupView.destroy()
+                                        }
+                                    }
+                                    override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
+                                        BrowserUrlPolicy.normalizeNavigation(request.url.toString())?.let {
+                                            session.navigate(it)
+                                            popupView.stopLoading()
+                                            popupView.destroy()
+                                            return true
+                                        }
+                                        return true
+                                    }
+                                }
+                            }
+                            val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
+                            transport.webView = popup
+                            resultMsg.sendToTarget()
+                            return true
+                        }
                         override fun onProgressChanged(view: WebView, newProgress: Int) {
                             session.onNavigationProgress(newProgress)
                             session.onHistoryChanged(view.canGoBack(), view.canGoForward())

@@ -1,0 +1,5 @@
+gradle.beforeProject { project ->
+    if (project.name == "app") {
+        project.layout.buildDirectory.set(project.rootProject.layout.projectDirectory.dir("isolated-release-build/app"))
+    }
+}

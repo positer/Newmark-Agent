@@ -1,5 +1,13 @@
 # Newmark Agent Project Taste
 
+## Queue visibility boundary
+
+队列中的真实用户输入必须在用户消息时间线可见。出队时不得把带稳定 clientMessageId 的用户项标记为 hiddenUserInput；只有无用户身份的内部自动续接才允许隐藏。
+
+## Compression and recent visual input
+
+上下文压缩只折叠长期历史图片；压缩后近期窗口中的每一条用户图片都必须可继续提供给视觉模型，连续图片输入不能因“只保留最后一张”而丢失。
+
 ## Product and interaction principles
 
 - Provider onboarding must always offer three peer paths: explicit manual creation, fuzzy discovery, and import from a connected device. Manual providers and provider-owned models reuse the canonical PC-compatible store; never hide basic creation behind discovery or introduce a parallel mobile-only schema.
@@ -36,7 +44,7 @@
 - Mobile theming has no user-editable palette. Keep only built-in light/dark semantic theme colors; do not add color pickers, custom accent fields, palette JSON, or color-setting persistence.
 - Mobile queued-conversation actions are borderless. Pause/resume, disclosure, Guide, edit, and delete must not use framed glass buttons or static button fills; communicate action hierarchy through icon color, spacing, and a restrained same-color press wash while preserving 48dp-class combined row targets and ripple-free semantics.
 - The mobile queue header has no redundant “排队对话” title; its only text is the live `n 条待处理` count, with pause state conveyed by the existing color/status control rather than a second label.
-- Chat mode is a cross-client web-evidence sandbox. Publish and execute only `web_search` and `web_fetch`; reject every workspace, host, application, memory, task, browser-control, and write capability even when replayed from stale context. Search first, fetch authoritative sources when useful, then summarize promptly with evidence instead of becoming a long-running workflow.
+- Chat mode is a cross-client evidence sandbox. Publish and execute `web_search`, `web_fetch`, plus the existing `terminal_exec` only for exact `date`, `time`, or `now` local-time reads; do not add a parallel time tool. Reject every workspace, host, application, memory, task, browser-control, and write capability even when replayed from stale context. Search first, fetch authoritative sources when useful, then summarize promptly with evidence instead of becoming a long-running workflow.
 - Mobile glass edge thickness is a system token, not a per-screen decoration. Visible highlight, fallback border, refraction band, and RGB dispersion band must grow together; never thicken only the painted outline while leaving the optical layers at the old width.
 - Every mobile glass click owns a complete lift-and-land lifecycle. Lift and travel may run concurrently, but landing cannot begin until full lift and travel are both complete; quick release or repeated taps must never truncate a cycle. Parents around floating glass controls must not clip the expanded edge.
 - Conversation archival is a coordinated list transition: the capsule exits first, then surviving keyed rows animate into their new positions. Never remove a row and let lower capsules snap upward in one frame.
@@ -141,3 +149,27 @@ Windows 同版本安装必须明确区分“MSI 已构建/已验证”“UAC 已
 # Mobile conversation layout alignment
 
 用户消息附件与用户正文同向右对齐；Agent 展示图与 Agent 正文同向左对齐。对话底部避让必须由输入上方浮层的实时测量高度驱动，而不是固定预留值；Markdown/LaTeX 阅读器复用同一文字安全边界，避免窄屏出格。
+## Kernel interruption diagnostics
+
+稳定 API 场景下优先审计本地 Abort、utility child 生命周期与 renderer IPC 竞争。运行中状态刷新只绑定语义边界事件；所有 abort 必须携带可观测 reason，禁止把外部运行时退出静默归类为普通 interrupted。
+## PC Build Block boundary
+
+Build Block 是纯信息时间线，不是材质容器。展开/折叠只改变内容披露，不得引入玻璃、白板色、圆角、阴影、滤镜或伪元素；玻璃仅限明确批准的菜单与交互浮块。
+## Built-in browser popup navigation
+
+`target=_blank` 与 `window.open` 不创建脱离控制的第二浏览器表面：PC WebView 将安全 URL 导回当前 guest，移动 WebView 通过临时捕获窗口转发到同一会话。地址栏、历史和 Reload 始终属于会话状态，禁止弹出页失去刷新能力。
+## PC image interaction boundaries
+
+图片点击命中框贴合图片自然尺寸，禁止通用 button 胶囊圆角污染图片组件；用户附件随用户正文右对齐，Agent/Build 展示图随 Agent 正文左对齐。图片查看弹窗继续复用既有玻璃子窗口。
+
+## Automatic continuation guard
+自动续接必须可去重、可停止；对完全重复 Assistant 输出设置运行内指纹保护，用户明确 follow-up 不受影响。
+
+## Markdown and LaTeX rendering
+移动端优先使用内置解析能力并保持 Newmark 原生 Compose 视觉；LaTeX 在无完整数学排版引擎时提供稳定可读 fallback。PC 代码块复制必须独立于整条消息复制。
+
+## Mobile fenced code parsing
+代码围栏解析必须容忍更长围栏、波浪围栏及传输中语言标记/首行代码粘连；优先保持原文代码内容，不因格式瑕疵丢弃代码块。
+
+## Release version discipline
+修复版发布必须沿用 VERSION、桌面 package.json 与 Android versionName/versionCode 的一致值；本轮 Markdown 修复发布为 0.5.12 / 512。

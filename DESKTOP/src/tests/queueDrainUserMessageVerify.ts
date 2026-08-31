@@ -88,6 +88,7 @@ function main(): void {
   check(drained.text === queued.text, 'drain 保留完整 text（含前缀，供 history/continuation 匹配）');
   check(drained.visibleUserInput === 'hello from queue', 'drain 保留 visibleUserInput（去掉前缀的显示文本）');
   check(drained.visibleMode === 'build', 'drain 保留 visibleMode');
+  check(drained.hiddenUserInput === false, '普通排队用户输入明确标记为可见');
 
   // 2) 转换后不再被渲染端过滤条件命中
   check(
@@ -113,6 +114,7 @@ function main(): void {
   check(Array.isArray(drainedImages.images) && (drainedImages.images as unknown[]).length === 1, 'drain 保留 images');
   check(Array.isArray(drainedImages.attachments) && (drainedImages.attachments as unknown[]).length === 1, 'drain 保留 attachments');
   check(rendererSkips(drainedImages, ['old-run-2']) === false, '带图队列消息同样不被过滤');
+  check(drainedImages.hiddenUserInput === false, '带图排队用户输入不会继承隐藏标记');
 
   // 4) string 载荷原样透传
   const plain = runMethod(method, 'plain string message');
@@ -128,6 +130,13 @@ function main(): void {
   const drainedNoVisible = runMethod(method, noVisible) as Record<string, unknown>;
   check(drainedNoVisible.visibleUserInput === undefined, '无 visibleUserInput 时不注入空字段');
   check(rendererSkips(drainedNoVisible, ['old-run-3']) === false, '无 visibleUserInput 的队列消息同样不被过滤');
+
+  const hiddenContinuation = runMethod(method, {
+    text: 'internal continuation',
+    hiddenUserInput: true,
+    runId: 'old-run-internal',
+  }) as Record<string, unknown>;
+  check(hiddenContinuation.hiddenUserInput === true, '内部自动续接仍保留隐藏标记');
 
   console.log('queueDrainUserMessageVerify: all checks passed');
 }

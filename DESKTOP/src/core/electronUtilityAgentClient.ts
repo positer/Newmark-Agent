@@ -1512,6 +1512,26 @@ export class ElectronUtilityAgentClient {
   private handleExit(child: UtilityChild, code: number): void {
     if (this.child !== child) return;
     const error = new Error(`Electron utility runtime exited (${code}): ${this.lastError || 'no stderr'}`);
+    // Surface unexpected worker death as a target-scoped terminal error. A
+    // silent child exit used to leave the renderer with a generic interrupted
+    // state and no explanation of whether the provider, runtime, or process
+    // supervisor was responsible.
+    if (code !== 0 && !this.restartQuarantine) {
+      const event: AgentWorkEvent = {
+        id: `utility-runtime-exit-${process.pid}-${Date.now()}`,
+        conversationId: this.target.conversationId,
+        type: 'error',
+        content: error.message,
+        mode: 'build',
+        model: '',
+        timestamp: new Date().toISOString(),
+        workspaceId: this.target.workspaceId,
+        workspaceKey: this.target.workspaceKey,
+        runtimeKey: this.target.runtimeKey,
+        status: 'error',
+      };
+      for (const listener of this.listeners) listener(event);
+    }
     this.detachChild(child, error);
   }
 

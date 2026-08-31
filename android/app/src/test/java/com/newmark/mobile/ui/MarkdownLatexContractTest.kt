@@ -18,7 +18,7 @@ class MarkdownLatexContractTest {
         assertTrue(source.contains("trimmed == \"$$\" || trimmed == \"\\\\[\""))
         assertTrue(source.contains("private val INLINE_MATH"))
         assertTrue(source.contains("val tex = m.groupValues[1].ifBlank { m.groupValues[2] }"))
-        assertTrue(source.contains("startsWith(\"~~~\")"))
+        assertTrue(source.contains("~{3,}"))
         assertTrue(source.contains("HorizontalRule"))
         assertTrue(source.contains("MarkdownBody("))
     }

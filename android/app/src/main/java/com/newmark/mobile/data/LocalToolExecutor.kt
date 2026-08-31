@@ -139,7 +139,13 @@ class LocalToolExecutor(
             )
         }
         if (mode.equals("chat", ignoreCase = true) && name !in LocalToolCatalog.chatNames) {
-            return ToolResult.err("[permission] Chat 模式仅允许 web_search 与 web_fetch；拒绝工作区、系统、应用、记忆、任务及其他写入或操作权限。已阻断：$name")
+            return ToolResult.err("[permission] Chat 模式仅允许 web_search、web_fetch 与受限 terminal_exec；拒绝工作区、系统、应用、记忆、任务及其他写入或操作权限。已阻断：$name")
+        }
+        if (mode.equals("chat", ignoreCase = true) && name == "terminal_exec") {
+            val command = args.optString("command").trim().lowercase()
+            if (command !in setOf("date", "time", "now")) {
+                return ToolResult.err("[permission] Chat 模式的 terminal_exec 仅允许 date、time 或 now 获取当前时间")
+            }
         }
         if (name in LocalToolCatalog.privilegedNames && !capabilities.highPrivilegeActive()) {
             return ToolResult.err("高权限模式未开启或 Root/Shizuku 未授权，已阻断高权限工具")

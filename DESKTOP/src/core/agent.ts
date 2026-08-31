@@ -4377,12 +4377,15 @@ export class Agent {
     return this.config.getStr('general', 'default_input') === 'next' ? 'next' : 'guide';
   }
 
-  abortActiveKernelRun(): boolean {
+  abortActiveKernelRun(reason = 'unspecified'): boolean {
     let aborted = false;
     this.subagents.pauseScheduling();
     if (this.activeProcessAbortController && !this.activeProcessAbortController.signal.aborted) {
       const abortError = new Error('Agent run aborted');
       abortError.name = 'AbortError';
+      if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') {
+        console.error(`[NewmarkKernel] abort-request reason=${String(reason).slice(0, 160)} conversation=${this.activeConversationId}`);
+      }
       this.activeProcessAbortController.abort(abortError);
       aborted = true;
     }
@@ -4391,7 +4394,7 @@ export class Agent {
       aborted = true;
     }
     for (const peer of this.activePeerAgents.values()) {
-      aborted = peer.abortActiveKernelRun() || aborted;
+      aborted = peer.abortActiveKernelRun(reason) || aborted;
     }
     this.pendingAgentKernelQueue = [];
     return aborted;
@@ -6056,10 +6059,21 @@ export class Agent {
   }
 
   private compactHistoricalImages(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+    // The post-compression continuation anchor separates summarized history
+    // from the retained recent window. Preserve every user image in that
+    // recent window (not only the last image message): a burst of consecutive
+    // uploads must remain available to the next vision request. Images older
+    // than the retained window are still replaced by bounded text markers.
+    const continuationIndex = messages.reduce((found, message, index) => {
+      const content = String(message?.content || '');
+      return content.includes('[Post-Compression Task Continuation]') ? index : found;
+    }, -1);
     const lastParts = Array.isArray(messages.at(-1)?.content) ? messages.at(-1)!.content as Array<Record<string, unknown>> : [];
-    const newestImageMessage = lastParts.some(part => part?.type === 'image_url') ? messages.length - 1 : -1;
+    const newestImageMessage = continuationIndex < 0 && lastParts.some(part => part?.type === 'image_url') ? messages.length - 1 : -1;
     return messages.map((message, index) => {
-      if (!Array.isArray(message.content) || index === newestImageMessage) return { ...message };
+      if (!Array.isArray(message.content)) return { ...message };
+      const preserveRecentImage = continuationIndex >= 0 && index > continuationIndex;
+      if (preserveRecentImage || index === newestImageMessage) return { ...message };
       const parts = (message.content as Array<Record<string, unknown>>).flatMap(part => {
         if (part?.type !== 'image_url') return [{ ...part }];
         return [{ type: 'text', text: '[Historical image attachment omitted after context compression.]' }];
@@ -9317,12 +9331,16 @@ export class Agent {
 
   buildSystemPrompt(): string {
     const cwd = this.workspace.current?.path || this.rootPath;
+    const newmarkConfigRoot = path.resolve(this.rootPath);
+    const newmarkConfigFile = path.join(newmarkConfigRoot, 'config.json');
     const enabledSkills = this.skills.active();
     const globalPromptPath = path.join(this.rootPath, 'agent.md');
     const globalPrompt = normalizeInjectedPrompt(fs.existsSync(globalPromptPath) ? fs.readFileSync(globalPromptPath, 'utf-8') : '');
     const workspacePrompt = normalizeInjectedPrompt(this.workspace.currentAgentPrompt());
     const identity = JSON.stringify({
       cwd,
+      newmarkConfigRoot,
+      newmarkConfigFile,
       mode: this.mode,
       conversationId: this.activeConversationId,
       subagent: this.isSubagentRuntime ? [this.subagentName, this.subagentPrompt] : null,
@@ -9339,7 +9357,7 @@ export class Agent {
       workspacePrompt,
     });
     if (this.systemPromptCache?.identity === identity) return this.systemPromptCache.value;
-    const parts: string[] = [`${CORE_SYSTEM_PROMPT}\n\n## Current Working Directory\n${cwd}\n\nWhen using file tools (read, write, edit, glob), use ABSOLUTE paths rooted at this directory. Never guess paths. First use \`pwd\` or \`bash\` to verify.`];
+    const parts: string[] = [`${CORE_SYSTEM_PROMPT}\n\n## Newmark Runtime Configuration\nNewmark's own user-level configuration and runtime state are stored by default under ${newmarkConfigRoot} (the conventional user path is user/.Newmark). The primary configuration file is ${newmarkConfigFile}; provider credentials, conversation state, caches, Work/Flow data, Memory Lab, skills, and archives may also live beneath this root. Treat these files as Newmark internal state: read or modify them only when the user explicitly asks, never expose API keys or tokens, and do not confuse this runtime root with the active workspace.\n\n## Current Working Directory\n${cwd}\n\nWhen using file tools (read, write, edit, glob), use ABSOLUTE paths rooted at this directory. Never guess paths. First use \`pwd\` or \`bash\` to verify.`];
     if (this.isSubagentRuntime) {
       parts.push([
         '## Subagent Sandbox',

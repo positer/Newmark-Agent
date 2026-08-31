@@ -12,8 +12,8 @@ android {
         applicationId = "com.newmark.mobile"
         minSdk = 24
         targetSdk = 36
-        versionCode = 511
-        versionName = "0.5.11"
+        versionCode = 512
+        versionName = "0.5.12"
     }
 
     buildTypes {
@@ -60,6 +60,10 @@ android {
 }
 
 dependencies {
+    // Bundled, offline Markdown AST/parser support; the Compose renderer keeps
+    // the Newmark visual language while using the library for broader CommonMark
+    // token coverage on mobile.
+    implementation("org.commonmark:commonmark:0.22.0")
     implementation(platform("androidx.compose:compose-bom:2024.10.01"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")

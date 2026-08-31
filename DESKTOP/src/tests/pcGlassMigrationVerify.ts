@@ -70,6 +70,9 @@ function main(): void {
   check(/button::after\s*\{[^}]*backdrop-filter:\s*blur\(calc\(var\(--glass-blur-3\) \* 4\)\)[^}]*saturate\(145%\)/s.test(html), 'PC button 交互玻璃模糊接入统一强度变量');
   check(/button:active:not\(:disabled\)::after\s*\{\s*opacity:\s*1/.test(html), 'PC button 按下时浮起玻璃层');
   check(!/button\s*\{[^}]*backdrop-filter/s.test(html), 'PC button 静态不常驻玻璃');
+  check(/\.work-run-message,[\s\S]*\.conversation-work-run-body\s*\{[^}]*background:\s*transparent\s*!important[^}]*backdrop-filter:\s*none\s*!important[^}]*border-radius:\s*0\s*!important[^}]*box-shadow:\s*none\s*!important/s.test(html)
+    && /\.work-run-message::before,[\s\S]*\.conversation-work-run-body::after\s*\{[^}]*content:\s*none\s*!important[^}]*display:\s*none\s*!important/s.test(html),
+    'PC Build Block 展开保持纯时间线：无白板底色、无玻璃模糊、无伪元素与阴影');
   check(html.includes('function wireLiquidMenuInteractions(menu)') &&
     html.includes('source.classList.add(\'liquid-selection-source\')') &&
     html.includes('float.classList.add(\'visible\')') &&

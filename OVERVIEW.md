@@ -1,5 +1,11 @@
 # Newmark Agent Overview
 
+## dev-0.5.12 变更
+
+- Android 各宽度布局移除右侧栏折叠态展开按钮，展开入口统一为右缘左滑。
+- 新建本地对话默认 Chat；Chat 复用既有 `terminal_exec` 权限，并在执行边界仅放行 `date`、`time`、`now`，不新增工具。
+- 模式/模型选择一级、二级弹窗圆角调整为 26dp。
+
 ## 2026-08-29 dev-0.5.11 模型供应商浮块生命周期与轴互斥
 
 - `android/app/src/main/java/com/newmark/mobile/ui/components/ProviderSettingsCapsules.kt`：新增 `ProviderRailMotionCoordinator`，横向协议浮块与纵向胶囊浮块共享单一轴占用；点击均执行完整浮起、并行移动、落下生命周期。协议行作为纵向不可穿越边界，跨区选择在边界两侧分段起落。
@@ -340,7 +346,7 @@ The automated gates do not substitute for physical-device or packaged-desktop vi
 - **PC-GUI 液态玻璃等价移植**：PC 为 Electron+HTML/CSS，无法运行 Compose 库，故在 `DESKTOP/src/ui/index.html` 用 CSS 等价实现 kyant 库视觉：新增 `--liquid-*` token（顶部高光/内阴影/外阴影/折射渐变/边缘光）与 `.liquid-glass`/`.liquid-glass-strong` 工具类（backdrop-filter 增强 + 折射渐变伪元素 + 高光边缘）。应用到左/右侧边栏（`#left-secondary`/`#right`）、顶栏 `#topbar`、输入区 `#input-area`、底部终端 `#bottom`、弹层（`.conv-action-menu`/`.model-select-menu`/`.newmark-select-menu`）：`saturate(130%)→140%` + `brightness(1.02)` + 高光/内阴影。
 - **版本同步**：三端升级 dev-0.5.6（`VERSION`/desktop `package.json`/android `versionCode 506`），`sync-release-version --check` 通过。
 - **验证**：Android `testDebugUnitTest` BUILD SUCCESSFUL（含新增 LiquidGlassContractTest）；PC `tsc --noEmit` + `npm run build` 通过，`verify.js` 1641 PASS / 27 FAIL（27 项为既有 Electron host tool bridge 环境依赖：terminal_takeover/computer_use/browser control，与基线一致，与本次改动无关）。
-# Newmark Agent Overview
+# Newmark Agent Overview`r`n`r`n## dev-0.5.12 变更`r`n`r`n- Android 各宽度布局移除右侧栏折叠态展开按钮，展开入口统一为右缘左滑。`r`n- 新建本地对话默认 Chat；Chat 工具面新增只读 `time` 并纳入权限白名单。`r`n- 模式/模型选择一级、二级弹窗圆角调整为 26dp。
 
 ## dev-0.5.5 provider-boundary fallback, runtime capacity, and interruption fixes (2026-08-23)
 
@@ -3389,3 +3395,71 @@ release-0.5.11-mobile-images-glass/
 - `ui/ChatScreen.kt`：用户图片右对齐、Agent 展示图左对齐；输入上方浮层高度实时进入对话底部避让。
 - `ui/RightSidebar.kt`：Markdown/LaTeX 阅读预览复用对话文字安全边界，窄屏保持可读区不出格。
 - `archive/20260830-dev-0.5.11-mobile-layout-release.md`：本轮修复、门禁与发布边界记录。
+
+## 2026-08-30 内核中断排查增量
+
+- 运行中上下文窗口刷新改为语义事件节流，避免 text/thought 高频增量造成快照 IPC 竞争。
+- Agent abort 支持记录触发原因，区分 user_stop、process timeout 与运行时故障。
+- 实际配置 timeout 均为 0；provider 流式无限等待与 runtime 隔离回归通过。
+## 2026-08-30 PC Build Block 材质边界修复
+
+Build Block 对话展开严格保持纯时间线，不允许任何玻璃、白板底色、圆角、阴影或伪元素；对应 CSS 强制规则和 `pcGlassMigrationVerify` 门禁已更新。
+## 2026-08-30 内置浏览器弹出页刷新
+
+PC WebView 与移动端 WebView 均将安全的 `target=_blank`/`window.open` 页面导回当前会话浏览器页，沿用地址栏与刷新命令；移动端临时弹出 WebView 仅负责捕获 URL，不创建第二套会话。
+## 2026-08-30 PC 图片点击区域与对齐
+
+`DESKTOP/src/ui/index.html` 将用户附件和 Agent 展示图按钮改为内容尺寸布局，图片本体自然缩放并使用非胶囊方框；用户消息附件组右对齐，Agent/Build 展示图左对齐。`DESKTOP/src/tests/displayImageVerify.ts` 增加命中框、对齐及玻璃预览回归断言。
+
+## 2026-08-30 队列用户输入可见性
+
+`ConversationKernel.drainQueuedFollowUpMessage` 在 follow-up 出队时区分真实队列用户输入与内部自动续接：带稳定 clientMessageId 的队列项不会携带 hiddenUserInput，避免 PC/移动端把它误判为 Agent 自输入而过滤；内部无 client id 的续接仍保持隐藏。`queueDrainUserMessageVerify` 覆盖两种路径。
+
+## 2026-08-30 自动续接循环保护
+
+ConversationKernel 对自动 steer、Goal continuation 与隐藏续接记录最近 Assistant 文本指纹；连续完全重复且无新用户输入/工具进展时清理剩余自动队列并停止循环，真实用户 follow-up 不受影响。
+
+## 2026-08-30 MSI/UAC 安装验证
+
+已生成 release/Newmark-Agent-0.5.12-x64.msi（SHA-256：6A0070729DD1F480642AF7B446FDB5051F440FD884ACA7F28427D150A650AEFC）。已通过管理员权限启动 msiexec；当前会话无法取得其 UAC 交互结果，Program Files 中仍是既有 0.5.11 安装，因此未宣称替换安装已完成。
+
+## 2026-08-30 UAC MSI 安装成功复核
+
+确认 Windows Installer 已完成：Program Files\\Newmark Agent 的可执行文件与 app.asar 版本为 0.5.12.0，卸载注册表 DisplayVersion 为 0.5.12.0，msiexec 已退出；用户 .Newmark/config.json 仍存在并保留。
+
+## 2026-08-30 Markdown/LaTeX 渲染与代码块复制
+
+Android 引入内置 CommonMark 依赖以扩展 Markdown 语法覆盖，保留 Newmark Compose 样式与离线 LaTeX 可读渲染；PC Markdown 代码块新增独立复制按钮，不影响整条消息复制。桌面构建、图片/UI 回归与 Android compileDebugKotlin 通过。
+
+## 2026-08-30 APK 打包状态
+
+Release 编译、Lint 与 R8 通过；assembleRelease 最终 packageRelease 因旧 app-release.apk 被外部进程锁定而失败。未将旧 APK 宣称为本轮新产物，需释放文件锁后重试。
+
+## 2026-08-30 APK 重打包重试
+
+重试 assembleRelease 仍因旧 app-release.apk 外部文件锁在 packageRelease 失败；临时独立输出目录方案因 Gradle Windows 路径参数解析失败，已立即撤销，未保留构建脚本改动。
+
+## 2026-08-30 移动端 Markdown 代码块解析修复
+
+移动端 Markdown 解析器现在支持三字符以上反引号/波浪围栏，并兼容语言标记与首行代码粘连的异常输入，避免整段代码被误识别为语言名而裸显示。MarkdownLatexContractTest 已通过。
+## 2026-08-30 Markdown 修复版 Release APK
+
+已重新生成 Android Release APK，版本号保持 `0.5.12`、versionCode `512`。产物 `APK/Newmark-Agent-0.5.12-markdown-fix-release.apk`，大小 52,761,506 bytes，SHA-256 `B79DD9E478BBCCCA6EED5E2D1812AEFADC2A12115668D9B6AC898C341732F82D`。`assembleRelease`、Lint、R8 与 APK v2 签名验证通过。
+
+## 2026-08-30 MSI 重打包与安装
+
+已从 clean build 重新生成 release/Newmark-Agent-0.5.12-x64.msi（226,400,274 bytes，SHA-256 C59AE094B39803ADAB475649D6A735D30B9D3FF3237B4EF2817D8EBE61067B9B），并启动可见管理员安装。安装目录程序版本已为 0.5.12.0；Windows Installer 进程仍在运行，最终完成状态需等待安装界面结束。
+
+## 2026-08-30 全平台发布门禁状态
+
+版本 0.5.12 的桌面全量门禁通过，Windows MSI/ZIP 与 Linux AppImage/deb/ZIP 已生成；Android Release 编译、Lint、R8 可通过，但 `testDebugUnitTest` 有 2/222 失败（ChatModeContractTest、LiquidGlassContractTest），因此按门禁规则停止在上传前，未创建或上传 GitHub Release。
+
+## 2026-08-31 dev-0.5.12 全平台发布完成
+
+- `ChatModeContractTest` 已更新为 Chat 复用既有 `terminal_exec` 且只允许 `date/time/now` 的权限边界；执行器仍拒绝其他终端命令和全部写入工具。
+- `LocalContextContract.kt` 恢复“证据充分后简洁总结”的 Chat 约束，避免时间权限提示覆盖快速回答行为。
+- `LiquidGlassContractTest` 与当前 26dp `MobilePopupShape` 契约同步。
+- Android 定向 18 项测试通过；全量 JVM、Vital Lint、R8 与隔离目录 Release assembly 通过。
+- Windows MSI/ZIP 与 Linux AppImage/deb/ZIP 均完成打包态版本和 GUI/终端启动检查；`npm audit --omit=dev --audit-level=high` 为 0 漏洞。
+- Android APK 为 versionName 0.5.12、versionCode 512，使用 Android Debug 证书并通过 APK Signature Scheme v2 验证。
+- GitHub prerelease：`https://github.com/positer/Newmark-Agent/releases/tag/dev-0.5.12`。六个远端资产已回下载并与本地 SHA-256 逐项一致。

@@ -65,6 +65,12 @@ try {
 
   const ui = fs.readFileSync(path.join(__dirname, '..', 'ui', 'index.html'), 'utf8');
   assert.ok(ui.includes('work-run-collapsed-images') && ui.includes('renderWorkDisplayImage') && ui.includes('normalizeWorkDisplayImage'), 'GUI renders inline and collapsed Build image surfaces');
+  assert.ok(ui.includes('.conversation-image-attachment {') && ui.includes('width: fit-content !important') && ui.includes('display: inline-flex'), 'uploaded image hit targets follow the image content width');
+  assert.ok(ui.includes('.conversation-work-display-image { display:inline-grid') && ui.includes('border-radius:0 !important'), 'Agent image hit targets are content-sized and not pill-shaped');
+  assert.ok(ui.includes('.chat-msg.user .conversation-image-attachments { justify-content: flex-end; }'), 'uploaded images remain right-aligned with user messages');
+  assert.ok(ui.includes('.chat-msg.assistant .conversation-image-attachments') && ui.includes('justify-content: flex-start;'), 'Agent image attachments remain left-aligned with assistant content');
+  assert.ok(ui.includes('window.openSubWin(safe.name'), 'image preview continues to use the glass sub-window');
+  assert.ok(ui.includes('copyMarkdownCode') && ui.includes('md-code-copy'), 'Markdown code blocks expose an independent copy action');
   process.stdout.write('Display image verification passed.\n');
 } finally {
   fs.rmSync(base, { recursive: true, force: true });

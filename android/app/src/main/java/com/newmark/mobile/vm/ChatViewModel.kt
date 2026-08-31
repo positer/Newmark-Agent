@@ -582,6 +582,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val c = LocalConversation(
             id = UUID.randomUUID().toString(),
             title = "新对话",
+            mode = "chat",
         )
         conversations = listOf(c) + conversations
         currentId = c.id

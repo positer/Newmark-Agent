@@ -622,6 +622,7 @@ async function main() {
   assert(uiHtml.includes('function loadActiveConversationMessages(conversationId)') && uiHtml.includes('var requestedConversationId = String(conversationId || activeConversationId() ||') && uiHtml.includes('var requestedTarget = currentConversationTarget(requestedConversationId)') && uiHtml.includes('api.getState(lockedTarget)') && !uiHtml.includes('api.getState().then(function(s) {\n      if (s && s.contextCompression'), 'ui html: active window refreshes are bound to the owning workspace and conversation target');
   assert(uiHtml.includes('function setActiveWorkspaceConversationById(id)') && uiHtml.includes('var activeBeforeRender = (conversations.find(function(c)') && uiHtml.includes('if (activeBeforeRender) setActiveWorkspaceConversationById(activeBeforeRender);'), 'ui html: conversation list rerender preserves active conversation by id instead of stale cross-window index');
   assert(uiHtml.includes('function applyWorkspaceStateFromBackend(s)') && uiHtml.includes('var localActiveId = activeConversationId();') && uiHtml.includes('var hasLocalActive = backendConversations.some(function(item)') && uiHtml.includes('window.openWorkspaceManager = async function()') && uiHtml.includes('await window.refreshWorkspaceState().catch(function(){})'), 'ui html: workspace manager refresh keeps each window-local active conversation before rendering');
+  assert(uiHtml.includes("view.addEventListener('new-window'") && uiHtml.includes('navigateBrowserView(view, popupUrl)') && uiHtml.includes('window.browserReload = function()'), 'built-in PC Browser routes popup pages into the current tab so they retain Reload support');
   assert(uiHtml.includes('window.selectWorkspace = function(reference, initialSnapshot)') && uiHtml.includes('applyConversationSnapshot(initialSnapshot') && uiHtml.includes('initialSnapshot ? loadActiveConversationMessages(activeId) : syncBackendConversation()') && uiHtml.includes('ws.conversationSnapshot || null') && uiHtml.includes('state.backendQueue = backendQueueForTarget(currentConversationTarget());') && uiHtml.includes('state.backendQueue = backendQueueForTarget(currentConversationTarget(activeId));'), 'ui html: workspace switching paints the host snapshot immediately, restores only the composite-target queue cache, and uses one runtime refresh instead of an activate-plus-state waterfall');
   assert(mainSource.includes('conversationSnapshot: localConversationSnapshotForStartup(target)') && mainSource.includes("conversationId: agent.activeConversationId || 'default'"), 'workspace selection: response includes the already-loaded persisted active conversation snapshot');
   assert(mainSource.includes('const resident = peekTargetRuntime(target).resident') && mainSource.includes('runtimeDeferred: true') && mainSource.includes('runtimeDeferred: false') && uiHtml.includes('renderConversationHistoryFirst(activeBrowserTarget)') && uiHtml.includes('Promise.allSettled([historyPromise, activationPromise])'), 'conversation activation: paints cached history first while persisted history and runtime activation enhance independently without a failure rollback');
@@ -4130,6 +4131,7 @@ async function main() {
   agent.setMode('build'); // ensure build mode for prompt test
   const sysPrompt = agent.buildSystemPrompt();
   assert(sysPrompt.includes('Newmark Agent'), 'buildSystemPrompt: includes identity');
+  assert(sysPrompt.includes('Newmark Runtime Configuration') && sysPrompt.includes('config.json') && sysPrompt.includes('user/.Newmark'), 'buildSystemPrompt: discloses the default user/.Newmark runtime configuration root without exposing secrets');
   assert(sysPrompt.includes('Enabled Newmark Features And Implementation'), 'buildSystemPrompt: includes feature disclosure');
   assert(sysPrompt.includes('做了什么') && sysPrompt.includes('验证') && sysPrompt.includes('文件') && sysPrompt.includes('问题/下一步'), 'buildSystemPrompt: enforces Chinese structured reply format');
   assert(sysPrompt.includes('What changed') && sysPrompt.includes('Verification') && sysPrompt.includes('Files') && sysPrompt.includes('Issues/Next'), 'buildSystemPrompt: enforces English structured reply format');
@@ -5015,6 +5017,16 @@ async function main() {
   assert(agent.estimateContextTokens(imageCompressionMessages) > 8000, 'maybeCompress images: structured base64 is counted instead of collapsing to object string text');
   await agent.maybeCompress(imageCompressionMessages, new FakeProvider(['## Preserved State\nThe historical image was inspected.']) as unknown as LLMProvider);
   assert(!JSON.stringify(imageCompressionMessages).includes(oversizedImage) && JSON.stringify(imageCompressionMessages).includes('Historical image attachment omitted'), 'maybeCompress images: historical image payloads become bounded textual records before the next provider request');
+  const recentImages: Array<Record<string, any>> = Array.from({ length: 18 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `history-${index} ` + 'h'.repeat(1800) }));
+  const recentImageData = ['AAA', 'BBB', 'CCC'].map(value => `data:image/png;base64,${value}`);
+  recentImages.push(...recentImageData.map((dataUrl, index) => ({
+    role: 'user',
+    content: [{ type: 'text', text: `recent image ${index + 1}` }, { type: 'image_url', image_url: { url: dataUrl } }],
+  })));
+  const recentImageCompressionMessages = recentImages.map(message => ({ ...message }));
+  await agent.maybeCompress(recentImageCompressionMessages, new FakeProvider(['## Preserved State\nKeep every recent visual input.']) as unknown as LLMProvider);
+  const retainedRecentImageUrls = JSON.stringify(recentImageCompressionMessages).match(/data:image\/png;base64,(?:AAA|BBB|CCC)/g) || [];
+  assert(retainedRecentImageUrls.length === 3, 'maybeCompress images: three consecutive recent image inputs survive compression for the next vision request');
   agent.history = Array(50).fill(null).map((_, i) => ({ role: i % 2 === 0 ? 'user' : 'assistant', content: 'y'.repeat(2000) }));
   const errorCompressionMessages = [...agent.history];
   await agent.maybeCompress(errorCompressionMessages, new FakeProvider(['[LLM Error: 400] unsupported response shape']) as unknown as LLMProvider);

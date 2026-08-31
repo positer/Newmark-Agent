@@ -166,6 +166,7 @@ interface ConversationRuntime {
   guideEnvelopes: Map<string, ConversationInputEnvelope>;
   goalContinuationTimer?: ReturnType<typeof setTimeout>;
   pendingContinuationRunId?: string;
+  lastAutomaticAssistantFingerprint?: string;
 }
 
 type WorkListener = (event: AgentWorkEvent) => void;
@@ -251,6 +252,11 @@ export class ConversationKernel {
       ...(attachments?.length ? { attachments } : {}),
       ...(visible ? { visibleUserInput: visible } : {}),
       ...(visibleMode ? { visibleMode } : {}),
+      // A normal user follow-up must never inherit the identity metadata that
+      // was only needed while it lived in the runtime queue.  In particular,
+      // do not let a stale/forwarded hiddenUserInput flag classify it as an
+      // Agent-generated continuation when Agent.process persists the turn.
+      hiddenUserInput: message.hiddenUserInput === true && !message.clientMessageId,
     };
   }
 
@@ -910,7 +916,7 @@ export class ConversationKernel {
     this.deferOutstandingGuides(runtime);
     const checkpointed = this.checkpoint(runtime.target).checkpointed;
     runtime.stopCheckpointed = checkpointed;
-    runtime.runner.abortActiveKernelRun();
+    runtime.runner.abortActiveKernelRun('user_stop');
     runtime.runner.emitWorkEvent({
       type: 'status',
       content: 'Stop requested. Saving progress and interrupting this conversation.',
@@ -1074,6 +1080,7 @@ export class ConversationKernel {
   ): Promise<ConversationKernelRunResult> {
     this.applyOptions(runtime.runner, options);
     let lastTokens = await this.runSingle(runtime, message);
+    this.rememberAutomaticAssistantFingerprint(runtime, message);
     if (runtime.stopRequestedRunId === runtime.runId) {
       this.mirrorHostIfTargetActive(runtime);
       return this.result(runtime, lastTokens);
@@ -1103,6 +1110,7 @@ export class ConversationKernel {
           }
           if (batchGuides.length === 1) {
             lastTokens = await this.runSingle(runtime, next.message, next.queueMode);
+            if (this.repeatedAutomaticAssistant(runtime, next.message, next.queueMode)) break;
             continue;
           }
           const batchText = batchGuides.map((guide, index) => `Guide ${index + 1}: ${guide.text}`).join('\n');
@@ -1112,8 +1120,11 @@ export class ConversationKernel {
             batchGuides,
           };
           lastTokens = await this.runSingle(runtime, batchMessage, 'steer');
+          if (this.repeatedAutomaticAssistant(runtime, batchMessage, 'steer')) break;
         } else {
-          lastTokens = await this.runSingle(runtime, this.drainQueuedFollowUpMessage(next.message), next.queueMode);
+          const drained = this.drainQueuedFollowUpMessage(next.message);
+          lastTokens = await this.runSingle(runtime, drained, next.queueMode);
+          if (this.repeatedAutomaticAssistant(runtime, drained, next.queueMode)) break;
         }
       }
       const rootMessage = runtime.runner.subagents.readRootInbox()[0];
@@ -1153,6 +1164,40 @@ export class ConversationKernel {
     }
     this.mirrorHostIfTargetActive(runtime);
     return this.result(runtime, lastTokens);
+  }
+
+  private automaticMessage(message: string | AgentPromptMessage, queueMode?: ConversationQueueMode): boolean {
+    return queueMode === 'steer'
+      || (typeof message !== 'string' && (message.hiddenUserInput === true || message.goalContinuation === true || !!message.batchGuides?.length));
+  }
+
+  private currentAssistantFingerprint(runtime: ConversationRuntime): string {
+    const messages = runtime.runner.chatMessages || [];
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'assistant') return '';
+    return String(last.content || '').trim().replace(/\s+/g, ' ').toLowerCase().slice(0, 4000);
+  }
+
+  private rememberAutomaticAssistantFingerprint(runtime: ConversationRuntime, message: string | AgentPromptMessage, queueMode?: ConversationQueueMode): void {
+    if (this.automaticMessage(message, queueMode)) runtime.lastAutomaticAssistantFingerprint = this.currentAssistantFingerprint(runtime) || undefined;
+  }
+
+  private repeatedAutomaticAssistant(runtime: ConversationRuntime, message: string | AgentPromptMessage, queueMode: ConversationQueueMode): boolean {
+    if (!this.automaticMessage(message, queueMode)) return false;
+    const fingerprint = this.currentAssistantFingerprint(runtime);
+    if (!fingerprint) return false;
+    if (runtime.lastAutomaticAssistantFingerprint === fingerprint) {
+      runtime.pendingNextTurn = runtime.pendingNextTurn.filter(item => {
+        const automatic = item.queueMode === 'steer' || (typeof item.message !== 'string' && item.message.hiddenUserInput === true);
+        if (automatic) runtime.runner.consumeConversationContinuation({ content: typeof item.message === 'string' ? item.message : item.message.text, queueMode: item.queueMode, clientMessageId: typeof item.message === 'string' ? undefined : item.message.clientMessageId });
+        return !automatic;
+      });
+      runtime.runner.recordWorkStatus('Automatic continuation stopped after a repeated assistant response.');
+      this.emitQueueUpdate(runtime);
+      return true;
+    }
+    runtime.lastAutomaticAssistantFingerprint = fingerprint;
+    return false;
   }
 
   /**
@@ -1196,7 +1241,20 @@ export class ConversationKernel {
         tokens = await Promise.race([
           runtime.runner.process(message),
           new Promise<never>((_, reject) => {
-            timeout = setTimeout(() => reject(new Error(`Process timeout (${Math.round(timeoutMs / 1000)}s)`)), timeoutMs);
+            timeout = setTimeout(() => {
+              // A timeout must cancel the provider/kernel operation as well as
+              // reject the caller. Previously only the Promise.race rejected,
+              // leaving the worker running in the background and making the
+              // UI observe a later unexplained interruption.
+              runtime.runner.abortActiveKernelRun(`process_timeout_${timeoutMs}ms`);
+              runtime.runner.emitWorkEvent({
+                type: 'error',
+                content: `Process timeout (${Math.round(timeoutMs / 1000)}s); the run was aborted to prevent a stale worker from continuing.`,
+                status: 'error',
+                runId: runtime.runId,
+              });
+              reject(new Error(`Process timeout (${Math.round(timeoutMs / 1000)}s); run aborted and checkpointed`));
+            }, timeoutMs);
           }),
         ]);
       } catch (error) {
@@ -1265,6 +1323,7 @@ export class ConversationKernel {
       guideEnvelopes: new Map(),
       goalContinuationTimer: undefined,
       pendingContinuationRunId: undefined,
+      lastAutomaticAssistantFingerprint: undefined,
     };
     runner.setGoalContinuationGate(() => {
       this.queueState(runtime);

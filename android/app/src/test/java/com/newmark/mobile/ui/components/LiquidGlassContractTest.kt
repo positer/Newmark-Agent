@@ -410,7 +410,7 @@ class LiquidGlassContractTest {
         assertFalse(memory.contains("scaleY = glassScaleY"))
         assertTrue(memory.contains(".width(slotWidth + edgeExpansion)"))
         assertTrue(memory.contains(".height(34.dp + edgeExpansion)"))
-        assertTrue(liquid.contains("val MobilePopupShape = RoundedCornerShape(22.dp)"))
+        assertTrue(liquid.contains("val MobilePopupShape = RoundedCornerShape(26.dp)"))
         assertTrue(app.contains("alpha = (1f - leftReveal).coerceIn(0f, 1f)"))
         assertTrue(app.contains("if (sidebarGestureLocks.isNotEmpty())"))
         assertTrue(app.contains("gesturesEnabled = true"))

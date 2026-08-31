@@ -1299,12 +1299,9 @@ private fun CompactMainLayout(
                     onSelectTab = onSelectRightTab,
                 )
             }
-            if (!rightExpanded && rightProgress < 0.01f) {
-                RightSidebarOpenButton(
-                    onClick = { onRightExpandedChange(true) },
-                    modifier = Modifier.align(Alignment.CenterEnd),
-                )
-            }
+            // Compact mobile expansion is gesture-only: reveal the right
+            // sidebar by swiping left from the right edge. There is no
+            // persistent affordance competing with that gesture.
         }
     }
 }
@@ -1402,12 +1399,8 @@ private fun ExpandedMainLayout(
                     .background(palette.bgPrimary),
             ) {
                 ConversationSurfaceContent(surface, showMenuButton = false, onMenuClick = {})
-                if (!rightExpanded && rightProgress < 0.01f) {
-                    RightSidebarOpenButton(
-                        onClick = { onRightExpandedChange(true) },
-                        modifier = Modifier.align(Alignment.CenterEnd),
-                    )
-                }
+                // The right sidebar is gesture-only on every mobile width;
+                // swipe left from the right edge to expand it.
             }
             Box(Modifier.width(panelWidth * rightProgress).fillMaxHeight())
         }

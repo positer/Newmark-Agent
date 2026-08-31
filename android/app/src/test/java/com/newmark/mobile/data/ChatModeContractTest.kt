@@ -9,7 +9,7 @@ import org.junit.Test
 class ChatModeContractTest {
     @Test
     fun chatExposesOnlyWebEvidenceToolsAndRejectsStaleWritesAtExecution() {
-        assertEquals(setOf("web_search", "web_fetch"), LocalToolCatalog.chatNames)
+        assertEquals(setOf("web_search", "web_fetch", "terminal_exec"), LocalToolCatalog.chatNames)
 
         val tools = File("src/main/java/com/newmark/mobile/data/LocalTools.kt").readText()
         val executor = File("src/main/java/com/newmark/mobile/data/LocalToolExecutor.kt").readText()
@@ -19,7 +19,9 @@ class ChatModeContractTest {
 
         assertTrue(tools.contains("\"chat\" -> definitions.filter"))
         assertTrue(executor.contains("mode.equals(\"chat\", ignoreCase = true) && name !in LocalToolCatalog.chatNames"))
-        assertTrue(executor.contains("Chat 模式仅允许 web_search 与 web_fetch"))
+        assertTrue(executor.contains("Chat 模式仅允许 web_search、web_fetch 与受限 terminal_exec"))
+        assertTrue(executor.contains("command !in setOf(\"date\", \"time\", \"now\")"))
+        assertTrue(executor.contains("terminal_exec 仅允许 date、time 或 now 获取当前时间"))
         assertTrue(context.contains("first use web_search for online evidence"))
         assertTrue(context.contains("summarize the evidence into a concise answer"))
         assertTrue(viewModel.contains("definitionsFor(getApplication(), mode = mode)"))

@@ -1049,7 +1049,6 @@ async function run(): Promise<void> {
   const popup = await engine.run(request(observed, 'click', ref('Popup')));
   ok(popup.ok && popup.effects?.popupBlocked === true, 'automation popup is denied and recorded in the receipt');
   ok(BrowserWindow.getAllWindows().filter(item => !item.isDestroyed()).length === 1, 'blocked popup creates no window');
-
   const download = await engine.run(request(observed, 'click', ref('Download')));
   ok(download.ok && download.effects?.downloadBlocked === true, 'automation download is denied and recorded in the receipt');
 

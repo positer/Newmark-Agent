@@ -81,6 +81,8 @@ private fun normalizeCodeLanguage(language: String): String {
     return LANG_ALIASES[v] ?: v.ifBlank { "text" }
 }
 
+private val FENCED_LANGUAGE_PREFIXES = listOf("powershell", "javascript", "typescript", "python", "bash", "shell", "json", "yaml", "markdown", "latex", "text", "sh", "js", "ts", "py")
+
 /** PC-compatible readable LaTeX fallback used by inline and display math. */
 internal fun renderReadableLatex(tex: String): String {
     val symbols = mapOf(
@@ -338,13 +340,19 @@ private fun parseBlocks(text: String): List<MdBlock> {
     while (i < lines.size) {
         val line = lines[i]
         val trimmed = line.trim()
-        if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
+        val fenceMatch = Regex("^(`{3,}|~{3,})(.*)$").find(trimmed)
+        if (fenceMatch != null) {
             flushParagraph()
-            val fence = trimmed.take(3)
-            val lang = trimmed.removePrefix(fence).trim()
+            val fence = fenceMatch.groupValues[1]
+            val fenceTail = fenceMatch.groupValues[2].trim()
+            val rawLang = fenceTail.takeWhile { !it.isWhitespace() }
+            val matchedPrefix = FENCED_LANGUAGE_PREFIXES.firstOrNull { rawLang.startsWith(it, ignoreCase = true) }
+            val lang = matchedPrefix ?: rawLang
             val codeLines = mutableListOf<String>()
+            val inlineCode = fenceTail.drop(lang.length).trimStart()
+            if (inlineCode.isNotEmpty()) codeLines.add(inlineCode)
             i++
-            while (i < lines.size && !lines[i].trim().startsWith(fence)) {
+            while (i < lines.size && !Regex("^${Regex.escape(fence.first().toString())}{${fence.length},}\\s*$").matches(lines[i].trim())) {
                 codeLines.add(lines[i])
                 i++
             }

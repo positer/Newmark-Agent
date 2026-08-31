@@ -34,4 +34,15 @@ class BrowserSessionRegistryTest {
         assertSame(conversationA, registry.session("local:conversation-a"))
         assertEquals("https://example.com/a", registry.session("local:conversation-a").address)
     }
+
+    @Test
+    fun reloadKeepsPopupNavigationInTheSameSession() {
+        val session = BrowserSessionState()
+        session.navigate("https://example.com/popup")
+        val before = session.command.id
+        session.reload()
+        assertEquals(BrowserCommandKind.Reload, session.command.kind)
+        assertEquals("https://example.com/popup", session.address)
+        assertEquals(before + 1, session.command.id)
+    }
 }

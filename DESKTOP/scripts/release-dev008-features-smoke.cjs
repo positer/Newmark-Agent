@@ -226,7 +226,6 @@ function startMockProvider() {
     request.on('end', () => {
       let parsed = {};
       try { parsed = JSON.parse(body || '{}'); } catch {}
-      requests.push({ method: request.method, url: request.url, parsed });
       if (request.method === 'GET' && request.url === '/v1/models') {
         response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         response.end(JSON.stringify({ data: [{ id: modelName }] }));
@@ -237,6 +236,12 @@ function startMockProvider() {
         response.end(JSON.stringify({ error: { message: 'not found' } }));
         return;
       }
+      if (parsed.stream !== true) {
+        response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({ choices: [{ message: { content: 'DEV008_TITLE_OK' } }] }));
+        return;
+      }
+      requests.push({ method: request.method, url: request.url, parsed });
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       const latestUser = latestUserText(messages);
       const peer = peerIdentity(messages);

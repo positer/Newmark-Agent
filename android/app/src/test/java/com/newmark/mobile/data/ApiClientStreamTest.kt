@@ -181,7 +181,7 @@ class ApiClientStreamTest {
                     .addHeader("Content-Type", "text/event-stream")
                     .setBody(
                         "data:{\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n" +
-                            "data:{\"type\":\"response.completed\",\"response\":{}}\n\n",
+                            "data:{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
                     ),
             )
         }
@@ -217,7 +217,7 @@ class ApiClientStreamTest {
                     .addHeader("Content-Type", "text/event-stream")
                     .setBody(
                         "data:{\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n" +
-                            "data:{\"type\":\"response.completed\",\"response\":{}}\n\n",
+                            "data:{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
                     ),
             )
         }
@@ -453,7 +453,9 @@ class ApiClientStreamTest {
             ).text,
         )
         assertTrue(
-            parseResponsesStreamDelta("{\"type\":\"response.completed\",\"response\":{}}")
+            parseResponsesStreamDelta(
+                "{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}",
+            )
                 .completed,
         )
 
@@ -472,14 +474,46 @@ class ApiClientStreamTest {
     }
 
     @Test
+    fun backgroundAgentNetworkFailuresUseBoundedRecoveryBackoff() {
+        assertTrue(isTransientAgentNetworkFailure(java.net.UnknownHostException("offline")))
+        assertTrue(isTransientAgentNetworkFailure(SocketException("Connection reset")))
+        assertTrue(!isTransientAgentNetworkFailure(IllegalStateException("HTTP 401")))
+        assertEquals(250L, agentNetworkRetryDelayMs(0))
+        assertEquals(1_000L, agentNetworkRetryDelayMs(1))
+        assertEquals(3_000L, agentNetworkRetryDelayMs(2))
+        assertEquals(10_000L, agentNetworkRetryDelayMs(3))
+        assertEquals(30_000L, agentNetworkRetryDelayMs(20))
+    }
+
+    @Test
     fun responsesFallbackUsesPcCompatibleEndpointAndRequestShapes() {
         val source = File("src/main/java/com/newmark/mobile/data/ApiClient.kt").readText()
 
         assertTrue(source.contains("shouldRetryWithResponses(resp.code, text)"))
-        assertTrue(source.contains("val url = \"\$endpointBase/responses\""))
+        assertTrue(source.contains("val url = responsesEndpoint(base)"))
         assertTrue(source.contains("put(\"reasoning\", JSONObject().put(\"effort\", effort).put(\"summary\", \"auto\"))"))
         assertTrue(source.contains("put(\"type\", \"function_call_output\")"))
         assertTrue(source.contains("put(\"parallel_tool_calls\", true)"))
+    }
+
+    @Test
+    fun responsesEndpointAcceptsApiRootsAndFullEndpointsWithoutDroppingV1() {
+        val client = ApiClient(OkHttpClient())
+
+        assertEquals("https://api.openai.com/v1/responses", client.responsesEndpoint("https://api.openai.com"))
+        assertEquals("https://api.openai.com/v1/responses", client.responsesEndpoint("https://api.openai.com/v1"))
+        assertEquals(
+            "https://api.openai.com/v1/responses",
+            client.responsesEndpoint("https://api.openai.com/v1/chat/completions"),
+        )
+        assertEquals(
+            "https://api.openai.com/v1/responses",
+            client.responsesEndpoint("https://api.openai.com/v1/responses"),
+        )
+        assertEquals(
+            "https://gateway.example/openai/responses",
+            client.responsesEndpoint("https://gateway.example/openai"),
+        )
     }
 
     @Test
@@ -504,7 +538,7 @@ class ApiClientStreamTest {
                         "data:{\"type\":\"response.output_item.done\",\"item\":{" +
                         "\"id\":\"item_1\",\"call_id\":\"call_1\",\"type\":\"function_call\"," +
                         "\"name\":\"terminal_exec\",\"arguments\":\"{\\\"command\\\":\\\"pwd\\\"}\"}}\n\n" +
-                        "data:{\"type\":\"response.completed\",\"response\":{}}\n\n",
+                        "data:{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
                 ),
         )
         server.start()
@@ -552,6 +586,322 @@ class ApiClientStreamTest {
     }
 
     @Test
+    fun explicitResponsesProtocolSkipsChatAndUsesResponsesDirectly() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody(
+                    "data:{\"type\":\"response.output_text.delta\",\"delta\":\"direct\"}\n\n" +
+                        "data:{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+                ),
+        )
+        server.start()
+        try {
+            val response = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(
+                    baseUrl = server.url("/v1/chat/completions").toString().trimEnd('/'),
+                    apiKey = "test-key",
+                    model = "gpt-response",
+                    protocol = "openai_responses",
+                ),
+                messages = listOf(ChatMessage(role = "user", content = "hello")),
+            ).getOrThrow()
+
+            val request = server.takeRequest()
+            assertEquals(1, server.requestCount)
+            assertEquals("/v1/responses", request.path)
+            assertEquals("direct", response.content)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun explicitResponsesProtocolRejectsTruncatedStreamAfterVisibleText() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody("data:{\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"),
+        )
+        server.start()
+        try {
+            val visible = StringBuilder()
+            val result = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(
+                    baseUrl = server.url("/v1").toString().trimEnd('/'),
+                    apiKey = "test-key",
+                    model = "gpt-response",
+                    protocol = "openai_responses",
+                ),
+                messages = listOf(ChatMessage(role = "user", content = "hello")),
+                onTextDelta = { visible.append(it) },
+            )
+
+            assertEquals("partial", visible.toString())
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("response.completed"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun responsesEventNameWithoutPayloadTypeStillReportsProviderFailure() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody("event: response.failed\ndata: {\"error\":{\"message\":\"provider failed\"}}\n\n"),
+        )
+        server.start()
+        try {
+            val result = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(
+                    baseUrl = server.url("/v1").toString().trimEnd('/'),
+                    apiKey = "test-key",
+                    model = "gpt-response",
+                    protocol = "openai_responses",
+                ),
+                messages = listOf(ChatMessage(role = "user", content = "hello")),
+            )
+
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("provider failed"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun responsesCompletedEventRejectsContradictoryEmbeddedStatusAndUsesIncompleteReason() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody(
+                    "event: response.completed\n" +
+                        "data: {\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n",
+                ),
+        )
+        server.start()
+        try {
+            val result = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(
+                    baseUrl = server.url("/v1").toString().trimEnd('/'),
+                    apiKey = "test-key",
+                    model = "gpt-response",
+                    protocol = "openai_responses",
+                ),
+                messages = listOf(ChatMessage(role = "user", content = "hello")),
+            )
+
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("max_output_tokens"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun responsesCompletedEventRequiresExplicitCompletedStatus() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody("event: response.completed\ndata: {\"response\":{}}\n\n"),
+        )
+        server.start()
+        try {
+            val result = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(
+                    baseUrl = server.url("/v1").toString().trimEnd('/'),
+                    apiKey = "test-key",
+                    model = "gpt-response",
+                    protocol = "openai_responses",
+                ),
+                messages = listOf(ChatMessage(role = "user", content = "hello")),
+            )
+
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("response.status=completed"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun responsesCompletedEventRejectsRootLevelStatusWithoutEmbeddedStatus() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody(
+                    "event: response.completed\n" +
+                        "data: {\"status\":\"completed\",\"response\":{}}\n\n",
+                ),
+        )
+        server.start()
+        try {
+            val result = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(
+                    baseUrl = server.url("/v1").toString().trimEnd('/'),
+                    apiKey = "test-key",
+                    model = "gpt-response",
+                    protocol = "openai_responses",
+                ),
+                messages = listOf(ChatMessage(role = "user", content = "hello")),
+            )
+
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("response.status=completed"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun responsesCompletedEventWithoutStatusPreservesProviderFailureDetails() = runBlocking {
+        val cases = listOf(
+            "{\"response\":{\"error\":{\"message\":\"provider status omitted\"}}}" to
+                "provider status omitted",
+            "{\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}" to
+                "max_output_tokens",
+        )
+        val server = MockWebServer()
+        cases.forEach { (payload, _) ->
+            server.enqueue(
+                MockResponse()
+                    .addHeader("Content-Type", "text/event-stream")
+                    .setBody("event: response.completed\ndata: $payload\n\n"),
+            )
+        }
+        server.start()
+        try {
+            cases.forEach { (_, expectedMessage) ->
+                val result = ApiClient(OkHttpClient()).chat(
+                    config = ApiConfig(
+                        baseUrl = server.url("/v1").toString().trimEnd('/'),
+                        apiKey = "test-key",
+                        model = "gpt-response",
+                        protocol = "openai_responses",
+                    ),
+                    messages = listOf(ChatMessage(role = "user", content = "hello")),
+                )
+
+                assertTrue(result.isFailure)
+                assertTrue(result.exceptionOrNull()?.message.orEmpty().contains(expectedMessage))
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun responsesCancelledEventIsAProviderFailure() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody("event: response.cancelled\ndata: {\"response\":{\"status\":\"cancelled\"}}\n\n"),
+        )
+        server.start()
+        try {
+            val result = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(
+                    baseUrl = server.url("/v1").toString().trimEnd('/'),
+                    apiKey = "test-key",
+                    model = "gpt-response",
+                    protocol = "openai_responses",
+                ),
+                messages = listOf(ChatMessage(role = "user", content = "hello")),
+            )
+
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("response.cancelled"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun nonStreamingResponsesPayloadStillNormalizesTextReasoningAndTools() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "application/json")
+                .setBody(
+                    "{\"status\":\"completed\",\"output\":[" +
+                        "{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"检查\"}]}," +
+                        "{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"完成\"}]}," +
+                        "{\"type\":\"function_call\",\"id\":\"item_1\",\"call_id\":\"call_1\"," +
+                        "\"name\":\"terminal_exec\",\"arguments\":\"{\\\"command\\\":\\\"pwd\\\"}\"}]}",
+                ),
+        )
+        server.start()
+        try {
+            val response = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(
+                    baseUrl = server.url("/v1").toString().trimEnd('/'),
+                    apiKey = "test-key",
+                    model = "gpt-response",
+                    protocol = "openai_responses",
+                ),
+                messages = listOf(ChatMessage(role = "user", content = "hello")),
+            ).getOrThrow()
+
+            assertEquals("检查", response.reasoningContent)
+            assertEquals("完成", response.content)
+            assertEquals(listOf(ToolCall("call_1", "terminal_exec", "{\"command\":\"pwd\"}")), response.toolCalls)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun nonStreamingResponsesRequiresExplicitCompletedStatus() = runBlocking {
+        val statuses = listOf("failed", "incomplete", "cancelled", "queued", "in_progress", "mystery", null)
+        val server = MockWebServer()
+        statuses.forEach { status ->
+            val body = JSONObject().put("output_text", "must-not-succeed")
+            if (status != null) body.put("status", status)
+            if (status == "incomplete") {
+                body.put("incomplete_details", JSONObject().put("reason", "max_output_tokens"))
+            }
+            server.enqueue(
+                MockResponse()
+                    .addHeader("Content-Type", "application/json")
+                    .setBody(body.toString()),
+            )
+        }
+        server.start()
+        try {
+            statuses.forEach { status ->
+                val result = ApiClient(OkHttpClient()).chat(
+                    config = ApiConfig(
+                        baseUrl = server.url("/v1").toString().trimEnd('/'),
+                        apiKey = "test-key",
+                        model = "gpt-response",
+                        protocol = "openai_responses",
+                    ),
+                    messages = listOf(ChatMessage(role = "user", content = "status-$status")),
+                )
+
+                assertTrue("status=$status must fail", result.isFailure)
+                if (status == "incomplete") {
+                    assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("max_output_tokens"))
+                }
+                if (status == null) {
+                    assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("response.status=completed"))
+                }
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun chatThenResponsesThenNoTemperatureRetryCompletesEndToEnd() = runBlocking {
         val server = MockWebServer()
         server.enqueue(
@@ -572,7 +922,7 @@ class ApiClientStreamTest {
                 .setBody(
                     "data:{\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"检查\"}\n\n" +
                         "data:{\"type\":\"response.output_text.delta\",\"delta\":\"完成\"}\n\n" +
-                        "data:{\"type\":\"response.completed\",\"response\":{}}\n\n",
+                        "data:{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
                 ),
         )
         server.start()
@@ -609,7 +959,7 @@ class ApiClientStreamTest {
                     .addHeader("Content-Type", "text/event-stream")
                     .setBody(
                         "data:{\"type\":\"response.output_text.delta\",\"delta\":\"再次完成\"}\n\n" +
-                            "data:{\"type\":\"response.completed\",\"response\":{}}\n\n",
+                            "data:{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
                     ),
             )
             val cached = client.chat(

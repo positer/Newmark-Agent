@@ -8,7 +8,7 @@ import {
   persistAttachmentsFromHistoryContent,
   persistSubmittedConversationImages,
 } from './conversationAttachments';
-import { durableDisplayImage, hydrateDisplayImage, persistWorkspaceDisplayImage } from './displayImages';
+import { durableDisplayImage, hydrateDisplayImage, persistWorkspaceDisplayImage, readWorkspaceImageForVision } from './displayImages';
 import { ConfigManager, ModelConfig, ModelEvaluation, ModelValidationSummary, ProviderProtocol, inferModelVisionCapability, inferProviderProtocol, mergeProviderSecrets } from './config';
 import { LLMProvider } from '../llm/provider';
 import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, tokenizeFuzzyProviderInput } from './fuzzy';
@@ -197,6 +197,9 @@ interface StoredConversationState {
   flowSuspensions?: Record<string, FlowSuspensionRecord>;
   conversations?: Record<string, {
     title?: string;
+    titleRequestMessageId?: string;
+    /** Set immediately before the first formal Agent/provider response starts. */
+    firstAgentResponseStarted?: boolean;
     chatMessages?: ChatMessage[];
     history?: Array<Record<string, unknown>>;
     compressionCache?: CompressionCacheEntry[];
@@ -394,12 +397,12 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - delete_file: Delete ONE file at a time under Agent supervision (absolute path; refuses directories and wildcards)
 - glob: Find files by pattern
 - grep: Search file contents with regex
-- web_search: Search the web via DuckDuckGo
+- web_search: Search through the configured search-only MCP pool, then fall back to Bing HTTP and finally DuckDuckGo HTTP
 - web_fetch: Fetch and extract content from URLs
 - browser_use: Preferred native built-in-browser workflow. Observe first, then use the returned page generation, observation id, and opaque refs for click/type/select/scroll/key/navigation/wait/extraction. Recognition order is enforced as rendered DOM text first, then an ephemeral screenshot sent to a validated vision model when text is unavailable, and only then local OCR. A successful action receipt is enough to continue the Build; do not wait for the browser session or window to close. Every receipt is bound to the current workspace/conversation runtime and actor. Stale page capabilities are rejected; observe again to recover.
 - browser_open/browser_snapshot/browser_click/browser_type/browser_eval/browser_back/browser_forward/browser_reload/browser_cdp: Legacy and expert Chromium controls. Prefer browser_use for normal interactive work; raw eval/CDP remain advanced escape hatches.
 - computer_use: Native desktop Computer Use control for full desktop or app-scoped observe/move/click/scroll/type/key/wait against Windows desktop applications. A successful takeover_start receipt means the persistent control surface started and the Build may continue immediately; do not wait for takeover_stop or closure before taking the next step. Use takeover_stop when control is no longer needed. Use app_list/app_observe/app_activate/app_click/app_scroll/app_type/app_key when the task can be scoped to a visible taskbar application by title, process name, PID, or window handle; this narrows screenshots and actions to that application. Use observe/app_observe first, reason over returned screenshot plus UI Automation objects. If the model supports vision, Newmark sends the screenshot image and UI object tree together in the same tool-result context; use both for stable decisions. Prefer target_id from perception.scene_summary.high_priority_objects or perception.objects for move/click/scroll when available; fall back to exact coordinates only when necessary.
-- image_inspect: For durable user-submitted visual attachments, query source_info by stable attachment_id (or latest-message image_index) and actively crop/magnify a precise pixel region when text or geometry is too small to inspect reliably. Original user images remain revisitable; derived crops are current-turn-only and never saved to disk.
+- image_inspect: Inspect durable user-submitted visual attachments, or use action=inspect with a workspace-relative PNG/JPEG path to send that file to the current validated vision model. Query source_info before cropping submitted images when dimensions are unknown. Workspace observations and derived crops are current-turn-only; image bytes are never saved in tool text or durable history.
 - image_display: Present one workspace PNG/JPEG to the user. Use it for diagrams or other visual evidence that materially helps explain the current Build; pass a workspace-relative path and optional caption hint. When validated vision is active, Newmark inspects the actual image and generates the displayed descriptive title; otherwise the caption or filename is used as fallback.
 - ocr_read: LAST-RESORT, approximate Simplified-Chinese/English OCR only. Never call it before normal text extraction and validated vision input. When it returns text, use its Agent repair prompt to conservatively correct likely substitutions, spacing, and line breaks from surrounding context; never invent unsupported content.
 - task: Create a subagent for parallel work
@@ -519,10 +522,17 @@ export class Agent {
   private branchMailbox: BranchMessage[] = [];
   private nextBranchMessageSequence = 1;
   private branchCommunicationEnabled = false;
+  /**
+   * Title/model availability is a hard gate for the first formal response.
+   * These values mirror the current conversation's persisted gate state so a
+   * failed first attempt cannot be bypassed by a second ordinary user send.
+   */
+  private titleRequestMessageId = '';
+  private firstAgentResponseStarted = false;
   private compressionArchiveCountCache: { scopeKey: string; count: number } | null = null;
   private nextCompressionCacheId = 1;
   private readonly compressionHistoryArchive: CompressionHistoryArchive;
-  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; compressionCache?: CompressionCacheEntry[]; branchMailbox?: BranchMessage[]; branchCommunication?: boolean; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; runtimeOwnerId?: string; runtimeOwnerPid?: number; runtimeLifecycleRole?: RuntimeLifecycleRole; updatedAt?: string }>();
+  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; compressionCache?: CompressionCacheEntry[]; branchMailbox?: BranchMessage[]; branchCommunication?: boolean; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; titleRequestMessageId?: string; firstAgentResponseStarted?: boolean; runtimeOwnerId?: string; runtimeOwnerPid?: number; runtimeLifecycleRole?: RuntimeLifecycleRole; updatedAt?: string }>();
   public isSubagentRuntime = false;
   private subagentName = '';
   private subagentPrompt = '';
@@ -1980,6 +1990,45 @@ export class Agent {
     }
     if (preservedLiveRun && !changed) return { runs: normalized, changed: false };
     return { runs: normalized, changed };
+  }
+
+  /** Close tool calls left without results by a hard worker exit. */
+  private repairDanglingToolCalls(messages: Array<Record<string, unknown>>): { messages: Array<Record<string, unknown>>; changed: boolean } {
+    const repaired: Array<Record<string, unknown>> = [];
+    const pending = new Map<string, string>();
+    let changed = false;
+    const settlePending = (): void => {
+      for (const [id, name] of pending) {
+        repaired.push({
+          role: 'tool', tool_call_id: id, name,
+          content: JSON.stringify({
+            ok: false, code: 'runtime_interrupted', recoverable: true,
+            error: 'The runtime exited before this tool returned. Retry the tool if it is still needed.',
+          }),
+        });
+        changed = true;
+      }
+      pending.clear();
+    };
+    for (const message of messages) {
+      const role = String(message.role || '');
+      const toolCallId = String(message.tool_call_id || '');
+      if (pending.size && role !== 'tool') settlePending();
+      repaired.push({ ...message });
+      if (role === 'assistant' && Array.isArray(message.tool_calls)) {
+        for (const call of message.tool_calls as Array<Record<string, unknown>>) {
+          const id = String(call.id || '');
+          const fn = call.function && typeof call.function === 'object' ? call.function as Record<string, unknown> : {};
+          if (id) pending.set(id, String(fn.name || 'tool'));
+        }
+      } else if (role === 'tool' && toolCallId) pending.delete(toolCallId);
+    }
+    if (pending.size) settlePending();
+    return { messages: repaired, changed };
+  }
+
+  repairDanglingToolCallsForTest(messages: Array<Record<string, unknown>>): { messages: Array<Record<string, unknown>>; changed: boolean } {
+    return this.repairDanglingToolCalls(messages);
   }
 
   private pauseFlowAfterUnexpectedExit(): boolean {
@@ -3843,10 +3892,10 @@ export class Agent {
     return { id, title: resolvedTitle };
   }
   /**
-   * 首 Build 命名判定：仅当 (1) 当前对话尚无历史 Build（排除当前 run）且
-   * (2) 其持久化 title 仍是自动生成（含为空）时返回 true。dev-0.4.3 起不再
-   * 用该判定注入首轮 tool-call 指令，而是在首个完成 Build 的最终响应处自动
-   * 命名（见 maybeAutoRenameConversationFromRun）。判定本身只读存储、无副作用。
+   * Compatibility query for callers that still expose the rename affordance.
+   * Automatic naming itself is a hard pre-response gate: until the persisted
+   * firstAgentResponseStarted flag is true, every ordinary send must finish a
+   * title probe for the first persisted user message before formal execution.
    */
   public shouldPromptConversationRename(): boolean {
     if (this.conversationBuildHistory(1).length > 0) return false;
@@ -3854,15 +3903,16 @@ export class Agent {
     const stateKey = this.workspaceConversationStateKey(conversationId);
     if (!stateKey) return false;
     const entry = this.readStoredConversationState().conversations?.[stateKey];
+    if (this.restoredFirstAgentResponseStarted(entry)) return false;
     const priorTitle = entry?.title;
     const messages = entry?.chatMessages || this.chatMessages;
     return this.isGeneratedConversationTitle(priorTitle, conversationId, messages);
   }
 
   /**
-   * 从首个 Build 的最终响应中提取一个简短对话标题。跳过 Markdown 标题/列表
-   * 符号与固定 section 标题，取第一条有意义的摘要句并做保守清洗。
-   * dev-0.4.5 起仅作为独立 rename API 不可用时的本地回退。
+   * Legacy explicit-rename sanitizer retained for compatibility tests only.
+   * Automatic naming must never use an Agent/Build summary as a fallback;
+   * the independent first-input title probe is the sole automatic source.
    */
   private deriveConversationTitleFromSummary(summary: string): string {
     const clean = this.sanitizeAssistantOutput(summary || '').replace(/\r/g, '');
@@ -3904,26 +3954,33 @@ export class Agent {
   }
 
   /**
-   * 用独立的 provider API 请求为对话生成标题（与主响应并行、不共享主前缀缓存）。
-   * system 约束模型只按格式返回一个简短名词短语标题；失败、超时或无 provider 时
-   * 返回空字符串，由调用方回退到本地 deriveConversationTitleFromSummary。
+   * Run the independent, tool-free title/model-availability probe. It shares
+   * the frozen deployment selected for this send, but no main Agent history or
+   * tool schema. An empty result keeps the formal response hard-blocked.
    */
-  private async deriveConversationTitleFromProvider(summary: string): Promise<string> {
-    const provider = this.engineModel();
-    const modelName = this.activeModelName();
-    if (!provider || !modelName) return '';
+  private async deriveConversationTitleFromProvider(
+    firstUserInput: string,
+    provider: LLMProvider,
+    modelName: string,
+    intelligence: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
     const system = [
       'You are a conversation title generator.',
-      'Return ONLY a short, concrete noun-phrase title for the conversation, a few words at most.',
+      'Summarize the user intent and return ONLY a short, concrete noun-phrase title for the conversation.',
+      'Do not quote, repeat, or truncate the user input as the title.',
       'No preamble, no explanation, no Markdown, no quotes, no trailing punctuation.',
     ].join('\n');
-    const prompt = `Task summary:\n${String(summary || '').slice(0, 2000)}\n\nConversation title (a few words):`;
+    const prompt = `First user input:\n${String(firstUserInput || '').slice(0, 4000)}\n\nConversation title (a few words):`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error('conversation rename timed out')), 15000);
     try {
-      const { temperature } = provider.intelligenceConfig('low');
-      const generated = await provider.chat(modelName, [{ role: 'user', content: prompt }], system, temperature, 64, controller.signal);
-      return this.normalizeConversationRenameTitle(generated);
+      if (signal?.aborted) return '';
+      const { temperature, reasoningEffort } = provider.intelligenceConfig(intelligence);
+      const generated = await provider.chat(modelName, [{ role: 'user', content: prompt }], system, temperature, 64, controller.signal, reasoningEffort);
+      const title = this.normalizeConversationRenameTitle(generated);
+      const source = String(firstUserInput || '').replace(/\s+/g, ' ').trim();
+      return title && title !== source ? title : '';
     } catch {
       return '';
     } finally {
@@ -3931,30 +3988,134 @@ export class Agent {
     }
   }
 
-  /**
-   * dev-0.4.5：conversation_rename 流程独立为「并行响应 API」。首个完成 Build 的
-   * 最终响应到达时，fire-and-forget 发起一个独立 provider 请求生成标题并按格式
-   * rename，不阻塞主流程、不污染主前缀缓存；无 provider / 失败时回退本地启发式。
-   * conversation_rename 工具与 shouldPromptConversationRename 判定均保留，且不再
-   * 在首轮 prompt 注入一次性 tool-call 指令。
-   */
-  private maybeAutoRenameConversationFromRun(run: ConversationWorkRun): void {
-    if (run.status !== 'completed') return;
-    if (!this.shouldPromptConversationRename()) return;
-    const finalEvent = [...run.events].reverse().find(event => event.type === 'final_response');
-    const finalMessage = [...this.chatMessages].reverse().find(message => message.role === 'assistant' && message.runId === run.runId);
-    const raw = finalEvent?.content || finalMessage?.content || '';
-    const summary = this.sanitizePublicWorkContent(raw).slice(0, 2000);
+  /** Legacy completion hook retained as a no-op; naming is pre-response only. */
+  private maybeAutoRenameConversationFromRun(_run: ConversationWorkRun): void {
+    // Compatibility no-op. Automatic naming is a hard gate on the first
+    // persisted user input and never depends on Agent output or completion.
+  }
+
+  private async startFirstInputConversationTitle(
+    messageId: string,
+    firstUserInput: string,
+    provider: LLMProvider,
+    modelName: string,
+    intelligence: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
     const conversationId = this.activeConversationId || 'default';
-    void this.deriveConversationTitleFromProvider(summary)
-      .then(title => {
-        const resolved = title || this.deriveConversationTitleFromSummary(summary);
-        if (resolved) this.renameConversation(conversationId, resolved);
-      })
-      .catch(() => {
-        const fallback = this.deriveConversationTitleFromSummary(summary);
-        if (fallback) this.renameConversation(conversationId, fallback);
-      });
+    const workspace = this.workspace.current;
+    const stateKey = this.workspaceConversationStateKeyFor(conversationId, workspace);
+    // 标题探测失败（空响应、响应重复用户输入、临时传输错误）使用
+    // 0s → 1s → 2s → 4s → 8s 的 5 级退避，全部失败才阻断正式首轮。
+    const maxAttempts = 5;
+    const retryDelaysMs = [0, 1000, 2000, 4000, 8000];
+    if (!messageId || !firstUserInput.trim()) return false;
+    if (!stateKey) {
+      // Pure Agent/CLI mode has no workspace conversation file to rename, but
+      // still uses the title request as the required first model-availability
+      // probe before starting the formal response.
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        if (await this.deriveConversationTitleFromProvider(firstUserInput, provider, modelName, intelligence, signal)) return true;
+        if (signal?.aborted) return false;
+        if (attempt < maxAttempts - 1) await new Promise<void>(resolve => setTimeout(resolve, retryDelaysMs[attempt]));
+      }
+      return false;
+    }
+    const stored = this.readStoredConversationState(workspace);
+    const entry = stored.conversations?.[stateKey];
+    if (!entry || (entry.titleRequestMessageId && entry.titleRequestMessageId !== messageId)) return false;
+    const firstUser = (entry.chatMessages || []).find(message => message.role === 'user');
+    if (!firstUser || String(firstUser.messageId || '') !== messageId) return false;
+    entry.titleRequestMessageId = messageId;
+    this.writeStoredConversationState(stored, workspace);
+    this.titleRequestMessageId = messageId;
+    const memoryKey = this.workspaceConversationKey();
+    const memory = memoryKey ? this.workspaceConversations.get(memoryKey) : undefined;
+    if (memory) memory.titleRequestMessageId = messageId;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const title = await this.deriveConversationTitleFromProvider(firstUserInput, provider, modelName, intelligence, signal);
+      if (title) {
+        const latest = this.readStoredConversationState(workspace);
+        const current = latest.conversations?.[stateKey];
+        const stillFirst = (current?.chatMessages || []).find(message => message.role === 'user');
+        if (!current || current.titleRequestMessageId !== messageId || String(stillFirst?.messageId || '') !== messageId) return false;
+        if (!this.isGeneratedConversationTitle(current.title, conversationId, current.chatMessages || [])) return true;
+        current.title = title;
+        current.updatedAt = this.nowIso();
+        this.writeStoredConversationState(latest, workspace);
+        return true;
+      }
+      if (signal?.aborted) return false;
+      if (attempt < maxAttempts - 1) await new Promise<void>(resolve => setTimeout(resolve, retryDelaysMs[attempt]));
+    }
+    return false;
+  }
+
+  private firstPersistedUserForTitleGate(): { messageId: string; input: string } | null {
+    const firstUser = this.chatMessages.find(message => message.role === 'user');
+    const messageId = String(firstUser?.messageId || '').trim();
+    if (!firstUser || !messageId) return null;
+    const attachmentCount = firstUser.attachments?.length || 0;
+    const input = String(firstUser.content || '').trim()
+      || (attachmentCount ? `The user submitted ${attachmentCount} image attachment${attachmentCount === 1 ? '' : 's'}.` : '');
+    return input ? { messageId, input } : null;
+  }
+
+  /**
+   * Conversations saved before the durable title gate existed have no explicit
+   * flag. Prior assistant history or any persisted WorkRun proves that their
+   * first formal response already started. An explicit false is authoritative:
+   * it represents a failed title probe that must remain blocked across reloads.
+   */
+  private restoredFirstAgentResponseStarted(entry: {
+    firstAgentResponseStarted?: boolean;
+    chatMessages?: ChatMessage[];
+    history?: Array<Record<string, unknown>>;
+    workRuns?: ConversationWorkRun[];
+  } | null | undefined): boolean {
+    if (!entry) return false;
+    if (typeof entry.firstAgentResponseStarted === 'boolean') return entry.firstAgentResponseStarted;
+    return (entry.workRuns || []).length > 0
+      || (entry.chatMessages || []).some(message => message.role === 'assistant')
+      || (entry.history || []).some(message => String(message.role || '') === 'assistant');
+  }
+
+  public getConversationTitleGateState(): { titleRequestMessageId: string; firstAgentResponseStarted: boolean } {
+    return {
+      titleRequestMessageId: this.titleRequestMessageId,
+      firstAgentResponseStarted: this.firstAgentResponseStarted,
+    };
+  }
+
+  private markFirstAgentResponseStarted(messageId: string): boolean {
+    const normalizedMessageId = String(messageId || '').trim();
+    if (!normalizedMessageId) return false;
+    const workspace = this.workspace.current;
+    const stateKey = this.workspaceConversationStateKeyFor(this.activeConversationId || 'default', workspace);
+    if (!stateKey) {
+      this.titleRequestMessageId = normalizedMessageId;
+      this.firstAgentResponseStarted = true;
+      return true;
+    }
+    const marked = this.mutateStoredConversationState(workspace, latest => {
+      const current = latest.conversations?.[stateKey];
+      const firstUser = (current?.chatMessages || []).find(message => message.role === 'user');
+      if (!current || current.titleRequestMessageId !== normalizedMessageId
+        || String(firstUser?.messageId || '') !== normalizedMessageId) return latest;
+      current.firstAgentResponseStarted = true;
+      current.updatedAt = this.nowIso();
+      return latest;
+    }, latest => latest.conversations?.[stateKey]?.firstAgentResponseStarted === true);
+    if (!marked) return false;
+    this.titleRequestMessageId = normalizedMessageId;
+    this.firstAgentResponseStarted = true;
+    const key = this.workspaceConversationKey();
+    const memory = key ? this.workspaceConversations.get(key) : undefined;
+    if (memory) {
+      memory.titleRequestMessageId = normalizedMessageId;
+      memory.firstAgentResponseStarted = true;
+    }
+    return true;
   }
 
 
@@ -4020,6 +4181,7 @@ export class Agent {
     if (cleanTitle === fallbackTitle) return true;
     if (cleanTitle === conversationId || cleanTitle === this.safeConversationId(conversationId)) return true;
     if (cleanTitle === 'Default conversation') return true;
+    if (/^(?:New (?:chat|conversation)|新对话)(?:\s+\d+)?$/i.test(cleanTitle)) return true;
     return false;
   }
 
@@ -4100,6 +4262,8 @@ export class Agent {
       inputMode: this.inputMode,
       mode: this.mode,
       goal: this.serializeGoal(),
+      titleRequestMessageId: this.titleRequestMessageId || undefined,
+      firstAgentResponseStarted: this.firstAgentResponseStarted,
       runtimeOwnerId: runtimeOwner.runtimeOwnerId,
       runtimeOwnerPid: runtimeOwner.runtimeOwnerPid,
       runtimeLifecycleRole: runtimeOwner.runtimeLifecycleRole,
@@ -4113,9 +4277,7 @@ export class Agent {
     const priorTitle = stored.conversations[stateKey]?.title;
     const conversationId = this.activeConversationId || 'default';
     const derivedTitle = this.titleFromMessages(this.chatMessages, conversationId);
-    const title = this.hasUserConversationTitle(this.chatMessages) && this.isGeneratedConversationTitle(priorTitle, conversationId, stored.conversations[stateKey]?.chatMessages || [])
-      ? derivedTitle
-      : (priorTitle || derivedTitle);
+    const title = priorTitle || derivedTitle;
     const nextEntry: StoredConversationEntry = {
       ...(stored.conversations[stateKey] || {}),
       title,
@@ -4134,6 +4296,8 @@ export class Agent {
       inputMode: this.inputMode,
       mode: this.mode,
       goal: this.serializeGoal(),
+      titleRequestMessageId: this.titleRequestMessageId || undefined,
+      firstAgentResponseStarted: this.firstAgentResponseStarted,
       runtimeOwnerId: runtimeOwner.runtimeOwnerId,
       runtimeOwnerPid: runtimeOwner.runtimeOwnerPid,
       runtimeLifecycleRole: runtimeOwner.runtimeLifecycleRole,
@@ -4163,6 +4327,8 @@ export class Agent {
       this.continuations = [];
       this.mode = 'build';
       this.goal = null;
+      this.titleRequestMessageId = '';
+      this.firstAgentResponseStarted = false;
       this.flow = null;
       this.flowPc = 0;
       this.status = 'idle';
@@ -4189,6 +4355,8 @@ export class Agent {
       this.inputMode = this.defaultInputMode();
       this.mode = saved.mode || 'build';
       this.goal = this.restoreGoal(saved.goal);
+      this.titleRequestMessageId = String(saved.titleRequestMessageId || '');
+      this.firstAgentResponseStarted = this.restoredFirstAgentResponseStarted(saved);
       this.status = this.restoreStatusFromWorkRuns(saved.goal);
       this.recoverMissingTerminalBuildOverviews();
       this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
@@ -4197,7 +4365,8 @@ export class Agent {
     const stored = this.readStoredConversationState();
     const stateKey = this.workspaceConversationStateKey();
     const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : null;
-    this.history = persisted?.history ? [...persisted.history] : [];
+    const repairedHistory = this.repairDanglingToolCalls(persisted?.history ? [...persisted.history] : []);
+    this.history = repairedHistory.messages;
     this.compressionCache = persisted?.compressionCache ? persisted.compressionCache.map(entry => ({ ...entry, messages: [...entry.messages] })) : [];
     this.nextCompressionCacheId = Math.max(1, ...this.compressionCache.map(entry => Number(entry.id.replace(/^ctx-cache-/, '')) || 0)) + 1;
     this.branchMailbox = (persisted?.branchMailbox || []).map(message => ({ ...message }));
@@ -4218,6 +4387,8 @@ export class Agent {
     this.inputMode = this.defaultInputMode();
     this.mode = persisted?.mode || 'build';
     this.goal = this.restoreGoal(persisted?.goal);
+    this.titleRequestMessageId = String(persisted?.titleRequestMessageId || '');
+    this.firstAgentResponseStarted = this.restoredFirstAgentResponseStarted(persisted);
     const persistedRuntimeOwnerPid = Math.floor(Number(persisted?.runtimeOwnerPid) || 0);
     const persistedRuntimeOwnerKnown = persistedRuntimeOwnerPid > 0;
     const persistedRuntimeOwnerAlive = persistedRuntimeOwnerKnown && isRuntimeProcessAlive(persistedRuntimeOwnerPid);
@@ -4239,7 +4410,7 @@ export class Agent {
       }
     }
     this.recoverMissingTerminalBuildOverviews();
-    const recoveryApplied = recoveredWorkRuns.changed || runtimeOwnerLost || goalPausedByRecovery || flowPausedByRecovery;
+    const recoveryApplied = repairedHistory.changed || recoveredWorkRuns.changed || runtimeOwnerLost || goalPausedByRecovery || flowPausedByRecovery;
     const recoveryAt = recoveryApplied ? this.nowIso() : persisted?.updatedAt;
     this.workspaceConversations.set(key, {
       chatMessages: [...this.chatMessages],
@@ -4257,6 +4428,8 @@ export class Agent {
       inputMode: this.defaultInputMode(),
       mode: this.mode,
       goal: this.serializeGoal(),
+      titleRequestMessageId: this.titleRequestMessageId || undefined,
+      firstAgentResponseStarted: this.firstAgentResponseStarted,
       runtimeOwnerId: this.activeConversationRuntimeOwner().runtimeOwnerId,
       runtimeOwnerPid: this.activeConversationRuntimeOwner().runtimeOwnerPid,
       runtimeLifecycleRole: this.activeConversationRuntimeOwner().runtimeLifecycleRole,
@@ -4267,6 +4440,7 @@ export class Agent {
       recoveredStored.conversations = recoveredStored.conversations || {};
       recoveredStored.conversations[stateKey] = {
         ...(recoveredStored.conversations[stateKey] || persisted),
+        history: [...this.history],
         workRuns: this.normalizeWorkRuns(this.workRuns),
         flowSelection: this.currentConversationFlowSelection(),
         mode: this.mode,
@@ -5416,7 +5590,7 @@ export class Agent {
     ].join('\n');
   }
 
-  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'> & Partial<Pick<Agent, 'linkedPlan' | 'subagents' | 'workRuns' | 'continuations'>> & { modelSelection?: ConversationModelSelection; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null }): void {
+  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'> & Partial<Pick<Agent, 'linkedPlan' | 'subagents' | 'workRuns' | 'continuations' | 'getConversationTitleGateState'>> & { modelSelection?: ConversationModelSelection; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; titleGateState?: { titleRequestMessageId?: string; firstAgentResponseStarted?: boolean } }): void {
     const clean = this.safeConversationId(id || 'default');
     const ws = this.workspace.current;
     if (!ws) return;
@@ -5428,6 +5602,17 @@ export class Agent {
     const continuations = this.normalizeContinuations(source.continuations || this.getConversationSnapshot(clean).continuations);
     const normalizedChatMessages = this.normalizeConversationChatMessages(source.chatMessages, source.history);
     const updatedAt = new Date().toISOString();
+    const stateKey = this.workspaceConversationStateKey(clean);
+    const stored = this.readStoredConversationState(ws);
+    stored.conversations = stored.conversations || {};
+    const previous = stateKey ? stored.conversations[stateKey] : undefined;
+    const sourceTitleGate = source.getConversationTitleGateState?.() || source.titleGateState;
+    const titleRequestMessageId = sourceTitleGate?.titleRequestMessageId === undefined
+      ? String(previous?.titleRequestMessageId || '')
+      : String(sourceTitleGate.titleRequestMessageId || '');
+    const firstAgentResponseStarted = sourceTitleGate?.firstAgentResponseStarted === undefined
+      ? this.restoredFirstAgentResponseStarted(previous)
+      : sourceTitleGate.firstAgentResponseStarted === true;
     if (key) {
       this.workspaceConversations.set(key, {
         chatMessages: normalizedChatMessages,
@@ -5441,14 +5626,12 @@ export class Agent {
         inputMode: this.inputMode,
         mode: source.mode || this.mode,
         goal: source.goal === undefined ? this.serializeGoal() : source.goal,
+        titleRequestMessageId: titleRequestMessageId || undefined,
+        firstAgentResponseStarted,
         updatedAt,
       });
     }
-    const stateKey = this.workspaceConversationStateKey(clean);
     if (!stateKey) return;
-    const stored = this.readStoredConversationState(ws);
-    stored.conversations = stored.conversations || {};
-    const previous = stored.conversations[stateKey];
     const derivedTitle = this.titleFromMessages(normalizedChatMessages, clean);
     const title = this.hasUserConversationTitle(normalizedChatMessages) && this.isGeneratedConversationTitle(previous?.title, clean, previous?.chatMessages || [])
       ? derivedTitle
@@ -5467,6 +5650,8 @@ export class Agent {
       inputMode: this.inputMode,
       mode: source.mode || previous?.mode || this.mode,
       goal: source.goal === undefined ? (previous?.goal || this.serializeGoal()) : source.goal,
+      titleRequestMessageId: titleRequestMessageId || undefined,
+      firstAgentResponseStarted,
       updatedAt,
     };
     if (nextEntry.tree || nextEntry.branches?.length) {
@@ -5485,6 +5670,8 @@ export class Agent {
       this.continuations = continuations;
       this.mode = source.mode || this.mode;
       if (source.goal !== undefined) this.goal = this.restoreGoal(source.goal);
+      this.titleRequestMessageId = titleRequestMessageId;
+      this.firstAgentResponseStarted = firstAgentResponseStarted;
       this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
     }
   }
@@ -7729,8 +7916,9 @@ export class Agent {
           });
         }
       } else if (!hiddenUserInput) {
+        const messageId = crypto.randomUUID();
         this.chatMessages.push({
-          messageId: crypto.randomUUID(),
+          messageId,
           branchNodeId: this.currentBranchNodeId(),
           role: 'user',
           content: displayText,
@@ -7750,12 +7938,19 @@ export class Agent {
           run_id: inputRunId || undefined,
         });
       }
-      // Agent.process seeds the kernel from history, so its initial prompt does
-      // not otherwise emit a kernel message_start event.
-      this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);
       if (!hiddenUserInput) this.recordWorkRunPrimaryPrompt(displayText);
       this.saveWorkspaceConversationState(true);
-      this.emitWorkEvent({ type: 'start', content: 'Preparing request.' });
+      let firstResponseGateMessageId = '';
+      let firstResponseTitleInput: { messageId: string; input: string } | null = null;
+      if (!hiddenUserInput && !clientMessageId && !this.firstAgentResponseStarted) {
+        const firstInput = this.firstPersistedUserForTitleGate();
+        if (!firstInput) throw new Error('Conversation title generation failed; the first persisted user input is unavailable.');
+        if (this.model === 'auto' && !autoRouteEvaluated) {
+          await this.evaluateAndSwitch(firstInput.input, inputEnvelope?.routePolicy);
+          autoRouteEvaluated = true;
+        }
+        firstResponseTitleInput = firstInput;
+      }
 
       if (this.model === 'auto' && !autoRouteEvaluated) {
         await this.evaluateAndSwitch(displayText, inputEnvelope?.routePolicy);
@@ -7772,6 +7967,36 @@ export class Agent {
           throw new Error(message);
         }
       }
+      if (firstResponseTitleInput) {
+        // ConversationKernel isolates each send in a runner. Capture the
+        // resolved deployment only after routing/fallback, then use that same
+        // runner-owned model and intelligence for the title availability gate.
+        const titleProvider = this.engineModel();
+        const titleModelName = this.activeModelName();
+        const titleIntelligence = this.intelligence;
+        if (!titleProvider || !titleModelName) {
+          throw new Error('Conversation title generation failed; no resolved model deployment is available. No LLM configured. Add provider in Settings > Models.');
+        }
+        const titled = await this.startFirstInputConversationTitle(
+          firstResponseTitleInput.messageId,
+          firstResponseTitleInput.input,
+          titleProvider,
+          titleModelName,
+          titleIntelligence,
+          processSignal,
+        );
+        if (!titled) throw new Error('Conversation title generation failed; the first Agent request was not started. Retry the first input.');
+        firstResponseGateMessageId = firstResponseTitleInput.messageId;
+      }
+      if (firstResponseGateMessageId && !this.markFirstAgentResponseStarted(firstResponseGateMessageId)) {
+        throw new Error('Conversation title generation succeeded, but the first Agent response gate could not be persisted. Retry the first input.');
+      }
+      // Agent.process seeds the kernel from history, so its initial prompt does
+      // not otherwise emit a kernel message_start event. Keep this notification
+      // after the title/model hard gate so a failed probe starts no formal
+      // Agent provider request.
+      this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);
+      this.emitWorkEvent({ type: 'start', content: 'Preparing request.' });
 
       // Use external opencode CLI engine
       if (this.engine === 'opencode') {
@@ -8711,7 +8936,27 @@ export class Agent {
     let input: Record<string, unknown> = {};
     try { input = JSON.parse(args); } catch {}
     const action = String(input.action || '').trim();
-    if (action !== 'source_info' && action !== 'crop') return '[Image inspect error] action must be source_info or crop.';
+    if (action !== 'source_info' && action !== 'crop' && action !== 'inspect') return '[Image inspect error] action must be source_info, crop, or inspect.';
+    if (action === 'inspect') {
+      try {
+        const workspacePath = this.workspace.current?.path || this.rootPath;
+        const source = readWorkspaceImageForVision(workspacePath, String(input.path || ''));
+        return JSON.stringify({
+          ok: true,
+          action,
+          source: 'workspace',
+          path: source.path,
+          name: source.name,
+          format: source.mimeType,
+          byte_length: source.byteLength,
+          width: source.width,
+          height: source.height,
+          image_data_url: source.dataUrl,
+        }, null, 2);
+      } catch (error) {
+        return `[Image inspect error] ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
     const attachmentId = String(input.attachment_id || '').trim();
     const images = this.latestSubmittedImages(attachmentId);
     const imageIndex = Math.max(1, Math.floor(Number(input.image_index || 1)));

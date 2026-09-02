@@ -270,7 +270,7 @@ function startMockServer() {
     if (!mock.requests.some(r => r.url === '/v1/chat/completions' && r.body.includes('"stream":true'))) fail('send did not call streaming chat completions');
     const englishSend = await runPackagedCli(['send', 'release cli language override', '--language', 'en', '--mode', 'build', '--model', 'release-cli-mock', '--conversation', 'release-cli-language', '--root', root], root);
     if (!englishSend.stdout.includes(mock.responseText)) fail(`send --language en output missing response: ${englishSend.stdout}`);
-    const languageRequest = mock.requests.find(r => r.body.includes('release cli language override'));
+    const languageRequest = mock.requests.find(r => r.body.includes('release cli language override') && r.body.includes('"stream":true'));
     if (!languageRequest || !languageRequest.body.includes('general.language=en')) fail('send --language en did not inject English language policy');
     log('send ok');
 

@@ -3,6 +3,46 @@ package com.newmark.mobile.data
 import com.google.gson.annotations.SerializedName
 import org.json.JSONObject
 
+internal const val PROVIDER_PROTOCOL_OPENAI = "openai"
+internal const val PROVIDER_PROTOCOL_OPENAI_RESPONSES = "openai_responses"
+internal const val PROVIDER_PROTOCOL_ANTHROPIC = "anthropic"
+internal const val PROVIDER_PROTOCOL_GITHUB_MODELS = "github_models"
+
+internal val MOBILE_PROVIDER_PROTOCOLS: Set<String> = setOf(
+    PROVIDER_PROTOCOL_OPENAI,
+    PROVIDER_PROTOCOL_OPENAI_RESPONSES,
+    PROVIDER_PROTOCOL_ANTHROPIC,
+    PROVIDER_PROTOCOL_GITHUB_MODELS,
+)
+
+internal fun normalizeMobileProviderProtocol(value: String?): String = when (value.orEmpty().trim().lowercase()) {
+    "openai_responses", "openai-responses", "responses", "response" -> PROVIDER_PROTOCOL_OPENAI_RESPONSES
+    "anthropic", "claude" -> PROVIDER_PROTOCOL_ANTHROPIC
+    "github_models", "github-models", "github", "copilot" -> PROVIDER_PROTOCOL_GITHUB_MODELS
+    "openai", "openai-compatible", "openai_chat", "openai-chat", "chat", "chat_completions", "chat-completions" ->
+        PROVIDER_PROTOCOL_OPENAI
+    else -> PROVIDER_PROTOCOL_OPENAI
+}
+
+internal fun requireMobileProviderProtocol(value: String?): String {
+    val raw = value.orEmpty().trim().lowercase()
+    require(raw.isNotBlank()) { "provider protocol is required" }
+    require(raw in MOBILE_PROVIDER_PROTOCOL_ALIASES) { "unsupported provider protocol: $raw" }
+    return normalizeMobileProviderProtocol(raw)
+}
+
+private val MOBILE_PROVIDER_PROTOCOL_ALIASES: Set<String> = MOBILE_PROVIDER_PROTOCOLS + setOf(
+    "openai-compatible", "openai_chat", "openai-chat", "chat", "chat_completions", "chat-completions",
+    "openai-responses", "responses", "response", "claude", "github-models", "github", "copilot",
+)
+
+internal fun normalizeMobileProviderConfig(provider: ProviderConfig): ProviderConfig = provider.copy(
+    protocol = normalizeMobileProviderProtocol(provider.protocol),
+)
+
+internal fun normalizeMobileProviderConfigs(providers: List<ProviderConfig>): List<ProviderConfig> =
+    providers.map(::normalizeMobileProviderConfig)
+
 /**
  * 模型/供应商持久化结构 —— 与 PC config.json `models.providers` 完全一致（snake_case 序列化）。
  * Kotlin 属性保持 camelCase，通过 @SerializedName 映射 PC 的字段名。
@@ -54,7 +94,7 @@ data class ProviderConfig(
     @SerializedName("name") val name: String = "",
     @SerializedName("base_url") val baseUrl: String = "",
     @SerializedName("api_key") val apiKey: String = "",
-    @SerializedName("protocol") val protocol: String = "openai",
+    @SerializedName("protocol") val protocol: String = PROVIDER_PROTOCOL_OPENAI,
     @SerializedName("enabled") val enabled: Boolean = true,
     @SerializedName("has_api_key") val hasApiKey: Boolean = true,
     @SerializedName("models") val models: List<ModelConfig> = emptyList(),
@@ -63,7 +103,12 @@ data class ProviderConfig(
 
     /** 生成该供应商某个模型的 OpenAI 兼容调用配置 */
     fun toApiConfig(model: ModelConfig): ApiConfig =
-        ApiConfig(baseUrl = baseUrl, apiKey = apiKey, model = model.name)
+        ApiConfig(
+            baseUrl = baseUrl,
+            apiKey = apiKey,
+            model = model.name,
+            protocol = normalizeMobileProviderProtocol(protocol),
+        )
 }
 
 data class ProviderCatalogMergeResult(
@@ -80,13 +125,10 @@ internal fun createManualProviderConfig(
     protocol: String,
 ): ProviderConfig {
     val normalizedName = name.trim()
-    val normalizedProtocol = protocol.trim().lowercase().ifBlank { "openai" }
+    val normalizedProtocol = requireMobileProviderProtocol(protocol)
     require(normalizedName.isNotBlank()) { "provider name is required" }
-    require(normalizedProtocol in setOf("openai", "anthropic", "github_models")) {
-        "unsupported provider protocol: $normalizedProtocol"
-    }
     val normalizedUrl = baseUrl.trim().ifBlank {
-        if (normalizedProtocol == "github_models") "https://models.github.ai" else ""
+        if (normalizedProtocol == PROVIDER_PROTOCOL_GITHUB_MODELS) "https://models.github.ai" else ""
     }.trimEnd('/')
     require(normalizedUrl.isNotBlank()) { "provider endpoint is required" }
     require(id.isNotBlank()) { "provider id is required" }
@@ -139,17 +181,18 @@ fun mergeProviderCatalogEntries(
     val merged = existing.toMutableList()
     incoming.forEach { remote ->
         val normalizedUrl = remote.baseUrl.trim().trimEnd('/').lowercase()
+        val normalizedRemoteProtocol = normalizeMobileProviderProtocol(remote.protocol)
         val index = merged.indexOfFirst { local ->
             local.id == remote.id || (
                 normalizedUrl.isNotBlank() &&
                     local.baseUrl.trim().trimEnd('/').lowercase() == normalizedUrl &&
-                    local.protocol.equals(remote.protocol, ignoreCase = true)
+                    normalizeMobileProviderProtocol(local.protocol) == normalizedRemoteProtocol
                 )
         }
         if (index < 0) {
             val baseId = remote.id.ifBlank { "device-${uniqueSuffix()}" }
             val uniqueId = if (merged.none { it.id == baseId }) baseId else "$baseId-${uniqueSuffix()}"
-            merged += remote.copy(
+            merged += normalizeMobileProviderConfig(remote).copy(
                 id = uniqueId,
                 hasApiKey = remote.apiKey.isNotBlank() || remote.hasApiKey,
             )
@@ -164,7 +207,7 @@ fun mergeProviderCatalogEntries(
                 name = local.name.ifBlank { remote.name },
                 baseUrl = local.baseUrl.ifBlank { remote.baseUrl },
                 apiKey = mergedApiKey,
-                protocol = local.protocol.ifBlank { remote.protocol },
+                protocol = normalizeMobileProviderProtocol(local.protocol.ifBlank { remote.protocol }),
                 hasApiKey = mergedApiKey.isNotBlank() || local.hasApiKey || remote.hasApiKey,
                 models = local.models + additions,
             )
@@ -194,7 +237,11 @@ internal fun patchProviderConfig(existing: ProviderConfig?, patch: JSONObject): 
         name = if (patch.has("name")) patch.optString("name") else existing?.name.orEmpty(),
         baseUrl = if (patch.has("base_url")) patch.optString("base_url") else existing?.baseUrl.orEmpty(),
         apiKey = if (patch.has("api_key")) patch.optString("api_key") else existing?.apiKey.orEmpty(),
-        protocol = if (patch.has("protocol")) patch.optString("protocol", "openai") else existing?.protocol ?: "openai",
+        protocol = if (patch.has("protocol")) {
+            requireMobileProviderProtocol(patch.optString("protocol", PROVIDER_PROTOCOL_OPENAI))
+        } else {
+            normalizeMobileProviderProtocol(existing?.protocol)
+        },
         enabled = if (patch.has("enabled")) patch.optBoolean("enabled") else existing?.enabled ?: true,
         hasApiKey = when {
             patch.has("has_api_key") -> patch.optBoolean("has_api_key")

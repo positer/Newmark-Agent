@@ -1,7 +1,6 @@
 package com.newmark.mobile.vm
 
 import android.app.Application
-import android.os.PowerManager
 import android.graphics.BitmapFactory
 import android.util.Base64
 import com.newmark.mobile.service.LocalAgentForegroundService
@@ -34,6 +33,7 @@ import com.newmark.mobile.data.LocalWorkRun
 import com.newmark.mobile.data.MobileThoughtContinuation
 import com.newmark.mobile.data.MobileThoughtRequestContinuation
 import com.newmark.mobile.data.LocalImageAttachment
+import com.newmark.mobile.data.LocalGuideDeliveryContract
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
@@ -45,6 +45,8 @@ import com.newmark.mobile.data.ModelConfig
 import com.newmark.mobile.data.ModelOption
 import com.newmark.mobile.data.ProviderConfig
 import com.newmark.mobile.data.ProviderStore
+import com.newmark.mobile.data.normalizeMobileProviderConfig
+import com.newmark.mobile.data.normalizeMobileProviderProtocol
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -55,6 +57,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.json.JSONArray
 import java.util.UUID
@@ -64,11 +67,13 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import com.newmark.mobile.data.EmptyResponseLimitException
+import com.newmark.mobile.data.agentNetworkRetryDelayMs
 import com.newmark.mobile.data.emptyResponseRetryDelayMs
 import com.newmark.mobile.data.MAX_CONSECUTIVE_EMPTY_RESPONSES
 import com.newmark.mobile.data.MAX_EMPTY_RESPONSE_RETRIES
 import com.newmark.mobile.data.ProviderNoResponseException
 import com.newmark.mobile.data.isEmptyResponseFailure
+import com.newmark.mobile.data.isTransientAgentNetworkFailure
 import com.newmark.mobile.data.isUsableChatResponse
 import com.newmark.mobile.data.nextEmptyResponseStreak
 import com.newmark.mobile.data.modelRequestedContinuation
@@ -208,6 +213,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         onTextDelta: suspend (String) -> Unit = {},
     ): Result<ChatResponse> {
         var emptyStreak = 0
+        var networkRetryAttempt = 0
+        var requestMessages = messages
+        val recoveredText = StringBuilder()
+        val recoveredThought = StringBuilder()
         while (currentCoroutineContext().isActive) {
             // The provider call owns the entire thought/text stream. No retry
             // delay or empty-response count is evaluated while it is active;
@@ -218,17 +227,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             var observedThought = false
             val result = apiClient.chat(
                 config = config,
-                messages = messages,
+                messages = requestMessages,
                 tools = tools,
                 intelligence = intelligence,
                 thinkingTierMap = thinkingTierMap,
                 maxOutputTokens = maxOutputTokens,
                 onThoughtDelta = { delta ->
                     observedThought = observedThought || delta.isNotBlank()
+                    recoveredThought.append(delta)
                     onThoughtDelta(delta)
                 },
                 onTextDelta = { delta ->
                     observedText = observedText || delta.isNotBlank()
+                    recoveredText.append(delta)
                     onTextDelta(delta)
                 },
             )
@@ -238,13 +249,44 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 // streak and is returned as a normal result; it must never be
                 // retried or converted into an empty-response failure.
                 emptyStreak = 0
-                return Result.success(response)
+                networkRetryAttempt = 0
+                return Result.success(response.copy(
+                    content = recoveredText.toString().ifBlank { response.content },
+                    reasoningContent = recoveredThought.toString().ifBlank { response.reasoningContent },
+                ))
             }
             val error = result.exceptionOrNull()
             if (response != null && !response.explicitEmptyResponse) {
                 return Result.failure(ProviderNoResponseException())
             }
-            if (response == null && error != null && !isEmptyResponseFailure(error)) return result
+            if (response == null && error != null && !isEmptyResponseFailure(error)) {
+                if (!observedText && !observedThought && isTransientAgentNetworkFailure(error)) {
+                    LocalAgentForegroundService.awaitUsableNetwork(getApplication())
+                    delay(agentNetworkRetryDelayMs(networkRetryAttempt++))
+                    apiClient.evictConnections()
+                    continue
+                }
+                if ((observedText || observedThought) && isTransientAgentNetworkFailure(error) && networkRetryAttempt < 3) {
+                    LocalAgentForegroundService.awaitUsableNetwork(getApplication())
+                    delay(agentNetworkRetryDelayMs(networkRetryAttempt++))
+                    apiClient.evictConnections()
+                    val partialText = recoveredText.toString().takeLast(4000)
+                    val partialThought = recoveredThought.toString().takeLast(2000)
+                    requestMessages = messages + listOf(
+                        ChatMessage(role = "assistant", content = partialText, reasoningContent = partialThought),
+                        ChatMessage(
+                            role = "user",
+                            content = "[Network continuation] Continue exactly where the interrupted response stopped. " +
+                                "Do not repeat any text already shown and do not claim completion unless the original task is complete.",
+                        ),
+                    )
+                    continue
+                }
+                if ((observedText || observedThought) && isTransientAgentNetworkFailure(error)) {
+                    return Result.failure(java.io.IOException("后台网络在续接过程中反复中断；已保留当前回复进度，请在网络稳定后继续。"))
+                }
+                return result
+            }
             // A stream that emitted visible text but then failed is not an
             // empty response; retrying would duplicate already-rendered text.
             // Thought is likewise successful activity and never becomes an
@@ -672,13 +714,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     // ---- 供应商 / 模型后端 ----
 
     fun upsertProvider(provider: ProviderConfig) {
+        val normalizedProvider = normalizeMobileProviderConfig(provider)
         val list = providers.toMutableList()
-        val idx = list.indexOfFirst { it.id == provider.id }
-        if (idx >= 0) list[idx] = provider else list.add(provider)
+        val idx = list.indexOfFirst { it.id == normalizedProvider.id }
+        if (idx >= 0) list[idx] = normalizedProvider else list.add(normalizedProvider)
         providers = list
         providerStore.save(list)
         if (activeProviderId.isBlank() || providers.none { it.id == activeProviderId }) {
-            activeProviderId = provider.id
+            activeProviderId = normalizedProvider.id
             normalizeActive()
         }
     }
@@ -706,9 +749,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updateProvider(provider: ProviderConfig) {
-        providers = providers.map { if (it.id == provider.id) provider else it }
+        val normalizedProvider = normalizeMobileProviderConfig(provider)
+        providers = providers.map { if (it.id == normalizedProvider.id) normalizedProvider else it }
         providerStore.save(providers)
-        if (activeProviderId == provider.id) normalizeActive()
+        if (activeProviderId == normalizedProvider.id) normalizeActive()
+    }
+
+    fun updateProviderProtocol(providerId: String, protocol: String) {
+        val normalized = normalizeMobileProviderProtocol(protocol)
+        providers = providers.map { provider ->
+            if (provider.id == providerId) provider.copy(protocol = normalized) else provider
+        }
+        providerStore.save(providers)
     }
 
     fun selectProvider(id: String) {
@@ -790,6 +842,54 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         updateConversation(id) { it.copy(title = t, updatedAt = System.currentTimeMillis()) }
     }
 
+    private fun normalizeGeneratedConversationTitle(raw: String, source: String): String {
+        val title = raw.lineSequence().map(String::trim).firstOrNull(String::isNotBlank).orEmpty()
+            .replace(Regex("^#{1,6}\\s*|^[-*+>]\\s*"), "")
+            .trim('"', '\'', '“', '”', '‘', '’')
+            .replace(Regex("\\s+"), " ").trim().take(80)
+        val normalizedSource = source.replace(Regex("\\s+"), " ").trim()
+        if (title.length < 2 || title == normalizedSource) return ""
+        return title
+    }
+
+    private fun requestFirstInputConversationTitle(
+        conversationId: String,
+        messageId: String,
+        firstInput: String,
+        config: ApiConfig,
+        turnIntelligence: String,
+        turnThinkingTierMap: Map<String, String>,
+    ): kotlinx.coroutines.Deferred<Boolean> {
+        val job = LocalAgentForegroundService.asyncRuntime {
+            val prompt = "Summarize the user's intent and output only a short concrete noun-phrase conversation title. " +
+                "Do not quote, repeat, or truncate the input. No Markdown or explanation.\n\n" +
+                "First user input:\n${firstInput.take(4000)}"
+            val response = withTimeoutOrNull(15_000L) {
+                apiClient.chat(
+                    config = config,
+                    messages = listOf(ChatMessage(role = "user", content = prompt)),
+                    tools = emptyList(),
+                    intelligence = turnIntelligence,
+                    thinkingTierMap = turnThinkingTierMap,
+                    maxOutputTokens = 64,
+                ).getOrNull()
+            }
+            val title = normalizeGeneratedConversationTitle(response?.content.orEmpty(), firstInput)
+            if (title.isBlank()) return@asyncRuntime false
+            var applied = false
+            updateConversation(conversationId) { current ->
+                val firstUser = current.messages.firstOrNull { it.role == "user" }
+                if (current.titleRequestMessageId != messageId || firstUser?.messageId != messageId || current.firstAgentResponseStarted) current
+                else {
+                    applied = true
+                    current.copy(title = if (current.title == "新对话") title else current.title, updatedAt = System.currentTimeMillis())
+                }
+            }
+            applied
+        }
+        return job
+    }
+
     fun archiveConversation(id: String) {
         val target = conversations.find { it.id == id } ?: return
         // 从本地对话区移出（§7-2：本地归档 = 从列表删除），数据移入 archived.json 保留
@@ -847,6 +947,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         runtime.guideChannel.close()
         localRuntimes.remove(targetConversationId)
         localLiveRuns.remove(targetConversationId)
+        updateLocalAgentService()
         if (interrupted != null) {
             updateConversation(targetConversationId) { conversation ->
                 val assistant = ChatMessage(
@@ -934,27 +1035,41 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun guideLocalQueueMessage(id: String) {
         val conversation = current ?: return
         val item = conversation.queuedMessages.firstOrNull { it.id == id } ?: return
+        if (submitLocalGuide(conversation, item.text)) {
+            updateConversation(conversation.id) {
+                it.copy(queuedMessages = LocalQueueContract.consumeAcceptedGuide(it.queuedMessages, id, accepted = true))
+            }
+        }
+    }
+
+    /** Submit composer text directly to the active Build without touching Next. */
+    fun guideLocalConversation(text: String): Boolean =
+        current?.let { conversation -> submitLocalGuide(conversation, text) } ?: false
+
+    private fun submitLocalGuide(conversation: LocalConversation, text: String): Boolean {
+        val content = text.trim()
+        if (content.isBlank()) return false
         val runtime = localRuntimes[conversation.id]
         val channel = runtime?.guideChannel
         val run = localLiveRuns[conversation.id]
-        if (runtime == null || !runtime.acceptingGuide || channel == null || run == null ||
-            run.runId != runtime.runId || run.mode != "build"
+        if (runtime == null || channel == null || run == null || !LocalGuideDeliveryContract.acceptsActiveRun(
+                runtimeRunId = runtime.runId,
+                acceptingGuide = runtime.acceptingGuide,
+                liveRunId = run.runId,
+            )
         ) {
             error = "当前没有可接收 Guide 的本地运行"
-            return
+            return false
         }
         val guide = LocalGuideInput(
             clientMessageId = UUID.randomUUID().toString(),
             guideId = UUID.randomUUID().toString(),
-            text = item.text,
+            text = content,
             createdAt = System.currentTimeMillis(),
         )
         if (!channel.trySend(guide).isSuccess) {
             error = "当前本地运行已结束，Guide 未发送"
-            return
-        }
-        updateConversation(conversation.id) {
-            it.copy(queuedMessages = LocalQueueContract.consumeAcceptedGuide(it.queuedMessages, id, accepted = true))
+            return false
         }
         val accepted = WorkGuide(
             clientMessageId = guide.clientMessageId,
@@ -976,6 +1091,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             guideId = guide.guideId,
             guide = accepted,
         ))
+        return true
     }
 
     private fun drainLocalQueueIfReady(conversationId: String?) {
@@ -1044,17 +1160,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
 
         // 1. 落库用户消息
+        val firstPersistedUser = conv.messages.firstOrNull { it.role == "user" }
+        val firstTitleMessageId = firstPersistedUser?.messageId.orEmpty().ifBlank { userMessage.messageId }
+        val shouldRequestFirstTitle = !conv.firstAgentResponseStarted
+        val titleConfig = apiConfig
+        val turnModelConfig = activeModelConfig
+        val turnIntelligence = intelligence
+        val turnThinkingTierMap = turnModelConfig?.thinkingTierMap?.toMap() ?: emptyMap()
         updateConversation(targetConversationId) {
             val nextMessages = it.messages + userMessage
             it.copy(
                 messages = nextMessages,
                 modelContext = if (it.modelContext.isEmpty()) emptyList() else it.modelContext + userMessage,
-                title = if (it.messages.isEmpty()) deriveTitle(content) else it.title,
+                titleRequestMessageId = if (shouldRequestFirstTitle) firstTitleMessageId else it.titleRequestMessageId,
                 updatedAt = System.currentTimeMillis(),
                 branchTree = updateBranchNodeMessages(it.branchTree, targetBranchId, nextMessages),
             )
         }
-
         error = null
         val runId = UUID.randomUUID().toString()
         val runStartedAt = System.currentTimeMillis()
@@ -1085,21 +1207,79 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             anchorMessageId = userMessage.messageId,
             branchNodeId = targetBranchId.orEmpty(),
         )
-        runtime.job = viewModelScope.launch {
-            withLocalAgentWakeLock {
+        runtime.job = LocalAgentForegroundService.launchRuntime {
+            if (shouldRequestFirstTitle) {
+                val firstUser = conversations.firstOrNull { it.id == targetConversationId }
+                    ?.messages?.firstOrNull { it.role == "user" }
+                val titleInput = firstUser?.content.orEmpty().ifBlank { "用户提交了 ${firstUser?.imageAttachments?.size ?: images.size} 个图片附件" }
+                var titleReady = false
+                // 标题探测失败（空响应、响应重复用户输入、临时传输错误）使用
+                // 0s → 1s → 2s → 4s → 8s 的 5 级退避，全部失败才阻断正式首轮。
+                val titleAttemptLimit = 5
+                val titleRetryDelaysMs = listOf(0L, 1000L, 2000L, 4000L, 8000L)
+                for (attempt in 0 until titleAttemptLimit) {
+                    titleReady = requestFirstInputConversationTitle(
+                        targetConversationId,
+                        firstTitleMessageId,
+                        titleInput,
+                        titleConfig,
+                        turnIntelligence,
+                        turnThinkingTierMap,
+                    ).await()
+                    if (titleReady) break
+                    if (attempt < titleAttemptLimit - 1 && currentCoroutineContext().isActive) {
+                        delay(titleRetryDelaysMs[attempt])
+                    }
+                }
+                if (!titleReady) {
+                    val endedAt = System.currentTimeMillis()
+                    val message = "标题总结在自动重试后仍失败，首轮 Agent 尚未执行。"
+                    localLiveRuns[targetConversationId] = LocalWorkRun(
+                        runId = runId,
+                        status = "error",
+                        startedAt = runStartedAt,
+                        endedAt = endedAt,
+                        events = localLiveRuns[targetConversationId]?.events.orEmpty() + LocalWorkEvent(
+                            type = "error",
+                            id = "$runId:1:error",
+                            content = message,
+                            timestamp = endedAt,
+                            sequence = 1,
+                        ),
+                        mode = targetMode,
+                        text = message,
+                        anchorMessageId = userMessage.messageId,
+                        branchNodeId = targetBranchId.orEmpty(),
+                    )
+                    error = message
+                    localRuntimes.remove(targetConversationId)
+                    updateLocalAgentService()
+                    return@launchRuntime
+                }
+            }
+            updateConversation(targetConversationId) { current ->
+                current.copy(firstAgentResponseStarted = true, updatedAt = System.currentTimeMillis())
+            }
             val targetConversation = conversations.find { it.id == targetConversationId }
-                ?: return@withLocalAgentWakeLock
+                ?: return@launchRuntime
             val snapshot = targetConversation.messages
             val executor = LocalToolExecutor(getApplication()) { name, args ->
-                executeConversationTool(targetConversationId, name, args)
+                executeConversationTool(
+                    targetConversationId,
+                    name,
+                    args,
+                    titleConfig,
+                    turnModelConfig,
+                    turnIntelligence,
+                    turnThinkingTierMap,
+                )
             }
             // 智能档位 + 模型原生思考强度映射（thinking_tier_map）随调用透传
-            val tierMap = activeModelConfig?.thinkingTierMap ?: emptyMap()
             val prepared = prepareModelContext(
-                config = apiConfig,
+                config = titleConfig,
                 conversation = targetConversation,
                 displaySnapshot = snapshot,
-                maxTokens = activeModelConfig?.maxTokens?.takeIf { it > 0 } ?: 128_000,
+                maxTokens = turnModelConfig?.maxTokens?.takeIf { it > 0 } ?: 128_000,
             )
             if (prepared.compression != targetConversation.contextCompression ||
                 prepared.messages != targetConversation.modelContext
@@ -1116,12 +1296,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             val loopResult = runAgentLoop(
-                apiConfig,
+                titleConfig,
                 targetConversationId,
                 prepared.messages,
                 executor,
-                intelligence,
-                tierMap,
+                turnIntelligence,
+                turnThinkingTierMap,
                 targetMode,
                 runId,
                 runStartedAt,
@@ -1168,27 +1348,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             updateLocalAgentService()
             drainLocalQueueIfReady(targetConversationId)
-            }
-        }
-    }
-
-    /** Keep provider/tool work alive while the screen is backgrounded. */
-    private suspend fun <T> withLocalAgentWakeLock(block: suspend () -> T): T {
-        val power = getApplication<Application>()
-            .getSystemService(PowerManager::class.java)
-        val lock = power?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Newmark:LocalAgent")
-        lock?.setReferenceCounted(false)
-        lock?.acquire()
-        return try {
-            block()
-        } finally {
-            if (lock?.isHeld == true) lock.release()
         }
     }
 
     private fun updateLocalAgentService() {
         val context = getApplication<Application>()
         LocalAgentForegroundService.updateLocalCount(context, localRuntimes.size)
+    }
+
+    override fun onCleared() {
+        // Active runs are owned by LocalAgentForegroundService and intentionally
+        // survive screen/ViewModel disposal. Only screen-bound tool bridges are
+        // detached here; terminal completion still persists through the service job.
+        localBrowserToolHandlers.clear()
+        localCalendarToolHandler = null
+        localAlarmToolHandler = null
+        super.onCleared()
     }
 
     /** 从磁盘重载设置状态（供 Agent settings_update 工具改动后同步 UI 与后续调用） */
@@ -1205,6 +1380,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         conversationId: String,
         name: String,
         args: JSONObject,
+        turnConfig: ApiConfig,
+        turnModelConfig: ModelConfig?,
+        turnIntelligence: String,
+        turnThinkingTierMap: Map<String, String>,
     ): com.newmark.mobile.data.ToolResult? = withContext(Dispatchers.Main) {
         when (name) {
             "build_history_query" -> {
@@ -1230,13 +1409,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 ?: com.newmark.mobile.data.ToolResult.err("日历权限请求器尚未挂载")
             "alarm_manage" -> localAlarmToolHandler?.invoke(args)
                 ?: com.newmark.mobile.data.ToolResult.err("闹钟权限请求器尚未挂载")
-            "__document_visual_read" -> readDocumentPagesWithVision(args)
+            "__document_visual_read" -> readDocumentPagesWithVision(
+                args, turnConfig, turnModelConfig, turnIntelligence, turnThinkingTierMap,
+            )
+            "__image_visual_read" -> readImageWithVision(
+                args, turnConfig, turnModelConfig, turnIntelligence, turnThinkingTierMap,
+            )
             else -> null
         }
     }
 
-    private suspend fun readDocumentPagesWithVision(args: JSONObject): com.newmark.mobile.data.ToolResult {
-        if (activeModelConfig?.vision != true) return com.newmark.mobile.data.ToolResult.err("当前模型未声明视觉能力")
+    private suspend fun readDocumentPagesWithVision(
+        args: JSONObject,
+        turnConfig: ApiConfig,
+        turnModelConfig: ModelConfig?,
+        turnIntelligence: String,
+        turnThinkingTierMap: Map<String, String>,
+    ): com.newmark.mobile.data.ToolResult {
+        if (turnModelConfig?.vision != true) return com.newmark.mobile.data.ToolResult.err("当前模型未声明视觉能力")
         val images = args.optJSONArray("images") ?: JSONArray()
         val attachments = (0 until images.length()).mapNotNull { index ->
             images.optJSONObject(index)?.let { item ->
@@ -1251,10 +1441,47 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (attachments.isEmpty()) return com.newmark.mobile.data.ToolResult.err("没有可供视觉读取的页面")
         val response = withContext(Dispatchers.IO) {
             chatWithEmptyRecovery(
-                config = apiConfig,
+                config = turnConfig,
                 messages = listOf(ChatMessage(role = "user", content = args.optString("prompt"), imageAttachments = attachments)),
                 tools = emptyList(),
-                intelligence = intelligence,
+                intelligence = turnIntelligence,
+                thinkingTierMap = turnThinkingTierMap,
+                maxOutputTokens = 8_000,
+            )
+        }.getOrElse { return com.newmark.mobile.data.ToolResult.err(it.message ?: "视觉模型读取失败") }
+        return if (response.content.isBlank()) com.newmark.mobile.data.ToolResult.err("视觉模型返回空内容")
+        else com.newmark.mobile.data.ToolResult.ok(response.content)
+    }
+
+    private suspend fun readImageWithVision(
+        args: JSONObject,
+        turnConfig: ApiConfig,
+        turnModelConfig: ModelConfig?,
+        turnIntelligence: String,
+        turnThinkingTierMap: Map<String, String>,
+    ): com.newmark.mobile.data.ToolResult {
+        if (turnModelConfig?.vision != true) return com.newmark.mobile.data.ToolResult.err("当前模型未声明视觉能力")
+        val dataUrl = args.optString("data_url")
+        val mime = args.optString("mime_type")
+        if (!dataUrl.startsWith("data:$mime;base64,") || mime !in setOf("image/png", "image/jpeg")) {
+            return com.newmark.mobile.data.ToolResult.err("没有可供视觉读取的有效 PNG/JPEG")
+        }
+        val attachment = LocalImageAttachment(
+            name = args.optString("name", "image"),
+            mimeType = mime,
+            dataUrl = dataUrl,
+        )
+        val response = withContext(Dispatchers.IO) {
+            chatWithEmptyRecovery(
+                config = turnConfig,
+                messages = listOf(ChatMessage(
+                    role = "user",
+                    content = args.optString("prompt"),
+                    imageAttachments = listOf(attachment),
+                )),
+                tools = emptyList(),
+                intelligence = turnIntelligence,
+                thinkingTierMap = turnThinkingTierMap,
                 maxOutputTokens = 8_000,
             )
         }.getOrElse { return com.newmark.mobile.data.ToolResult.err(it.message ?: "视觉模型读取失败") }
@@ -1616,11 +1843,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         appliedAt = appliedAt.toString(),
                     ),
                 ))
-                messages += ChatMessage(
-                    role = "user",
-                    content = guide.text,
-                    messageId = guide.clientMessageId,
-                    timestamp = guide.createdAt,
+                messages += LocalGuideDeliveryContract.promptMessage(
+                    clientMessageId = guide.clientMessageId,
+                    text = guide.text,
+                    createdAt = guide.createdAt,
                 )
                 thoughtRequestContinuation.clear()
                 applied++
@@ -1641,7 +1867,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val requestMessages = thoughtRequestContinuation.requestMessages(listOf(
                 LocalContextContract.requestScopedTaskFocus(messages, mode, tools.size),
             ) + messages)
-            val deltaPublisher = AgentUiDeltaPublisher(viewModelScope, ::publishDeltaBatch)
+            val deltaPublisher = AgentUiDeltaPublisher(CoroutineScope(currentCoroutineContext()), ::publishDeltaBatch)
             val responseResult = try {
                 chatWithEmptyRecovery(
                     config,
@@ -1965,9 +2191,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             existing.copy(nodes = nodes, viewedNodeId = viewed)
         }
         val activeMessages = tree?.nodes?.get(tree.activeNodeId)?.messages ?: normalizedMessages
+        val legacyFormalResponseExists = activeMessages.any { it.role == "assistant" } ||
+            legacyModelContext.orEmpty().any { it.role == "assistant" }
         return LocalConversation(
             id = conversation.id,
             title = conversation.title,
+            titleRequestMessageId = (conversation.titleRequestMessageId as String?).orEmpty(),
+            firstAgentResponseStarted = conversation.firstAgentResponseStarted || legacyFormalResponseExists,
             messages = activeMessages,
             createdAt = conversation.createdAt,
             updatedAt = conversation.updatedAt,
@@ -2007,6 +2237,4 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (loaded) conversationStore.save(conversations)
     }
 
-    private fun deriveTitle(text: String): String =
-        text.replace('\n', ' ').take(24)
 }

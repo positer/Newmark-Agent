@@ -12,8 +12,9 @@ android {
         applicationId = "com.newmark.mobile"
         minSdk = 24
         targetSdk = 36
-        versionCode = 512
-        versionName = "0.5.12"
+        versionCode = 513
+        versionName = "0.5.13"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -59,6 +60,15 @@ android {
     }
 }
 
+androidComponents {
+    beforeVariants(selector().withBuildType("debug")) { variantBuilder ->
+        // Instrumentation needs a debuggable APK. The app's POI/Log4j
+        // MethodHandle paths require API 26 during D8; release remains at the
+        // product minSdk 24 declared in defaultConfig.
+        variantBuilder.minSdk = 26
+    }
+}
+
 dependencies {
     // Bundled, offline Markdown AST/parser support; the Compose renderer keeps
     // the Newmark visual language while using the library for broader CommonMark
@@ -91,5 +101,8 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.json:json:20240303")
+    androidTestImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.5.2")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

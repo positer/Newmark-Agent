@@ -73,6 +73,9 @@ function main(): void {
   check(/\.work-run-message,[\s\S]*\.conversation-work-run-body\s*\{[^}]*background:\s*transparent\s*!important[^}]*backdrop-filter:\s*none\s*!important[^}]*border-radius:\s*0\s*!important[^}]*box-shadow:\s*none\s*!important/s.test(html)
     && /\.work-run-message::before,[\s\S]*\.conversation-work-run-body::after\s*\{[^}]*content:\s*none\s*!important[^}]*display:\s*none\s*!important/s.test(html),
     'PC Build Block 展开保持纯时间线：无白板底色、无玻璃模糊、无伪元素与阴影');
+  check(/button\.conversation-work-run-head:active:not\(:disabled\)\s*\{[^}]*background:\s*transparent\s*!important[^}]*background-image:\s*none\s*!important/s.test(html)
+    && !/button\.conversation-work-run-head:active:not\(:disabled\),\s*button\.shell-block-header:active:not\(:disabled\),\s*button\.diff-block-header:active:not\(:disabled\),\s*button\.work-review-head:active:not\(:disabled\)\s*\{[^}]*background-color:\s*revert\s*!important/s.test(html),
+    'PC Build Block 标题按住态保持透明，不回退到 Chromium 原生白色按钮背景');
   check(html.includes('function wireLiquidMenuInteractions(menu)') &&
     html.includes('source.classList.add(\'liquid-selection-source\')') &&
     html.includes('float.classList.add(\'visible\')') &&

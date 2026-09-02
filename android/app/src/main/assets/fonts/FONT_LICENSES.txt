@@ -1,0 +1,14 @@
+Bundled Newmark Mobile rendering fonts
+
+Noto Sans Math
+Source: https://github.com/notofonts/noto-fonts/tree/main/hinted/ttf/NotoSansMath
+License: SIL Open Font License 1.1
+Copyright: Google LLC and Noto Project contributors.
+
+Noto Sans Mono CJK SC
+Source: https://github.com/notofonts/noto-cjk/tree/main/Sans/Mono
+License: SIL Open Font License 1.1
+Copyright: Adobe and the Noto CJK Project contributors.
+
+The files are bundled as application resources to provide deterministic
+offline glyph coverage for Markdown code blocks and LaTeX/Unicode math.

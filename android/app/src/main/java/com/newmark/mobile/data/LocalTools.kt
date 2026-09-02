@@ -85,13 +85,16 @@ object LocalTools {
 
     private val settingsProviderSchema: JSONObject
         get() = objectProp(
-            description = "一个 OpenAI 兼容供应商配置。更新 providers 会整体替换现有供应商数组，修改前应先调用 settings_read。",
+            description = "一个模型供应商配置。更新 providers 会整体替换现有供应商数组，修改前应先调用 settings_read。",
             properties = mapOf(
                 "id" to prop("string", "供应商稳定唯一标识；已有供应商必须保留原 id"),
                 "name" to prop("string", "设置页显示的供应商名称"),
                 "base_url" to prop("string", "OpenAI 兼容 API 基础地址，例如 https://example.com/v1"),
                 "api_key" to prop("string", "供应商 API Key；保留现有供应商时不得无意清空"),
-                "protocol" to enumProp(listOf("openai", "anthropic"), "请求协议；通常为 openai"),
+                "protocol" to enumProp(
+                    listOf("openai", "openai_responses", "anthropic", "github_models"),
+                    "请求协议；openai_responses 会直接调用 /responses",
+                ),
                 "enabled" to prop("boolean", "是否启用该供应商，默认 true"),
                 "has_api_key" to prop("boolean", "是否已有凭据；通常与 api_key 是否非空一致"),
                 "models" to arrayProp(settingsModelSchema, "该供应商的完整模型配置数组"),
@@ -121,7 +124,10 @@ object LocalTools {
                 "name" to prop("string", "可选的新显示名称"),
                 "base_url" to prop("string", "可选的新 API 基础地址"),
                 "api_key" to prop("string", "可选的新 API Key；省略会保留旧 Key"),
-                "protocol" to enumProp(listOf("openai", "anthropic"), "可选的新请求协议"),
+                "protocol" to enumProp(
+                    listOf("openai", "openai_responses", "anthropic", "github_models"),
+                    "可选的新请求协议；openai_responses 会直接调用 /responses",
+                ),
                 "enabled" to prop("boolean", "可选的新启用状态"),
                 "has_api_key" to prop("boolean", "可选的新凭据存在标记"),
             ),
@@ -179,6 +185,15 @@ object LocalTools {
             mapOf(
                 "path" to prop("string", "安全工作区内 PNG/JPEG 的相对路径；绝对路径也必须仍位于安全工作区"),
                 "caption" to prop("string", "可选的简短图片说明，最多保留 160 个字符；省略时使用文件名"),
+            ),
+            listOf("path"),
+        ),
+        function(
+            "image_inspect",
+            "让当前已冻结且声明视觉能力的模型一次性查看 PNG/JPEG 文件并返回观察结果。支持移动端安全工作区路径，以及已由系统授权且应用内文件开关开启的 content URI 或共享存储路径；图片不超过 10 MiB、4000 万像素。图片字节只进入本次视觉子请求，不写入公开工具回执或持久对话历史",
+            mapOf(
+                "path" to prop("string", "安全工作区内路径、已授权 content:// URI，或已授权共享存储绝对路径"),
+                "prompt" to prop("string", "希望视觉模型检查的问题；省略时要求客观描述图片内容"),
             ),
             listOf("path"),
         ),
@@ -261,7 +276,7 @@ object LocalTools {
         ),
         function(
             "web_search",
-            "通过 DuckDuckGo 搜索公开网页，不打开结果页面。返回匹配结果的标题、绝对 URL 与摘要；需要正文时再调用 web_fetch",
+            "通过移动端受限 Search MCP 池搜索公开网页；严格只调用经名称、描述与 schema 验证的搜索工具，全部节点失败后依次回落 Bing，最后才使用 DuckDuckGo。返回匹配结果的标题、绝对 URL 与摘要；需要正文时再调用 web_fetch",
             mapOf("query" to prop("string", "搜索关键词")),
             listOf("query"),
         ),
@@ -467,9 +482,10 @@ object LocalTools {
 
     private fun browserUse(actions: Collection<String>): JSONObject = function(
         "browser_use",
-        "操作当前本地对话的内置浏览器。navigate 需要 url；wait 可传 duration_ms；observe/extract 可传 max_chars；back、forward、reload 不需要附加字段。observe/extract 优先读取 DOM 或 PDF 文本层，文本不足时使用当前页面截图和设备端中英 OCR。返回页面状态、文本或导航错误。",
+        "操作当前本地对话的浏览器会话。visible 省略时为 true，绑定右侧栏内置浏览器但不会强制展开侧栏或切换标签；visible=false 使用独立后台会话，不连接、不显示也不渲染右侧栏 WebView。navigate 需要 url；wait 可传 duration_ms；observe/extract 可传 max_chars；back、forward、reload 不需要附加字段。observe/extract 优先读取 DOM 或 PDF 文本层，文本不足时使用当前页面截图和设备端中英 OCR。返回页面状态、文本或导航错误。",
         mapOf(
             "action" to enumProp(actions, "当前模式允许的浏览器动作"),
+            "visible" to prop("boolean", "可选；是否绑定并使用右侧栏内置浏览器，省略时为 true；false 使用不参与 Compose 绘制的独立后台浏览会话"),
             "url" to prop("string", "navigate 必填的完整 http:// 或 https:// 地址；其他动作省略"),
             "max_chars" to prop("integer", "observe 或 extract 返回的最大正文字符数"),
             "duration_ms" to prop("integer", "wait 等待的毫秒数；必须为非负值"),

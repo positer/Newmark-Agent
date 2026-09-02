@@ -7,17 +7,44 @@ import org.junit.Test
 
 class BrowserSessionRegistryTest {
     @Test
-    fun browserToolAndSidebarResolveTheSameConversationSession() {
+    fun visibleBrowserToolAndSidebarResolveTheSameConversationSession() {
         val registry = BrowserSessionRegistry()
-        val backgroundToolSession = registry.session("local:conversation-a")
-        assertEquals(false, backgroundToolSession.hasActivity)
+        val visibleToolSession = registry.visibleSession("local:conversation-a")
+        assertEquals(false, visibleToolSession.hasActivity)
 
-        backgroundToolSession.navigate("https://example.com/a")
+        visibleToolSession.navigate("https://example.com/a")
 
         val sidebarSession = registry.session("local:conversation-a")
-        assertSame(backgroundToolSession, sidebarSession)
+        assertSame(visibleToolSession, sidebarSession)
         assertEquals(true, sidebarSession.hasActivity)
         assertEquals("https://example.com/a", sidebarSession.address)
+    }
+
+    @Test
+    fun invisibleBrowserToolNeverAliasesTheRightSidebarSession() {
+        val registry = BrowserSessionRegistry()
+        val sidebarSession = registry.visibleSession("local:conversation-a")
+        val backgroundSession = registry.backgroundSession("local:conversation-a")
+
+        backgroundSession.navigate("https://example.com/background")
+
+        assertNotSame(sidebarSession, backgroundSession)
+        assertSame(backgroundSession, registry.backgroundSession("local:conversation-a"))
+        assertEquals(BrowserUrlPolicy.DefaultUrl, sidebarSession.address)
+        assertEquals(false, sidebarSession.hasActivity)
+        assertEquals("https://example.com/background", backgroundSession.address)
+    }
+
+    @Test
+    fun releasingAnInvisibleSessionDoesNotAffectTheSidebarSession() {
+        val registry = BrowserSessionRegistry()
+        val visible = registry.visibleSession("local:conversation-a")
+        val background = registry.backgroundSession("local:conversation-a")
+
+        registry.releaseBackgroundSession("local:conversation-a")
+
+        assertSame(visible, registry.visibleSession("local:conversation-a"))
+        assertNotSame(background, registry.backgroundSession("local:conversation-a"))
     }
 
     @Test

@@ -3,7 +3,7 @@ package com.newmark.mobile.data
 /** Pure Kotlin inventory used by runtime wiring and JVM contract tests. */
 object LocalToolCatalog {
     val buildNames: Set<String> = linkedSetOf(
-        "read_file", "write_file", "list_dir", "recent_files", "image_display",
+        "read_file", "write_file", "list_dir", "recent_files", "image_display", "image_inspect",
         "terminal_exec",
         "memory_lab_read", "memory_lab_query", "memory_lab_update", "memory_lab_delete", "memory_lab_reindex",
         "settings_read", "settings_update",
@@ -14,7 +14,7 @@ object LocalToolCatalog {
         "alarm_manage",
     )
     val planNames: Set<String> = linkedSetOf(
-        "read_file", "list_dir", "recent_files", "image_display", "memory_lab_read", "memory_lab_query", "settings_read",
+        "read_file", "list_dir", "recent_files", "image_display", "image_inspect", "memory_lab_read", "memory_lab_query", "settings_read",
         "web_search", "web_fetch", "browser_use", "task_read", "calendar_read",
     )
     val chatNames: Set<String> = linkedSetOf("web_search", "web_fetch", "terminal_exec")

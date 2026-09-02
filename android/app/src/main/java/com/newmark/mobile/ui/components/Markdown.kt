@@ -1,7 +1,7 @@
 package com.newmark.mobile.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,12 +12,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -34,6 +40,7 @@ import com.newmark.mobile.ui.theme.NewmarkBorder2
 import com.newmark.mobile.ui.theme.NewmarkTextPrimary
 import com.newmark.mobile.ui.theme.NewmarkTextSecondary
 import com.newmark.mobile.ui.theme.NewmarkTextTertiary
+import com.newmark.mobile.R
 
 // ============================================================================
 // 与 PC-GUI `renderMarkdownBlocks` / `renderMarkdownInline` 对齐的 Markdown 渲染
@@ -42,13 +49,14 @@ import com.newmark.mobile.ui.theme.NewmarkTextTertiary
 private val BoldSpan = SpanStyle(fontWeight = FontWeight.Bold)
 private val ItalicSpan = SpanStyle(fontStyle = FontStyle.Italic)
 
-// 语法高亮 token 色（近似 PC tok-*）
-private val TokKeyword = Color(0xFFC792EA)
-private val TokString = Color(0xFFC3E88D)
-private val TokComment = Color(0xFF546E7A)
-private val TokNumber = Color(0xFFF78C6C)
-private val TokType = Color(0xFFFFCB6B)
-private val TokTag = Color(0xFFF07178)
+// Bundled offline fallback fonts: CJK-aware monospace for code, math symbols
+// for LaTeX/Unicode math. Avoid relying on device font coverage for tofu.
+private val MarkdownCodeFontFamily = FontFamily(Font(R.font.noto_sans_mono_cjk_sc))
+private val MarkdownMathFontFamily = FontFamily(Font(R.font.noto_sans_math))
+
+private const val HighlightMarkerStart = '\uE100'
+private const val HighlightMarkerEnd = '\uE1FF'
+private const val HighlightMarkerBase = 0xE300
 
 private val INLINE_CODE = Regex("`([^`\\n]+)`")
 private val INLINE_DISPLAY_MATH = Regex("""\\\[([^\\n]+?)\\\]|(?<!\\)\$\$([^\$]+?)\$\$""")
@@ -162,9 +170,13 @@ internal fun renderReadableLatex(tex: String): String {
 
 /** 行内 markdown → AnnotatedString（code/数学/链接/图片/加粗/斜体），跟随固定亮暗主题色 */
 private fun renderInline(text: String, p: NewmarkThemeColors): AnnotatedString {
-    val codeSpan = SpanStyle(fontFamily = FontFamily.Monospace, background = p.bgTertiary, color = p.textPrimary)
+    val codeSpan = SpanStyle(fontFamily = MarkdownCodeFontFamily, background = p.bgTertiary, color = p.textPrimary)
     val linkSpan = SpanStyle(color = p.accent)
-    val mathSpan = SpanStyle(color = p.textSecondary, fontStyle = FontStyle.Italic)
+    val mathSpan = SpanStyle(
+        color = p.textSecondary,
+        fontFamily = MarkdownMathFontFamily,
+        fontStyle = FontStyle.Italic,
+    )
     val placeholders = mutableListOf<AnnotatedString>()
     fun hold(ans: AnnotatedString): String {
         val token = "\u0000${placeholders.size}\u0000"
@@ -249,25 +261,31 @@ private fun renderInline(text: String, p: NewmarkThemeColors): AnnotatedString {
 }
 
 /** 代码高亮（对齐 PC highlightCodeByLanguage：字符串/注释/数字/关键字/类型/tag） */
-private fun highlightCode(code: String, language: String): AnnotatedString {
+internal fun highlightCode(code: String, language: String, palette: NewmarkThemeColors): AnnotatedString {
     val protected = mutableListOf<AnnotatedString>()
     fun protect(value: String, color: Color): String {
-        val token = "\uE100${protected.size}\uE1FF"
-        protected.add(AnnotatedString(value, SpanStyle(color = color)))
+        // Encode the index as one private-use character (no ASCII letters or
+        // digits), so later string/number/keyword replacements cannot corrupt
+        // the placeholder by matching its numeric index.
+        val token = "$HighlightMarkerStart${(HighlightMarkerBase + protected.size).toChar()}$HighlightMarkerEnd"
+        protected.add(AnnotatedString(
+            value,
+            SpanStyle(color = color, fontFamily = MarkdownCodeFontFamily),
+        ))
         return token
     }
     var text = code
     text = Regex("""("[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|`[^`\\]*(?:\\.[^`\\]*)*`)""")
-        .replace(text) { protect(it.value, TokString) }
+        .replace(text) { protect(it.value, palette.codeString) }
     text = Regex("(^|\\s)(//[^\\n]*|#[^\\n]*)$", RegexOption.MULTILINE)
-        .replace(text) { m -> m.groupValues[1] + protect(m.groupValues[2], TokComment) }
+        .replace(text) { m -> m.groupValues[1] + protect(m.groupValues[2], palette.codeComment) }
     text = Regex("\\b(0x[\\da-f]+|\\d+(?:\\.\\d+)?)\\b", RegexOption.IGNORE_CASE)
-        .replace(text) { protect(it.value, TokNumber) }
-    text = KEYWORDS.replace(text) { protect(it.value, TokKeyword) }
-    text = TYPES.replace(text) { protect(it.value, TokType) }
+        .replace(text) { protect(it.value, palette.codeNumber) }
+    text = KEYWORDS.replace(text) { protect(it.value, palette.codeKeyword) }
+    text = TYPES.replace(text) { protect(it.value, palette.codeType) }
     if (language == "html" || language == "xml" || language == "vue" || language == "svelte") {
         text = Regex("(&lt;/?)([\\w-]+)").replace(text) { m ->
-            m.groupValues[1] + protect(m.groupValues[2], TokTag)
+            m.groupValues[1] + protect(m.groupValues[2], palette.codeTag)
         }
     }
 
@@ -281,15 +299,16 @@ private fun highlightCode(code: String, language: String): AnnotatedString {
     }
     var i = 0
     while (i < text.length) {
-        if (text[i] == '\uE100') {
+        if (text[i] == HighlightMarkerStart) {
             flush()
-            val end = text.indexOf('\uE1FF', i)
+            if (i + 1 >= text.length) break
+            val encodedIdx = text[i + 1].code - HighlightMarkerBase
+            val end = text.indexOf(HighlightMarkerEnd, i + 2)
             if (end > i) {
-                val idx = text.substring(i + 1, end).toIntOrNull()
-                if (idx != null && idx in protected.indices) builder.append(protected[idx])
+                if (encodedIdx in protected.indices) builder.append(protected[encodedIdx])
                 i = end + 1
             } else {
-                i++
+                i += 2
             }
         } else {
             plain.append(text[i])
@@ -563,6 +582,7 @@ fun MarkdownBody(
                         fontSize = baseFontSize.sp,
                         lineHeight = baseLineHeight.sp,
                         color = p.textSecondary,
+                        fontFamily = MarkdownMathFontFamily,
                         fontStyle = FontStyle.Italic,
                         textAlign = if (alignEnd) TextAlign.Right else TextAlign.Left,
                         modifier = Modifier
@@ -583,7 +603,6 @@ fun MarkdownBody(
     }
 }
 
-@Suppress("DEPRECATION")
 @Composable
 private fun MarkdownInlineText(
     text: AnnotatedString,
@@ -595,7 +614,9 @@ private fun MarkdownInlineText(
     textAlign: TextAlign = TextAlign.Left,
     onLinkClick: ((String) -> Unit)? = null,
 ) {
-    ClickableText(
+    var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val linkClick = onLinkClick
+    Text(
         text = text,
         style = androidx.compose.ui.text.TextStyle(
             color = color,
@@ -604,20 +625,24 @@ private fun MarkdownInlineText(
             fontWeight = fontWeight,
             textAlign = textAlign,
         ),
-        modifier = modifier,
-        onClick = { offset ->
-            text.getStringAnnotations(NewmarkWebLinkTag, offset, offset)
-                .firstOrNull()
-                ?.item
-                ?.let { url -> onLinkClick?.invoke(url) }
+        modifier = modifier.pointerInput(text) {
+            detectTapGestures { position ->
+                val layout = layoutResult ?: return@detectTapGestures
+                val offset = layout.getOffsetForPosition(position)
+                text.getStringAnnotations(NewmarkWebLinkTag, offset, offset)
+                    .firstOrNull()
+                    ?.item
+                    ?.let { url -> linkClick?.invoke(url) }
+            }
         },
+        onTextLayout = { layoutResult = it },
     )
 }
 
 @Composable
 private fun CodeBlockView(block: MdBlock.CodeBlock) {
     val p = LocalNewmarkColors.current
-    val code = remember(block.code, block.language) { highlightCode(block.code, block.language) }
+    val code = remember(block.code, block.language, p.codeString) { highlightCode(block.code, block.language, p) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -640,10 +665,10 @@ private fun CodeBlockView(block: MdBlock.CodeBlock) {
             fontSize = 12.sp,
             lineHeight = 17.sp,
             color = p.textPrimary,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = MarkdownCodeFontFamily,
+            softWrap = true,
             modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
+                .fillMaxWidth(),
         )
     }
 }

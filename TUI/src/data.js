@@ -20,7 +20,7 @@ const navigation = [
 const workspace = {
   id: "workspace-newmark-agent-demo",
   name: "Newmark Agent",
-  path: "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent",
+  path: "C:\\Users\\DemoUser\\Projects\\Newmark Agent",
   isInternal: false,
   hostBinding: "demo-host",
   icon: "[W]",
@@ -40,7 +40,7 @@ const workspaces = [
   {
     id: "workspace-condensed-lab-demo",
     name: "Condensed Lab",
-    path: "C:\\Users\\12252\\Desktop\\Files\\Condensed Lab",
+    path: "C:\\Users\\DemoUser\\Projects\\Condensed Lab",
     isInternal: false,
     hostBinding: "demo-host",
     icon: "[W]",

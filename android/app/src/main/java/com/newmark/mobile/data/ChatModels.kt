@@ -200,6 +200,10 @@ data class LocalContextCompression(
 data class LocalConversation(
     val id: String,
     val title: String,
+    /** First user message whose title probe must succeed before the first formal Agent response. */
+    val titleRequestMessageId: String = "",
+    /** True only after a formal Agent response has been allowed to start for this conversation. */
+    val firstAgentResponseStarted: Boolean = false,
     val messages: List<ChatMessage> = emptyList(),
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),

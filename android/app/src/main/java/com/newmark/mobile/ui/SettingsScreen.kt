@@ -90,11 +90,13 @@ import com.newmark.mobile.data.ModelConfig
 import com.newmark.mobile.data.ProviderConfig
 import com.newmark.mobile.data.createManualModelConfig
 import com.newmark.mobile.data.createManualProviderConfig
+import com.newmark.mobile.data.normalizeMobileProviderProtocol
 import com.newmark.mobile.ui.components.NewmarkShapeLarge
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
 import com.newmark.mobile.ui.components.liquidGlassModifier
 import com.newmark.mobile.ui.components.glassButtonSurface
+import com.newmark.mobile.ui.components.GlassButtonCanvas
 import com.newmark.mobile.ui.components.LiquidGlassSwitch
 import com.newmark.mobile.ui.components.DialogBackdropBlur
 import com.newmark.mobile.ui.components.MobilePopupShape
@@ -177,24 +179,23 @@ fun SettingsScreen(
                 .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .glassButtonSurface(CircleShape, p.bgQuaternary)
-                    .clickable {
-                        when (page) {
-                            is SettingsPage.Main -> onBack()
-                            is SettingsPage.DeviceManage -> page = SettingsPage.Main
-                            is SettingsPage.Providers -> page = SettingsPage.Main
-                            is SettingsPage.NewProvider -> page = SettingsPage.Providers
-                            is SettingsPage.FuzzyInject -> page = SettingsPage.Providers
-                            is SettingsPage.Capabilities -> page = SettingsPage.Main
-                            is SettingsPage.Plugins -> page = SettingsPage.Main
-                            is SettingsPage.ProviderDetail -> page = SettingsPage.Providers
-                            is SettingsPage.NewModel -> page = SettingsPage.ProviderDetail((page as SettingsPage.NewModel).providerId)
-                        }
-                    },
-                contentAlignment = Alignment.Center,
+            GlassButtonCanvas(
+                visualSize = 36.dp,
+                shape = CircleShape,
+                surfaceColor = p.bgQuaternary,
+                onClick = {
+                    when (page) {
+                        is SettingsPage.Main -> onBack()
+                        is SettingsPage.DeviceManage -> page = SettingsPage.Main
+                        is SettingsPage.Providers -> page = SettingsPage.Main
+                        is SettingsPage.NewProvider -> page = SettingsPage.Providers
+                        is SettingsPage.FuzzyInject -> page = SettingsPage.Providers
+                        is SettingsPage.Capabilities -> page = SettingsPage.Main
+                        is SettingsPage.Plugins -> page = SettingsPage.Main
+                        is SettingsPage.ProviderDetail -> page = SettingsPage.Providers
+                        is SettingsPage.NewModel -> page = SettingsPage.ProviderDetail((page as SettingsPage.NewModel).providerId)
+                    }
+                },
             ) {
                 Icon(
                     imageVector = Icons.Filled.ArrowBack,
@@ -928,9 +929,10 @@ private fun ManualProviderPage(onSave: (ProviderConfig) -> Unit, onCancel: () ->
                     0 -> ProviderCapsuleField("供应商名称", name, { name = it }, "例如 OpenAI")
                     1 -> ProviderProtocolRail(
                         options = listOf(
-                            "openai" to "OpenAI 兼容",
+                            "openai" to "OpenAI Chat",
+                            "openai_responses" to "Responses",
                             "anthropic" to "Anthropic",
-                            "github_models" to "GitHub Models",
+                            "github_models" to "GitHub",
                         ),
                         value = protocol,
                         coordinator = railCoordinator,
@@ -1020,7 +1022,8 @@ private fun FuzzyInjectPage(onSave: (ProviderConfig) -> Unit, onCancel: () -> Un
                     1 -> ProviderProtocolRail(
                         options = listOf(
                             "auto" to "自动检测",
-                            "openai" to "OpenAI 兼容",
+                            "openai" to "OpenAI Chat",
+                            "openai_responses" to "Responses",
                             "anthropic" to "Anthropic 兼容",
                         ),
                         value = protocol,
@@ -1055,7 +1058,8 @@ private fun FuzzyInjectPage(onSave: (ProviderConfig) -> Unit, onCancel: () -> Un
                                                         name = effectiveName,
                                                         baseUrl = parsed.url,
                                                         apiKey = parsed.key,
-                                                        protocol = if (protocol == "anthropic") "anthropic" else "openai",
+                                                        protocol = if (protocol == "auto") "openai"
+                                                        else normalizeMobileProviderProtocol(protocol),
                                                         enabled = true,
                                                         models = (models.ifEmpty { listOf("default") }).map { ModelConfig(name = it) },
                                                     ),
@@ -1178,6 +1182,7 @@ private fun ProviderDetailPage(
     val p = LocalNewmarkColors.current
     val provider = vm.providers.find { it.id == providerId }
     var railSelected by remember { mutableIntStateOf(0) }
+    val railCoordinator = rememberProviderRailMotionCoordinator()
 
     if (provider == null) {
         LaunchedEffect(Unit) { onBack() }
@@ -1198,6 +1203,8 @@ private fun ProviderDetailPage(
             ProviderVerticalCapsuleRail(
                 itemCount = railCount,
                 selectedIndex = railSelected.coerceIn(0, railCount - 1),
+                coordinator = railCoordinator,
+                horizontalBarrierIndices = setOf(2),
                 onSelected = {
                     railSelected = it
                     when (it) {
@@ -1212,10 +1219,16 @@ private fun ProviderDetailPage(
                 when {
                     it == 0 -> ProviderCapsuleRow("供应商", detail = provider.label, active = railSelected == it)
                     it == 1 -> ProviderCapsuleRow("API 接口", detail = provider.baseUrl.ifBlank { "未配置接口" }, active = railSelected == it)
-                    it == 2 -> ProviderCapsuleRow(
-                        "连接协议",
-                        detail = "${provider.protocol} · Key ${if (provider.apiKey.isNotBlank()) "已配置" else "未配置"}",
-                        active = railSelected == it,
+                    it == 2 -> ProviderProtocolRail(
+                        options = listOf(
+                            "openai" to "OpenAI Chat",
+                            "openai_responses" to "Responses",
+                            "anthropic" to "Anthropic",
+                            "github_models" to "GitHub",
+                        ),
+                        value = normalizeMobileProviderProtocol(provider.protocol),
+                        coordinator = railCoordinator,
+                        onValueChange = { protocol -> vm.updateProviderProtocol(provider.id, protocol) },
                     )
                     it == 3 -> ProviderCapsuleRow("＋ 新建模型", active = true)
                     emptyOffset == 1 && it == 4 -> ProviderCapsuleRow("暂无模型", detail = "请新建供应商内模型", active = railSelected == it)

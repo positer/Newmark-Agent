@@ -2,7 +2,7 @@ import assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { beginRuntimeLifecycle, markRuntimeLifecycleClean, prepareRuntimeLifecycle } from '../core/runtimeLifecycle';
+import { beginRuntimeLifecycle, markRuntimeLifecycleClean, markRuntimeLifecycleExitedByPid, prepareRuntimeLifecycle } from '../core/runtimeLifecycle';
 
 async function main(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-runtime-lifecycle-startup-'));
@@ -24,6 +24,11 @@ async function main(): Promise<void> {
   const state = beginRuntimeLifecycle(root, 'main');
   assert.strictEqual(state.unexpectedExit, true);
   assert.strictEqual(state.previousOwnerAlive, false);
+  markRuntimeLifecycleExitedByPid(root, 'main', process.pid, { unexpected: true, exitCode: 9, error: 'fixture exit' });
+  const exited = JSON.parse(fs.readFileSync(path.join(directory, `lifecycle-main-${state.ownerId}.json`), 'utf-8'));
+  assert.strictEqual(exited.active, false);
+  assert.strictEqual(exited.unexpectedExit, true);
+  assert.strictEqual(exited.exitCode, 9);
   markRuntimeLifecycleClean(root, 'main');
   assert.strictEqual(fs.existsSync(path.join(directory, `lifecycle-main-${state.ownerId}.json`)), false);
   fs.rmSync(root, { recursive: true, force: true });

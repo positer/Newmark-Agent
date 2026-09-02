@@ -9,6 +9,7 @@ data class ApiConfig(
     val baseUrl: String = "",
     val apiKey: String = "",
     val model: String = "",
+    val protocol: String = PROVIDER_PROTOCOL_OPENAI,
 ) {
     val isReady: Boolean get() = baseUrl.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank()
 }
@@ -23,14 +24,17 @@ class AppConfigStore(context: Context) {
     fun load(): ApiConfig {
         if (!file.exists()) return ApiConfig()
         return runCatching {
-            gson.fromJson(file.readText(), ApiConfig::class.java) ?: ApiConfig()
+            val parsed = gson.fromJson(file.readText(), ApiConfig::class.java) ?: ApiConfig()
+            val normalized = parsed.copy(protocol = normalizeMobileProviderProtocol(parsed.protocol))
+            if (normalized != parsed) save(normalized)
+            normalized
         }.getOrDefault(ApiConfig())
     }
 
     fun save(config: ApiConfig) {
         runCatching {
             dir.mkdirs()
-            file.writeText(gson.toJson(config))
+            file.writeText(gson.toJson(config.copy(protocol = normalizeMobileProviderProtocol(config.protocol))))
         }
     }
 }

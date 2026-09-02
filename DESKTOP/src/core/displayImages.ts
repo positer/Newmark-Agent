@@ -51,6 +51,38 @@ function decodeFile(filePath: string): {
   return { bytes, dataUrl, mimeType, width: decoded.width, height: decoded.height };
 }
 
+export interface WorkspaceImageObservation {
+  path: string;
+  name: string;
+  byteLength: number;
+  dataUrl: string;
+  mimeType: DisplayImageAttachment['mimeType'];
+  width: number;
+  height: number;
+}
+
+export function readWorkspaceImageForVision(
+  workspacePath: string,
+  requestedPath: string,
+): WorkspaceImageObservation {
+  const workspace = fs.realpathSync(path.resolve(workspacePath));
+  const candidate = path.resolve(workspace, String(requestedPath || '').trim());
+  if (!inside(workspace, candidate)) throw new Error('Workspace images must stay inside the active workspace.');
+  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) throw new Error(`Workspace image not found: ${requestedPath}`);
+  const realCandidate = fs.realpathSync(candidate);
+  if (!inside(workspace, realCandidate)) throw new Error('Workspace images must stay inside the active workspace.');
+  const decoded = decodeFile(realCandidate);
+  return {
+    path: path.relative(workspace, realCandidate).split(path.sep).join('/'),
+    name: path.basename(realCandidate),
+    byteLength: decoded.bytes.length,
+    dataUrl: decoded.dataUrl,
+    mimeType: decoded.mimeType,
+    width: decoded.width,
+    height: decoded.height,
+  };
+}
+
 function writeAsset(filePath: string, bytes: Buffer, sha256: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   if (fs.existsSync(filePath)) {
@@ -74,12 +106,15 @@ export function persistWorkspaceDisplayImage(
   caption = '',
   createdAt = new Date().toISOString(),
 ): DisplayImageAttachment {
-  const workspace = fs.realpathSync(path.resolve(workspacePath));
-  const candidate = path.resolve(workspace, String(requestedPath || '').trim());
-  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) throw new Error(`Display image not found: ${requestedPath}`);
-  const realCandidate = fs.realpathSync(candidate);
-  if (!inside(workspace, realCandidate)) throw new Error('Display images must stay inside the active workspace.');
-  const decoded = decodeFile(realCandidate);
+  const source = readWorkspaceImageForVision(workspacePath, requestedPath);
+  const realCandidate = path.resolve(fs.realpathSync(path.resolve(workspacePath)), ...source.path.split('/'));
+  const decoded = {
+    bytes: Buffer.from(source.dataUrl.slice(source.dataUrl.indexOf(',') + 1), 'base64'),
+    dataUrl: source.dataUrl,
+    mimeType: source.mimeType,
+    width: source.width,
+    height: source.height,
+  };
   const sha256 = crypto.createHash('sha256').update(decoded.bytes).digest('hex');
   writeAsset(absoluteAssetPath(rootPath, sha256, decoded.mimeType), decoded.bytes, sha256);
   return {

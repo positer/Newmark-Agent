@@ -47,6 +47,7 @@ function displayMessages(prefix, count = 4) {
   return Array.from({ length: count }, (_, index) => ({
     role: index % 2 === 0 ? 'user' : 'assistant',
     content: `${prefix}-display-${index}`,
+    messageId: `compression-display-${index}`,
     mode: 'build',
     model: 'compression-pressure-model',
     timestamp: new Date().toISOString(),

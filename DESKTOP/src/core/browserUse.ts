@@ -48,6 +48,13 @@ export function isPublicBrowserUseAttribute(input: string): boolean {
 export interface BrowserUseScope {
   owner: string;
   runtimeKey: string;
+  /**
+   * Selects the user-visible right-sidebar browser surface. `false` keeps the
+   * same Browser-Use protocol on a host-owned background page that is never
+   * attached to the renderer. Omission is normalized to `true` for backwards
+   * compatibility.
+   */
+  visible?: boolean;
 }
 
 export interface BrowserUseRequest extends BrowserUseScope {
@@ -250,7 +257,17 @@ function hasControlCharacter(text: string): boolean {
 }
 
 function scopeKey(scope: BrowserUseScope): string {
-  return `${scope.runtimeKey}\u0000${scope.owner}`;
+  return `${scope.runtimeKey}\u0000${scope.owner}\u0000${browserUseVisible(scope.visible) ? 'visible' : 'background'}`;
+}
+
+function browserUseVisible(value: unknown): boolean {
+  return typeof value === 'boolean' ? value : true;
+}
+
+function bindBrowserUseVisible(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== 'boolean') throw new TypeError('Browser-Use visible must be a boolean when provided.');
+  return value;
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -351,6 +368,7 @@ export function bindBrowserUseRequest(
   const request: BrowserUseRequest = {
     owner: runtimeKey && actorId ? `browser-use:${runtimeKey}:actor:${actorId}` : '',
     runtimeKey,
+    visible: bindBrowserUseVisible(raw.visible),
     action: String(raw.action || '').trim().toLowerCase() as BrowserUseAction,
   };
   if (raw.actionId !== undefined || raw.action_id !== undefined) request.actionId = String(raw.actionId ?? raw.action_id ?? '');
@@ -448,10 +466,11 @@ export class BrowserUseEngine implements BrowserUseBackend {
     const rawAction = String(input?.action || '').trim().toLowerCase();
     const action = (ACTIONS.has(rawAction as BrowserUseAction) ? rawAction : 'observe') as BrowserUseAction;
     const actionId = cleanScopePart(input?.actionId) || `browser-use-${this.id()}`;
-    const normalized = { ...input, owner, runtimeKey, action, actionId };
+    const visible = browserUseVisible(input?.visible);
+    const normalized = { ...input, owner, runtimeKey, visible, action, actionId };
     if (!owner || !runtimeKey || !ACTIONS.has(rawAction as BrowserUseAction)) return await this.runNow(normalized, signal);
 
-    const session = this.ensureSession({ owner, runtimeKey });
+    const session = this.ensureSession({ owner, runtimeKey, visible });
     const cached = session.receipts.get(actionId);
     if (cached) return cached;
     const inflight = session.inflight.get(actionId);
@@ -476,19 +495,20 @@ export class BrowserUseEngine implements BrowserUseBackend {
     throwIfBrowserUseAborted(signal);
     const owner = cleanScopePart(input?.owner);
     const runtimeKey = cleanScopePart(input?.runtimeKey);
+    const visible = browserUseVisible(input?.visible);
     const rawAction = String(input?.action || '').trim().toLowerCase();
     const action = (ACTIONS.has(rawAction as BrowserUseAction) ? rawAction : 'observe') as BrowserUseAction;
     const actionId = cleanScopePart(input?.actionId) || `browser-use-${this.id()}`;
     const startedAt = this.now();
 
     if (!owner || !runtimeKey) {
-      return this.standaloneFailure({ owner, runtimeKey, action, actionId, startedAt }, 'invalid_scope', 'Browser-Use requires a non-empty owner and runtimeKey.');
+      return this.standaloneFailure({ owner, runtimeKey, visible, action, actionId, startedAt }, 'invalid_scope', 'Browser-Use requires a non-empty owner and runtimeKey.');
     }
     if (!ACTIONS.has(rawAction as BrowserUseAction)) {
-      return this.standaloneFailure({ owner, runtimeKey, action, actionId, startedAt }, 'invalid_request', `Unsupported Browser-Use action: ${rawAction || '(missing)'}`);
+      return this.standaloneFailure({ owner, runtimeKey, visible, action, actionId, startedAt }, 'invalid_request', `Unsupported Browser-Use action: ${rawAction || '(missing)'}`);
     }
 
-    const scope = { owner, runtimeKey };
+    const scope = { owner, runtimeKey, visible };
     const session = this.ensureSession(scope);
     const cached = session.receipts.get(actionId);
     if (cached) return cached;
@@ -802,7 +822,10 @@ export class BrowserUse {
     throwIfBrowserUseAborted(signal);
     if (bridged.ok && bridged.data && typeof bridged.data === 'object') {
       const receipt = bridged.data as BrowserUseReceipt;
-      if (receipt.action && receipt.actionId && receipt.owner === request.owner && receipt.runtimeKey === request.runtimeKey) return receipt;
+      if (receipt.action && receipt.actionId
+        && receipt.owner === request.owner
+        && receipt.runtimeKey === request.runtimeKey
+        && browserUseVisible(receipt.visible) === browserUseVisible(request.visible)) return receipt;
     }
     return this.unavailable(request, bridged.error ? 'backend_error' : 'backend_unavailable', bridged.error || 'Browser-Use backend is not connected. Start Newmark Desktop to use the built-in browser.');
   }
@@ -815,6 +838,7 @@ export class BrowserUse {
       actionId: cleanScopePart(request?.actionId) || `browser-use-${randomUUID()}`,
       owner: cleanScopePart(request?.owner),
       runtimeKey: cleanScopePart(request?.runtimeKey),
+      visible: browserUseVisible(request?.visible),
       sequence: 0,
       pageGeneration: Number.isInteger(request?.pageGeneration) ? Number(request.pageGeneration) : 0,
       startedAt: now,

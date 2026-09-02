@@ -136,7 +136,7 @@ function startMockServer() {
       } else if (/ACTIVE_CONTEXT_TOOL_REQUEST/i.test(prompt)) {
         writeText(res, 'ACTIVE_CONTEXT_TOOL_OK', true);
       } else {
-        writeText(res, 'LOCAL_MOCK_OK', true);
+        writeText(res, 'LOCAL_MOCK_OK', parsed.stream === true);
       }
     });
   });

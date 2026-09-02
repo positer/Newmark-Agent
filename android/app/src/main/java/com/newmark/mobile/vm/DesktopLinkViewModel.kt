@@ -300,6 +300,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     init {
+        LocalAgentForegroundService.setRemoteTransportOwner(getApplication(), true)
         // Do not start network work from the ViewModel constructor.  A paired
         // device may point at a temporarily unreachable desktop (for example
         // after an emulator restart); starting the 5-10s hello timeout during
@@ -311,6 +312,17 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                 .collect { count ->
                     LocalAgentForegroundService.updateRemoteCount(getApplication(), count)
                 }
+        }
+        LocalAgentForegroundService.registerNetworkRecoveryListener(REMOTE_NETWORK_OWNER) {
+            api.evictConnections()
+            activeDevice?.let { pair ->
+                val session = sessionGate.current(pair)
+                if (session != null && isCurrent(session, pair) &&
+                    (runningRemoteAgentCount() > 0 || linkStatus == LinkStatus.Reconnecting || !isConnected)
+                ) {
+                    startReconnect(pair, session, immediate = true)
+                }
+            }
         }
     }
 
@@ -338,6 +350,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                 if (pairing || activeDevice != null) return@withContext
                 pairedDevices = saved
                 activeDevice = saved.firstOrNull()
+                LocalAgentForegroundService.updateRemoteConnectionLease(getApplication(), activeDevice != null)
                 if (activeDevice != null) refresh()
             }
         }
@@ -362,6 +375,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                     val pair = base.copy(name = name)
                     pairedDevices = pairStore.add(pair)
                     activeDevice = pair
+                    LocalAgentForegroundService.updateRemoteConnectionLease(getApplication(), true)
                     refresh()
                 }
                 .onFailure { e ->
@@ -384,6 +398,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         }
         pairedDevices = pairStore.add(pair)
         activeDevice = pair
+        LocalAgentForegroundService.updateRemoteConnectionLease(getApplication(), true)
         refresh()
     }
 
@@ -392,6 +407,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         pairedDevices = pairStore.remove(host)
         if (activeDevice?.host == host) {
             activeDevice = pairedDevices.firstOrNull()
+            LocalAgentForegroundService.updateRemoteConnectionLease(getApplication(), activeDevice != null)
             if (activeDevice == null) {
                 clearSession()
             } else {
@@ -405,6 +421,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         val target = pairedDevices.firstOrNull { it.host == host } ?: return
         if (activeDevice?.host == host) return
         activeDevice = target
+        LocalAgentForegroundService.updateRemoteConnectionLease(getApplication(), true)
         refresh()
     }
 
@@ -514,23 +531,31 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         return true
     }
 
-    /** 端口不可达：与 SSE 同步每 3s 主动重连，5min 后判定连接已断开 */
-    private fun startReconnect(pair: PairInfo, session: MobileSessionGate.Session) {
+    /** Active remote Agent leases reconnect indefinitely; idle links retain the bounded 5 minute policy. */
+    private fun startReconnect(
+        pair: PairInfo,
+        session: MobileSessionGate.Session,
+        immediate: Boolean = false,
+    ) {
         if (!isCurrent(session, pair)) return
         linkStatus = LinkStatus.Reconnecting
         reconnectJob?.cancel()
-        reconnectJob = viewModelScope.launch {
+        reconnectJob = LocalAgentForegroundService.launchRuntime {
             val deadline = System.currentTimeMillis() + RECONNECT_TIMEOUT_MS
-            while (isCurrent(session, pair) && System.currentTimeMillis() < deadline) {
-                delay(RECONNECT_INTERVAL_MS)
-                if (!isCurrent(session, pair)) return@launch
+            var firstAttempt = true
+            while (isCurrent(session, pair) &&
+                (runningRemoteAgentCount() > 0 || System.currentTimeMillis() < deadline)
+            ) {
+                if (!immediate || !firstAttempt) delay(RECONNECT_INTERVAL_MS)
+                firstAttempt = false
+                if (!isCurrent(session, pair)) return@launchRuntime
                 if (connect(pair, session)) {
-                    if (!isCurrent(session, pair)) return@launch
+                    if (!isCurrent(session, pair)) return@launchRuntime
                     linkStatus = LinkStatus.Connected
-                    return@launch
+                    return@launchRuntime
                 }
             }
-            if (!isCurrent(session, pair)) return@launch
+            if (!isCurrent(session, pair)) return@launchRuntime
             linkStatus = LinkStatus.Disconnected
             isConnected = false
             lastError = "连接已断开"
@@ -1543,10 +1568,10 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
 
     private var sseJob: Job? = null
 
-    /** 连接成功后挂 SSE 长连接；断线自动 3s 重试，viewModelScope 取消即停 */
+    /** 连接成功后挂 SSE 长连接；活动 Agent 的所有者是前台服务，不是 ViewModel。 */
     private fun startSse(pair: PairInfo, session: MobileSessionGate.Session) {
         sseJob?.cancel()
-        sseJob = viewModelScope.launch(Dispatchers.IO) {
+        sseJob = LocalAgentForegroundService.launchRuntime(Dispatchers.IO) {
             var outageStartedAt = 0L
             while (isActive && isCurrent(session, pair)) {
                 var cancellation: kotlinx.coroutines.DisposableHandle? = null
@@ -1598,7 +1623,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                     withContext(Dispatchers.Main.immediate) {
                         if (isCurrent(session, pair)) {
                             isConnected = false
-                            if (now - outageStartedAt >= RECONNECT_TIMEOUT_MS) {
+                            if (now - outageStartedAt >= RECONNECT_TIMEOUT_MS && runningRemoteAgentCount() == 0) {
                                 linkStatus = LinkStatus.Disconnected
                                 lastError = "连接已断开"
                             } else {
@@ -1703,6 +1728,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         terminalSyncs.distinctBy { it.runId }.forEach { sync ->
             refreshTerminalWorkRun(session, pair, sync)
         }
+        LocalAgentForegroundService.updateRemoteCount(getApplication(), runningRemoteAgentCount())
     }
 
     /** SSE work event → live Build reducer. Must run on Main inside one mutable snapshot. */
@@ -1920,6 +1946,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
     }.getOrDefault(SendResponse())
 
     companion object {
+        private const val REMOTE_NETWORK_OWNER = "DesktopLinkViewModel"
         private const val SSE_BATCH_WINDOW_MS = 48L
         private const val SSE_MAX_BATCH_SIZE = 48
         private const val SSE_EVENT_QUEUE_CAPACITY = 256
@@ -1927,5 +1954,12 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         private val TERMINAL_SSE_EVENT_TYPES = setOf("done", "error", "interrupted", "force_interrupted")
         private const val RECONNECT_INTERVAL_MS = 3_000L
         private const val RECONNECT_TIMEOUT_MS = 5 * 60_000L
+    }
+
+    override fun onCleared() {
+        LocalAgentForegroundService.unregisterNetworkRecoveryListener(REMOTE_NETWORK_OWNER)
+        cancelConnectionWork(clearGate = true)
+        LocalAgentForegroundService.setRemoteTransportOwner(getApplication(), false)
+        super.onCleared()
     }
 }

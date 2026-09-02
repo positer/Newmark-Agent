@@ -24,9 +24,14 @@ function startProvider() {
         response.end(JSON.stringify({ data: [{ id: 'latency-mock' }] }));
         return;
       }
+      const payload = JSON.parse(body || '{}');
+      if (payload.stream !== true) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ choices: [{ message: { content: 'LATENCY_TITLE_OK' } }] }));
+        return;
+      }
       stats.requests += 1;
       stats.receivedAt.push(performance.now());
-      const payload = JSON.parse(body || '{}');
       const toolResult = (payload.messages || []).some(message => message.role === 'tool');
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
       if (body.includes('TOOL_LATENCY') && !toolResult) {

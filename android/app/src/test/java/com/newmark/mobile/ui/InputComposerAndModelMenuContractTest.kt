@@ -37,6 +37,42 @@ class InputComposerAndModelMenuContractTest {
     }
 
     @Test
+    fun cursorMovementPreservesSelectionCompositionAndDoesNotTriggerOutsideTapImeDismissal() {
+        val source = File("src/main/java/com/newmark/mobile/ui/ChatScreen.kt").readText()
+        val screenState = source.substringAfter("fun ChatScreen(").substringBefore("private fun ChatTopBar(")
+        val composer = source.substringAfter("private fun InputArea(").substringBefore("private fun InputCompositeMenuOverlay(")
+
+        assertTrue(screenState.contains("mutableStateOf(TextFieldValue())"))
+        assertTrue(screenState.contains("pass = PointerEventPass.Final"))
+        assertTrue(screenState.contains("if (!down.isConsumed && inputBounds?.contains(down.position) != true)"))
+        assertTrue(composer.contains("value: TextFieldValue"))
+        assertTrue(composer.contains("onValueChange: (TextFieldValue) -> Unit"))
+        assertTrue(composer.contains("BasicTextField("))
+        assertTrue(composer.contains("value = value"))
+        assertTrue(composer.contains("onValueChange = onValueChange"))
+    }
+
+    @Test
+    fun runningSendSupportsThreeHundredMillisecondUpwardDirectGuideWithoutChangingTapNext() {
+        assertEquals(300L, DirectGuideHoldMillis)
+        assertTrue(directGuideDragArmed(verticalOffsetPx = -15f, thresholdPx = 14f))
+        assertTrue(!directGuideDragArmed(verticalOffsetPx = -13f, thresholdPx = 14f))
+
+        val source = File("src/main/java/com/newmark/mobile/ui/ChatScreen.kt").readText()
+        val runningSend = source.substringAfter("SubmitButtonMode.RunningSend ->")
+            .substringBefore("SubmitButtonMode.IdleSend ->")
+        assertTrue(runningSend.contains("holdMillis = DirectGuideHoldMillis"))
+        assertTrue(runningSend.contains("imageVector = Icons.Filled.KeyboardArrowUp"))
+        assertTrue(runningSend.contains("if (submitGuide) onGuide()"))
+        assertTrue(runningSend.contains("onClick = onClick"))
+
+        val composer = source.substringAfter("private fun InputArea(")
+            .substringBefore("private fun InputCompositeMenuOverlay(")
+        assertTrue(composer.contains("val accepted = onGuide(value.text)"))
+        assertTrue(composer.contains("if (accepted) onValueChange(TextFieldValue())"))
+    }
+
+    @Test
     fun modelOptionsAreGroupedByProviderWithoutRepeatingProviderInRows() {
         val options = listOf(
             ModelOption("openai", "gpt-5.4", providerLabel = "OpenAI", displayName = "GPT-5.4"),

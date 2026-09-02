@@ -130,8 +130,10 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -361,6 +363,7 @@ fun ChatScreen(
     onNewChat: () -> Unit,
     onSend: (String) -> Unit,
     onSendWithImages: (String, List<LocalImageAttachment>) -> Unit = { text, _ -> onSend(text) },
+    onGuide: (String) -> Boolean = { false },
     onStop: () -> Unit = {},
     escalating: Boolean = false,
     showConnectRemote: Boolean = false,
@@ -392,7 +395,8 @@ fun ChatScreen(
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     var inputBounds by remember { mutableStateOf<Rect?>(null) }
-    var inputText by remember { mutableStateOf("") }
+    // Preserve selection and IME composition while the cursor moves.
+    var inputValue by remember { mutableStateOf(TextFieldValue()) }
     var goalEditPending by remember { mutableStateOf(false) }
     var queueEditPending by remember { mutableStateOf<QueueMessageUi?>(null) }
     val inputFocusRequester = remember { FocusRequester() }
@@ -442,9 +446,10 @@ fun ChatScreen(
                     pendingFileUpload(name, mime, bytes).fold(
                         onSuccess = { path ->
                             if (!uploadInjectsGuide) {
-                                inputText = listOf(inputText, "已上传文件：$path")
+                                val nextText = listOf(inputValue.text, "已上传文件：$path")
                                     .filter(String::isNotBlank)
                                     .joinToString("\n")
+                                inputValue = TextFieldValue(nextText, TextRange(nextText.length))
                             }
                             Toast.makeText(context, "已上传到：$path", Toast.LENGTH_SHORT).show()
                         },
@@ -512,9 +517,9 @@ fun ChatScreen(
                     awaitEachGesture {
                         val down = awaitFirstDown(
                             requireUnconsumed = false,
-                            pass = PointerEventPass.Initial,
+                            pass = PointerEventPass.Final,
                         )
-                        if (inputBounds?.contains(down.position) != true) {
+                        if (!down.isConsumed && inputBounds?.contains(down.position) != true) {
                             focusManager.clearFocus(force = true)
                             keyboardController?.hide()
                         }
@@ -559,10 +564,10 @@ fun ChatScreen(
                 selectedModelName = selectedModelName,
                 intelligence = intelligence,
                 selectedMode = selectedMode,
-                text = inputText,
+                value = inputValue,
                 pendingImage = pendingImage,
                 onRemovePendingImage = { pendingImage = null },
-                onTextChange = { inputText = it },
+                onValueChange = { inputValue = it },
                 onSelectModel = onSelectModel,
                 onSelectIntelligence = onSelectIntelligence,
                 onSelectMode = onSelectMode,
@@ -577,6 +582,11 @@ fun ChatScreen(
                         onEditGoal(value)
                         goalEditPending = false
                     } else if (images.isNotEmpty()) onSendWithImages(value, images) else onSend(value)
+                },
+                onGuide = { value ->
+                    val accepted = onGuide(value)
+                    if (accepted) inputValue = TextFieldValue()
+                    accepted
                 },
                 onStop = onStop,
                 escalating = escalating,
@@ -610,7 +620,7 @@ fun ChatScreen(
                     queueItems = queueItems.filterNot { it.id == queueEditPending?.id },
                     queuePaused = queuePaused,
                     onEditGoal = {
-                        inputText = it
+                        inputValue = TextFieldValue(it, TextRange(it.length))
                         goalEditPending = true
                         onSelectMode("Goal")
                         onDeleteGoal()
@@ -621,7 +631,7 @@ fun ChatScreen(
                     onUpdateQueueItem = onUpdateQueueItem,
                     onDeleteQueueItem = onDeleteQueueItem,
                     onEditQueueItem = {
-                        inputText = it.text
+                        inputValue = TextFieldValue(it.text, TextRange(it.text.length))
                         queueEditPending = it
                         onSelectMode(it.requestedMode.ifBlank { "build" }.replaceFirstChar(Char::titlecase))
                     },
@@ -2344,33 +2354,37 @@ private fun QueueRow(
                 if (dragging) pc.accent.copy(alpha = 0.08f)
                 else pc.text.copy(alpha = 0.025f),
             )
-            .pointerInput(item.id, item.editable) {
-                if (!item.editable) return@pointerInput
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { onDragStart() },
-                    onDragEnd = onDragEnd,
-                    onDragCancel = onDragCancel,
-                    onDrag = { change, amount ->
-                        change.consume()
-                        onDrag(amount.y)
-                    },
-                )
-            }
             .padding(start = 7.dp, end = 5.dp, top = 5.dp, bottom = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(width = 16.dp, height = 24.dp).drawBehind {
-                val dotColor = pc.textDim
-                val radius = 1.25.dp.toPx()
-                val x1 = size.width * 0.35f
-                val x2 = size.width * 0.65f
-                for (row in 1..3) {
-                    val y = size.height * row / 4f
-                    drawCircle(dotColor, radius, Offset(x1, y))
-                    drawCircle(dotColor, radius, Offset(x2, y))
+            Modifier
+                .size(width = 16.dp, height = 24.dp)
+                // Drag ownership belongs only to the handle. A row-wide
+                // long-press detector competes with Guide/edit/delete taps.
+                .pointerInput(item.id, item.editable) {
+                    if (!item.editable) return@pointerInput
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { onDragStart() },
+                        onDragEnd = onDragEnd,
+                        onDragCancel = onDragCancel,
+                        onDrag = { change, amount ->
+                            change.consume()
+                            onDrag(amount.y)
+                        },
+                    )
                 }
-            },
+                .drawBehind {
+                    val dotColor = pc.textDim
+                    val radius = 1.25.dp.toPx()
+                    val x1 = size.width * 0.35f
+                    val x2 = size.width * 0.65f
+                    for (row in 1..3) {
+                        val y = size.height * row / 4f
+                        drawCircle(dotColor, radius, Offset(x1, y))
+                        drawCircle(dotColor, radius, Offset(x2, y))
+                    }
+                },
         )
         Spacer(Modifier.width(5.dp))
         Text(
@@ -2482,14 +2496,15 @@ private fun InputArea(
     selectedModelName: String,
     intelligence: String,
     selectedMode: String,
-    text: String,
+    value: TextFieldValue,
     pendingImage: com.newmark.mobile.data.LocalImageAttachment? = null,
     onRemovePendingImage: () -> Unit = {},
-    onTextChange: (String) -> Unit,
+    onValueChange: (TextFieldValue) -> Unit,
     onSelectModel: (ModelOption) -> Unit,
     onSelectIntelligence: (String) -> Unit,
     onSelectMode: (String) -> Unit,
     onSend: (String) -> Unit,
+    onGuide: (String) -> Boolean,
     onStop: () -> Unit,
     escalating: Boolean = false,
     onInputBoundsChanged: (Rect) -> Unit = {},
@@ -2620,8 +2635,8 @@ private fun InputArea(
                 contentAlignment = Alignment.CenterStart,
             ) {
                 BasicTextField(
-                    value = text,
-                    onValueChange = onTextChange,
+                    value = value,
+                    onValueChange = onValueChange,
                     modifier = Modifier
                         .fillMaxWidth()
                         .offset(y = if (inputLineCount == 1) InputComposerSingleLineOpticalOffset else 0.dp)
@@ -2636,7 +2651,7 @@ private fun InputArea(
                     maxLines = InputComposerMaxLines,
                     onTextLayout = { inputLineCount = it.lineCount },
                     decorationBox = { inner ->
-                        if (text.isEmpty()) {
+                        if (value.text.isEmpty()) {
                             Text(
                                 text = "输入消息...",
                                 color = p.textTertiary,
@@ -2668,10 +2683,14 @@ private fun InputArea(
             Box(Modifier.offset(x = InputComposerHorizontalCenterCompensation)) {
                 SubmitButton(
                     running = running,
-                    hasText = text.isNotBlank(),
+                    hasText = value.text.isNotBlank(),
                     onClick = {
-                        onSend(text)
-                        onTextChange("")
+                        onSend(value.text)
+                        onValueChange(TextFieldValue())
+                    },
+                    onGuide = {
+                        val accepted = onGuide(value.text)
+                        if (accepted) onValueChange(TextFieldValue())
                     },
                     onStop = onStop,
                     escalating = escalating,
@@ -3269,8 +3288,19 @@ internal fun submitButtonMode(running: Boolean, hasText: Boolean): SubmitButtonM
     else -> SubmitButtonMode.RunningStop
 }
 
+internal const val DirectGuideHoldMillis = 300L
+internal fun directGuideDragArmed(verticalOffsetPx: Float, thresholdPx: Float): Boolean =
+    verticalOffsetPx <= -thresholdPx
+
 @Composable
-private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit, onStop: () -> Unit, escalating: Boolean = false) {
+private fun SubmitButton(
+    running: Boolean,
+    hasText: Boolean,
+    onClick: () -> Unit,
+    onGuide: () -> Unit,
+    onStop: () -> Unit,
+    escalating: Boolean = false,
+) {
     val p = LocalNewmarkColors.current
     // 按压缩放（对齐 PC :active scale(0.92)）
     val interaction = remember { MutableInteractionSource() }
@@ -3315,29 +3345,87 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
     SubmitButtonMode.RunningSend -> {
         // PC 独立第三态：Agent 正在运行但输入非空。保持 running-action
         // 深色/浅色表面和旋转边框，图标与点击语义切换为 Send/Next。
-        GlassButtonCanvas(
-            visualSize = InputComposerEdgeControlSize,
-            shape = shape,
-            surfaceColor = if (isDark) Color(0xFF0E1018) else Color.White,
-            alpha = if (isDark) 0.88f else 0.72f,
-            onClick = onClick,
-            interactionSource = interaction,
-            visualModifier = Modifier.graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            },
-        ) {
-            MarqueeBorder(
-                cornerRadius = 18.dp,
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
+        val density = LocalDensity.current
+        val guideThresholdPx = with(density) { 14.dp.toPx() }
+        val guideTravelLimitPx = with(density) { 64.dp.toPx() }
+        var guideVisible by remember { mutableStateOf(false) }
+        var guideOffsetPx by remember { mutableFloatStateOf(0f) }
+        var guideArmed by remember { mutableStateOf(false) }
+        Box(Modifier.size(InputComposerEdgeControlSize), contentAlignment = Alignment.Center) {
+            if (guideVisible) {
+                GlassButtonCanvas(
+                    visualSize = InputComposerEdgeControlSize,
+                    shape = shape,
+                    surfaceColor = if (isDark) PcColorsDark.accent else Color.White,
+                    alpha = if (isDark) 0.9f else 0.78f,
+                    onClick = {},
+                    modifier = Modifier
+                        .zIndex(3f)
+                        .graphicsLayer {
+                            translationY = guideOffsetPx
+                            scaleX = if (guideArmed) 1.08f else 1f
+                            scaleY = if (guideArmed) 1.08f else 1f
+                        },
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowUp,
+                        contentDescription = "松开发送 Guide",
+                        tint = if (isDark) Color.White else Color(0xFF0A0A1A),
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            }
+            GlassButtonCanvas(
+                visualSize = InputComposerEdgeControlSize,
+                shape = shape,
+                surfaceColor = if (isDark) Color(0xFF0E1018) else Color.White,
+                alpha = if (isDark) 0.88f else 0.72f,
+                onClick = onClick,
+                interactionSource = interaction,
+                modifier = Modifier.liquidHoldDragGesture(
+                    running,
+                    hasText,
+                    holdMillis = DirectGuideHoldMillis,
+                    onTap = {},
+                    onHoldStart = {
+                        guideVisible = true
+                        guideOffsetPx = 0f
+                        guideArmed = false
+                    },
+                    onDrag = { _, delta ->
+                        guideOffsetPx = (guideOffsetPx + delta.y).coerceIn(-guideTravelLimitPx, 0f)
+                        guideArmed = directGuideDragArmed(guideOffsetPx, guideThresholdPx)
+                    },
+                    onHoldEnd = { _, _ ->
+                        val submitGuide = guideArmed
+                        guideVisible = false
+                        guideOffsetPx = 0f
+                        guideArmed = false
+                        if (submitGuide) onGuide()
+                    },
+                    onCancel = {
+                        guideVisible = false
+                        guideOffsetPx = 0f
+                        guideArmed = false
+                    },
+                ),
+                visualModifier = Modifier.graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                },
             ) {
-                Icon(
-                    imageVector = LucideIcons.Send,
-                    contentDescription = "发送下一条",
-                    tint = if (isDark) Color.White else Color(0xFF0A0A1A),
-                    modifier = Modifier.size(14.dp),
-                )
+                MarqueeBorder(
+                    cornerRadius = 18.dp,
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = LucideIcons.Send,
+                        contentDescription = "发送下一条；长按上滑发送 Guide",
+                        tint = if (isDark) Color.White else Color(0xFF0A0A1A),
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
             }
         }
     }

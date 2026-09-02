@@ -5894,6 +5894,14 @@ button.diff-block-header:active:not(:disabled),
 button.work-review-head:active:not(:disabled) {
   scale: 1;
   filter: none;
+}
+button.conversation-work-run-head:active:not(:disabled) {
+  background: transparent !important;
+  background-image: none !important;
+}
+button.shell-block-header:active:not(:disabled),
+button.diff-block-header:active:not(:disabled),
+button.work-review-head:active:not(:disabled) {
   background-color: revert !important;
 }
 
@@ -9597,7 +9605,9 @@ var STREAMING_LARGE_TEXT_INTERVAL_MS = 100;
 
 function updateMsg(div, text, role, mode, model, options) {
   if (!div) return;
+  var preserveRunFinalResponse = div.classList && div.classList.contains('run-final-response');
   if (role) div.className = 'chat-msg ' + role;
+  if (preserveRunFinalResponse) div.classList.add('run-final-response');
   text = redactSensitiveText(text);
   div._newmarkMessageText = String(text || '');
   var body = div.querySelector('.msg-body');
@@ -10795,6 +10805,7 @@ function presentedWorkRunEvents(run, includeGuides) {
   var rawEvents = (run.events || []).filter(publicWorkEvent).filter(function(event) {
     return includeGuides !== false || !(String(event && event.type || '').toLowerCase().indexOf('guide') === 0 || !!(event && event.guide));
   }).sort(compareConversationWorkEvents);
+  var terminalAssistantResponse = terminalAssistantResponseForRun(run);
   var terminalInterrupted = ['interrupted', 'force_interrupted'].indexOf(String(run && run.status || '')) >= 0;
   var events = [];
   var publicText = '';
@@ -10821,6 +10832,10 @@ function presentedWorkRunEvents(run, includeGuides) {
       // response boundary, while retaining every distinct provider reply.
       publicText = '';
       while (events.length && ['public_text', 'partial_text'].indexOf(String(events[events.length - 1].type || '').toLowerCase()) >= 0) events.pop();
+      // If an interrupted run never produced final_response, its last public
+      // response becomes the standalone Agent boundary below the Build. Do
+      // not keep the same text inside the expanded Build as a duplicate.
+      if (terminalAssistantResponse && terminalAssistantResponse.interrupted && terminalAssistantResponse.event === rawEvent) continue;
       events.push(rawEvent);
       continue;
     }
@@ -11574,6 +11589,47 @@ function renderConversationHistoryFirst(target) {
 }
 
 function renderChatMessages(messages, target) {
+  var liveArea = els['chat-area'];
+  if (!liveArea) return;
+  var previousRendered = Array.isArray(state.renderedChatMessages) ? state.renderedChatMessages.slice() : [];
+  var previousHtml = liveArea.innerHTML;
+  var previousScrollTop = liveArea.scrollTop;
+  var wasAtBottom = shouldAutoScroll(liveArea);
+  var stagingArea = liveArea.cloneNode(false);
+  els['chat-area'] = stagingArea;
+  try {
+    renderChatMessagesUnsafe(messages, target);
+    liveArea.replaceChildren.apply(liveArea, Array.prototype.slice.call(stagingArea.childNodes));
+    if (wasAtBottom) _chatShouldAutoScroll = true;
+    else liveArea.scrollTop = previousScrollTop;
+  } catch (error) {
+    state.renderedChatMessages = previousRendered;
+    liveArea.innerHTML = previousHtml;
+    liveArea.scrollTop = previousScrollTop;
+    console.error('[ui_chat_render_failed]', error);
+    showUiNotice(currentLang() === 'zh' ? '对话渲染出现异常，已保留原内容。' : 'Chat rendering failed; the previous content was preserved.', 'error', 'chat-render-failed');
+  } finally {
+    els['chat-area'] = liveArea;
+  }
+}
+
+function terminalAssistantResponseForRun(run) {
+  var events = Array.isArray(run && run.events) ? run.events : [];
+  for (var finalIndex = events.length - 1; finalIndex >= 0; finalIndex--) {
+    if (String(events[finalIndex] && events[finalIndex].type || '').toLowerCase() !== 'final_response') continue;
+    var finalContent = String(events[finalIndex] && events[finalIndex].content || '').trim();
+    if (finalContent) return { content: finalContent, timestamp: events[finalIndex].timestamp || run.endedAt || '', interrupted: false, event: events[finalIndex] };
+  }
+  if (['interrupted', 'force_interrupted'].indexOf(String(run && run.status || '').toLowerCase()) < 0) return null;
+  for (var responseIndex = events.length - 1; responseIndex >= 0; responseIndex--) {
+    if (String(events[responseIndex] && events[responseIndex].type || '').toLowerCase() !== 'response') continue;
+    var responseContent = String(events[responseIndex] && events[responseIndex].content || '').trim();
+    if (responseContent) return { content: responseContent, timestamp: events[responseIndex].timestamp || run.endedAt || '', interrupted: true, event: events[responseIndex] };
+  }
+  return null;
+}
+
+function renderChatMessagesUnsafe(messages, target) {
   var renderTarget = target || currentConversationTarget(activeConversationId());
   var normalizedMessages = cacheConversationMessages(messages, renderTarget);
   state.renderedChatMessages = normalizedMessages;
@@ -11598,6 +11654,7 @@ function renderChatMessages(messages, target) {
   var persistedRunsById = {};
   var persistedRunIndexes = {};
   var renderedRunIds = {};
+  var recoveredAssistantRunIds = {};
   var messageRunRoles = {};
   state.guideMessageIndexByClientId = {};
   persistedRuns.forEach(function(run, runIndex) {
@@ -11616,26 +11673,20 @@ function renderChatMessages(messages, target) {
     if (!messageRunRoles[runId]) messageRunRoles[runId] = {};
     if (role === 'user' || role === 'assistant') messageRunRoles[runId][role] = true;
   });
-  function finalResponseForRun(run) {
-    var events = Array.isArray(run && run.events) ? run.events : [];
-    for (var eventIndex = events.length - 1; eventIndex >= 0; eventIndex--) {
-      if (String(events[eventIndex] && events[eventIndex].type || '').toLowerCase() !== 'final_response') continue;
-      var content = String(events[eventIndex] && events[eventIndex].content || '').trim();
-      if (content) return { content: content, timestamp: events[eventIndex].timestamp || run.endedAt || '' };
-    }
-    return null;
-  }
   function renderOwnedWorkRun(run, includeRecoveredFinal) {
     var runId = String(run && run.runId || '');
-    if (!runId || renderedRunIds[runId]) return;
+    if (!runId) return;
     var roles = messageRunRoles[runId] || {};
-    if (!roles.user && String(run.primaryPrompt || '').trim()) {
-      addMsg('user', run.primaryPrompt, '', '', -1, { runId: runId, target: renderTarget, timestamp: run.startedAt || '', recovered: true });
+    if (!renderedRunIds[runId]) {
+      if (!roles.user && String(run.primaryPrompt || '').trim()) {
+        addMsg('user', run.primaryPrompt, '', '', -1, { runId: runId, target: renderTarget, timestamp: run.startedAt || '', recovered: true });
+      }
+      renderConversationWorkRun(run, workRunBeforeElement(run));
+      renderedRunIds[runId] = true;
     }
-    renderConversationWorkRun(run, workRunBeforeElement(run));
-    renderedRunIds[runId] = true;
-    if (includeRecoveredFinal && !roles.assistant) {
-      var recoveredFinal = finalResponseForRun(run);
+    if (includeRecoveredFinal && !roles.assistant && !recoveredAssistantRunIds[runId]) {
+      recoveredAssistantRunIds[runId] = true;
+      var recoveredFinal = terminalAssistantResponseForRun(run);
       if (recoveredFinal) addMsg('assistant', recoveredFinal.content, '', '', -1, { runId: runId, target: renderTarget, timestamp: recoveredFinal.timestamp, recovered: true });
     }
   }
@@ -11917,6 +11968,18 @@ function renderAgentWorkEvent(event) {
       var finalMsg = addMsg('assistant', content, event.mode || state.mode, event.model || state.model, undefined, { runId: event.runId || '', target: workRun.target || currentConversationTarget(eventConversationId) });
       markFinalResponseMsg(eventConversationId, content, finalMsg);
     }
+  } else if (workRun && (['interrupted', 'force_interrupted'].indexOf(String(type).toLowerCase()) >= 0
+    || (type === 'status' && ['interrupted', 'force_interrupted'].indexOf(String(event.status || workRun.status || '').toLowerCase()) >= 0))) {
+    ui.activeWorkflowText = '';
+    ui.activeWorkflowMsg = null;
+    ui._streamFlushPending = false;
+    ui._lastLargeStreamRenderAt = 0;
+    var interruptedResponse = terminalAssistantResponseForRun(workRun);
+    if (interruptedResponse && interruptedResponse.content) {
+      var interruptedMsg = addMsg('assistant', interruptedResponse.content, event.mode || state.mode, event.model || state.model, undefined, { runId: event.runId || workRun.runId || '', target: workRun.target || currentConversationTarget(eventConversationId) });
+      markFinalResponseMsg(eventConversationId, interruptedResponse.content, interruptedMsg);
+    }
+    finishToolBatch(eventConversationId);
   } else if (type === 'tool_call' && !workRun) {
     upsertToolEvent(event, '');
   } else if (type === 'tool_result' && !workRun) {
@@ -15739,7 +15802,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         applyAutoRouteRatingState(s);
         hydrateConversationBranchState(s);
         syncWorkRunsSnapshot(s.workRuns, lockedTarget);
-        renderChatMessages(s.chatMessages || []);
+        if (Array.isArray(s.chatMessages)) renderChatMessages(s.chatMessages, lockedTarget);
       }
       if (s && s.queued) {
         var refreshedQueue = setBackendQueueForTarget(s.queued, lockedTarget);

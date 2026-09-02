@@ -25,6 +25,9 @@ The Electron desktop package directly depends on these npm packages:
 | Package | Version | License |
 |---|---:|---|
 | `@mozilla/readability` | 0.6.0 | Apache-2.0 |
+| `@modelcontextprotocol/sdk` | 1.30.0 | MIT |
+| `@iflow-mcp/maeshughes-wuxing-search-mcp` | 1.0.0 | MIT |
+| `@ignidor/web-search-mcp` | 1.3.0 | MIT |
 | `cross-fetch` | 4.1.0 | MIT |
 | `glob` | 7.2.3 | ISC |
 | `https-proxy-agent` | 9.1.0 | MIT |
@@ -52,6 +55,13 @@ BSD-3-Clause, BlueOak-1.0.0, MIT-0, CC0-1.0, Python-2.0, WTFPL,
 ## Icons And Assets
 
 - `lucide-static` SVG icons are third-party open-source assets under ISC.
+- `Noto Sans Math` (`android/app/src/main/res/font/noto_sans_math.ttf`) is
+  bundled for offline LaTeX/Unicode math glyph coverage under SIL Open Font
+  License 1.1.
+- `Noto Sans Mono CJK SC`
+  (`android/app/src/main/res/font/noto_sans_mono_cjk_sc.otf`) is bundled for
+  offline CJK-aware Markdown/code glyph coverage under SIL Open Font License
+  1.1.
 - `DESKTOP/assets/app-icon-dark.png`, `DESKTOP/assets/app-icon-light.png`,
   `DESKTOP/assets/icon.ico`, and
   `SCRIPTS/assets/newmark-agent-social-preview.png` are treated as

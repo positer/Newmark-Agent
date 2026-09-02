@@ -1,5 +1,61 @@
 # Newmark Agent Overview
 
+## dev-0.5.13 双端累计交付与当前 r5 APK + Windows MSI
+
+全平台 `dev-0.5.13` 发行规范：Tag `dev-0.5.13`，Release 标题 `Newmark Agent dev-0.5.13`；`DESKTOP/scripts/release-tag-audit.cjs` 强制该格式，并保留远端历史 `dev-*` 正式 Tag。Windows、Linux、Android 六资产已通过本地 release-assets 校验，路径记录在 `DESKTOP/scripts/release-notes-dev-0.5.13.md`。
+
+- PC 当前源码与构建产物已覆盖标题先行门禁、Search MCP 池、`browser_use.visible`、图片视觉、PDF 整体工具超时、局部快照稳定性、Build 暗色按压和中断回复恢复；typecheck、build 与完整 `test:full-release` 通过，包括 1702/1702 主验证、thinking tier 68/68、压缩压力 34/34、模型恢复、TUI、SSH/WSL、CLI 与三端压力。无供应商标题门禁错误同时保留 `No LLM configured` 可操作诊断。`pdf_read` 一个累计 deadline 覆盖异步文件读取、pdf.js 全文解析和扫描页浏览器观察，阶段性超时返回可恢复回执并允许同一 Agent 继续响应。既有 PC MSI/ZIP 早于本轮最终源码，因此本次不把它们作为当前交付物。
+- Android 当前源码已覆盖标题先行门禁、冻结 provider/model/intelligence/native reasoning、OpenAI Responses、Search MCP 兼容层、后台 Agent 服务与恢复、输入/Guide、设置玻璃返回按钮、模型视觉 `image_inspect`、离线 Markdown/LaTeX 字体、代码块约束内软换行与亮暗主题高亮色板；Responses 聚焦 32/32、70 suites / 269/269 JVM、Vital Lint、R8、资源收缩及隔离 clean Release assembly 通过。
+- 当前 APK：`APK/Newmark-Agent-0.5.13-dual-platform-final-r5-release.apk`，52,794,422 bytes，SHA-256 `C87DFA53B309D4FE1790FCB5F1EB2084F67BE6E44FC27D76D5E8E4E84A30A14B`。隔离构建源与交付副本字节一致；r2、r3、r4 均保留为历史候选且未被覆盖。
+- 当前 Windows MSI：`release-0.5.13-r5-title-retry-msi-20260902-3/Newmark-Agent-0.5.13-x64.msi`，249,629,109 bytes，SHA-256 `AD9427B36178473BAF461C63119D14B5DF1B27EC510205205DD991845ECEE462`；配套 zip `Newmark-Agent-0.5.13-win-unpacked-x64.zip`，326,302,457 bytes，SHA-256 `91644890407C4C7A1F8BC8F84FEAB5D55F3B71D66517EDA7F744D71A0D97C803`。
+- 移动端字体适配候选：`APK/Newmark-Agent-0.5.13-mobile-md-font-r8-release.apk`，66,686,998 bytes，SHA-256 `05A26E0EE66541F656E39412384A689B06AAA2A4ABA363043516C2B862D6A1FE`；AAPT 将字体短名化为 `res/wo.otf`（Noto Sans Mono CJK SC）与 `res/xz.ttf`（Noto Sans Math）。高亮色板按亮暗主题切换，亮色字色更暗且可读；r7/r6 保留为回滚候选。
+- 二进制门禁：`com.newmark.mobile`、`0.5.13` / `513`、minSdk 24、targetSdk 36、`MainActivity` 可启动；`LocalAgentForegroundService` 为 `exported=false`、`stopWithTask=false`、`foregroundServiceType=specialUse`，subtype 为长期用户可见本地/远程 AI Agent 网络会话；zipalign 4 通过，APK Signature Scheme v2 通过。
+- 逐 Zip entry 字节扫描未命中开发者 profile/workspace、其他用户目录、凭据或私钥；裸数字 `12252` 仅命中 6 个 vendor 文件（4 个 PDFBox CMap、2 个 BouncyCastle SIKE 常量），4 ABI ML Kit 库内的 `/home/build` 为第三方通用构建标记。API 35 `emulator-5554` 在 ADB 重启后冷启动恢复在线，`adb install -r` 成功；显式启动后 2 秒与 7 秒均为 `MainActivity` topResumed，PID 3173 保持不变，FATAL/ANR 为 0。该结果不替代真机设置按压帧、真实供应商、配对 PC stdio bridge 和后台长运行切网验收；签名仍为 Android Debug，非商店生产签名。
+
+## dev-0.5.13 移动端设置返回按钮光学画布
+
+- `android/app/src/main/java/com/newmark/mobile/ui/SettingsScreen.kt`：设置主页、设备管理、模型与供应商、新建供应商、模糊注入、权限、插件、供应商详情与新建模型共用的顶栏返回按钮，从直接挂载于 36dp RenderNode 的 `glassButtonSurface` 改为 `GlassButtonCanvas`。逐页 `when (page)` 返回目标、36dp 布局/命中区、20dp 图标、主题语义色与既有点击动画均保持不变。
+- `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidGlass.kt`：复用既有 8dp `GlassButtonCanvasOutset` 和 `CenteredInsetShape`，仅扩大不参与父级测量或点击命中的光学子层，从根因上容纳 1.065 浮起、高光、阴影与折射边缘。
+- `SettingsBackButtonGlassCanvasContractTest.kt` 与 `GlassButtonCanvasOutsetContractTest.kt`：锁定共享顶栏、36dp 名义尺寸、圆形材质、返回语义和透明外扩实现，防止重新把玻璃绘制挂回按钮等大画布。
+- 验证：设置玻璃聚焦契约与 Android 全量 `testDebugUnitTest` 通过。修复已进入上述当前 r5 APK；尚未执行真机逐帧视觉验收。
+
+## dev-0.5.13 双端 Search MCP 兼容层
+
+- `DESKTOP/src/core/searchMcpPool.ts`：维护九个候选名称的发行清单；每轮重新读取 `user/.Newmark/search-mcp.json`，完整访问所有启用节点，支持 stdio、Streamable HTTP 与 SSE，并在完成本轮检查后选择最高优先级成功结果。健康快照原子覆盖写入 `search-mcp-health.json`，运行时从不读取该文件做熔断或跳过。
+- 同一文件只发现并调用 schema 已验证的公开网络搜索工具：必须有字符串查询字段，只允许查询、数量、排序、语言、地区、时间与安全搜索参数；命令、路径、文件、脚本、代码、header/body/method 等字段会使工具失去准入。结果文本与 `structuredContent` 均限制为 60,000 字符。
+- `DESKTOP/src/tools/index.ts`：公开独立的 `webSearchMcpOnly` 边界；普通 `web_search` 仍使用 MCP 池 → Bing HTTP → DuckDuckGo HTTP 的固定容灾链，MCP-only 调用则只返回本轮 `invocationId`、`checkedAt`、结果与 attempts，绝不进入 HTTP fallback。
+- `DESKTOP/src/server.ts`：提供 Bearer 认证 `/api/mobile/web-search-mcp`、兼容旧调用的完整 `/api/mobile/web-search` 与只读 `/api/mobile/search-mcp-manifest`；公开清单移除 stdio command/args/cwd，只公开非敏感元数据、env/header 名称和已脱敏 URL。
+- `android/app/src/main/java/com/newmark/mobile/data/MobileSearchMcp.kt`：实现严格 JSON-RPC id 匹配的 Streamable HTTP/SSE search-only 客户端；stdio 通过配对 PC 的 MCP-only bridge 执行。桌面 MCP 与 Android 直连 MCP 全部完成后，外层才按 Bing → DuckDuckGo 回退。
+- `android/app/src/androidTest/java/com/newmark/mobile/data/SearchOnlyHttpMcpDeviceTest.kt`：在 Android 设备网络栈上执行 Streamable HTTP 与 Legacy SSE 的 initialize → tools/list → tools/call 准入；固定回环用例验证非空公网 URL 和“仅非搜索工具时绝不调用”，显式 live 参数可经 `adb reverse` 连接宿主真实搜索 MCP，且不会预先写入用户清单。
+- `DESKTOP/scripts/probe-search-mcp*.cjs` 与 `archive/20260901-search-mcp-real-probe-final.json`：记录真实握手/调用证据并自动清理 Windows/POSIX 本地路径。Wuxing 因缺少 SearXNG 保持默认禁用；`@ignidor/web-search-mcp` 是唯一真实调用成功的默认节点。
+- `@ignidor/web-search-mcp` 包本身约 276 KiB，但声明可选 Playwright；当前 lock 中 Playwright/Playwright Core 文件约 18.5 MiB（不含浏览器下载）。search-only 路径不会调用其爬虫/截图工具，后续发行体积优化可通过安装阶段排除该可选依赖，但本轮保留以避免改变共享依赖解析。
+- 验证：Desktop typecheck、build、`searchMcpPoolVerify`、`browserUseVerify`、`browserUseVisibleContractVerify` 与移动 API 53 项认证/契约探测通过；Android Search MCP JVM 专项 14/14 及全量 263/263 通过。模拟器设备网络栈 instrumentation 4/4 已通过 Streamable HTTP、Legacy SSE、非搜索工具拒绝和经 `adb reverse` 连接真实 Ignidor bridge 的 live 准入。
+
+## dev-0.5.13 移动端供应商协议与 OpenAI Responses
+
+- `android/app/src/main/java/com/newmark/mobile/data/ProviderConfig.kt`：定义 `openai`、`openai_responses`、`anthropic`、`github_models` 四个规范协议，并在旧配置、设备导入与 Agent 设置写入边界迁移 `responses`、`openai-compatible`、`claude`、`github` 等历史别名。
+- `android/app/src/main/java/com/newmark/mobile/data/ProviderStore.kt` 与 `LocalToolExecutor.kt`：读取、保存及 `settings_update.providers` 全量替换统一规范化协议，同时保留供应商 ID、名称、接口、API Key 与模型字段。
+- `android/app/src/main/java/com/newmark/mobile/ui/SettingsScreen.kt` 与 `ChatViewModel.kt`：新建、模糊注入及既有供应商详情均使用同一横向协议胶囊切换；变更直接落入供应商配置，不引入全局协议开关。
+- `android/app/src/main/java/com/newmark/mobile/data/ApiClient.kt`：显式 Responses 供应商跳过 Chat Completions；官方 API 根补齐 `/v1/responses`，`/v1`、完整 Chat/Responses 端点和兼容网关自定义路径保留其前缀。流式解析覆盖 reasoning、output/refusal text、function call 与参数增量；`response.completed` 还会校验内嵌状态，非流式 JSON 也只接受明确 `status=completed`。`failed`、`incomplete`、`cancelled/canceled`、`queued`、`in_progress`、未知或缺失状态全部失败，`incomplete_details.reason` 会进入受控错误原因。
+- 聚焦回归位于 `ApiClientStreamTest.kt`、`ManualProviderModelCreationTest.kt`、`ProviderCatalogMergeTest.kt`、`ProviderStoreCleanInstallContractTest.kt`、`LocalToolContractTest.kt` 与 `ProviderSettingsCapsuleRailContractTest.kt`。`ApiClientStreamTest` 32/32、Android 全量 269/269 均通过。
+
+## dev-0.5.13 运行时稳定性增量
+
+- `DESKTOP/src/core/displayImages.ts`：提供工作区内 PNG/JPEG 的统一只读视觉加载器，复用 10 MiB、格式一致性、真实路径边界和 40MP 解码限制。
+- `DESKTOP/src/core/agent.ts`：`image_inspect` 新增 `inspect + path`，只在当前模型已通过视觉验证时生成一次性模型观察。
+- `DESKTOP/src/tools/index.ts`：公开工作区图片视觉 schema；`pdf_read` 增加工具级 `timeout_ms` 与可恢复超时回执。
+- `archive/20260831-dev-0.5.13-pdf-read-runtime-incident.md`：基于真实会话、WorkRun、utility 生命周期 marker、安装版 `app.asar` 与 PDF 文本层的事故取证；区分已证实链路、第二次用户 Stop 和仍缺日志的直接退出原因。
+- `DESKTOP/src/ui/index.html`：仅在长运行局部快照明确携带 `chatMessages` 时重建文字对话。
+- `TUI/src/data.js` 与 `DESKTOP/scripts/release-linux-real-provider-smoke.cjs`：移除开发者机器路径，改用虚构演示地址和安装者本机 `.Newmark` 动态路径。
+- `DESKTOP/src/tests/verify.ts`：覆盖视觉、PDF 超时、局部快照稳定性与发行路径隐私门禁。
+
+## dev-0.5.13 PC Build 展开按压暗色修复
+
+- `DESKTOP/src/ui/index.html`：将 `.conversation-work-run-head` 从通用 `:active { background-color: revert }` 回退规则中拆出，按住态显式保持透明且无背景图，避免 Chromium 原生白色按钮底覆盖暗色对话时间线。
+- `DESKTOP/src/tests/pcGlassMigrationVerify.ts`：增加 Build 标题按住态不得进入 `revert` 背景规则的静态契约。
+- `DESKTOP/scripts/release-ui-work-review-bars-smoke.cjs`：在真实 Electron 暗色页面按住已展开 Build 标题，读取计算样式并保存按住帧截图；展开状态、无伪元素、无滤镜与透明背景同时受检。
+- 版本同步为 root/Desktop/Android `0.5.13`、Android `versionCode=513`。`npm.cmd run build`、`pcGlassMigrationVerify`、1676 项主断言、版本门禁和真实 Electron UI smoke 全部通过；本轮未构建安装包。
+
 ## dev-0.5.12 变更
 
 - Android 各宽度布局移除右侧栏折叠态展开按钮，展开入口统一为右缘左滑。
@@ -2304,7 +2360,14 @@ DESKTOP/
 - `modelValidation.ts`: provider-neutral four-level validation state machine, six statuses, seven-day TTL, two-of-three sampling, concurrency-two scheduler, health/capability separation, Standard text/stream/strict-JSON/tool/tool-result/declared-vision probes, Extended image-output validation, tool-error taxonomy, and audit redaction.
 - `modelValidationStore.ts`: root-scoped JSON persistence adapter for validation records. It returns cloned records and uses the selected test/user root rather than the installation directory.
 - `toolArgumentValidator.ts`: recursively closed JSON Schema registration/validation used by model-authored and direct CLI tool calls before policy or execution.
-- Conversation persistence in `agent.ts` stores workspace-local `conversations/state.json`, saves conversation Plan items and user-image attachment metadata with each conversation, hydrates the content-addressed assets on reload, sanitizes visible assistant output, derives titles from first user messages, exposes read-only snapshots by explicit conversation ID, and supports visible switching while another conversation continues through its own runner. Conversation archiving writes attachment copies under `archive/assets/user-images/` and links them from the archived Markdown.
+- Conversation persistence in `agent.ts` stores workspace-local `conversations/state.json`, saves conversation Plan items and user-image attachment metadata with each conversation, hydrates the content-addressed assets on reload, sanitizes visible assistant output, persists the first-user-message title-gate identity and formal-response-started state, exposes read-only snapshots by explicit conversation ID, and supports visible switching while another conversation continues through its own runner. Conversation archiving writes attachment copies under `archive/assets/user-images/` and links them from the archived Markdown.
+- Conversation-title boundary: PC and Android local conversations replace direct first-message clipping and completed-Build-derived naming with one separately persisted, tool-free provider probe that must succeed and apply its title before the first formal Agent request starts. Android remote conversations remain PC-owned. Failure or timeout starts zero formal provider requests; a later ordinary send retries the gate from the same first persisted user message rather than the newer text. Workspace/conversation/first-message identity and default-title state protect against stale results and preserve manual renames. The probe also verifies the frozen provider/model selected for the formal turn, while its messages, errors and output never enter Agent history or the main request prefix.
+
+Mobile local-provider recovery now gates usable connectivity on both `NET_CAPABILITY_INTERNET` and `NET_CAPABILITY_VALIDATED`. A transport abort before provider activity safely retries the original request. An abort after public thought/text preserves bounded progress and sends a continuation request after validated recovery, capped at three continuation attempts and explicitly forbidden from repeating visible text. The combined response remains the durable assistant result. Repeated failure is normalized to a controlled progress-preserved message instead of surfacing the raw socket exception. Foreground-service ownership, CPU/Wi-Fi locks, remote SSE leases and old-connection eviction remain unchanged.
+
+Android first-turn model identity is frozen before the gate runs: the independent title probe and the later local Agent loop use the same `ApiConfig`, `ModelConfig`, intelligence and thinking-tier snapshot. Per-conversation identity prevents the second send or a restart from replacing the first title source. A failed probe leaves `firstAgentResponseStarted=false`, returns a controlled error, and allows the next send in the same conversation to retry the same persisted first message; only a successful probe sets the formal-response-started marker immediately before provider execution.
+
+Forward compatibility distinguishes an actual failed pre-response gate from an old established conversation: when legacy state omits the new marker, existing Assistant messages, model history or persisted WorkRuns migrate the conversation to started. Only a state with no formal-response evidence remains gated, so upgrading does not force old conversations through a new first-turn probe.
 - `agentKernel/`: native Newmark TypeScript agent-loop package. `agent.ts` owns the queue-capable Agent facade, `agent-loop.ts` owns turn lifecycle/tool execution/steering and follow-up draining, `event-stream.ts` and `stream-types.ts` normalize provider stream events, and `types.ts` defines kernel message/model/tool/event contracts. This folder is source code, not vendor material.
 - `agentKernelRunner.ts`: bridge from the Newmark `Agent` facade into the native kernel. It converts Newmark conversation history into kernel messages, maps provider streaming/tool-call output into kernel events, executes Newmark tools, records visible work events, notifies the conversation runtime when queued user messages actually start, handles tool results, model fallback, Memory Lab/Flow/automation/subagent routing, context compression, and Goal continuation. Compression returns a request message set plus an optional durable replacement set so one-time continuation instructions do not become permanent context. The active run `AbortSignal` reaches ordinary and special tools. For Computer Use, it accepts only trusted one-use `vision_image_path` or WSL `vision_image_data_url` payloads, prepares structured current-turn model input, strips both transport fields from visible/persisted text, and deletes filesystem captures after preparation or abort. Tool definitions are built once per Agent turn and reused by provider streaming plus kernel execution; context conversion is skipped when auto compression is off; high-frequency tool workflow rows defer full state writes to existing persistence points.
 - `conversationKernel.ts`: target-aware conversation orchestrator inside each worker. It manages `runId` state, safe-boundary Guide delivery, continuation, checkpoint/snapshot, graceful stop, public work-run events, queue snapshots, completed runner persistence, and work-run expansion state for the worker's bound conversation. Guide acceptance prepares durable user-image attachments immediately; accepted/deferred receipts and empty-text continuations retain stable attachment references through checkpoint, then exactly-once application consumes the continuation and reconciles one chat/history row under its `clientMessageId`. A cold fold update creates a transient target-bound runner only for atomic state mutation and never registers it as an active runtime, so completed runs remain toggleable after worker eviction without cross-workspace leakage.
@@ -2359,7 +2422,7 @@ DESKTOP/
 
 ### `DESKTOP/src/llm/`
 
-Current Responses transport contract: tool-capable `/responses` requests use `stream: true` and `Accept: text/event-stream`; output text is published from deltas, function arguments are assembled until the output item completes, and a successful stream must reach `response.completed`. Context compression captures one concrete provider/model deployment snapshot before summarization and records that actual model ID.
+Current Responses transport contract: tool-capable `/responses` requests use `stream: true` and `Accept: text/event-stream`; output text is published from deltas, function arguments are assembled until the output item completes, and a successful stream must reach `response.completed` with an explicit case-insensitive embedded `response.status=completed`. Missing, blank, unknown, or non-completed status remains a controlled failure. Context compression captures one concrete provider/model deployment snapshot before summarization and records that actual model ID.
 
 - `provider.ts`: OpenAI/Anthropic/GitHub-Models provider abstraction, intelligence settings, model listing, validation, and HTTP fallback transport. JSON GET/POST calls use abort guards so model discovery can fall back instead of hanging indefinitely in packaged Electron. OpenAI-compatible calls can use streaming Chat Completions, non-stream Chat Completions, or direct Responses API mode; chat-completions calls also fall back to `/responses` for matching 4xx model/API errors and map `instructions`, `max_output_tokens`, text output, and function-call tools. Direct Responses failures return controlled `[LLM Error]` text instead of throwing through UI/validation loops, model validation treats that text as unavailable, and Responses tool-result turns preserve the prior `function_call` item before `function_call_output`. `github_models` uses GitHub Models catalog and inference chat-completions endpoints with GitHub token/API-version headers for GitHub Copilot/Models-style provider setup; acquisition of that token is an explicit browser-login flow rather than fuzzy injection. On Windows, the PowerShell HTTP fallback passes request and response bodies through explicit UTF-8 temporary files so non-ASCII provider output does not cross the console stdout encoding path.
 
@@ -3203,7 +3266,7 @@ Material3 Button/IconButton/TextButton 均不再绘制 Android 灰色 ripple，�
 `MobileEmptyResponseRetryContractTest.kt` 固化；Release APK 已重新构建。
 
 PC Chat SSE 只有观察到 `[DONE]` 或非空 `finish_reason` 后，零活动结果才可进入明确空响应恢复；
-Responses 对应要求 `response.completed`。纯 EOF、连接重置、流关闭、读取超时和 broken pipe 始终属于
+Responses 对应要求 `response.completed` 同时携带明确的内嵌 `response.status=completed`；缺失、空白、未知或非完成状态均失败。纯 EOF、连接重置、流关闭、读取超时和 broken pipe 始终属于
 独立 transport failure，不使用空响应计数或等待序列；用户取消仍直接传播，不会被重试吞掉。
 
 ## 2026-08-26 dev-0.5.8 模型菜单帧调度隔离
@@ -3463,3 +3526,122 @@ Release 编译、Lint 与 R8 通过；assembleRelease 最终 packageRelease 因�
 - Windows MSI/ZIP 与 Linux AppImage/deb/ZIP 均完成打包态版本和 GUI/终端启动检查；`npm audit --omit=dev --audit-level=high` 为 0 漏洞。
 - Android APK 为 versionName 0.5.12、versionCode 512，使用 Android Debug 证书并通过 APK Signature Scheme v2 验证。
 - GitHub prerelease：`https://github.com/positer/Newmark-Agent/releases/tag/dev-0.5.12`。六个远端资产已回下载并与本地 SHA-256 逐项一致。
+## dev-0.5.13 移动输入与队列事件边界
+
+- `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt`：输入区使用 `TextFieldValue` 保存文本、selection 与 composition；根级收键盘手势只在 Final pass 且事件未消费时执行。队列排序长按手势仅挂载于拖动把手，避免覆盖 Guide/编辑/删除按钮。
+- 运行中发送键：点按沿用 Next；300ms 长按上拉生成同尺寸上箭头玻璃浮块，释放走独立 `onGuide`，不经过队列。
+- `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt`：本地队列 Guide 与输入框直达 Guide 复用同一接收/事件投影实现，只有队列入口会删除被接受的条目。
+- `android/app/src/main/java/com/newmark/mobile/data/LocalGuideDeliveryContract.kt`：以活动 runId 与接收状态作为本地 Guide 的唯一接收边界，不按 Build/Plan/Chat 模式分流；生成进入下一 provider 请求前沿的真实 user-role 消息。
+- `android/app/src/test/java/com/newmark/mobile/data/LocalGuideDeliveryContractTest.kt`：锁定跨模式接收、runId 一致性与 provider 前沿消息结构。
+- `android/app/src/test/java/com/newmark/mobile/ui/InputComposerAndModelMenuContractTest.kt`：锁定稳定编辑值与外部点击焦点边界。
+- `android/app/src/test/java/com/newmark/mobile/ui/QueueDragAnimationContractTest.kt`：锁定拖动把手与操作按钮的互斥手势所有权。
+
+## 2026-08-31 dev-0.5.13 Windows MSI 与安装边界
+
+- `release/Newmark-Agent-0.5.13-x64.msi`：Windows x64 安装候选，243,902,901 bytes，SHA-256 `36E433210B226D058C1A34CA882FF0F2223D2E088D6834788955D62FDE80C10F`。
+- `release/Newmark-Agent-0.5.13-win-unpacked-x64.zip`：Windows x64 解包候选，317,508,798 bytes，SHA-256 `92FF8788A386F39EC74EF807E3AB4F8990E5C85F8A2C690204D109AE202E6E9B`。
+- `release/win-unpacked/resources/app.asar`：打包应用边界，196,521,066 bytes，SHA-256 `B20D31F19B1C709C2AA95A191EDF9AE79C9EBC4015CBC960E585606DF79D5761`。
+- `archive/20260831-212202-dev-0.5.13-msi-install.log`：Windows Installer 详细日志，明确记录安装完成。
+- `archive/20260831-213000-dev-0.5.13-pc-msi-build-install.md`：本轮构建、安装、哈希和响应性审计摘要。
+
+本机安装注册表 DisplayVersion 为 `0.5.13.0`、ProductCode 为 `{14CE66AF-8E1D-4E30-BB3D-EF46E296F3BC}`；Program Files 内三种 CLI 均返回 `0.5.13`，安装版 `app.asar` 与候选包一致。安装器未改动用户 `.Newmark` 状态，启动后的主窗口和全部已采样子进程均响应。MSI 当前没有 Authenticode 签名。
+
+## 2026-08-31 移动后台 Agent 前台服务
+
+- `android/app/src/main/java/com/newmark/mobile/service/LocalAgentForegroundService.kt`：服务级 `SupervisorJob`、常驻通知、CPU/Wi-Fi lock、默认网络 callback、网络恢复分发、配对连接租约及无 UI 时的认证 SSE 保活所有者。
+- `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt`：本地 Agent 执行迁入服务运行域；仅在零模型活动的瞬态网络失败上等待恢复并按 250ms/1s/3s/10s/30s 退避重试，停止时立即释放本地服务计数。
+- `android/app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt`：正式远程 SSE/重连迁入服务运行域；网络恢复时淘汰旧连接池并立即重连，活跃 Agent 期间持续重连，ViewModel 退出时把连接所有权交给服务保活通道。
+- `android/app/src/main/java/com/newmark/mobile/data/ApiClient.kt` 与 `MobileApiClient.kt`：提供失效连接池清理及本地 Agent 瞬态网络错误分类。
+- `android/app/src/main/AndroidManifest.xml`：前台服务类型改为 `specialUse`，声明长期本地/远程 AI Agent 网络会话子类型，并增加 Wi-Fi 状态权限。
+- `android/app/src/test/java/com/newmark/mobile/ui/BackgroundAgentRuntimeContractTest.kt`：锁定服务所有权、配对连接租约、后台保活 SSE、安全重试、网络恢复与停止释放边界。
+
+验证：230 tests / 64 suites、0 failures；Debug/Release Kotlin 编译、Vital Lint 与 R8 通过。当前无 ADB 设备，因此未声明锁屏/划走任务/网络切换的真机长时验收。
+
+### 2026-09-01 后台强化 APK 打包
+
+- 标准 `android/app/build/outputs/apk/release/app-release.apk` 仍被外部 Windows 进程占用；本轮不关闭未知进程，也不把该旧文件作为新产物。
+- 复用受控的 `android/isolated-release-output.init.gradle` 将 app build directory 指向 `android/isolated-release-build/app/`，执行全新 `clean assembleRelease` 成功，最终交付副本为 `APK/Newmark-Agent-0.5.13-background-agent-service-release.apk`。
+- APK 为 52,761,654 bytes，SHA-256 `AD2BE3FD29F7A38CB7F7FC9E2A44744B34BDE25A8906D78C36868283FE3FB04C`；源 APK 与交付副本哈希一致。
+- `aapt` 确认包名 `com.newmark.mobile`、versionName `0.5.13`、versionCode `513`、minSdk 24、targetSdk 36。
+- 最终二进制 Manifest 包含 `FOREGROUND_SERVICE_SPECIAL_USE`、`ACCESS_WIFI_STATE`、`LocalAgentForegroundService`、`foregroundServiceType=specialUse` 和 `PROPERTY_SPECIAL_USE_FGS_SUBTYPE=user_visible_long_running_local_and_remote_ai_agent_network_session`；服务 `exported=false`、`stopWithTask=false`。
+- `apksigner` 验证 APK Signature Scheme v2 通过，签名人为工程既有 `Android Debug` 证书；不是 Google Play 生产签名。
+- 发布门禁为 230 tests / 64 suites、0 failures/errors/skipped，Vital Lint、R8、资源收缩与隔离 Release assembly 全部通过。编译保留既有弃用提示、native strip 提示、Log4j min-api R8 提示和 Gradle 9 兼容提示，未形成构建错误。
+
+当前 `adb devices` 无设备，因此未安装 APK，也不声明真机锁屏、划走任务、Wi-Fi/移动网络切换或 30 分钟以上后台运行通过。回滚方式为侧载上一份已验证 APK；Google Play 上架前必须替换生产签名并申报 `specialUse` 用途。
+
+### 2026-09-01 移动后台断流全面复查
+
+用户在真机后台运行时仍观察到 `Software caused connection abort`。该原文只由本地 Agent 的 `localAgentFailureMessage` 路径进入对话；配对 PC 的远程 SSE 将 Socket 失败折叠为“连接中断，正在重连…”，因此当前现象定位到 Android 本地 Agent → 模型供应商 SSE，而非 `/api/mobile/events` 远程观察连接。
+
+主根因位于 `ChatViewModel.chatWithEmptyRecovery`：每次 provider turn 用 `observedThought`/`observedText` 记录是否已出现模型增量，只有两者均为 false 时才把 SocketException 交给 `awaitUsableNetwork`、退避和连接池淘汰。任一 thought/text 出现后，网络异常在同函数中明确直接返回失败。`ApiClient.executeProviderRequest` 的一次 connection-abort 重试也只包围 `newCall(...).execute()`，即取得响应头之前；响应头之后在 `readUtf8Line()` 读取 SSE 时发生的 abort 不在该重试层内。推理模型往往在正文前先产生 thought，因此真实后台长任务很快越过可恢复窗口，服务仍存活也会显示原始 SocketException。
+
+次级问题：
+
+- `LocalAgentForegroundService` 以 `NET_CAPABILITY_INTERNET` 作为 usable 判定，没有要求 `NET_CAPABILITY_VALIDATED`；Wi-Fi/蜂窝切换时 capability 可先于真实公网路由恢复，导致恢复循环过早发起新请求。
+- service 使用 companion 静态 `runtimeScope` 与内存计数。正常 Activity/ViewModel 销毁不会取消运行，但整个进程被 OEM 杀死后，`START_STICKY` 无法重建内存中的 conversation/run/provider 请求，也没有持久 checkpoint/resume 协议。
+- Wi-Fi lock 只约束 Wi-Fi 无线电，不能保证蜂窝、VPN/Tailscale、OEM 防火墙或 provider 连接不被系统中止；WakeLock 也不等于 socket 保活。
+- `BackgroundAgentRuntimeContractTest` 主要用 `source.contains(...)` 锁定代码形状；`ApiClientStreamTest` 只验证响应头之前的首次 abort 和错误分类/退避，没有模拟“已收到 thought/text → 后台切换 → SSE abort → 网络恢复 → 无重复续接”。此前 230 项单测和 APK Manifest 验证不能证明真机后台连续性。
+
+建议修复必须按可重放阶段设计，而不是无条件重发：provider turn 尚无增量时可安全重试；已有 thought/text 但尚无工具调用/副作用时，恢复后以持久的 partial assistant checkpoint 发起 continuation，并做重叠前缀去重；工具调用已形成或工具执行开始后，只能从持久化的 tool-call/tool-result 边界续接，不能重放原请求。网络门槛应要求 validated capability，并记录每轮 request id、网络 transport、首增量、断流点、恢复尝试和终态原因。进程死亡恢复需要单独的持久运行状态机。
+
+当前没有 ADB 设备，无法验证真机安装的确切 APK 哈希、通知/电池优化授权、OEM 后台策略、网络 transport 变化和原始异常 cause chain。完整证据与分级结论见 `archive/20260901-mobile-background-connection-abort-investigation.md`。
+
+## 2026-08-31 PC 中断回复边界
+
+- `DESKTOP/src/ui/index.html`：完成态优先使用最后一条非空 `final_response`；`interrupted`/`force_interrupted` 没有终态回复时，使用最后一条非空公开 `response` 恢复 Build 块外 Agent 行。
+- 被提升到块外的中断回复会从展开 Build 的事件列表中排除，避免同一正文重复；无公开回复的中断只保留 Build，不生成虚假消息。
+- 实时终结与持久快照重建使用同一选择函数；重复更新保持 `run-final-response` 结构类，继续按 runId 去重。
+- `DESKTOP/src/tests/guideUiReconcileVerify.ts`：覆盖已有 user 行时的中断回复补齐、最后回复选择、单实例去重及无回复不伪造。
+
+验证：Desktop typecheck、build、聚焦 Guide UI reconciliation 与 1685/1685 主验证通过。
+
+### 2026-09-01 打包与覆盖安装边界
+
+- `release-0.5.13-pc-agent-response-fix/Newmark-Agent-0.5.13-x64.msi`：243,911,093 bytes，SHA-256 `5A6A38326D5A1180160C8B8A0434F0C6721D04B241DB2DB9A403BBB55227F03F`，Authenticode 状态 `NotSigned`。
+- `release-0.5.13-pc-agent-response-fix/Newmark-Agent-0.5.13-win-unpacked-x64.zip`：317,510,279 bytes，SHA-256 `D20196BACCDCFB1BCDD613EB3D0ED538F08DDEEA0B4D07E86B7C566C7A1AC622`。
+- `release-0.5.13-pc-agent-response-fix/win-unpacked/resources/app.asar`：196,528,014 bytes，SHA-256 `73ED089782AA5774974D54FC7BBD2054370912E4835295B8A6E307A38F141427`。
+- 候选包通过真实 SSH/PTTY/TUI 四轮重启、release CLI、上下文压缩、console wrapper、MSI/ZIP 结构门禁；从候选 `app.asar` 提取 `dist/ui/index.html` 后，已确认 `terminalAssistantResponseForRun`、中断事件提升与 `preserveRunFinalResponse` 三处关键修复存在。
+
+覆盖安装前仅关闭了可执行路径经核实属于 `C:\Program Files\Newmark Agent` 的 4 个 Electron 进程。安装前 `.Newmark` 基线为 20,873 个文件、335,810,138 bytes、全量相对路径/大小/逐文件哈希聚合 SHA-256 `195FF9B3709A10D310C0CD2E2C9B3FD369A5D8456D4E3F957A204B23DBE73282`。两次 `Start-Process msiexec -Verb RunAs` 均由系统返回“操作已被用户取消”，没有创建 MSI 日志，候选未进入 Windows Installer 事务。安装尝试后同一基线三项完全一致，已安装 `app.asar` 仍为旧哈希 `B20D31F19B1C709C2AA95A191EDF9AE79C9EBC4015CBC960E585606DF79D5761`，注册表仍为既有 `0.5.13.0` / `{14CE66AF-8E1D-4E30-BB3D-EF46E296F3BC}`。旧版 GUI 已恢复运行，主窗口存在且 5 个采样进程全部 `Responding=true`。因此当前结论是“修复 MSI/ZIP 已构建并通过打包态验证，覆盖安装待用户允许下一次 UAC”，不声明安装版修复已验收。
+
+## 2026-09-01 双端标题部署一致性与 Android r2 发行（历史候选，已被 r3 替代）
+
+首次标题请求和首轮正式响应现在共享同一发送级部署快照。PC 在标题硬门禁前先完成不可用部署检查和 fallback 解析，再冻结 provider、model 与 intelligence；标题调用沿用该档位映射出的原生 `reasoningEffort`，正式 runner 不会在标题成功后切换到另一部署。Android 在发送同步区冻结不可变 `ApiConfig`、`ModelConfig` 与 intelligence，标题成功后才写入 `firstAgentResponseStarted` 并以同一快照启动本地 Agent。双端失败路径都保持正式 provider 调用为 0，并保留首条持久化用户消息供下一次发送重试。
+
+结构与回归入口：
+
+- `DESKTOP/src/core/agent.ts`：部署解析、标题门禁、冻结 intelligence/reasoning effort 与正式响应启动顺序。
+- `DESKTOP/src/tests/verify.ts`：标题请求和正式流的 provider/model/intelligence/reasoning effort 一致性及 fallback 回归。
+- `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt`：标题 helper 显式接收 `turnIntelligence`，并与正式 loop 复用冻结配置。
+- `android/app/src/test/java/com/newmark/mobile/vm/FirstInputTitleAndNetworkRecoveryContractTest.kt`：禁止标题作用域硬编码 `low`，约束冻结值透传。
+- `archive/20260901-211500-dev-0.5.13-dual-platform-r2-apk.md`：r2 历史构建、签名、对齐、隐私扫描和模拟器冒烟记录。
+
+该轮发布门禁为 Desktop typecheck/build/1696 assertions、Android 263 tests、`lintVitalRelease`、隔离 clean Release/R8/资源收缩、v2 签名、4-byte 与 16 KiB native 对齐、二进制 Manifest/版本和 APK 内容隐私扫描。r2 历史交付 `APK/Newmark-Agent-0.5.13-dual-platform-final-r2-release.apk` 为 52,794,422 bytes，SHA-256 `6A3B048E987F4BBE94C1F22EFCFD3E2B85DF96B58BEF813FE01C72A581243183`；API 35 模拟器覆盖安装后 `MainActivity` 前台运行且无 FATAL/ANR。旧 `8BDCF457...` 候选不再代表 r2 标题契约；r2 后续又因 Responses SSE 缺失内嵌状态仍被接受而由 r3 替代。Debug 签名与模拟器冒烟不替代生产签名或故障真机长时后台验收。
+
+## 2026-09-01 Android Responses 严格完成态与 r3 发行（已被 r4/r5 替代）
+
+Android `ApiClient.kt` 的流式 Responses 终态现在只接受 `response.completed` 事件中大小写不敏感的明确 `response.status=completed`。缺失、空白、未知或 `failed`、`incomplete`、`cancelled/canceled`、`queued`、`in_progress` 状态均进入受控失败；`ApiClientStreamTest.kt` 的成功 SSE fixture 全部显式携带完成状态，并新增缺失状态拒绝回归。
+
+结构与回归入口：
+
+- `android/app/src/main/java/com/newmark/mobile/data/ApiClient.kt`：流式 Responses 显式完成态校验。
+- `android/app/src/test/java/com/newmark/mobile/data/ApiClientStreamTest.kt`：30/30 Responses 聚焦协议回归，包含缺失状态负例和显式完成成功例。
+- `archive/20260901-220426-dev-0.5.13-dual-platform-r3-apk.md`：r3 构建、逐 entry 隐私扫描、签名、对齐和模拟器冒烟记录。
+
+r3 门禁为 Android 68 suites / 264 tests / 0 failures/errors/skips，`lintVitalRelease` 3 分 50 秒成功，隔离 clean `assembleRelease` 50 tasks（48 executed、2 up-to-date）5 分 05 秒成功。历史交付 `APK/Newmark-Agent-0.5.13-dual-platform-final-r3-release.apk` 为 52,794,422 bytes，SHA-256 `B702EB35EC4E9DB42FD8598865D46EF75F7B707CE6C3C611307CBD573A5B8847`。r3 后由修正根级 Responses 状态绕过的 r4 替代；r4 又因终审发现 PDF 整体超时、Android 标题 native reasoning 和移动图片视觉三项缺口而由 r5 替代。
+
+首次普通解压因重复 APK entry 失败，因此最终扫描直接逐 Zip entry 读取字节，重复 entry 也全部检查且未创建临时目录。结果未命中开发者 profile/workspace、非允许用户目录、凭据或私钥；裸数字 `12252` 仅命中 4 个 PDFBox CMap 和 2 个 BouncyCastle SIKE 常量 vendor 文件，4 ABI ML Kit 库中的 `/home/build` 是第三方通用构建标记。用户本轮只要求 APK，未重新打包 MSI。真机后台切网/长时运行、真实 provider、配对 PC bridge 与逐帧视觉仍未验证。
+
+## 2026-09-01 双端终审修复与 Android r5 发行
+
+- `DESKTOP/src/tools/index.ts`：`pdf_read` 从扫描页局部计时改为一个 1–120 秒累计工具预算；异步文件读取、pdf.js 文本解析和浏览器观察共享同一个 abort guard，超时回执包含 `stage`、`recoverable=true`，父级 Agent abort 仍按原取消语义抛出。
+- `DESKTOP/src/tests/verify.ts`：用可注入文件读取/文本解析边界分别覆盖 file-read、text-parse、累计预算和 rendered-page timeout，并验证异常 PDF 超时后同一 Agent run 仍能消费工具回执并产生最终回复。
+- `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt`：首轮发送冻结 `thinkingTierMap` 并同时传给标题探测、文档/图片视觉子请求和正式 Agent loop；标题探测不再与正式首轮使用不同供应商原生 reasoning effort。
+- `android/app/src/main/java/com/newmark/mobile/data/LocalTools.kt`、`LocalToolCatalog.kt`、`LocalToolExecutor.kt`：Build/Plan 新增只读 `image_inspect`。安全工作区无需额外全盘权限；`content://` 与共享存储路径要求现有授权。读取过程限制 10 MiB，解码后只接受 PNG/JPEG 且不超过 4000 万像素，base64 只经内部 `__image_visual_read` 进入一次性视觉请求，不返回公开工具文本或持久化历史。
+- `FirstInputTitleAndNetworkRecoveryContractTest.kt`、`MobileImageInspectContractTest.kt`、`LocalToolContractTest.kt`：锁定标题/正式调用身份、视觉工具 schema/边界和 Build/Plan 工具清单。
+
+验证为 Desktop typecheck、build、1702/1702 主断言与完整 `test:full-release`；Android Responses 32/32、69 suites / 267 tests / 0 failures/errors/skips；`lintVitalRelease` 3 分 01 秒；隔离 clean `assembleRelease` 50 tasks（47 executed、3 up-to-date）3 分 49 秒。当前交付 `APK/Newmark-Agent-0.5.13-dual-platform-final-r5-release.apk` 为 52,794,422 bytes，SHA-256 `C87DFA53B309D4FE1790FCB5F1EB2084F67BE6E44FC27D76D5E8E4E84A30A14B`，版本/Manifest/v2 Debug 签名/4-byte/16 KiB 对齐和逐 entry 隐私扫描通过。Desktop 后续补充 5 级标题自动退避、无供应商诊断与打包后 CLI 夹具，随后 Windows MSI 发行验证通过。
+
+Windows MSI 经过打包后的 CLI smoke、context-compress CLI stress 和 console wrapper boundary stress；首次非提升 `/qn` 因无凭据提升返回 1603，UAC 提升安装返回 0。安装后 `C:\Program Files\Newmark Agent` 内的 `app.asar`、`Newmark.exe`、`Newmark Console Runtime.exe`、`Newmark.bat` 与本次 `win-unpacked` 哈希一致，注册表 `Newmark Agent 0.5.13.0` 的 ProductCode 为 `{B0B20387-74F3-413E-8550-4FDA74735E0B}`。
+
+API 35 `emulator-5554` 冷启动恢复在线后完成 `adb install -r`。显式启动后 2 秒和 7 秒均为 `MainActivity` topResumed，PID 3173 不变，目标进程 FATAL/ANR 为 0。模拟器证据不外推到故障真机后台、真实 provider、配对 PC bridge、长时运行或逐帧视觉反馈。本轮没有打包 MSI。

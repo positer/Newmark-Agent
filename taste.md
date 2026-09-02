@@ -1,5 +1,27 @@
 # Newmark Agent Project Taste
 
+## Release artifact traceability
+
+- 同版本累计修复的最终产物必须从当前源码重新构建，并以源码时间、构建日志、包内版本、签名和 SHA-256 共同证明；同版本旧包不能因版本号相同而冒充最新候选。
+- 被占用的标准输出不得通过结束未知进程或覆盖旧包解决。使用项目定义的隔离输出，并把隔离源与唯一命名交付副本做字节哈希一致性校验。
+- APK 交付必须同时核对 `apksigner`、`aapt badging`、二进制 Manifest、zipalign、启动冒烟和开发者路径/凭据扫描。模拟器安装启动、真机交互、后台长运行和生产签名是不同证据层级，报告时不得互相替代。
+
+## Search MCP boundary
+
+- `web_search` 的 MCP 兼容层只执行可证明为公开网络搜索的工具。工具名/描述、字符串查询字段和安全参数集合必须同时通过；任何 command/path/file/script/code/header/body/method 等能力都拒绝。
+- 每个调用重新读取安装者本地 `user/.Newmark/search-mcp.json` 并完成本轮所有启用节点检查。健康文件是当轮原子覆盖的可观测快照，不是持久熔断器；旧失败不得令下一轮跳过节点。
+- 固定容灾顺序是 MCP 池、Bing HTTP、DuckDuckGo HTTP。前置条件缺失或未完成真实 tools/call 的候选保持禁用，不能仅因握手成功宣称可用。
+- 移动端借用已配对 PC 执行 stdio MCP 时，只能调用 Bearer 认证的 MCP-only bridge；PC 自身的 Bing/DuckDuckGo HTTP 退路不得嵌套进移动 MCP 池。所有桌面/移动 MCP 完整轮询后，Android 外层才进入 Bing，最终 DuckDuckGo。
+- 发行公开面不得暴露 stdio command/args/cwd、header/env 值、开发者本地路径或无限 MCP 输出；安装者运行时配置路径可按其本机实际位置展示。
+- Android Search MCP 准入必须在清单写入前通过设备网络栈完成 initialize、tools/list、tools/call，并取得至少一个公网 HTTP(S) URL。设备验收同时覆盖 Streamable HTTP 与 Legacy SSE；只暴露非搜索工具或开放危险 schema 的服务必须在 tools/call 前拒绝。
+
+## Runtime vision, timeout, and partial snapshots
+
+- Agent 自行查看工作区图片时复用既有视觉工具和一次性模型输入通道；只允许活动工作区内经过真实路径、格式、字节与像素预算校验的文件，禁止把 base64 写入公开工具结果或 durable history。
+- 复合读取工具的内部超时属于工具级可恢复结果。子操作可以被有界取消，但不得借用父级 Abort 把后续模型响应一并吞掉；用户显式停止仍保持真正的整轮中断语义。
+- 长运行局部快照是 patch，不是完整替换。缺失 `chatMessages` 表示“未提供”，绝不等价于空数组；只有显式完整空历史才能清空可读对话投影。
+- 发行应用可在运行时展示安装者本机路径，但发行源码、演示数据、脚本默认值和打包资源不得烘焙开发者机器用户名或绝对地址。
+
 ## Queue visibility boundary
 
 队列中的真实用户输入必须在用户消息时间线可见。出队时不得把带稳定 clientMessageId 的用户项标记为 hiddenUserInput；只有无用户身份的内部自动续接才允许隐藏。
@@ -10,6 +32,7 @@
 
 ## Product and interaction principles
 
+- Mobile provider transport is provider-owned persisted state, not a global or inferred runtime toggle. Every manual, imported, and edited provider must preserve an explicit canonical protocol (`openai`, `openai_responses`, `anthropic`, or `github_models`); legacy aliases normalize at every persistence/import boundary without dropping credentials or model metadata. A Responses stream is successful only when `response.completed` carries an explicit case-insensitive embedded `response.status=completed`, even if partial text, reasoning, or tool deltas arrived earlier. Event type alone and missing, blank, unknown, or non-completed status are controlled failures; successful fixtures must state the completed status explicitly so permissive test data cannot hide a protocol gap.
 - Provider onboarding must always offer three peer paths: explicit manual creation, fuzzy discovery, and import from a connected device. Manual providers and provider-owned models reuse the canonical PC-compatible store; never hide basic creation behind discovery or introduce a parallel mobile-only schema.
 - Mobile submit controls are a three-state protocol, not a boolean skin: idle send, running stop with empty input, and running send/Next with non-empty input must each retain the PC action semantics and material. Center icon geometry inside animated borders explicitly; never rely on a container's default top-start alignment.
 - Memory Lab glass actions obey the same layout-invariant optical-canvas rule as composer controls. Text pills and circular navigation buttons keep their nominal hit boxes while refraction, blur, shadow and lift render in a transparent outset child.
@@ -137,15 +160,29 @@ diagnostics must not rewrite the prefix, enter durable summaries, or create a sy
 
 Windows 同版本安装必须明确区分“MSI 已构建/已验证”“UAC 已触发”和“安装已完成”。UAC 拒绝或取消后不得循环重试、绕过提升或声称安装成功；复核注册表与安装路径，保留现有响应进程，并等待用户明确要求再次触发。
 
+Android Release 的标准输出若被外部文件锁占用，不得结束未知进程或把旧 APK 冒充新产物；应使用项目受控的隔离 build directory 做全新构建，并以包内版本、最终 Manifest、签名、大小、SHA-256 及源/交付副本一致性共同确认交付物。
+
+移动 Agent 的后台稳定性不能以“前台服务存在、WakeLock 已持有、结构测试通过”代替端到端连续性。Provider SSE 必须显式区分响应头前、无增量、有公开增量、工具调用形成、工具副作用完成和进程死亡六个恢复阶段；只有证明幂等或使用持久 checkpoint 的阶段才可重放。网络恢复门槛必须基于 validated transport，所有断流都要留下 request/run/transport/phase/retry/terminal reason 的脱敏诊断。
+
 # Release candidate boundary
 
 “全平台 Release”在 Windows 主机上表示从同一版本源码生成并逐件验证 Windows、Linux 与 Android 的本地候选资产；macOS 制品只允许在 macOS 主机原生生成。构建成功、签名状态、黑盒运行、远端上传和商店可分发性必须分别陈述。标准输出被外部进程占用时，优先采用隔离输出并核对哈希，不关闭不明进程或覆盖用户正在使用的制品。
+
+桌面端发行收口必须运行完整 `test:full-release`，不能只以主验证或单项压力通过代替。首轮标题门禁会使旧的纯流式 mock 在标题探测处失败，因此所有使用 `Agent.process` 的夹具必须区分 `stream=true` 与非流式标题探测，并让无供应商诊断保留 `No LLM configured` 可操作提示。
+
+PC/移动端首次标题探测使用 0s → 1s → 2s → 4s → 8s 的 5 级退避；空响应和“标题原样重复用户输入”都视为未完成并自动进入下一级。正式首轮必须等到标题成功后再启动；全部重试失败才落错误，不能要求用户手动再次发送。Windows MSI 发行还必须通过打包后 `release-cli-smoke`、context-compress CLI stress 与 console wrapper boundary stress，并以安装后 `app.asar`/关键 EXE 与 `win-unpacked` 哈希一致作为安装证据。
 
 # Mobile image evidence style
 
 用户图片属于其对应输入消息，必须在文字正文上方展示，并在本地/远程历史间复用同一附件投影。Agent 展示图片属于公开 Build 证据，工具回执只返回元数据，图片字节不得进入后续模型工具结果。图片路径、格式、来源、尺寸与大小必须先校验；预览可展开，但不得引入与现有时间线竞争的新卡片语言。
 
+移动 Agent 主动检查图片与展示图片是两个边界：`image_inspect` 只读安全工作区或安装者已授权的 URI/共享路径，验证 PNG/JPEG、10 MiB 与 4000 万像素上限后，将字节作为当前冻结视觉部署的一次性输入；公开工具回执、Build 事件、模型上下文持久化和对话历史都不得保存 base64。`image_display` 仍只负责向用户保留可见证据，不能冒充模型已经观察图片。
+
+移动端 Markdown/LaTeX 渲染必须自带离线字体，不能依赖设备系统字库覆盖数学符号、CJK 和代码框线：数学使用 Noto Sans Math，代码/行内码使用 Noto Sans Mono CJK SC。代码正文必须在父级可用宽度内 `softWrap` 换行，禁止用横向滚动占满无限宽度作为默认策略；只有用户显式进入宽行查看时才可增加横向平移，不把“能横滚”当成“自适应”。代码高亮 Token 色必须来自亮暗主题语义色板，亮色模式下所有语法色都要比代码块浅背景更暗并保证可读，不能复用暗色荧光色。
+
 紧凑玻璃按钮的静止边框、浮起折射边缘和落下恢复必须由同一光学层绘制。禁止在内容层额外叠加静态 `border`，否则边框不会随玻璃起落与形变同步；名义布局、语义和命中框继续与透明光学外扩分离。
+
+设置主页与所有设置子页的顶栏返回按钮属于同一个共享紧凑玻璃入口。名义 36dp 节点只负责布局、语义和命中，折射、高光、阴影与浮起必须由共享 8dp 透明光学子层承载；禁止重新在按钮等大的 RenderNode 上直接挂载 `glassButtonSurface`。
 # Mobile conversation layout alignment
 
 用户消息附件与用户正文同向右对齐；Agent 展示图与 Agent 正文同向左对齐。对话底部避让必须由输入上方浮层的实时测量高度驱动，而不是固定预留值；Markdown/LaTeX 阅读器复用同一文字安全边界，避免窄屏出格。
@@ -155,6 +192,8 @@ Windows 同版本安装必须明确区分“MSI 已构建/已验证”“UAC 已
 ## PC Build Block boundary
 
 Build Block 是纯信息时间线，不是材质容器。展开/折叠只改变内容披露，不得引入玻璃、白板色、圆角、阴影、滤镜或伪元素；玻璃仅限明确批准的菜单与交互浮块。
+Build 标题按钮的 hover、focus、active 与键盘触发态都必须保持透明；禁止使用 `revert`、系统按钮色或通用按压材质恢复其背景。
+
 ## Built-in browser popup navigation
 
 `target=_blank` 与 `window.open` 不创建脱离控制的第二浏览器表面：PC WebView 将安全 URL 导回当前 guest，移动 WebView 通过临时捕获窗口转发到同一会话。地址栏、历史和 Reload 始终属于会话状态，禁止弹出页失去刷新能力。
@@ -173,3 +212,63 @@ Build Block 是纯信息时间线，不是材质容器。展开/折叠只改变�
 
 ## Release version discipline
 修复版发布必须沿用 VERSION、桌面 package.json 与 Android versionName/versionCode 的一致值；本轮 Markdown 修复发布为 0.5.12 / 512。
+## 移动输入与队列手势边界
+
+- Compose 文本输入必须使用能保留 selection/composition 的稳定编辑状态；普通光标、选字与组合文本更新不得重建 IME 会话。
+- 页面级点击收键盘只能观察未被子输入控件消费的最终事件，禁止在 Initial pass 抢占文本选择手势。
+- 队列排序手势只属于显式拖动把手；Guide、编辑和删除按钮的短点击区域不得承载父级长按拖动识别器。
+- 运行中发送键的点按永远保持 Next 语义；直达 Guide 只能由 300ms 长按后明确向上拖动并释放触发，浮块与原按钮等尺寸且不得写入、删除或重排队列。
+- Guide 的接收边界由活动 runId 和显式 acceptance 状态决定，不由 UI 模式名决定。拒绝或过期的 Guide 不得清空用户输入，也不得伪装成 applied。
+
+## Windows MSI 安装验收纪律
+
+- Windows 发布不能以 MSI 文件生成或提权窗口出现作为安装成功；必须同时核对安装日志、卸载注册表版本、安装目录 CLI 版本和打包/安装 `app.asar` 哈希。
+- 安装前先温和关闭目标安装目录中的应用；若必须强制结束，只能作用于已核实属于该安装目录的进程，不得波及同名或无关程序。
+- 安装器不得修改用户 `.Newmark`。在 GUI 启动前用同一相对路径、大小和逐文件哈希清单比较安装前后状态，避免 Electron 启动缓存污染验证结果。
+- GUI 验收至少确认主窗口存在且响应；Windows Installer 的 Session 0 服务进程可在事务完成后暂留，是否完成应以交互进程退出码与 MSI 日志最终状态为准。
+- 未签名 MSI 必须明确记录 `NotSigned`，不得将本地验证等同于生产签名或远端发布。
+
+## Mobile background Agent ownership
+
+- 前台服务必须拥有真实 Agent/连接协程，而不只是显示通知或持有 WakeLock；活动本地 Agent、远程 SSE 和重连不能由 Activity、Compose 或 ViewModel 生命周期拥有。
+- 已配对的远程设备构成后台连接租约。界面存在时由正式事件 reducer 持有 SSE；界面销毁后服务接管只读认证 SSE 保活，重新进入界面时取消保活并从持久状态重建，禁止两个事件消费者同时写 UI。
+- 长期 Agent 会话使用用户可见且用途明确的 `specialUse` 前台服务，CPU/Wi-Fi lock 仅随本地运行或远程连接租约存在；解除配对且无本地运行时必须释放。
+- 网络恢复由系统默认网络 callback 驱动，恢复后清理 OkHttp 旧连接池并立即重连。远程 Agent 活跃期间重连不设软件端总时限；空闲连接可以保留有界状态提示。
+- 本地 provider 请求只允许在尚无任何 thought/text/tool 活动时因瞬态网络错误重试。已有公开模型活动后连接失败必须终止当前请求，禁止可能重复正文或工具副作用的自动重放。
+
+## PC interrupted response boundary
+
+- 正常完成以 `final_response` 作为唯一块外 Agent 结果。
+- 中断且没有 `final_response` 时，可将最后一条非空公开 `response` 提升为块外 Agent 回复，但必须同时从 Build 展开正文中移除同一事件。
+- 没有公开回复的中断不得伪造 Agent 消息；实时渲染、对话切换和重启历史恢复必须同构，并继续按 runId 保证单实例。
+
+## Conversation title generation boundary
+
+- 自动标题必须来自独立、无工具、短上下文的模型请求，不得把用户原输入直接裁切成标题，也不得等待主 Agent 完成后再命名。
+- 标题探测是首次正式响应的硬门禁：成功生成并落库前不得启动正式 Agent/provider 请求；失败或超时后，后续普通发送必须继续读取并重试同一条首个持久化用户消息，不能把新发送文本换成标题来源。
+- 标题探测与后续正式响应共享发送时冻结的 provider/model/intelligence，并兼作该部署的首轮可用性检查；探测消息、错误和输出不得进入聊天、Build、Guide/Next 或主请求缓存前缀。
+- 标题请求必须绑定发起时的工作区快照；用户切换工作区后，迟到结果只能写回原工作区，不能依赖当前可变选择。
+- 标题身份与首次正式响应启动状态必须持久化；异步结果只有在目标对话、首消息和默认标题状态仍匹配时才可落库，手动命名永远优先。
+
+## Mobile provider interruption recovery
+
+- Android 网络“可用”必须同时满足 INTERNET 与 VALIDATED；仅有路由声明但尚未通过系统验证的网络不能唤醒 provider 重试。
+- 响应头前的瞬态失败可以重试原请求；已有公开正文/思考后只能携带有界进度发起“继续且禁止复述”的新请求，不能把旧请求当作从未发生。
+- 已持久化的工具调用/结果是副作用边界。恢复路径不得重放已经提交的工具；反复失败应保留进度并给出受控错误，而不是向用户透传底层 SocketException 文案。
+
+## First-response deployment identity
+
+- 首轮标题探测不是固定低档模型请求。它必须复用正式响应发送时冻结的 provider、model、intelligence 与供应商原生 reasoning effort；任何 fallback 都必须在冻结和标题门禁之前完成。
+- 标题成功之后不得再次解析或切换首轮部署。若可用性发生变化，应让该次门禁失败并保留重试身份，不能让“标题验证 A、正式响应运行 B”。
+- 这类跨阶段身份契约必须由测试同时观测标题调用和正式调用的实参，不能只以标题文本或请求次数间接推断。
+
+## APK candidate replacement discipline
+
+- 最终 APK 必须从隔离输出执行 clean Release 构建，交付复制拒绝覆盖同名文件，并以源/交付 SHA-256 一致性绑定当前工作树；旧候选保留作回滚证据，但必须显式标记已被替代。
+- Android 发行门禁同时覆盖包名/版本/SDK/入口、合并 Manifest、签名方案、4-byte 与 16 KiB native 对齐，以及只报告命中类别和文件位置的开发机路径/凭据扫描。
+- 模拟器安装启动只能证明包可安装和进程可运行；真机 OEM 后台、网络切换、真实供应商与逐帧视觉反馈必须作为独立未完成边界保留。
+
+## PDF whole-tool timeout boundary
+
+- `pdf_read.timeout_ms` 是一次调用的累计预算，不是只包围扫描页浏览器观察。异步文件读取、pdf.js 文档加载、逐页文本提取与视觉观察必须共享同一 deadline；任何阶段超时都返回带阶段、预算和 `recoverable=true` 的工具回执，使同一 Agent run 可以继续响应。
+- 父级 run 取消与工具预算超时必须区分：用户/运行时 abort 继续向外传播，不能伪装成可恢复 PDF 超时。超时后要销毁 pdf.js loading task、解绑 abort listener、清除 timer，禁止遗留 worker、未处理 rejection 或悬空 tool call。

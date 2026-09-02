@@ -230,8 +230,20 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
 
 /** Keeps local and paired-desktop conversations from sharing a browser URL. */
 class BrowserSessionRegistry {
-    private val sessions = linkedMapOf<String, BrowserSessionState>()
+    private val visibleSessions = linkedMapOf<String, BrowserSessionState>()
+    private val backgroundSessions = linkedMapOf<String, BrowserSessionState>()
 
-    fun session(targetKey: String): BrowserSessionState =
-        sessions.getOrPut(targetKey) { BrowserSessionState() }
+    /** Default/visible tools and the right sidebar intentionally share state. */
+    fun session(targetKey: String): BrowserSessionState = visibleSession(targetKey)
+
+    fun visibleSession(targetKey: String): BrowserSessionState =
+        visibleSessions.getOrPut(targetKey) { BrowserSessionState() }
+
+    /** visible=false never aliases the Compose-owned right-sidebar session. */
+    fun backgroundSession(targetKey: String): BrowserSessionState =
+        backgroundSessions.getOrPut(targetKey) { BrowserSessionState() }
+
+    fun releaseBackgroundSession(targetKey: String) {
+        backgroundSessions.remove(targetKey)
+    }
 }

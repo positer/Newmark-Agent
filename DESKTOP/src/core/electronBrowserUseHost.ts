@@ -13,6 +13,7 @@ export interface ElectronBrowserUseHostOptions {
   resolveContents(scope: BrowserUseScope, boundContentsId?: number): Promise<WebContents>;
   openExternal?(url: string): void | Promise<void>;
   guardSettleMs?: number;
+  releaseContents?(scope: BrowserUseScope, contents: WebContents): void;
 }
 
 const SAFE_NAVIGATION = /^(?:https?:|about:blank|newmark-preview:)/i;
@@ -69,21 +70,30 @@ export class ElectronBrowserUseHost {
   }
 
   async resolve(scope: BrowserUseScope): Promise<BrowserUseHostPage> {
-    const boundId = this.runtimeBindings.get(scope.runtimeKey);
+    const bindingKey = this.bindingKey(scope);
+    const boundId = this.runtimeBindings.get(bindingKey);
     const contents = await this.options.resolveContents(scope, boundId);
     if (contents.isDestroyed()) throw new Error('Built-in browser page is unavailable.');
     this.attach(contents);
-    this.runtimeBindings.set(scope.runtimeKey, contents.id);
+    this.runtimeBindings.set(bindingKey, contents.id);
     return this.page(contents);
   }
 
   clear(scope?: BrowserUseScope): void {
-    if (scope) this.runtimeBindings.delete(scope.runtimeKey);
-    else this.runtimeBindings.clear();
+    if (!scope) {
+      for (const [bindingKey, contentsId] of this.runtimeBindings) this.releaseBinding(bindingKey, contentsId);
+      this.runtimeBindings.clear();
+      return;
+    }
+    for (const [bindingKey, contentsId] of this.runtimeBindings) {
+      if (!this.bindingMatchesScope(bindingKey, scope)) continue;
+      this.releaseBinding(bindingKey, contentsId, scope);
+      this.runtimeBindings.delete(bindingKey);
+    }
   }
 
   dispose(): void {
-    this.runtimeBindings.clear();
+    this.clear();
     for (const [browserSession, handler] of this.downloadHandlers) {
       browserSession.removeListener('will-download', handler);
     }
@@ -203,6 +213,25 @@ export class ElectronBrowserUseHost {
       if (id === contentsId) return true;
     }
     return false;
+  }
+
+  private bindingKey(scope: BrowserUseScope): string {
+    return `${scope.runtimeKey}\u0000${scope.visible === false ? 'background' : 'visible'}`;
+  }
+
+  private bindingMatchesScope(bindingKey: string, scope: BrowserUseScope): boolean {
+    const prefix = `${scope.runtimeKey}\u0000`;
+    return bindingKey.startsWith(prefix)
+      && (scope.visible === undefined || bindingKey === this.bindingKey({ ...scope, visible: scope.visible !== false }));
+  }
+
+  private releaseBinding(bindingKey: string, contentsId: number, scope?: BrowserUseScope): void {
+    const contents = this.pages.get(contentsId)?.contents;
+    if (!contents || contents.isDestroyed()) return;
+    const separator = bindingKey.lastIndexOf('\u0000');
+    const runtimeKey = separator >= 0 ? bindingKey.slice(0, separator) : bindingKey;
+    const visible = separator < 0 || bindingKey.slice(separator + 1) !== 'background';
+    this.options.releaseContents?.({ owner: scope?.owner || '', runtimeKey, visible }, contents);
   }
 
   private installDownloadGuard(browserSession: Session): void {

@@ -59,6 +59,8 @@ function createFixture(): {
     'renderConversationBranchPagers',
     'conversationMessageCache',
     'cacheConversationMessages',
+    'terminalAssistantResponseForRun',
+    'renderChatMessagesUnsafe',
     'renderChatMessages',
   ];
   const extracted = names.map(name => functionSource(source, name)).join('\n\n');
@@ -138,6 +140,12 @@ function main(): void {
     'run-id races are recognized as safe-to-replay Guide failures');
   assert.match(source, /recoveredAsBuild: true/,
     'a rejected stale Guide is replayed as the same payload in a fresh Build');
+  assert.match(source, /terminalAssistantResponseForRun\(run\)/,
+    'interrupted Build recovery has an explicit standalone Agent response selector');
+  assert.match(source, /terminalAssistantResponse\.event === rawEvent/,
+    'the response promoted below an interrupted Build is removed from the expanded Build body');
+  assert.match(source, /preserveRunFinalResponse/,
+    'updating a recovered Agent boundary preserves its structural deduplication class');
   const fixture = createFixture();
   try {
     const acceptedId = 'guide-accepted';
@@ -344,6 +352,39 @@ function main(): void {
       'a persisted Build recovers both visible boundaries when legacy chat rows are missing');
     assert.match(fixture.document.getElementById('chat-area')?.textContent || '', /Historical record/,
       'synthetic recovery rows are identified as historical instead of appearing newly submitted');
+
+    fixture.state.workRunsByTarget['workspace-a::default'] = [{
+      runId: 'run-interrupted-response',
+      primaryPrompt: 'interrupt this after visible progress',
+      startedAt: '2026-08-31T10:08:05.000Z',
+      endedAt: '2026-08-31T10:15:53.000Z',
+      status: 'interrupted',
+      events: [
+        { type: 'response', content: 'earlier public progress' },
+        { type: 'tool_call', toolName: 'read' },
+        { type: 'response', content: 'last public progress before interruption', timestamp: '2026-08-31T10:15:40.000Z' },
+        { type: 'status', status: 'interrupted', content: 'Interrupted.' },
+      ],
+    }];
+    fixture.renderChatMessages([{ role: 'user', content: 'interrupt this after visible progress', runId: 'run-interrupted-response' }]);
+    const interruptedRows = Array.from(fixture.document.querySelectorAll('#chat-area > .chat-msg'));
+    assert.deepEqual(interruptedRows.map(row => row.getAttribute('data-test-run-id') || row.querySelector('.msg-body')?.textContent?.trim()), [
+      'interrupt this after visible progress',
+      'run-interrupted-response',
+      'last public progress before interruption',
+    ], 'an interrupted Build with public model output restores its last response as the standalone Agent boundary');
+    assert.equal(fixture.document.querySelectorAll('.run-final-response[data-run-id="run-interrupted-response"]').length, 1,
+      'the interrupted Agent boundary is restored exactly once even when the owning user row already exists');
+
+    fixture.state.workRunsByTarget['workspace-a::default'] = [{
+      runId: 'run-interrupted-empty',
+      primaryPrompt: 'interrupt before the model replies',
+      status: 'interrupted',
+      events: [{ type: 'status', status: 'interrupted', content: 'Interrupted.' }],
+    }];
+    fixture.renderChatMessages([{ role: 'user', content: 'interrupt before the model replies', runId: 'run-interrupted-empty' }]);
+    assert.equal(fixture.document.querySelectorAll('.run-final-response[data-run-id="run-interrupted-empty"]').length, 0,
+      'an interruption before any public model response does not invent an Agent reply');
 
     fixture.state.workRunsByTarget['workspace-a::default'] = [
       {

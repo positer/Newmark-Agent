@@ -1,5 +1,78 @@
 # Newmark Agent
 
+### dev-0.5.13 双端累计改动 r5 APK + Windows MSI（当前）
+
+PC 与 Android 当前 `0.5.13` 累计源码已完成一致性核验。桌面端 typecheck、build 和完整 `test:full-release` 通过，其中主验证 1702/1702、thinking tier 压力 68/68、压缩压力 34/34、模型恢复压力、TUI、真实 loopback SSH、WSL TUI、CLI 与 GUI/TUI/CLI 三端压力均通过；无供应商标题门禁错误同时保留 `No LLM configured` 可操作诊断。`pdf_read` 的 1–120 秒预算现在覆盖异步文件读取、pdf.js 全文解析和扫描页浏览器观察，任一阶段超时都返回可恢复工具回执并允许同一 Agent 继续给出正式响应。Android 首轮标题探测与正式首轮共享冻结的 provider/model/intelligence/native reasoning 映射；新增 `image_inspect` 可把安全工作区或已授权文件 URI 的有效 PNG/JPEG 一次性送入当前冻结视觉模型，图片字节不写入工具文本或持久历史。Android Responses 聚焦 32/32、69 suites / 267/267 JVM、Vital Lint、R8、资源收缩及隔离 clean Release assembly 通过。当前 Android 交付包为 `APK/Newmark-Agent-0.5.13-dual-platform-final-r5-release.apk`，大小 52,794,422 bytes，SHA-256 `C87DFA53B309D4FE1790FCB5F1EB2084F67BE6E44FC27D76D5E8E4E84A30A14B`。
+
+Windows 当前交付包为 `release-0.5.13-r5-title-retry-msi-20260902-3/Newmark-Agent-0.5.13-x64.msi`，大小 249,629,109 bytes，SHA-256 `AD9427B36178473BAF461C63119D14B5DF1B27EC510205205DD991845ECEE462`；配套 `win-unpacked` zip 为 326,302,457 bytes，SHA-256 `91644890407C4C7A1F8BC8F84FEAB5D55F3B71D66517EDA7F744D71A0D97C803`。PC 首次标题探测已加入 0s→1s→2s→4s→8s 的 5 级自动退避重试，空响应或模型原样重复用户输入都会自动重试，不再要求手动再次发送。MSI 已通过打包后 CLI、上下文压缩与 console wrapper 压力，并在 UAC 提升下安装成功；已安装 `app.asar` 和关键 EXE 与 `win-unpacked` 哈希一致，注册表版本 `0.5.13.0`。
+
+移动端 Markdown/LaTeX 渲染已内置 Noto Sans Math 与 Noto Sans Mono CJK SC 两套离线字体：数学符号、箭头、CJK、代码框线均不再依赖设备字库；Markdown 代码块改为在父级约束内 `softWrap=true` 自动换行，不再用横向滚动占满无限宽度。代码高亮 token 也已修复：原占位符把索引写成数字，会被数字高亮正则二次命中并残留 PUA/方框；现改为私用区字符索引，字符串/数字/关键字高亮不再破坏原文。语法高亮改为主题语义色板：暗色保持原有观感，亮色下绿色字符串改为 `#1B7F3B`，关键字/注释/数字/类型/tag 也换成浅底可读色。当前候选 `APK/Newmark-Agent-0.5.13-mobile-md-font-r8-release.apk`，66,686,998 bytes，SHA-256 `05A26E0EE66541F656E39412384A689B06AAA2A4ABA363043516C2B862D6A1FE`；r7 保留为亮色高亮修复前回滚候选，r6 是更早的高亮 token 修复前候选，r5 仍未包含字体适配。
+
+全平台 `dev-0.5.13` 发行名为 `dev-0.5.13`，Release 标题统一为 `Newmark Agent dev-0.5.13`，六个资产：
+
+- Windows MSI：`E540A110453BC2F5647FFA9839C47BA85588E7281B3070EEEAA93AFC1AB40C67`
+- Windows ZIP：`CA6C20CF521FA3AD02BABE40C6F50557B72750F241FED641F8B7036D0853EE9C`
+- Linux AppImage：`165C0A2244FCADF482B09B207493705BB05725397C570A90AE34DA1C62EBCA67`
+- Linux Deb：`829B25C520EE6FB7BF33A47E8DECB95D36386EA0FBCB8579BDCCBEFA69C153A1`
+- Linux ZIP：`1622B63C6ABC5320D2353850B852288F73455346407221955627A555845D94E1`
+- Android APK：`05A26E0EE66541F656E39412384A689B06AAA2A4ABA363043516C2B862D6A1FE`
+
+APK 已核对包名 `com.newmark.mobile`、版本 `0.5.13` / `513`、compileSdk 36、minSdk 24、targetSdk 36、可启动 `MainActivity`、四 ABI、`specialUse` 前台服务、`stopWithTask=false`、4-byte/16 KiB 对齐与 APK Signature Scheme v2。逐 Zip entry 字节扫描未发现开发者 profile/workspace、其他用户目录、Bearer/API Key 或私钥材料；裸数字 `12252` 只命中 6 个 vendor 文件，4 个来自 PDFBox CMap、2 个来自 BouncyCastle SIKE 常量，4 ABI 的 ML Kit 库只含第三方通用 `/home/build` 标记，均不是开发机路径。安装者运行时仍可显示其本机实际 `user/.Newmark` 位置。该包使用工程既有 Android Debug 证书，适合开发预览/侧载，不是 Google Play 生产签名。API 35 `emulator-5554` 冷启动恢复在线后执行 `adb install -r` 成功；显式重启 `MainActivity` 后 2 秒与 7 秒均为 topResumed，PID 3173 保持不变，目标进程 FATAL/ANR 为 0。该冒烟不替代设置玻璃逐帧、真实供应商、配对 PC stdio bridge及真机锁屏/切网/划走/长时后台验收。
+
+### dev-0.5.13 移动端设置返回按钮玻璃画布修复
+
+移动端设置主页及全部子页共用的 36dp 顶栏返回按钮已改用 `GlassButtonCanvas`。按钮的布局、命中区、图标、主题色与逐页返回逻辑保持不变，仅将折射边缘、高光、阴影和按压浮起绘制到四周 8dp 的透明光学子层，避免玻璃反馈被按钮自身 RenderNode 画布截断。
+
+回归测试同时约束共享设置顶栏必须使用外扩画布、不得退回直接在 36dp 节点调用 `glassButtonSurface`。修复已进入上述当前 r5 APK，但仍不声明设置返回按钮的真机逐帧视觉验收。
+
+### dev-0.5.13 双端内置 Search MCP 搜索池
+
+PC 与 Android 的 `web_search` 已接入独立的 search-only MCP 兼容层。桌面端每次调用都重新读取安装者本地 `user/.Newmark/search-mcp.json`，按优先级完整探测本轮所有启用节点，再选择最高优先级成功结果；旧健康结果不会形成熔断或跳过。固定容灾顺序为 Search MCP 池 → Bing HTTP → DuckDuckGo HTTP。
+
+Wuxing Search MCP 已随 Desktop 内置，但它依赖可访问的 SearXNG；默认探测环境没有该前置服务，因此不会伪装成健康节点或默认启用。当前唯一通过真实 initialize → tools/list → tools/call 并默认启用的是 `@ignidor/web-search-mcp`。双端只允许带字符串查询字段且不含命令、文件、脚本、请求体等危险参数的公开网络搜索工具；MCP 输出限制为 60,000 字符。每轮健康状态原子刷新到安装者本地健康文件，仅用于观测，永不作为下一轮跳过依据。
+
+Android 可直接连接用户配置的 Streamable HTTP/SSE Search MCP；stdio 节点通过已配对 PC 的 Bearer 认证 MCP-only bridge 执行。该 bridge 不会提前执行 PC 的 Bing/DuckDuckGo HTTP 退路，因此全局顺序保持为所有桌面/移动 MCP 完整轮询后才进入 Android Bing，最后 DuckDuckGo。公开清单不返回 stdio command、args、cwd、密钥值或开发机路径。
+
+### dev-0.5.13 移动端供应商协议切换与 OpenAI Responses
+
+移动端“模型与供应商”现在把请求协议作为供应商自身的显式配置：新建供应商、模糊注入和既有供应商详情都可在 OpenAI Chat、OpenAI Responses、Anthropic 与 GitHub Models 之间切换。选择 Responses 后，本地 Agent 直接请求 Responses 端点；官方 API 根地址会补成标准 `/v1/responses`，已填写 `/v1`、`/v1/chat/completions`、完整 `/v1/responses` 或兼容网关自定义前缀时则保留其路径语义。Responses 流继续解析思考摘要、正文、拒绝文本、函数调用和参数增量；流式 `response.completed` 的内嵌状态和非流式 JSON 都只接受明确 `status=completed`，`failed`、`incomplete`、`cancelled`、`queued`、`in_progress`、未知或缺失状态均作为失败，并保留 `incomplete_details.reason` 供受控诊断。
+
+协议字段随 `ProviderConfig` 持久化；旧的 `responses`、`openai-compatible`、`claude`、`github` 等别名在读取、保存、设备目录合并和 Agent `settings_update` 全量替换边界统一迁移为规范值，其他供应商字段、模型列表和本地 API Key 保持不变。
+
+### dev-0.5.13 移动后台断流复查
+
+真机仍出现 `Software caused connection abort` 后，代码与既有测试复查确认：后台前台服务、Wake/Wi-Fi lock 和服务级运行 Job 已进入 APK，但本地模型 SSE 的恢复只允许发生在“尚未收到 thought/text”的阶段。推理模型一旦先输出任何思考或正文，随后后台网络切换导致 SocketException，当前状态机会为避免重复正文/工具副作用而直接终止，并把原始异常显示给用户。因此当前后台强化只解决生命周期所有权，没有闭合部分流式输出后的可恢复续接。
+
+次级缺口包括：网络恢复只检查 `NET_CAPABILITY_INTERNET`，没有等待 `VALIDATED`，可能在路由尚未真正可用时过早重试；`START_STICKY` 重启服务时没有持久运行检查点，进程被 OEM 杀死后无法恢复原 Agent；现有后台测试主要是源码结构断言与前台 MockWebServer，没有真实锁屏/网络切换覆盖。当前无 ADB 设备，尚不能取得发生故障手机的 logcat、系统电池策略与已安装 APK 指纹，因此本轮只声明代码根因与验证缺口，不声明设备侧诱因已经唯一确定。
+
+### dev-0.5.13 移动后台强化 APK
+
+后台强化版 Android Release APK 已重新打包至 `APK/Newmark-Agent-0.5.13-background-agent-service-release.apk`，大小 52,761,654 bytes，SHA-256 `AD2BE3FD29F7A38CB7F7FC9E2A44744B34BDE25A8906D78C36868283FE3FB04C`。包名为 `com.newmark.mobile`，版本为 `0.5.13` / `513`；最终 Manifest 已核对 `specialUse` 前台服务、Wi-Fi 状态权限、长期 AI Agent 网络会话 subtype 与 `stopWithTask=false`。230/230 项 JVM 测试、Vital Lint、R8、资源收缩和隔离 Release assembly 通过，APK Signature Scheme v2 验证通过。
+
+该 APK 使用工程既有 Android Debug 证书，只适合开发预览/侧载，不等同于商店生产签名。当前 ADB 无连接设备，因此尚未声明真机锁屏、划走任务、网络切换或 30 分钟后台长运行验收；Google Play 分发前仍需申报 `specialUse` 前台服务用途。
+
+### dev-0.5.13 PC 中断后 Agent 回复恢复候选
+
+PC 对话在 Build 被中断后，会把该运行最后一条非空公开 `response` 恢复为 Build 块外独立的“Agent回复”；同一正文不会再在展开 Build 中重复。未产生公开回复的中断仍只显示 Build，不伪造 Agent 内容。实时中断、切换对话和重启后的历史恢复使用同一规则。
+
+源码门禁为 Desktop typecheck、build、聚焦 UI 回归及 1685/1685 主验证全部通过。修复候选位于 `release-0.5.13-pc-agent-response-fix/`：MSI 为 243,911,093 bytes / SHA-256 `5A6A38326D5A1180160C8B8A0434F0C6721D04B241DB2DB9A403BBB55227F03F`，ZIP 为 317,510,279 bytes / SHA-256 `D20196BACCDCFB1BCDD613EB3D0ED538F08DDEEA0B4D07E86B7C566C7A1AC622`，`app.asar` 为 196,528,014 bytes / SHA-256 `73ED089782AA5774974D54FC7BBD2054370912E4835295B8A6E307A38F141427`。发行包内已直接核对三处关键恢复逻辑；MSI 未签名。
+
+本机覆盖安装尚未完成：2026-09-01 两次 UAC 启动均由系统返回“操作已被用户取消”，Windows Installer 未创建安装日志，Program Files 中仍是此前的 0.5.13 构建。安装尝试前后用户 `.Newmark` 的 20,873 个文件、335,810,138 bytes 及全量聚合 SHA-256 `195FF9B3709A10D310C0CD2E2C9B3FD369A5D8456D4E3F957A204B23DBE73282` 完全一致；旧版客户端已重新启动且 5 个已采样进程均响应。
+
+### dev-0.5.13 运行时稳定性、工作区图片视觉与发行隐私
+
+Agent 现在可通过扩展后的 `image_inspect` 将活动工作区内经过校验的 PNG/JPEG 作为一次性视觉观察交给当前已验证视觉模型；图片限制为 10 MiB、40MP，图片字节不会进入公开工具文本或持久历史。
+
+`pdf_read` 的扫描页浏览器观察新增默认 30 秒、可配置 1–120 秒的工具级超时。超时只返回可恢复回执，不再中止整轮 Agent 响应。PC 长运行期间的局部状态快照若未携带 `chatMessages`，不再把当前可读对话重绘为空，修复对话区暂时消失后又恢复的问题。
+
+发行应用可在运行时展示安装者本机的实际 `user/.Newmark` 配置位置，但发行源码、TUI 演示数据和辅助脚本不得包含开发者电脑用户名或绝对路径。
+
+### dev-0.5.13 PC Build 展开按压暗色修复
+
+PC 对话中的 Build 展开/折叠标题在暗色模式按住时继续保持透明时间线，不再回退到 Chromium 原生白色按钮背景。修复不改变展开状态、内容布局、折叠箭头、键盘按钮语义或既有无动效规则。
+
+验证已覆盖 Desktop 编译、1676 项主断言、PC 玻璃聚焦契约与真实 Electron 暗色按住态；按住帧计算背景为完全透明，并保存视觉证据到 `archive/20260831-dev-0.5.13-build-toggle-dark-held.png`。本轮未构建或发布安装包。
+
 ### dev-0.5.12 全平台预发布
 
 2026-08-31 已发布 [dev-0.5.12](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.5.12)。Windows MSI/ZIP、Linux AppImage/deb/ZIP 与 Android APK 共六个资产均通过版本和打包态门禁，并从 GitHub Release 回下载逐项复核 SHA-256。Windows 资产未做 Authenticode 签名；Android APK 使用工程既有 Android Debug 证书并通过 v2 签名验证，因此本版本保持 prerelease。
@@ -23,7 +96,7 @@
 
 Newmark Agent 是面向本地工作区的多端 AI Agent。它把对话、Build/Plan/Goal/Flow、文件与终端、浏览器、Memory Lab、自动化和多 Agent 协作整合在同一套本地状态模型中，并提供 Windows/Linux 桌面端、终端界面、CLI 与 Android 客户端。
 
-当前开发版本：`dev-0.5.12`。移动端右侧栏折叠态统一改为仅支持右缘左滑展开；新建本地对话默认 Chat；Chat 模式复用既有 `terminal_exec` 权限，并在执行边界只允许 `date`、`time`、`now` 获取本地时间，不新增工具；模式/模型选择弹窗圆角与内部玻璃浮块匹配。移动端 Memory Lab 的返回键与文字操作胶囊统一使用四边 8dp 透明光学画布，玻璃浮起、折射边缘和阴影不再被按钮自身 RenderNode 截断；发送按钮按 PC 契约显式区分空闲发送、运行中停止、运行中继续发送三态，并修正工作态图标居中。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本。
+当前开发版本：`dev-0.5.13`。PC Build Block 的展开/折叠标题在暗色模式按住时保持透明，不再出现白色原生按钮底；移动端右侧栏折叠态统一改为仅支持右缘左滑展开；新建本地对话默认 Chat；Chat 模式复用既有 `terminal_exec` 权限，并在执行边界只允许 `date`、`time`、`now` 获取本地时间，不新增工具；模式/模型选择弹窗圆角与内部玻璃浮块匹配。移动端 Memory Lab 的返回键与文字操作胶囊统一使用四边 8dp 透明光学画布，玻璃浮起、折射边缘和阴影不再被按钮自身 RenderNode 截断；发送按钮按 PC 契约显式区分空闲发送、运行中停止、运行中继续发送三态，并修正工作态图标居中。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本。
 
 dev-0.5.11 同时优化 PC 冷启动。历史生命周期 marker 不再由 `Agent` 构造函数同步逐个读取，而是在轻量启动页显示后按批异步清理；正常退出直接删除当前 marker，避免运行目录随启动次数线性增长。历史日志基线为 Agent 8.122s、主界面 14.974s；在 1000 个旧 marker 压力下，当前实测轻量启动页 721ms、主页面导航 2567ms、输入可用 2772ms，Windows 进程无响应采样为 0，目录最终仅保留当前进程 1 个 marker。
 
@@ -551,3 +624,58 @@ PC 用户上传图片与 Agent 展示图片的点击组件均按图片自然尺�
 ### dev-0.5.12 自动续接循环与缓存命中复核
 
 Conversation Kernel 为自动 Guide/Goal/隐藏续接记录最近一次 Agent 文本指纹；provider 在没有新用户输入或工具进展时重复返回完全相同内容，会停止剩余自动续接并写入运行状态，避免“自说自话”轮回。真实用户 follow-up 不参与该保护。缓存压力测试确认 cacheRead token、命中率及跨请求稳定前缀均保持正确。
+## dev-0.5.13 移动交互稳定性
+
+移动端输入编辑现在持续保留光标选择与输入法组合状态，向前移动光标、选字或调整选择区时不再触发键盘瞬时关闭重连。队列操作区也拆分了手势所有权：只有左侧把手响应长按拖动，Guide、编辑和删除保持独立、即时的短点击路径。
+
+Agent 运行中且输入框非空时，普通点按发送仍将内容加入 Next；长按发送键 300ms 后向上拉动会抽出一个同尺寸上箭头玻璃浮块，松手将当前文本直接作为 Guide 注入运行，不改动已有队列。
+
+本地 Guide 适用于所有正在执行的 Agent 模式（Build、Plan、Chat），不再被隐藏的 Build-only 判断忽略。若运行已经越过接收边界，输入内容会保留供用户再次提交。
+
+## dev-0.5.13 Windows x64 MSI 打包与本机安装
+
+PC 修复版已从当前 `0.5.13` 源码完成 clean build、桌面主验证、运行时隔离/生命周期/诊断验证，以及 Windows 打包态 CLI、上下文压缩、控制台参数边界和真实 SSH/TUI 压力测试。Windows x64 资产位于 `release/`：MSI 为 `Newmark-Agent-0.5.13-x64.msi`，解包 ZIP 为 `Newmark-Agent-0.5.13-win-unpacked-x64.zip`。
+
+MSI 已通过 UAC 安装到本机。卸载注册表为 `0.5.13.0`，安装版三种 CLI 均返回 `0.5.13`，安装后的 `app.asar` 与打包候选逐字节哈希一致，GUI 主窗口及 Electron 子进程均保持响应。安装前后用户 `.Newmark` 的 20,871 个文件、总字节数和聚合 SHA-256 完全一致。本地 MSI 未做 Authenticode 签名，当前资产未上传远端 Release。
+
+## dev-0.5.13 移动端后台 Agent 连接服务
+
+Android 前台服务不再只是运行数量通知：本地 Agent 主协程、远程 SSE 与重连均迁入服务级 `SupervisorJob`，不再由 Activity/Compose 的 `viewModelScope` 决定存活。服务在已配对期间维持用户可见的后台连接租约，持有 CPU/Wi-Fi 网络锁并监听默认网络变化；界面退出后由服务接管认证 SSE 保活，重新打开界面时交还正式事件流并从桌面持久状态补齐。
+
+断网恢复时会清理失效连接池并立即重连。远程 Agent 活跃期间不再受原 5 分钟重连上限限制；本地模型请求只有在尚未产生任何正文或思考时才允许等待网络恢复后重试，已经产生模型活动的请求不会盲目重发，避免重复正文或工具副作用。Android 使用 `specialUse` 前台服务类型，未来若上架 Google Play 需申报对应长期 Agent 连接用途。
+
+## dev-0.5.13 PC 中断回复边界修复
+
+PC Build 在被停止或强制停止后，只要模型已经产生过公开回复，最后一条公开回复会继续作为 Build 块外的独立 Agent 回复显示；展开 Build 时不会重复同一段正文。尚未产生任何公开模型回复就被中断的运行不会伪造回复。实时终结、切换对话、重启后的历史恢复使用同一选择与去重规则。
+
+## 首次输入智能对话命名与移动断线续接
+
+PC 与 Android 本地新对话在首条真实用户输入落库后，必须先完成一次独立、无工具、15 秒超时的标题探测；标题成功生成并落库后才允许首次正式 Agent 请求开始。该请求复用首轮发送时冻结的 provider/model/intelligence，概括用户意图而非截取原文，同时作为该部署的首轮可用性检查；失败或超时不会启动正式响应，用户在原对话再次发送时仍使用同一条首消息重试门禁。Android 远程对话继续由 PC 单点命名。
+
+标题身份和“首次正式响应是否已启动”均随对话持久化；重启、第二次发送或工作区切换不会把后续文本误当作标题来源。双端首轮使用发送时冻结的 provider/model/intelligence 配置，标题结果只在目标会话、首消息身份与自动默认标题仍匹配时落库，手动命名始终优先；标题请求的消息、错误和输出不进入聊天、Build、Guide/Next 或正式请求缓存前缀。
+
+移动端后台网络恢复现在要求系统默认网络同时具备 INTERNET 与 VALIDATED。provider 在流式正文或思考途中断开时，会保留已公开进度、等待验证网络恢复并最多安全续接三次，续接提示禁止复述；反复失败显示受控恢复提示，不再直接暴露 `Software caused connection abort`。工具调用仍以既有持久化结果边界为准，断线恢复不会重放已经提交的工具副作用。
+
+## dev-0.5.13 双端标题一致性与 r2 APK（历史候选，已被 r3 替代）
+
+双端首次标题探测现在严格复用首轮正式响应的冻结部署身份。PC 在标题门禁前完成不可用模型与 fallback 解析，再把同一 provider、model、intelligence 及原生 reasoning effort 交给标题探测和正式响应；Android 同步冻结 `ApiConfig`、`ModelConfig` 与 intelligence。标题探测不再硬编码 `low`，因此它确实承担首轮正式模型可用性检测，而不会验证另一档配置。
+
+该轮工作树的桌面 typecheck、build 与 `1696/1696` 主验证通过；Android `263/263` JVM 测试、Release Vital Lint、R8、资源收缩和隔离 Release 构建通过。r2 历史侧载包为 `APK/Newmark-Agent-0.5.13-dual-platform-final-r2-release.apk`，大小 52,794,422 bytes，SHA-256 `6A3B048E987F4BBE94C1F22EFCFD3E2B85DF96B58BEF813FE01C72A581243183`。旧 `8BDCF457C7003C8ECF710F006F87109D8A11E722C784CFD63F6A2F087EB7A820` 候选当时已被 r2 替代；r2 随后因 Android Responses 流把缺失内嵌 `response.status` 的 `response.completed` 误判为成功而被 r3 替代。
+
+r2 当时包含 Search MCP 池、`browser_use.visible`、OpenAI Responses 协议、后台网络恢复、Guide/输入法交互和设置返回按钮玻璃画布修复。其 v2 签名、4-byte/16 KiB 对齐、Manifest/版本、隐私扫描和 API 35 模拟器冒烟记录继续保留为历史/回滚证据，但 r2 不再代表当前源码或当前交付。
+
+## dev-0.5.13 Android Responses 严格完成态与 r3 APK（历史候选，已被 r4/r5 替代）
+
+Android Responses 流现在只有在 `response.completed` 同时携带大小写不敏感的明确 `response.status=completed` 时才成功。事件名本身以及缺失、空白、未知或非完成状态均返回受控失败；成功 SSE 测试夹具也显式携带该状态，避免宽松 fixture 再次掩盖协议缺口。
+
+Responses 聚焦测试 30/30、Android 68 suites / 264/264 且 0 failures/errors/skips；`lintVitalRelease` 用时 3 分 50 秒成功，隔离 clean `assembleRelease` 50 tasks（48 executed、2 up-to-date）用时 5 分 05 秒成功。历史侧载包为 `APK/Newmark-Agent-0.5.13-dual-platform-final-r3-release.apk`，52,794,422 bytes，SHA-256 `B702EB35EC4E9DB42FD8598865D46EF75F7B707CE6C3C611307CBD573A5B8847`；版本 `0.5.13/513`，使用 v2 Android Debug 签名，并通过 4-byte/16 KiB 对齐。后续终审发现根级 `status=completed` 仍可绕过内嵌状态契约，r3 因而被 r4 替代；r4 又因双端完整性终审发现 PDF 整体超时、Android 标题原生 reasoning 透传和移动图片视觉缺口而被 r5 替代。
+
+API 35 `emulator-5554` 安装成功。初次启动进入系统权限页，处理后 `MainActivity` 前台；独立复核一度被电池优化系统页覆盖，返回并显式启动后 2 秒、7 秒及最终查询均恢复 `MainActivity` topResumed。PID 11040 持续存活，FATAL/ANR 为 0。首次普通解压因重复 APK entry 失败后，发行扫描改为逐 Zip entry 读取字节，重复 entry 也全部检查且不创建临时目录；未发现开发者 profile/workspace、非允许用户目录、凭据或私钥。裸数字 `12252` 仅命中 6 个 vendor 文件，4 ABI ML Kit 库中的 `/home/build` 是第三方通用构建标记。用户本轮仅要求 APK，因此未打包 MSI；真机后台切网/长时运行、真实 provider、配对 PC bridge 与逐帧视觉仍未验证。
+
+## dev-0.5.13 双端终审修复与 r5 APK
+
+r4 将 Responses SSE 的成功条件收紧为只接受内嵌 `response.status=completed`，拒绝根级状态替代，并在缺失内嵌状态时优先保留供应商 `error.message`、`incomplete_details.reason` 或消息；Responses 聚焦 32/32。最终双端终审随后补齐三项发布阻断：Desktop `pdf_read` 使用一个累计 deadline 覆盖异步文件读取、pdf.js 全文解析和扫描页视觉观察，超时回执记录阶段并允许同一 Agent 继续响应；Android 标题探测与正式首轮共享冻结的 native reasoning 映射；Android `image_inspect` 校验 PNG/JPEG、10 MiB、4000 万像素与工作区/授权 URI 边界后，把图片仅作为一次性视觉子请求输入。
+
+门禁为 Desktop typecheck、build、1702/1702 主验证与完整 `test:full-release`；Android Responses 32/32、69 suites / 267/267、`lintVitalRelease` 3 分 01 秒，以及隔离 clean `assembleRelease` 50 tasks（47 executed、3 up-to-date）3 分 49 秒。当前侧载包 `APK/Newmark-Agent-0.5.13-dual-platform-final-r5-release.apk` 为 52,794,422 bytes，SHA-256 `C87DFA53B309D4FE1790FCB5F1EB2084F67BE6E44FC27D76D5E8E4E84A30A14B`；源包与交付副本一致，版本 `0.5.13/513`，v2 Android Debug 签名、4-byte/16 KiB 对齐及逐 Zip entry 隐私扫描通过。Desktop 后续仅完善了无供应商诊断文本与标题门禁压力夹具，不改变 APK 的 Android 源码快照。
+
+API 35 `emulator-5554` 在 ADB 重启后通过冷启动恢复在线，`adb install -r` 成功。显式启动 `MainActivity` 后 2 秒和 7 秒均为 topResumed，PID 3173 持续存在，目标进程 FATAL/ANR 为 0。该验证只证明模拟器安装和短时前台运行；真机 OEM 后台、切网/锁屏/划走、真实 provider、配对 PC bridge 与逐帧玻璃反馈仍需独立验收。本轮按用户要求只打包 APK，没有生成 MSI。

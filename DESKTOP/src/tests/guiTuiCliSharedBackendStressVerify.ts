@@ -31,13 +31,18 @@ function startMockProvider(): Promise<{
         response.end(JSON.stringify({ error: { message: 'not found' } }));
         return;
       }
-      let parsed: { messages?: Array<{ role?: string; content?: unknown }> } = {};
+      let parsed: { messages?: Array<{ role?: string; content?: unknown }>; stream?: boolean } = {};
       try { parsed = JSON.parse(body || '{}'); } catch {}
       const lastUser = [...(parsed.messages || [])].reverse().find(message => message.role === 'user');
       const text = typeof lastUser?.content === 'string'
         ? lastUser.content
         : JSON.stringify(lastUser?.content || '');
       const marker = (text.match(/SURFACE_[A-Z]+_[A-Z0-9_-]+/) || ['SURFACE_UNKNOWN'])[0];
+      if (parsed.stream !== true) {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ choices: [{ message: { content: `TITLE_${marker}` } }] }));
+        return;
+      }
       response.writeHead(200, {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache',

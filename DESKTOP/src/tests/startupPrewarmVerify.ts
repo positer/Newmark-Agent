@@ -454,6 +454,15 @@ function verifyDesktopContracts(): void {
     && ensureBrowserSource.includes("registered.hostWebContents?.send('browser:ensureGuest')")
     && ensureBrowserSource.includes('runtimeKey ? { runtimeKey } : undefined')
     && !ensureBrowserSource.includes('new BrowserWindow'), 'cold Browser-Use requests the registered built-in guest with a bounded wait and has no invisible BrowserWindow fallback');
+  const ensureBackgroundBrowserStart = mainTs.indexOf('async function ensureBackgroundBrowserWebContents');
+  const ensureBackgroundBrowserEnd = mainTs.indexOf('function ensureElectronBrowserUseHost', ensureBackgroundBrowserStart);
+  const ensureBackgroundBrowserSource = ensureBackgroundBrowserStart >= 0 && ensureBackgroundBrowserEnd > ensureBackgroundBrowserStart
+    ? mainTs.slice(ensureBackgroundBrowserStart, ensureBackgroundBrowserEnd)
+    : '';
+  ok(ensureBackgroundBrowserSource.includes('new WebContentsView({')
+    && ensureBackgroundBrowserSource.includes('backgroundBrowserViewsByRuntime')
+    && !ensureBackgroundBrowserSource.includes("browser:ensureGuest")
+    && !ensureBackgroundBrowserSource.includes('BrowserWindow'), 'visible=false Browser-Use stays on a main-process-only background WebContents and never creates or binds the right-sidebar guest');
   const coldBrowserUseIndex = packagedDev009Smoke.indexOf("action_id: 'dev009-cold-navigate'");
   const firstVisibleBrowserIndex = packagedDev009Smoke.indexOf("window.switchRightTab('browser')", coldBrowserUseIndex);
   ok(coldBrowserUseIndex >= 0

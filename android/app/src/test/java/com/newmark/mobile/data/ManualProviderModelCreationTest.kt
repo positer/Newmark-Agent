@@ -35,6 +35,28 @@ class ManualProviderModelCreationTest {
     }
 
     @Test
+    fun responsesProtocolPersistsAndReachesTheRuntimeApiConfig() {
+        val provider = createManualProviderConfig(
+            id = "responses",
+            name = "Responses Provider",
+            baseUrl = "https://api.example.test/v1/responses",
+            apiKey = "secret",
+            protocol = "responses",
+        ).copy(models = listOf(ModelConfig(name = "gpt-response")))
+
+        assertEquals("openai_responses", provider.protocol)
+        assertEquals("openai_responses", provider.toApiConfig(provider.models.single()).protocol)
+    }
+
+    @Test
+    fun protocolAliasesCoverPcCompatibleAndExplicitTransportNames() {
+        assertEquals("openai", requireMobileProviderProtocol("openai-compatible"))
+        assertEquals("openai", requireMobileProviderProtocol("chat_completions"))
+        assertEquals("openai_responses", requireMobileProviderProtocol("responses"))
+        assertEquals("anthropic", requireMobileProviderProtocol("claude"))
+    }
+
+    @Test
     fun manualModelPreservesCoreCapabilityFields() {
         val model = createManualModelConfig(
             name = " model-a ",
@@ -65,6 +87,9 @@ class ManualProviderModelCreationTest {
         assertTrue(settings.contains("private fun ManualProviderPage("))
         assertTrue(settings.contains("private fun ManualModelPage("))
         assertTrue(detailPage.contains("＋ 新建模型"))
+        assertTrue(detailPage.contains("ProviderProtocolRail("))
+        assertTrue(detailPage.contains("openai_responses"))
+        assertTrue(detailPage.contains("vm.updateProviderProtocol(provider.id, protocol)"))
         assertTrue(settings.contains("vm.upsertProvider(provider)"))
         assertTrue(settings.contains("vm.upsertModel(target.providerId, model)"))
         assertTrue(vm.contains("fun upsertModel(providerId: String, model: ModelConfig)"))

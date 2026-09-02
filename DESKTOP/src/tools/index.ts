@@ -40,6 +40,7 @@ import { closeToolArgumentSchema, ToolArgumentValidatorRegistry } from '../core/
 import { LocalOcrEngine, LocalOcrResult } from '../core/localOcr';
 import { browserVisualFallback, registerBrowserVisualFallback } from '../core/visualTextFallback';
 import { COMPUTER_USE_LOCK_TTL_MS, ComputerUseSessionScope, defaultComputerUseSessionRegistry } from '../core/computerUseSession';
+import { SearchMcpAttempt, SearchMcpPool, SearchMcpPoolResult } from '../core/searchMcpPool';
 
 export interface ToolExecutionContext {
   mode?: string;
@@ -149,7 +150,7 @@ function decodePdfLiteral(input: string): string {
     .replace(/\\([0-7]{1,3})/g, (_match, octal: string) => String.fromCharCode(parseInt(octal, 8)));
 }
 
-function extractPdfTextLayer(buffer: Buffer): string {
+function extractPdfTextLayerLegacy(buffer: Buffer): string {
   const binary = buffer.toString('latin1');
   const chunks: string[] = [];
   for (const match of binary.matchAll(/\((?:\\.|[^\\)]){1,4000}\)\s*Tj/g)) {
@@ -170,6 +171,62 @@ function extractPdfTextLayer(buffer: Buffer): string {
     chunks.push(swapped.toString('utf16le'));
   }
   return chunks.join(' ').replace(/\s+/g, ' ').trim().slice(0, 100_000);
+}
+
+export interface WebSearchResult {
+  invocationId: string;
+  checkedAt: string;
+  ok: boolean;
+  provider: string;
+  text: string;
+  attempts: SearchMcpAttempt[];
+}
+
+async function extractPdfTextLayer(buffer: Buffer, maxChars: number, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw abortReason(signal);
+  let loadingTask: any = null;
+  try {
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    loadingTask = pdfjs.getDocument({
+      data: new Uint8Array(buffer),
+      isEvalSupported: false,
+      useSystemFonts: true,
+      stopAtErrors: false,
+    });
+    const abortPromise = signal ? new Promise<never>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(abortReason(signal)), { once: true });
+    }) : null;
+    const document = await (abortPromise ? Promise.race([loadingTask!.promise, abortPromise]) : loadingTask!.promise);
+    const chunks: string[] = [];
+    let length = 0;
+    for (let pageNumber = 1; pageNumber <= document.numPages && length < maxChars; pageNumber += 1) {
+      if (signal?.aborted) throw abortReason(signal);
+      const page = await document.getPage(pageNumber);
+      const content = await page.getTextContent({ disableNormalization: false });
+      const pageText = (Array.isArray(content.items) ? content.items : [])
+        .map((item: { str?: string; hasEOL?: boolean }) => `${String(item.str || '')}${item.hasEOL ? '\n' : ' '}`)
+        .join('')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
+      if (pageText) {
+        const bounded = pageText.slice(0, Math.max(0, maxChars - length));
+        chunks.push(bounded);
+        length += bounded.length + 1;
+      }
+      page.cleanup();
+    }
+    return chunks.join('\n').trim().slice(0, maxChars);
+  } catch (error) {
+    if (signal?.aborted) throw abortReason(signal);
+    // Retain the bounded legacy decoder for minimal/malformed fixture PDFs and
+    // old documents whose streams pdf.js rejects. It never opens the browser.
+    const fallback = extractPdfTextLayerLegacy(buffer).slice(0, maxChars);
+    if (fallback) return fallback;
+    return '';
+  } finally {
+    try { await loadingTask?.destroy(); } catch {}
+  }
 }
 
 async function abortableToolDelay(durationMs: number, signal?: AbortSignal): Promise<void> {
@@ -221,6 +278,7 @@ export class ToolExecutor {
   private root: string;
   private readonly localOcr: LocalOcrEngine;
   private readonly argumentValidators = new ToolArgumentValidatorRegistry();
+  private readonly searchMcpPool: SearchMcpPool;
   private hostProfile: ToolHostProfile = {
     kind: 'desktop',
     platform: process.platform,
@@ -231,15 +289,42 @@ export class ToolExecutor {
   constructor(root: string, private config: ConfigManager, private ssh?: SshManager, private workspace?: WorkspaceManager) {
     this.root = root;
     this.localOcr = new LocalOcrEngine(root);
+    this.searchMcpPool = new SearchMcpPool(root);
   }
 
-  async webSearch(query: string): Promise<string> {
-    return this.wsearch(query);
+  async webSearch(query: string, signal?: AbortSignal): Promise<string> {
+    return (await this.webSearchDetailed(query, signal)).text;
+  }
+
+  async webSearchDetailed(query: string, signal?: AbortSignal): Promise<WebSearchResult> {
+    return this.wsearchDetailed(query, signal);
+  }
+
+  /** Search the configured MCP pool without entering any HTTP fallback. */
+  async webSearchMcpOnly(query: string, signal?: AbortSignal): Promise<WebSearchResult> {
+    const result = await this.searchMcpPool.search(query, signal);
+    return {
+      invocationId: result.invocationId,
+      checkedAt: result.checkedAt,
+      ok: result.ok,
+      provider: result.provider || '',
+      text: result.text || '',
+      attempts: result.attempts,
+    };
   }
 
   /** OCR entry point for the runtime's final visual fallback. */
   async finalVisualFallbackOcr(dataUrl: string, signal?: AbortSignal): Promise<LocalOcrResult> {
     return await this.localOcr.recognizeDataUrl(dataUrl, signal, 'sparse-ui');
+  }
+
+  private async readPdfFile(pdfPath: string, signal?: AbortSignal): Promise<Buffer> {
+    if (signal?.aborted) throw abortReason(signal);
+    return await fs.promises.readFile(pdfPath, signal ? { signal } : undefined);
+  }
+
+  private async extractPdfText(buffer: Buffer, maxChars: number, signal?: AbortSignal): Promise<string> {
+    return await extractPdfTextLayer(buffer, maxChars, signal);
   }
 
   setHostProfile(profile: ToolHostProfile): void {
@@ -287,8 +372,9 @@ export class ToolExecutor {
       t('browser_forward', 'Navigate the controlled browser forward.', {}, []),
       t('browser_reload', 'Reload the controlled browser.', {}, []),
       t('browser_cdp', 'Run a raw Chrome DevTools Protocol command against the controlled browser. Advanced use only.', { method: { type: 'string' }, params: { type: 'object' } }, ['method']),
-      t('browser_use', 'Native observe-then-act control for Newmark\'s built-in browser. Call observe first, then pass its page_generation, observation_id, and opaque ref to actions. Receipts are owner/runtime scoped; stale observations are rejected. This path does not require arbitrary page scripts or raw CDP.', {
+      t('browser_use', 'Native observe-then-act browser control. visible defaults to true and uses the right-sidebar built-in browser. Set visible=false to run on an independent host-owned background page that never connects to, displays, or renders the right-sidebar webview. Keep the same visible value throughout one observe/action sequence. Receipts are owner/runtime/surface scoped; stale observations are rejected.', {
         action: { type: 'string', enum: browserUseActions },
+        visible: { type: 'boolean', description: 'Whether to bind to the visible right-sidebar browser. Defaults to true. false uses an independent background execution surface and does not create or touch the sidebar webview.' },
         action_id: { type: 'string', description: 'Unique idempotency id for this action. Reusing it returns the original receipt without repeating the action.' },
         page_generation: { type: 'number', description: 'Generation returned by the latest observe receipt.' },
         observation_id: { type: 'string', description: 'Opaque observation capability returned by the latest observe receipt.' },
@@ -351,8 +437,9 @@ export class ToolExecutor {
           },
         },
       }, ['action']),
-      t('image_inspect', 'Inspect a durable user-submitted image by stable attachment_id, or use image_index within the latest user message containing images. Use source_info first when dimensions are unknown, then crop with pixel coordinates. Derived crops are current-turn only and are never written to disk.', {
-        action: { type: 'string', enum: ['source_info', 'crop'] },
+      t('image_inspect', 'Inspect a durable user-submitted image by stable attachment_id or latest-message image_index, or send one active-workspace PNG/JPEG to the current validated vision model with action=inspect. Use source_info first when submitted-image dimensions are unknown, then crop with pixel coordinates. Workspace observations and derived crops are current-turn only; image bytes never enter durable tool history.', {
+        action: { type: 'string', enum: ['source_info', 'crop', 'inspect'] },
+        path: { type: 'string', description: 'For action=inspect, a workspace-relative PNG/JPEG path. Absolute paths are accepted only when they remain inside the active workspace.' },
         attachment_id: { type: 'string', description: 'Stable user-image attachment id from the visible conversation. Prefer this when revisiting an older submitted image.' },
         image_index: { type: 'number', description: '1-based image index in the latest user message containing submitted images. Defaults to 1.' },
         x: { type: 'number', description: 'Crop left edge in source-image pixels.' },
@@ -371,10 +458,11 @@ export class ToolExecutor {
         path: { type: 'string', description: 'For source=image, a workspace PNG/JPEG/BMP path.' },
         fallback_reason: { type: 'string', enum: ['vision_unavailable', 'vision_failed'] },
       }, ['source', 'fallback_reason']),
-      t('pdf_read', 'Read a PDF with enforced fallback order: embedded text layer first; if unreadable, render the requested page in Newmark Browser and send a screenshot to a validated vision model; use bundled Chinese/English OCR only when vision is unavailable, or later through ocr_read after vision failed. Designed for scanned PDFs, not layout/table reconstruction.', {
+      t('pdf_read', 'Read a PDF with enforced fallback order: embedded text layer first; if unreadable, render the requested page in Newmark Browser and send a screenshot to a validated vision model; use bundled Chinese/English OCR only when vision is unavailable, or later through ocr_read after vision failed. One cumulative timeout covers the entire PDF read, including file I/O, pdf.js parsing, and rendered-page observation. Designed for scanned PDFs, not layout/table reconstruction.', {
         path: { type: 'string', description: 'Workspace PDF path.' },
         page: { type: 'number', minimum: 1, maximum: 100, description: 'Page to render when no usable text layer exists. Defaults to 1.' },
         max_chars: { type: 'number', minimum: 500, maximum: 100000 },
+        timeout_ms: { type: 'number', minimum: 1000, maximum: 120000, description: 'Bounded entire PDF read timeout. Defaults to 30000 ms. A timeout returns a recoverable tool result and does not abort the Agent run.' },
       }, ['path']),
       t('terminal_takeover', 'Take over a persistent owner-scoped PTY session that is independent from the one-shot bash tool. Actions: start creates/reuses a named PTY, write sends a command to the same session, read returns its output buffer, resize updates PTY geometry, detach releases the UI attachment without stopping the shell, stop interrupts it, list shows sessions. Use this when the user wants continuous terminal state such as cd/env/process context or interactive TTY programs.', {
         action: { type: 'string', enum: ['start', 'write', 'read', 'resize', 'detach', 'stop', 'list'] },
@@ -522,6 +610,7 @@ export class ToolExecutor {
         copy.function.description = 'Plan read-only browser: observe, navigate, wait, extract only.';
         copy.function.parameters.properties = {
           action: { type: 'string', enum: [...PLAN_BROWSER_USE_ACTIONS] },
+          visible: copy.function.parameters.properties.visible,
           action_id: copy.function.parameters.properties.action_id,
           page_generation: copy.function.parameters.properties.page_generation,
           observation_id: copy.function.parameters.properties.observation_id,
@@ -696,6 +785,7 @@ export class ToolExecutor {
           const scope = browserUseScope(context, wsPath);
           const request: BrowserUseRequest = {
             ...scope,
+            visible: typeof args.visible === 'boolean' ? args.visible : true,
             action: String(args.action || '').trim().toLowerCase() as BrowserUseAction,
             ...(g('action_id') ? { actionId: g('action_id') } : {}),
             ...(args.page_generation !== undefined ? { pageGeneration: Number(args.page_generation) } : {}),
@@ -770,44 +860,72 @@ export class ToolExecutor {
         case 'pdf_read': {
           const pdfPath = resolve(g('path'));
           if (path.extname(pdfPath).toLowerCase() !== '.pdf') return '[pdf_read error] path must end in .pdf.';
-          const stat = fs.statSync(pdfPath);
-          if (!stat.isFile() || stat.size <= 0 || stat.size > 250 * 1024 * 1024) {
-            return '[pdf_read error] PDF must be a regular file no larger than 250 MB.';
-          }
           const maxChars = Math.max(500, Math.min(100_000, Number(args.max_chars || 50_000)));
-          const textLayer = extractPdfTextLayer(fs.readFileSync(pdfPath)).slice(0, maxChars);
-          const readableCount = (textLayer.match(/[A-Za-z0-9\u3400-\u9fff]/g) || []).length;
-          if (readableCount >= 20) {
+          const page = Math.max(1, Math.min(100, Math.floor(Number(args.page || 1))));
+          const timeoutMs = Math.max(1000, Math.min(120_000, Number(args.timeout_ms || 30_000)));
+          const guard = abortGuard(context.signal, timeoutMs);
+          let stage = 'file_stat';
+          try {
+            const guardedContext = { ...context, signal: guard.signal };
+            const stat = await fs.promises.stat(pdfPath);
+            if (!stat.isFile() || stat.size <= 0 || stat.size > 250 * 1024 * 1024) {
+              return '[pdf_read error] PDF must be a regular file no larger than 250 MB.';
+            }
+            stage = 'file_read';
+            const bytes = await this.readPdfFile(pdfPath, guard.signal);
+            stage = 'text_parse';
+            const textLayer = await this.extractPdfText(bytes, maxChars, guard.signal);
+            const readableCount = (textLayer.match(/[A-Za-z0-9\u3400-\u9fff]/g) || []).length;
+            if (readableCount >= 20) {
+              return JSON.stringify({
+                ok: true,
+                source: 'pdf_text_layer',
+                recognition_order: 'text>vision>local_ocr',
+                text: textLayer,
+                truncated: textLayer.length >= maxChars,
+              }, null, 2);
+            }
+            stage = 'rendered_page_observation';
+            const url = `${pathToFileURL(pdfPath).toString()}#page=${page}&zoom=page-fit`;
+            const opened = await this.browserRun({ action: 'open', url }, guard.signal, guardedContext, wsPath);
+            if (!opened.includes('[browser:open] OK')) {
+              return JSON.stringify({ ok: false, source: 'pdf_render', code: 'pdf_open_failed', error: opened || 'Unable to open PDF.' }, null, 2);
+            }
+            await abortableToolDelay(900, guard.signal);
+            const observed = await this.execute('browser_use', JSON.stringify({
+              action: 'observe',
+              action_id: `pdf-read-${crypto.randomUUID()}`,
+              max_chars: maxChars,
+              max_refs: 80,
+            }), wsPath, guardedContext);
+            if (guard.signal.aborted) throw abortReason(guard.signal);
+            let parsed: unknown = observed;
+            try { parsed = JSON.parse(observed); } catch {}
             return JSON.stringify({
               ok: true,
-              source: 'pdf_text_layer',
+              source: 'pdf_rendered_page',
+              page,
               recognition_order: 'text>vision>local_ocr',
-              text: textLayer,
-              truncated: textLayer.length >= maxChars,
+              result: parsed,
             }, null, 2);
+          } catch (error) {
+            if (context.signal?.aborted) throw abortReason(context.signal);
+            if (guard.signal.aborted) {
+              return JSON.stringify({
+                ok: false,
+                source: stage === 'rendered_page_observation' ? 'pdf_rendered_page' : 'pdf_read',
+                code: 'pdf_read_timeout',
+                stage,
+                page,
+                timeout_ms: timeoutMs,
+                recoverable: true,
+                error: `PDF read timed out during ${stage} after ${timeoutMs} ms. The Agent run can continue or retry with a larger timeout_ms.`,
+              }, null, 2);
+            }
+            throw error;
+          } finally {
+            guard.dispose();
           }
-          const page = Math.max(1, Math.min(100, Math.floor(Number(args.page || 1))));
-          const url = `${pathToFileURL(pdfPath).toString()}#page=${page}&zoom=page-fit`;
-          const opened = await this.browserRun({ action: 'open', url }, context.signal, context, wsPath);
-          if (!opened.includes('[browser:open] OK')) {
-            return JSON.stringify({ ok: false, source: 'pdf_render', error: opened || 'Unable to open PDF.' }, null, 2);
-          }
-          await abortableToolDelay(900, context.signal);
-          const observed = await this.execute('browser_use', JSON.stringify({
-            action: 'observe',
-            action_id: `pdf-read-${crypto.randomUUID()}`,
-            max_chars: maxChars,
-            max_refs: 80,
-          }), wsPath, context);
-          let parsed: unknown = observed;
-          try { parsed = JSON.parse(observed); } catch {}
-          return JSON.stringify({
-            ok: true,
-            source: 'pdf_rendered_page',
-            page,
-            recognition_order: 'text>vision>local_ocr',
-            result: parsed,
-          }, null, 2);
         }
         case 'screen_capture': {
           const target = g('target').toLowerCase() === 'application' ? 'application' : 'desktop';
@@ -1338,6 +1456,10 @@ export class ToolExecutor {
   }
 
   private async wsearch(query: string, signal?: AbortSignal): Promise<string> {
+    return (await this.wsearchDetailed(query, signal)).text;
+  }
+
+  private async wsearchDetailed(query: string, signal?: AbortSignal): Promise<WebSearchResult> {
     const clean = (s: string) => s
       .replace(/<[^>]+>/g, ' ')
       .replace(/&amp;/g, '&')
@@ -1349,31 +1471,20 @@ export class ToolExecutor {
       .trim();
 
     const errors: string[] = [];
+    let mcp: SearchMcpPoolResult = { invocationId: '', checkedAt: '', ok: false, attempts: [] };
 
     try {
-      const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-      const guard = abortGuard(signal, 15000);
-      let html = '';
-      try {
-        const resp = await this.proxyFetch(url, {
-          headers: { 'User-Agent': 'NewmarkAgent/1.0' },
-          signal: guard.signal,
-        });
-        html = await resp.text();
-      } finally {
-        guard.dispose();
+      mcp = await this.webSearchMcpOnly(query, signal);
+      if (mcp.ok && mcp.text) {
+        return { invocationId: mcp.invocationId, checkedAt: mcp.checkedAt, ok: true, provider: mcp.provider || 'MCP search', text: mcp.text, attempts: mcp.attempts };
       }
-      const re = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>[\s\S]*?class="result__snippet">(.*?)<\/a>/g;
-      const results: string[] = [];
-      let m;
-      while ((m = re.exec(html)) !== null && results.length < 8) {
-        results.push(`${clean(m[2])}\n${clean(m[1])}\n${clean(m[3])}`);
+      for (const attempt of mcp.attempts) {
+        if (attempt.status === 'error') errors.push(`${attempt.name}: ${attempt.error || 'failed'}`);
+        else if (attempt.status === 'empty') errors.push(`${attempt.name}: no results`);
       }
-      if (results.length > 0) return results.join('\n\n');
-      errors.push('DuckDuckGo returned no parseable results');
-    } catch (e) {
+    } catch (error) {
       if (signal?.aborted) throw abortReason(signal);
-      errors.push(`DuckDuckGo: ${e instanceof Error ? e.message : String(e)}`);
+      errors.push(`Search MCP pool: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     try {
@@ -1399,14 +1510,40 @@ export class ToolExecutor {
         const snippet = item.match(/<p[^>]*>([\s\S]*?)<\/p>/);
         results.push(`${clean(title[2])}\n${clean(title[1])}\n${snippet ? clean(snippet[1]) : ''}`.trim());
       }
-      if (results.length > 0) return results.join('\n\n');
+      if (results.length > 0) return { invocationId: mcp.invocationId, checkedAt: mcp.checkedAt, ok: true, provider: 'Bing HTTP', text: results.join('\n\n'), attempts: mcp.attempts };
       errors.push('Bing returned no parseable results');
     } catch (e) {
       if (signal?.aborted) throw abortReason(signal);
       errors.push(`Bing: ${e instanceof Error ? e.message : String(e)}`);
     }
 
-    return `[web_search] No results. ${errors.join('; ')}`;
+    try {
+      const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      const guard = abortGuard(signal, 15000);
+      let html = '';
+      try {
+        const resp = await this.proxyFetch(url, {
+          headers: { 'User-Agent': 'NewmarkAgent/1.0' },
+          signal: guard.signal,
+        });
+        html = await resp.text();
+      } finally {
+        guard.dispose();
+      }
+      const re = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>[\s\S]*?class="result__snippet">(.*?)<\/a>/g;
+      const results: string[] = [];
+      let match;
+      while ((match = re.exec(html)) !== null && results.length < 8) {
+        results.push(`${clean(match[2])}\n${clean(match[1])}\n${clean(match[3])}`);
+      }
+      if (results.length > 0) return { invocationId: mcp.invocationId, checkedAt: mcp.checkedAt, ok: true, provider: 'DuckDuckGo HTTP', text: results.join('\n\n'), attempts: mcp.attempts };
+      errors.push('DuckDuckGo returned no parseable results');
+    } catch (e) {
+      if (signal?.aborted) throw abortReason(signal);
+      errors.push(`DuckDuckGo: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    return { invocationId: mcp.invocationId, checkedAt: mcp.checkedAt, ok: false, provider: '', text: `[web_search] No results. ${errors.join('; ')}`, attempts: mcp.attempts };
   }
 
   private async wfetch(url: string, signal?: AbortSignal): Promise<string> {

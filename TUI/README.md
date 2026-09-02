@@ -24,13 +24,13 @@ Newmark --TUI
 在任意项目目录中，直接指向本目录的入口：
 
 ```powershell
-node "C:\Users\12252\Desktop\Files\Code\Newmark Agent\TUI\bin\newmark-tui.js"
+node ".\TUI\bin\newmark-tui.js"
 ```
 
 也可显式指定运行时根和工作区：
 
 ```powershell
-node "C:\Users\12252\Desktop\Files\Code\Newmark Agent\TUI\bin\newmark-tui.js" `
+node ".\TUI\bin\newmark-tui.js" `
   --root "$HOME\.Newmark" `
   --workspace (Get-Location).Path
 ```

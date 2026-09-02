@@ -80,8 +80,21 @@ async function main(): Promise<void> {
   };
 
   const engine = new BrowserUseEngine(adapter, { now: (() => { let now = 1_000; return () => ++now; })() });
-  const scopeA = { owner: 'conversation:alpha:root', runtimeKey: 'workspace:a::conversation:default' };
-  const scopeB = { owner: 'conversation:beta:root', runtimeKey: 'workspace:b::conversation:default' };
+  const scopeA = { owner: 'conversation:alpha:root', runtimeKey: 'workspace:a::conversation:default', visible: true };
+  const scopeB = { owner: 'conversation:beta:root', runtimeKey: 'workspace:b::conversation:default', visible: true };
+
+  const boundDefaultVisible = bindBrowserUseRequest({ action: 'observe' }, { runtimeKey: scopeA.runtimeKey, actorId: 'default-visible' });
+  const boundBackground = bindBrowserUseRequest({ action: 'observe', visible: false }, { runtimeKey: scopeA.runtimeKey, actorId: 'background-visible' });
+  assert(boundDefaultVisible.visible === true && boundBackground.visible === false, 'trusted Browser-Use binding defaults visible=true and preserves explicit false');
+  for (const invalidVisible of ['false', 0, null, {}, []]) {
+    let rejected = false;
+    try {
+      bindBrowserUseRequest({ action: 'observe', visible: invalidVisible }, { runtimeKey: scopeA.runtimeKey, actorId: 'invalid-visible' });
+    } catch (error) {
+      rejected = error instanceof TypeError && /visible must be a boolean/i.test(error.message);
+    }
+    assert(rejected, `trusted Browser-Use binding rejects non-boolean visible=${JSON.stringify(invalidVisible)}`);
+  }
 
   const observation = await engine.run({ ...scopeA, action: 'observe', actionId: 'observe-a' });
   assert(observation.ok && observation.action === 'observe', 'observe returns a successful structured receipt');
@@ -90,6 +103,8 @@ async function main(): Promise<void> {
   assert(observation.observation?.refs.map(ref => ref.ref).join(',') === 'r1,r2,r3', 'observe returns compact opaque refs');
   assert(observation.observation?.refs[0].editable === true && observation.observation?.refs[1].options?.length === 2, 'observe preserves safe interaction metadata');
   assert(!JSON.stringify(observation).includes('#submit'), 'observe never exposes adapter selectors or internal tokens');
+  const backgroundObservation = await engine.run({ ...scopeA, visible: false, action: 'observe', actionId: 'observe-a' });
+  assert(backgroundObservation.sequence === 1 && backgroundObservation.pageGeneration === 1 && backgroundObservation.visible === false, 'visible and background Browser-Use surfaces have independent engine sessions and idempotency caches');
 
   const click = await engine.run({ ...scopeA, action: 'click', actionId: 'click-a', pageGeneration: 1, observationId: observation.observationId, ref: 'r3' });
   assert(click.ok && click.action === 'click' && click.ref === 'r3', 'click resolves an observed ref');
@@ -336,9 +351,11 @@ async function main(): Promise<void> {
   const tools = new ToolExecutor(toolRoot, config);
   const definition = tools.definitions().find((item: any) => item.function?.name === 'browser_use') as any;
   assert(!!definition && definition.function.parameters.required.includes('action'), 'ToolExecutor exposes browser_use with an action schema');
+  assert(definition.function.parameters.properties.visible?.type === 'boolean' && !definition.function.parameters.required.includes('visible'), 'Browser-Use exposes an optional strict visible boolean');
   assert(!Object.prototype.hasOwnProperty.call(definition.function.parameters.properties, 'owner') && !Object.prototype.hasOwnProperty.call(definition.function.parameters.properties, 'runtime_key'), 'model schema cannot supply owner or runtimeKey');
   const planDefinition = tools.definitions('plan').find((item: any) => item.function?.name === 'browser_use') as any;
   assert(JSON.stringify(planDefinition.function.parameters.properties.action.enum) === JSON.stringify(['observe', 'navigate', 'wait', 'extract']), 'Plan mode only exposes read-only Browser-Use actions');
+  assert(planDefinition.function.parameters.properties.visible?.type === 'boolean', 'Plan mode preserves the optional Browser-Use visible surface selector');
 
   const capturedRequests: BrowserUseRequest[] = [];
   BrowserUse.setBackend({
@@ -372,7 +389,22 @@ async function main(): Promise<void> {
     workspacePath: toolRoot,
   });
   assert(toolOutput.includes('tool-observation') && capturedRequests.at(-1)?.action === 'observe', 'ToolExecutor routes browser_use and formats its structured receipt');
+  assert(capturedRequests.at(-1)?.visible === true, 'Browser-Use omission defaults to the visible right-sidebar surface');
   assert(capturedRequests.at(-1)?.runtimeKey === 'workspace:trusted::conversation:default' && capturedRequests.at(-1)?.owner === 'browser-use:workspace:trusted::conversation:default:actor:root', 'ToolExecutor derives scope only from trusted execution context');
+  const backgroundToolOutput = await tools.execute('browser_use', JSON.stringify({
+    action: 'observe',
+    action_id: 'tool-background-observe',
+    visible: false,
+  }), toolRoot, {
+    workspaceId: 'workspace-alpha',
+    conversationId: 'default',
+    actorId: 'root',
+    runtimeKey: 'workspace:trusted::conversation:default',
+    workspacePath: toolRoot,
+  });
+  assert(backgroundToolOutput.includes('tool-observation') && capturedRequests.at(-1)?.visible === false, 'Browser-Use preserves explicit visible=false through direct execution');
+  const invalidVisible = tools.validateInvocation('browser_use', JSON.stringify({ action: 'observe', visible: 'false' }));
+  assert(!invalidVisible.ok && invalidVisible.error.includes('visible'), 'Browser-Use rejects non-boolean visible values');
   const callsBeforeBlockedPlan = capturedRequests.length;
   const blockedPlan = await tools.execute('browser_use', JSON.stringify({ action: 'click', page_generation: 1, observation_id: 'x', ref: 'r1' }), toolRoot, { mode: 'plan', runtimeKey: 'plan-runtime', conversationId: 'default' });
   assert(blockedPlan.includes('Plan mode only allows Browser-Use') && capturedRequests.length === callsBeforeBlockedPlan, `runtime policy blocks hidden mutating Browser-Use calls in Plan mode: ${blockedPlan}`);

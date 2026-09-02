@@ -13,8 +13,13 @@ import org.json.JSONObject
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.google.gson.JsonElement
+import java.io.EOFException
 import java.io.IOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
 import java.net.SocketException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
 /** 一次 chat 响应：文本内容 + 可选工具调用 */
@@ -171,6 +176,26 @@ internal fun isFreshConnectionRetryable(error: Throwable): Boolean =
                 message.contains("connection aborted")
         }
 
+/** Network loss before any model activity is safe to retry after connectivity returns. */
+internal fun isTransientAgentNetworkFailure(error: Throwable): Boolean =
+    generateSequence(error) { it.cause }.any { cause ->
+        cause is UnknownHostException || cause is ConnectException || cause is NoRouteToHostException ||
+            cause is SocketTimeoutException || cause is EOFException || cause is SocketException ||
+            (cause is IOException && cause.message.orEmpty().lowercase().let { message ->
+                message.contains("network is unreachable") || message.contains("connection reset") ||
+                    message.contains("connection aborted") || message.contains("unexpected end of stream") ||
+                    message.contains("failed to connect")
+            })
+    }
+
+internal fun agentNetworkRetryDelayMs(attempt: Int): Long = when (attempt.coerceAtLeast(0)) {
+    0 -> 250L
+    1 -> 1_000L
+    2 -> 3_000L
+    3 -> 10_000L
+    else -> 30_000L
+}
+
 internal data class ResponsesStreamDelta(
     val thought: String = "",
     val text: String = "",
@@ -187,9 +212,14 @@ internal fun parseResponsesStreamDelta(payload: String, sseEvent: String = ""): 
         ?: return ResponsesStreamDelta()
     val type = sseEvent.ifBlank { json.optionalText("type") }
     return when (type) {
-        "response.reasoning_summary_text.delta" -> ResponsesStreamDelta(thought = json.optionalText("delta"))
-        "response.reasoning_summary_text.done" -> ResponsesStreamDelta(thought = json.optionalText("text"))
+        "response.reasoning_summary_text.delta", "response.reasoning_text.delta" ->
+            ResponsesStreamDelta(thought = json.optionalText("delta"))
+        "response.reasoning_summary_text.done", "response.reasoning_text.done" ->
+            ResponsesStreamDelta(thought = json.firstText("text", "delta"))
         "response.output_text.delta" -> ResponsesStreamDelta(text = json.optionalText("delta"))
+        "response.output_text.done" -> ResponsesStreamDelta(text = json.firstText("text", "delta"))
+        "response.refusal.delta" -> ResponsesStreamDelta(text = json.optionalText("delta"))
+        "response.refusal.done" -> ResponsesStreamDelta(text = json.firstText("refusal", "text", "delta"))
         "response.output_item.added", "response.output_item.done" -> {
             val item = json.getAsJsonObject("item")?.takeIf { it.optionalText("type") == "function_call" }
             ResponsesStreamDelta(
@@ -201,8 +231,8 @@ internal fun parseResponsesStreamDelta(payload: String, sseEvent: String = ""): 
                     .ifBlank { json.optionalText("output_index") },
             )
         }
-        "response.function_call_arguments.delta" -> ResponsesStreamDelta(
-            toolArgumentsDelta = json.optionalText("delta"),
+        "response.function_call_arguments.delta", "response.function_call_arguments.done" -> ResponsesStreamDelta(
+            toolArgumentsDelta = json.firstText("delta", "arguments"),
             toolKey = json.optionalText("item_id")
                 .ifBlank { json.optionalText("call_id") }
                 .ifBlank { json.optionalText("output_index") },
@@ -210,6 +240,32 @@ internal fun parseResponsesStreamDelta(payload: String, sseEvent: String = ""): 
         "response.completed" -> ResponsesStreamDelta(completed = true)
         else -> ResponsesStreamDelta()
     }
+}
+
+private fun responsesFailureMessage(root: JSONObject?, fallbackStatus: String): String {
+    val response = root?.optJSONObject("response")
+    val status = response?.optionalText("status").orEmpty()
+        .ifBlank { root?.optionalText("status").orEmpty() }
+        .ifBlank { fallbackStatus.removePrefix("response.") }
+    val providerError = response?.optJSONObject("error")?.optionalText("message").orEmpty()
+        .ifBlank { root?.optJSONObject("error")?.optionalText("message").orEmpty() }
+    val incompleteReason = response?.optJSONObject("incomplete_details")?.optionalText("reason").orEmpty()
+        .ifBlank { root?.optJSONObject("incomplete_details")?.optionalText("reason").orEmpty() }
+    return providerError
+        .ifBlank { incompleteReason }
+        .ifBlank { root?.optionalText("message").orEmpty() }
+        .ifBlank { status.takeIf(String::isNotBlank)?.let { "response.$it" }.orEmpty() }
+        .ifBlank { "Responses response did not complete" }
+}
+
+private fun responsesMissingStreamStatusMessage(root: JSONObject?): String {
+    val response = root?.optJSONObject("response")
+    return response?.optJSONObject("error")?.optionalText("message").orEmpty()
+        .ifBlank { root?.optJSONObject("error")?.optionalText("message").orEmpty() }
+        .ifBlank { response?.optJSONObject("incomplete_details")?.optionalText("reason").orEmpty() }
+        .ifBlank { root?.optJSONObject("incomplete_details")?.optionalText("reason").orEmpty() }
+        .ifBlank { root?.optionalText("message").orEmpty() }
+        .ifBlank { "Responses stream missing explicit response.status=completed" }
 }
 
 /** OpenAI 兼容 chat/completions 客户端（流式文本/思考 + function calling） */
@@ -231,6 +287,10 @@ class ApiClient(
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
     private val temperatureUnsupported = mutableSetOf<String>()
 
+    fun evictConnections() {
+        client.connectionPool.evictAll()
+    }
+
     suspend fun chat(
         config: ApiConfig,
         messages: List<ChatMessage>,
@@ -243,6 +303,19 @@ class ApiClient(
     ): Result<ChatResponse> = withContext(Dispatchers.IO) {
         runCatching {
             val base = config.baseUrl.trim().trimEnd('/')
+            if (normalizeMobileProviderProtocol(config.protocol) == PROVIDER_PROTOCOL_OPENAI_RESPONSES) {
+                return@runCatching executeResponses(
+                    config = config,
+                    base = base,
+                    messages = messages,
+                    tools = tools,
+                    intelligence = intelligence,
+                    thinkingTierMap = thinkingTierMap,
+                    maxOutputTokens = maxOutputTokens,
+                    onThoughtDelta = onThoughtDelta,
+                    onTextDelta = onTextDelta,
+                )
+            }
             val url = if (base.endsWith("/chat/completions")) base else "$base/chat/completions"
 
             val body = JSONObject().apply {
@@ -440,11 +513,8 @@ class ApiClient(
         onThoughtDelta: suspend (String) -> Unit,
         onTextDelta: suspend (String) -> Unit,
     ): ChatResponse {
-        val endpointBase = base
-            .removeSuffix("/chat/completions")
-            .removeSuffix("/responses")
-            .trimEnd('/')
-        val url = "$endpointBase/responses"
+        val url = responsesEndpoint(base)
+        val endpointBase = url.removeSuffix("/responses")
         val (temperature, defaultMaxTokens, _) = intelligenceConfig(intelligence)
         val body = JSONObject().apply {
             put("model", config.model)
@@ -480,7 +550,7 @@ class ApiClient(
             val content = StringBuilder()
             val reasoning = StringBuilder()
             val calls = linkedMapOf<String, ToolCallAccumulator>()
-            val fallbackJson = StringBuilder()
+            val fallbackLines = mutableListOf<String>()
             var pendingEvent = ""
             var completed = false
             var streamError = ""
@@ -493,7 +563,8 @@ class ApiClient(
                     line.startsWith("data:") -> {
                         val payload = line.removePrefix("data:").trim()
                         if (payload.isBlank() || payload == "[DONE]") continue
-                        val parsed = parseResponsesStreamDelta(payload, pendingEvent)
+                        val eventName = pendingEvent
+                        val parsed = parseResponsesStreamDelta(payload, eventName)
                         pendingEvent = ""
                         val thoughtDelta = appendCompatibleStreamValue(reasoning, parsed.thought)
                         if (thoughtDelta.isNotBlank()) onThoughtDelta(thoughtDelta)
@@ -512,35 +583,61 @@ class ApiClient(
                             calls.getOrPut(parsed.toolKey) { ToolCallAccumulator(id = parsed.toolKey) }
                                 .argumentParts.add(parsed.toolArgumentsDelta)
                         }
-                        completed = completed || parsed.completed
                         val eventJson = runCatching { JSONObject(payload) }.getOrNull()
-                        val eventType = eventJson?.optString("type").orEmpty()
-                        if (eventType == "response.failed" || eventType == "response.incomplete" || eventType == "error") {
-                            streamError = eventJson?.optJSONObject("error")?.optionalText("message")
-                                .orEmpty().ifBlank { eventJson?.optionalText("message").orEmpty() }
-                                .ifBlank { eventType }
+                        val eventType = eventName.ifBlank { eventJson?.optString("type").orEmpty() }
+                        if (parsed.completed) {
+                            val responseStatus = eventJson?.optJSONObject("response")?.optionalText("status")
+                                .orEmpty()
+                            if (responseStatus.equals("completed", ignoreCase = true)) {
+                                completed = true
+                            } else {
+                                streamError = if (responseStatus.isBlank()) {
+                                    responsesMissingStreamStatusMessage(eventJson)
+                                } else {
+                                    responsesFailureMessage(eventJson, responseStatus)
+                                }
+                            }
+                        }
+                        if (
+                            eventType == "response.failed" || eventType == "response.incomplete" ||
+                            eventType == "response.cancelled" || eventType == "response.canceled" ||
+                            eventType == "error"
+                        ) {
+                            streamError = responsesFailureMessage(eventJson, eventType)
                         }
                     }
-                    line.isNotBlank() -> fallbackJson.append(line)
+                    line.isNotBlank() -> fallbackLines += line.trim()
                 }
             }
             if (streamError.isNotBlank()) error(streamError)
-            if (fallbackJson.isNotBlank() && content.isEmpty() && calls.isEmpty()) {
-                mergeNonStreamingResponses(fallbackJson.toString(), content, reasoning, calls)
+            if (fallbackLines.isNotEmpty() && content.isEmpty() && reasoning.isEmpty() && calls.isEmpty()) {
+                mergeNonStreamingResponses(fallbackLines.joinToString("\n"), content, reasoning, calls)
                 if (reasoning.isNotEmpty()) onThoughtDelta(reasoning.toString())
                 if (content.isNotEmpty()) onTextDelta(content.toString())
                 completed = true
             }
-            if (!completed && content.isEmpty() && calls.isEmpty()) error("Responses stream ended before response.completed")
+            if (!completed) error("Responses stream ended before response.completed")
             return ChatResponse(
                 content = content.toString(),
                 reasoningContent = reasoning.toString(),
                 toolCalls = calls.values.map { it.toToolCall() }.filter { it.name.isNotBlank() },
                 finishReason = if (completed) "completed" else "",
-                explicitEmptyResponse = (completed || fallbackJson.isNotBlank()) &&
-                    content.isBlank() && reasoning.isBlank() && calls.isEmpty(),
+                explicitEmptyResponse = completed && content.isBlank() && reasoning.isBlank() && calls.isEmpty(),
             )
         }
+    }
+
+    internal fun responsesEndpoint(baseUrl: String): String {
+        val base = baseUrl.trim().trimEnd('/')
+        val configuredPath = runCatching { java.net.URI(base).path.orEmpty().trimEnd('/') }.getOrDefault("")
+        val endpointBase = when {
+            base.endsWith("/chat/completions", ignoreCase = true) -> base.dropLast("/chat/completions".length)
+            base.endsWith("/responses", ignoreCase = true) -> base.dropLast("/responses".length)
+            base.endsWith("/v1", ignoreCase = true) -> base
+            configuredPath.isBlank() -> "$base/v1"
+            else -> base
+        }.trimEnd('/')
+        return "$endpointBase/responses"
     }
 
     private fun executeProviderRequest(
@@ -670,6 +767,9 @@ class ApiClient(
         calls: MutableMap<String, ToolCallAccumulator>,
     ) {
         val root = JSONObject(payload)
+        val status = root.optionalText("status").trim().lowercase()
+        if (status.isBlank()) error("Responses JSON missing explicit response.status=completed")
+        if (status != "completed") error(responsesFailureMessage(root, status))
         root.optionalText("output_text").takeIf(String::isNotBlank)?.let(content::append)
         root.optJSONArray("output")?.let { output ->
             for (index in 0 until output.length()) {

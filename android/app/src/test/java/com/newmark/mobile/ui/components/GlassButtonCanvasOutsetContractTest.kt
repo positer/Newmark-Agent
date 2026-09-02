@@ -11,6 +11,7 @@ class GlassButtonCanvasOutsetContractTest {
         val chat = File("src/main/java/com/newmark/mobile/ui/ChatScreen.kt").readText()
         val sidebar = File("src/main/java/com/newmark/mobile/ui/Sidebar.kt").readText()
         val memoryLab = File("src/main/java/com/newmark/mobile/ui/MemoryLabScreen.kt").readText()
+        val settings = File("src/main/java/com/newmark/mobile/ui/SettingsScreen.kt").readText()
 
         assertTrue(liquid.contains("val GlassButtonCanvasOutset = 8.dp"))
         assertTrue(liquid.contains("modifier\n            .size(visualSize)"))
@@ -42,6 +43,11 @@ class GlassButtonCanvasOutsetContractTest {
         assertTrue(memoryActions.contains("GlassButtonCanvas("))
         assertTrue(!memoryBack.contains(".glassButtonSurface"))
         assertTrue(!memoryActions.contains(".glassButtonSurface"))
+        val settingsBack = settings.substringAfter(".statusBarsPadding()")
+            .substringBefore("AnimatedContent(")
+        assertTrue(settingsBack.contains("GlassButtonCanvas("))
+        assertTrue(settingsBack.contains("visualSize = 36.dp"))
+        assertTrue(!settingsBack.contains(".size(36.dp)\n                    .glassButtonSurface"))
         assertTrue(liquid.contains(".requiredSize(\n                    visualWidth + GlassButtonCanvasOutset * 2,"))
     }
 

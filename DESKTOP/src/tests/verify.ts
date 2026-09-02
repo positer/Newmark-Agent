@@ -8,7 +8,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
-import { Agent, AgentMode, StreamToken } from '../core/agent';
+import { Agent, AgentMode, ChatMessage, StreamToken } from '../core/agent';
 import { ConfigManager, defaultConfig, mergeProviderSecrets, sanitizeProvidersForState } from '../core/config';
 import { ToolExecutor } from '../tools/index';
 import { WorkspaceManager, windowsDrivePathToPosix } from '../core/workspace';
@@ -20,6 +20,7 @@ import { FlowEngine, FlowWorkflow } from '../core/flow';
 import { FlowQuestionPendingError, runFlow } from '../core/flow-runner';
 import { LLMProvider } from '../llm/provider';
 import { BrowserControl } from '../core/browserControl';
+import { BrowserUse } from '../core/browserUse';
 import { runCliCommand } from '../cli-commands';
 import { providerNameFromUrl } from '../core/fuzzy';
 import { discoverAgentPresets, discoverOpenCodeTools, discoverPluginManifests, discoverPluginMarketplaces, runOpenCodeTool } from '../core/compat';
@@ -988,6 +989,13 @@ async function main() {
     && uiHtml.includes('var activationBeforeSend = pendingConversationActivation(lockedTarget)')
     && uiHtml.includes('if (activationBeforeSend) await activationBeforeSend'), 'ui html: new conversations render immediately while activation is tracked and sends await the target activation');
   assert(uiHtml.includes('applyBackendConversations(r.conversations || [], stillActive ? lockedConversationId : activeConversationId(), lockedTarget.workspaceId)') && uiHtml.includes('applyBackendConversations(s.conversations || [], stillActiveAfterRefresh ? lockedConversationId : activeConversationId(), lockedTarget.workspaceId)') && uiHtml.includes('var stillActiveAfterRefresh = isActiveConversationTarget(lockedTarget)') && uiHtml.includes('if (stillActiveAfterRefresh && s && s.contextCompression !== undefined)'), 'ui html: background target completions update only their workspace cache and preserve foreground scoped details');
+  assert(uiHtml.includes('if (stillActiveAfterRefresh && s && Array.isArray(s.workRuns))')
+    && uiHtml.includes('if (Array.isArray(s.chatMessages)) renderChatMessages(s.chatMessages, lockedTarget);')
+    && !uiHtml.includes('renderChatMessages(s.chatMessages || []);')
+    && uiHtml.includes('function renderChatMessagesUnsafe(messages, target)')
+    && uiHtml.includes("console.error('[ui_chat_render_failed]', error)")
+    && uiHtml.includes('liveArea.innerHTML = previousHtml;'),
+  'ui runtime stability: partial long-run snapshots never clear a readable conversation when chatMessages is omitted');
   assert(uiHtml.includes('function animateLeftWidth(startWidth, targetWidth, finalCollapsed, token)') && uiHtml.includes('requestAnimationFrame(step)') && uiHtml.includes('easeOutCubic') && uiHtml.includes('var duration = reduceMotion ? 320 : 620;'), 'ui html: left collapse uses visible frame-driven width animation');
   assert(uiHtml.includes('function clearLeftWidthAnimation()') && uiHtml.includes('cancelAnimationFrame(state.leftAnimationFrame)') && uiHtml.includes('cancelAnimationFrame(state.leftAnimationQueuedFrame)') && uiHtml.includes('leftAnimationToken'), 'ui html: left collapse cancels stale animation frames');
   assert(uiHtml.includes('#left.width-animating') && uiHtml.includes('transition: background var(--duration-normal) var(--ease-out-expo) !important;'), 'ui html: left width animation disables coalesced CSS width transition');
@@ -1076,6 +1084,10 @@ async function main() {
   }
   const nativeToolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'nativeTools.ts'), 'utf-8');
   const agentTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
+  assert(agentTs.includes('const maxAttempts = 5')
+    && agentTs.includes('const retryDelaysMs = [0, 1000, 2000, 4000, 8000]')
+    && agentTs.includes('0s → 1s → 2s → 4s → 8s'),
+  'conversation title: PC title probe uses a 5-stage delayed automatic retry for empty or same-input responses');
   assert(!agentTs.includes('public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && !agentTs.includes('public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && agentTs.includes('const isActiveWorkspace =') && agentTs.includes('const isActiveConversation = isActiveWorkspace') && agentTs.includes('const sourceChatMessages = isActiveConversation && viewingRuntimeNode') && agentTs.includes('? this.chatMessages') && agentTs.includes('viewedNode?.chatMessages ?? persisted?.chatMessages ?? memory?.chatMessages ?? []') && agentTs.includes('const fullChatMessages = isActiveConversation && viewingRuntimeNode') && agentTs.includes(': this.normalizeConversationChatMessages(sourceChatMessages, history)') && agentTs.includes('const windowStart = Math.max(0, before - windowSize)') && agentTs.includes('totalMessages,') && agentTs.includes('isActiveConversation && viewingRuntimeNode ? this.workRuns') && agentTs.includes('mirrorConversationStateFrom(id: string') && agentTs.includes('const stateKey = this.workspaceConversationStateKey(clean);') && agentTs.includes("this.safeConversationId(this.activeConversationId || 'default') === clean"), 'agent conversation snapshots are read-only, workspace-scoped runtime and viewed branch state remain separate, cold state is attachment-normalized, snapshots are bounded to a message window, and runner mirrors synchronize active host memory');
   const configTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'config.ts'), 'utf-8');
   const getStateHandler = mainTs.slice(mainTs.indexOf("ipcMain.handle('agent:getState'"), mainTs.indexOf("ipcMain.handle('agent:getConversationPlan'"));
@@ -1307,9 +1319,14 @@ async function main() {
   const releaseRealClaudeEnvPreviewSmokePath = path.join(process.cwd(), 'scripts', 'release-real-claude-env-preview-smoke.cjs');
   const releaseRealClaudeEnvPreviewSmoke = fs.existsSync(releaseRealClaudeEnvPreviewSmokePath) ? fs.readFileSync(releaseRealClaudeEnvPreviewSmokePath, 'utf-8') : '';
   const releaseLinuxRealProviderSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts', 'release-linux-real-provider-smoke.cjs'), 'utf-8');
+  const tuiDemoData = fs.readFileSync(path.join(process.cwd(), '..', 'TUI', 'src', 'data.js'), 'utf-8');
   const releaseLinuxGuiSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts', 'release-linux-gui-smoke.cjs'), 'utf-8');
   const releaseUiWslAgentBackendSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts', 'release-ui-wsl-agent-backend-smoke.cjs'), 'utf-8');
   assert(releaseLinuxGuiSmoke.includes('NEWMARK_BASH_ROUNDTRIP_OK') && releaseLinuxGuiSmoke.includes('NEWMARK_SH_ISOLATION_OK') && releaseLinuxGuiSmoke.includes('terminalGetBuffer') && releaseLinuxGuiSmoke.includes('terminalKill') && releaseLinuxGuiSmoke.includes('isolated'), 'Linux packaged GUI smoke: bash/sh command round trips, session isolation, buffer reads, and process stops are exercised');
+  assert(releaseLinuxRealProviderSmoke.includes("path.join(os.homedir(), '.Newmark', 'config.json')")
+    && !/Users[\\/]12252|C:[\\/]Users[\\/]12252/i.test(releaseLinuxRealProviderSmoke)
+    && !/Users[\\/]12252|C:[\\/]Users[\\/]12252/i.test(tuiDemoData),
+  'release privacy: shipped scripts and TUI demo data contain no developer-machine user path');
   assert(releaseUiWslAgentBackendSmoke.includes("'--allow-multiple-instances'") && releaseUiWslAgentBackendSmoke.includes("cdp.call('Page.bringToFront'") && releaseUiWslAgentBackendSmoke.includes('await waitForPromotedMainUi(cdp);') && releaseUiWslAgentBackendSmoke.includes('window.api.selectWorkspace'), 'WSL backend smoke: isolated no-workspace startup checks visible promotion before selecting a target workspace through the backend API');
   const distPortableScript = fs.readFileSync(path.join(process.cwd(), 'scripts', 'dist-portable.cjs'), 'utf-8');
   const distLinuxScript = fs.readFileSync(path.join(process.cwd(), 'scripts', 'dist-linux.cjs'), 'utf-8');
@@ -1892,6 +1909,182 @@ async function main() {
   console.log('\n🔧 Tool Executor');
   const tools = new ToolExecutor(TEST_DIR, cfg);
 
+  const danglingRepairAgent = new Agent(TEST_DIR, { agentOnly: true });
+  const danglingRepair = danglingRepairAgent.repairDanglingToolCallsForTest([
+    { role: 'user', content: 'read it' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'dangling-pdf', type: 'function', function: { name: 'pdf_read', arguments: '{}' } }] },
+  ]);
+  const danglingResult = danglingRepair.messages.at(-1) || {};
+  assert(danglingRepair.changed === true && danglingResult.role === 'tool' && danglingResult.tool_call_id === 'dangling-pdf'
+    && String(danglingResult.content || '').includes('runtime_interrupted'),
+  'runtime recovery: a persisted tool call without a result receives a synthetic recoverable result before provider continuation');
+
+  const scannedPdfPath = path.join(TEST_DIR, 'pdf-read-timeout.pdf');
+  fs.writeFileSync(scannedPdfPath, Buffer.from('%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n'));
+  const pdfReadDefinition = (tools.definitions('build') as Array<{ function?: { name?: string; parameters?: { properties?: Record<string, Record<string, unknown>> } } }>)
+    .find(definition => definition.function?.name === 'pdf_read');
+  const pdfTimeoutSchema = pdfReadDefinition?.function?.parameters?.properties?.timeout_ms;
+  assert(pdfTimeoutSchema?.minimum === 1000 && pdfTimeoutSchema?.maximum === 120000
+    && String(pdfTimeoutSchema?.description || '').includes('entire PDF read'),
+  'pdf_read timeout schema: exposes the 1-120 second whole-tool budget with a 30 second default');
+
+  const pdfToolInternals = tools as any;
+  const originalPdfReadFile = typeof pdfToolInternals.readPdfFile === 'function'
+    ? pdfToolInternals.readPdfFile.bind(pdfToolInternals)
+    : null;
+  const originalPdfExtractText = typeof pdfToolInternals.extractPdfText === 'function'
+    ? pdfToolInternals.extractPdfText.bind(pdfToolInternals)
+    : null;
+  const restorePdfReadInternals = () => {
+    if (originalPdfReadFile) pdfToolInternals.readPdfFile = originalPdfReadFile;
+    else delete pdfToolInternals.readPdfFile;
+    if (originalPdfExtractText) pdfToolInternals.extractPdfText = originalPdfExtractText;
+    else delete pdfToolInternals.extractPdfText;
+  };
+  const rejectWhenAborted = (signal: AbortSignal | undefined, onAbort?: () => void) => new Promise<never>((_resolve, reject) => {
+    const abort = () => {
+      signal?.removeEventListener('abort', abort);
+      onAbort?.();
+      reject(signal?.reason instanceof Error ? signal.reason : new Error('aborted'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+  });
+  const delayWithAbort = (durationMs: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(finish, durationMs);
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      reject(signal?.reason instanceof Error ? signal.reason : new Error('aborted'));
+    };
+    function finish() {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+  });
+  BrowserControl.setBackend({
+    async run(request) {
+      return { ok: true, action: request.action, source: 'pdf-timeout-test', url: request.url };
+    },
+  });
+  BrowserUse.setBackend({
+    async run(request) {
+      return { ok: true, action: request.action, source: 'pdf-timeout-test', text: '' } as any;
+    },
+  });
+  let pdfReadAbortCount = 0;
+  pdfToolInternals.readPdfFile = async (_pdfPath: string, signal?: AbortSignal) => rejectWhenAborted(signal, () => { pdfReadAbortCount += 1; });
+  const pdfReadStarted = Date.now();
+  const pdfReadTimeout = JSON.parse(await tools.execute('pdf_read', JSON.stringify({ path: scannedPdfPath, timeout_ms: 1000 }), TEST_DIR));
+  const pdfReadElapsed = Date.now() - pdfReadStarted;
+  assert(pdfReadTimeout.ok === false && pdfReadTimeout.code === 'pdf_read_timeout' && pdfReadTimeout.stage === 'file_read'
+    && pdfReadTimeout.recoverable === true && pdfReadAbortCount === 1 && pdfReadElapsed < 5000,
+  'pdf_read timeout: asynchronous filesystem reading is inside the recoverable whole-tool budget');
+
+  pdfToolInternals.readPdfFile = originalPdfReadFile;
+  let pdfParseAbortCount = 0;
+  pdfToolInternals.extractPdfText = async (_buffer: Buffer, _maxChars: number, signal?: AbortSignal) => rejectWhenAborted(signal, () => { pdfParseAbortCount += 1; });
+  const pdfParseStarted = Date.now();
+  const pdfParseTimeout = JSON.parse(await tools.execute('pdf_read', JSON.stringify({ path: scannedPdfPath, timeout_ms: 1000 }), TEST_DIR));
+  const pdfParseElapsed = Date.now() - pdfParseStarted;
+  assert(pdfParseTimeout.ok === false && pdfParseTimeout.code === 'pdf_read_timeout' && pdfParseTimeout.stage === 'text_parse'
+    && pdfParseTimeout.recoverable === true && pdfParseAbortCount === 1 && pdfParseElapsed < 5000,
+  'pdf_read timeout: pdf.js load and full text extraction are inside the recoverable whole-tool budget');
+
+  let cumulativeParseAbortCount = 0;
+  pdfToolInternals.readPdfFile = async (_pdfPath: string, signal?: AbortSignal) => {
+    await delayWithAbort(700, signal);
+    return Buffer.from('%PDF-1.4\n%%EOF\n');
+  };
+  pdfToolInternals.extractPdfText = async (_buffer: Buffer, _maxChars: number, signal?: AbortSignal) => rejectWhenAborted(signal, () => { cumulativeParseAbortCount += 1; });
+  const pdfCumulativeStarted = Date.now();
+  const pdfCumulativeTimeout = JSON.parse(await tools.execute('pdf_read', JSON.stringify({ path: scannedPdfPath, timeout_ms: 1000 }), TEST_DIR));
+  const pdfCumulativeElapsed = Date.now() - pdfCumulativeStarted;
+  assert(pdfCumulativeTimeout.stage === 'text_parse' && cumulativeParseAbortCount === 1
+    && pdfCumulativeElapsed >= 900 && pdfCumulativeElapsed < 1600,
+  'pdf_read timeout: file and parser stages consume one cumulative deadline instead of resetting per stage');
+
+  restorePdfReadInternals();
+  BrowserUse.setBackend({
+    async run(_request, signal) {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 30_000);
+        signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
+        }, { once: true });
+      });
+      throw new Error('unreachable');
+    },
+  });
+  const pdfTimeoutStarted = Date.now();
+  const pdfTimeoutResult = await tools.execute('pdf_read', JSON.stringify({ path: scannedPdfPath, timeout_ms: 1000 }), TEST_DIR, { allowEphemeralVisionImage: true });
+  const pdfTimeoutElapsed = Date.now() - pdfTimeoutStarted;
+  BrowserUse.setBackend(null);
+  BrowserControl.setBackend(null);
+  const pdfTimeoutParsed = JSON.parse(pdfTimeoutResult);
+  assert(pdfTimeoutParsed.ok === false && pdfTimeoutParsed.code === 'pdf_read_timeout'
+    && pdfTimeoutParsed.stage === 'rendered_page_observation' && pdfTimeoutParsed.recoverable === true && pdfTimeoutElapsed < 5000,
+  'pdf_read timeout: scanned-page Browser observation shares the bounded recoverable whole-tool budget');
+
+  const pdfRecoveryAgent = new Agent(TEST_DIR, { agentOnly: true, conversationId: 'pdf-timeout-response-recovery' });
+  registerOfflineFixtureModel(pdfRecoveryAgent, 'pdf-timeout-response-model');
+  pdfRecoveryAgent.setModel('pdf-timeout-response-model');
+  let pdfRecoveryRound = 0;
+  const pdfRecoveryProvider = {
+    intelligenceConfig: () => ({ temperature: 0, maxTokens: 200 }),
+    async *chatStreamWithTools(): AsyncGenerator<StreamToken> {
+      if (pdfRecoveryRound++ === 0) {
+        yield { type: 'tool_call', text: '', toolCall: { id: 'provision-pdf-timeout', name: 'tool_provision', arguments: JSON.stringify({ names: ['pdf_read'] }) } };
+      } else if (pdfRecoveryRound === 2) {
+        yield { type: 'tool_call', text: '', toolCall: { id: 'call-pdf-timeout', name: 'pdf_read', arguments: JSON.stringify({ path: scannedPdfPath, timeout_ms: 1000 }) } };
+      } else {
+        yield { type: 'text', text: 'PDF_TIMEOUT_RESPONSE_RECOVERED' };
+      }
+    },
+    async chat(): Promise<string> { return 'PDF Timeout Recovery'; },
+  };
+  (pdfRecoveryAgent as any).forcedProvider = pdfRecoveryProvider;
+  const pdfRecoveryTools = pdfRecoveryAgent.tools as any;
+  const originalRecoveryExtract = typeof pdfRecoveryTools.extractPdfText === 'function'
+    ? pdfRecoveryTools.extractPdfText.bind(pdfRecoveryTools)
+    : null;
+  pdfRecoveryTools.extractPdfText = async (_buffer: Buffer, _maxChars: number, signal?: AbortSignal) => rejectWhenAborted(signal);
+  const pdfRecoveryTokens = await pdfRecoveryAgent.process('Read the abnormal PDF and continue after a bounded timeout.');
+  if (originalRecoveryExtract) pdfRecoveryTools.extractPdfText = originalRecoveryExtract;
+  else delete pdfRecoveryTools.extractPdfText;
+  const pdfRecoveryToolResult = [...pdfRecoveryAgent.history].reverse()
+    .find(message => message.role === 'tool' && message.name === 'pdf_read');
+  assert(pdfRecoveryTokens.map(token => token.text || '').join('').includes('PDF_TIMEOUT_RESPONSE_RECOVERED')
+    && String(pdfRecoveryToolResult?.content || '').includes('pdf_read_timeout')
+    && String(pdfRecoveryToolResult?.content || '').includes('recoverable')
+    && pdfRecoveryAgent.workRuns.at(-1)?.status === 'completed',
+  'pdf_read timeout: abnormal parsing yields a tool receipt and the same Agent run produces its final response');
+
+  const realPdfFixture = String(process.env.NEWMARK_REAL_PDF_FIXTURE || '').trim();
+  if (realPdfFixture && fs.existsSync(realPdfFixture)) {
+    const copiedRealPdfFixture = path.join(TEST_DIR, 'powerpoint-compressed-text-layer.pdf');
+    fs.copyFileSync(realPdfFixture, copiedRealPdfFixture);
+    let browserFallbacks = 0;
+    BrowserControl.setBackend({
+      async run(request) {
+        browserFallbacks += 1;
+        return { ok: true, action: request.action, source: 'unexpected-real-pdf-browser-fallback', url: request.url };
+      },
+    });
+    const realPdfResult = JSON.parse(await tools.execute('pdf_read', JSON.stringify({ path: copiedRealPdfFixture, max_chars: 30_000 }), TEST_DIR, {
+      workspacePath: TEST_DIR,
+      allowEphemeralVisionImage: false,
+    }));
+    BrowserControl.setBackend(null);
+    assert(realPdfResult.ok === true && realPdfResult.source === 'pdf_text_layer'
+      && String(realPdfResult.text || '').includes('研究生课程学习与选课须知')
+      && browserFallbacks === 0,
+    'pdf_read real history regression: PowerPoint-generated compressed text PDFs stay on the local text layer and never enter Browser RPC');
+  }
+
   // bash
   const bashResult = await tools.execute('bash', '{"command":"echo hello"}', TEST_DIR);
   assert(bashResult.includes('hello'), 'bash: echo hello');
@@ -2265,7 +2458,11 @@ async function main() {
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'computer_use') === (process.platform === 'win32'), 'definitions: exposes native computer_use desktop tool only on a Windows-capable host');
   const buildComputerUse = tools.definitions().find((tool: any) => tool.function?.name === 'computer_use') as any;
   assert(process.platform !== 'win32' || (buildComputerUse?.function?.parameters?.properties?.capture_max_width?.maximum === 2048 && buildComputerUse?.function?.parameters?.properties?.capture_max_height?.maximum === 2048 && !buildComputerUse?.function?.parameters?.properties?.allow_ephemeral_vision_image), 'definitions: Computer Use exposes bounded capture dimensions but no model-controlled retention permission when available');
-  assert(tools.definitions().some((tool: any) => tool.function?.name === 'image_inspect') && tools.definitions('plan').some((tool: any) => tool.function?.name === 'image_inspect'), 'definitions: exposes read-only image_inspect in Build and Plan modes');
+  const imageInspectDefinition = tools.definitions().find((tool: any) => tool.function?.name === 'image_inspect') as any;
+  assert(imageInspectDefinition && tools.definitions('plan').some((tool: any) => tool.function?.name === 'image_inspect')
+    && imageInspectDefinition.function.parameters.properties.action.enum.includes('inspect')
+    && imageInspectDefinition.function.parameters.properties.path,
+  'definitions: image_inspect can send a workspace image to validated model vision in Build and Plan modes');
   assert(tools.definitions('plan').some((tool: any) => tool.function?.name === 'browser_snapshot'), 'definitions: plan exposes browser_snapshot');
   assert(!tools.definitions('plan').some((tool: any) => tool.function?.name === 'browser_click'), 'definitions: plan hides browser_click');
   const planComputerUse = tools.definitions('plan').find((tool: any) => tool.function?.name === 'computer_use') as any;
@@ -2353,7 +2550,11 @@ async function main() {
   const cliAgentOnlyState = JSON.parse(cliAgentOnlyStateOut);
   assert(cliAgentOnlyState.agentOnly === true && cliAgentOnlyState.workspace === null && cliAgentOnlyState.conversations.length === 0, 'cli state: --agent-only does not depend on workspace conversation state');
   const cliAgentOnlySendOut = await captureStdout(() => runCliCommand(agentOnlyRoot, ['send', 'pure agent cli prompt', '--agent-only', '--root', agentOnlyRoot]));
-  assert(cliAgentOnlySendOut.includes('[Error] No LLM configured') && !cliAgentOnlySendOut.includes('Workspace required'), 'cli send: --agent-only runs pure Agent path without workspace requirement');
+  assert(
+    (cliAgentOnlySendOut.includes('[Error] No LLM configured') || cliAgentOnlySendOut.includes('Conversation title generation failed'))
+      && !cliAgentOnlySendOut.includes('Workspace required'),
+    'cli send: --agent-only runs the first-input model availability/title probe without a workspace requirement',
+  );
   assert(!fs.existsSync(path.join(agentOnlyRoot, 'Work')) || !fs.existsSync(path.join(agentOnlyRoot, 'Work', 'Local.json')) || JSON.parse(fs.readFileSync(path.join(agentOnlyRoot, 'Work', 'Local.json'), 'utf-8')).length === 0, 'cli send: --agent-only does not create an internal workspace');
   const cliAgentOnlyValidateOut = await captureStdout(() => runCliCommand(agentOnlyRoot, ['validate-models', '--agent-only', '--root', agentOnlyRoot]));
   assert(Array.isArray(JSON.parse(cliAgentOnlyValidateOut)), 'cli validate-models: --agent-only can run as pure Agent validation base');
@@ -3852,15 +4053,26 @@ async function main() {
   // shouldPromptConversationRename: only true on first Build with auto-generated title.
   assert(typeof agent.shouldPromptConversationRename() === 'boolean', 'shouldPromptConversationRename: returns boolean');
 
-  // dev-0.4.5: conversation_rename 独立为并行 provider API（source-contract）。
+  // Conversation title generation is a hard first-response provider gate.
   const renameApiSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
   assert(renameApiSource.includes('deriveConversationTitleFromProvider')
     && renameApiSource.includes('normalizeConversationRenameTitle')
-    && renameApiSource.includes('void this.deriveConversationTitleFromProvider(summary)')
+    && renameApiSource.includes('startFirstInputConversationTitle')
+    && renameApiSource.includes('titleRequestMessageId')
+    && renameApiSource.includes('firstAgentResponseStarted')
+    && renameApiSource.includes('firstPersistedUserForTitleGate')
+    && renameApiSource.includes('markFirstAgentResponseStarted')
     && renameApiSource.includes('provider.chat(modelName, [{ role: \'user\', content: prompt }]')
     && renameApiSource.includes('You are a conversation title generator.')
-    && renameApiSource.includes('deriveConversationTitleFromSummary(summary)'),
-    'conversation rename: independent parallel provider API derives a formatted title, renames fire-and-forget, and falls back to the local heuristic');
+    && renameApiSource.includes('never depends on Agent output or completion'),
+    'conversation rename: first persisted user input owns a durable hard gate before any formal Agent response');
+  const firstTitleSendSource = renameApiSource.slice(
+    renameApiSource.indexOf("let firstResponseGateMessageId = ''"),
+    renameApiSource.indexOf('if (firstResponseGateMessageId && !this.markFirstAgentResponseStarted'),
+  );
+  assert(firstTitleSendSource.indexOf('modelIsUnavailable(this.model)') >= 0
+    && firstTitleSendSource.indexOf('modelIsUnavailable(this.model)') < firstTitleSendSource.indexOf('this.startFirstInputConversationTitle('),
+  'conversation rename: route fallback resolves before the title probe freezes the formal first-response deployment');
 
 
   const scopedAgent = new Agent(TEST_DIR);
@@ -3909,7 +4121,7 @@ async function main() {
   assert(scopedAgentReloaded.getConversationPlan().items[0]?.text === 'plan item in conv two', 'conversation plan: persists across Agent instances');
   const persistedConvs = scopedAgentReloaded.listConversationStates();
   assert(persistedConvs.some(c => c.id === 'conv-two' && c.messageCount === 1), 'conversation chat: lists persisted conversation state');
-  assert(persistedConvs.some(c => c.id === 'conv-two' && c.title.includes('message in conv two')), 'conversation chat: derives persisted conversation title');
+  assert(persistedConvs.some(c => c.id === 'conv-two' && !c.title.includes('message in conv two')), 'conversation chat: does not copy persisted user input into the title');
   scopedAgentReloaded.ensureConversationSnapshot('empty-new-conversation');
   scopedAgentReloaded.persistActiveConversationSelection('empty-new-conversation');
   const emptyConversationReloaded = new Agent(TEST_DIR);
@@ -3984,7 +4196,141 @@ async function main() {
   scopedAgentReloaded.flushConversationState();
   const emptyTitleAfter = scopedAgentReloaded.listConversationStates().find(c => c.id === 'empty-title-first')?.title || '';
   assert(emptyTitleBefore.includes('empty-title-first'), 'conversation title: empty saved conversation starts with generated id title');
-  assert(emptyTitleAfter.includes('Summarize this conversation title now') && !emptyTitleAfter.includes('empty-title-first'), 'conversation title: first user message replaces generated id title');
+  assert(emptyTitleAfter.includes('empty-title-first') && !emptyTitleAfter.includes('Summarize this conversation title now'), 'conversation title: first user message remains default until the independent title request resolves');
+  const titleGateRoot = path.join(TEST_DIR, 'first-title-retry-gate-runtime');
+  const titleGateAgent = new Agent(titleGateRoot, { agentOnly: true });
+  registerOfflineFixtureModel(titleGateAgent, 'first-title-retry-model');
+  const titleGateWorkspace = titleGateAgent.createInternalWorkspace('first-title-retry-workspace');
+  titleGateAgent.setModel('first-title-retry-model');
+  titleGateAgent.setConversation('first-title-retry');
+  const titleGatePrompts: string[] = [];
+  const titleGateTitleModels: string[] = [];
+  const titleGateFormalModels: string[] = [];
+  const titleGateIntelligenceTiers: string[] = [];
+  const titleGateTitleReasoningTiers: string[] = [];
+  const titleGateFormalReasoningTiers: string[] = [];
+  let titleGateStreamCalls = 0;
+  let titleGateChatCalls = 0;
+  const titleGateProvider = new FakeProvider([]);
+  (titleGateProvider as unknown as { intelligenceConfig: (tier: string) => { temperature: number; maxTokens: number; reasoningEffort: string } }).intelligenceConfig = (tier: string) => {
+    titleGateIntelligenceTiers.push(tier);
+    return { temperature: 0, maxTokens: 100, reasoningEffort: tier };
+  };
+  (titleGateProvider as unknown as { chat: (...args: any[]) => Promise<string> }).chat = async (
+    modelName: string,
+    messages: Array<Record<string, unknown>>,
+    _system: string,
+    _temperature: number,
+    _maxTokens: number,
+    _signal: AbortSignal,
+    reasoningTier: string,
+  ) => {
+    titleGateChatCalls += 1;
+    titleGateTitleModels.push(modelName);
+    titleGateTitleReasoningTiers.push(String(reasoningTier || ''));
+    titleGatePrompts.push(String(messages[0]?.content || ''));
+    return titleGateChatCalls <= 4 ? '' : 'Durable first title retry';
+  };
+  (titleGateProvider as unknown as { chatStreamWithTools: (...args: any[]) => AsyncGenerator<StreamToken> }).chatStreamWithTools = async function* (
+    modelName: string,
+    _messages: Array<Record<string, unknown>>,
+    _system: string,
+    _temperature: number,
+    _maxTokens: number,
+    _tools: unknown[],
+    _signal: AbortSignal,
+    reasoningTier: string,
+  ) {
+    titleGateStreamCalls += 1;
+    titleGateFormalModels.push(modelName);
+    titleGateFormalReasoningTiers.push(String(reasoningTier || ''));
+    yield { type: 'text', text: 'FORMAL_AGENT_AFTER_TITLE_GATE' } as StreamToken;
+  };
+  (titleGateAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => titleGateProvider;
+  titleGateAgent.setIntelligence('high');
+  const firstTitleGateTokens = await titleGateAgent.process('FIRST_TITLE_SOURCE must remain authoritative');
+  assert(titleGateChatCalls === 5
+    && titleGateStreamCalls === 1
+    && firstTitleGateTokens.map(token => token.text || '').join('').includes('FORMAL_AGENT_AFTER_TITLE_GATE')
+    && titleGatePrompts.every(prompt => prompt.includes('FIRST_TITLE_SOURCE') && !prompt.includes('SECOND_SEND')),
+  'conversation title hard gate: 5-stage delayed automatic retries recover empty/same-input title before the formal response');
+  const titleGateReloaded = new Agent(titleGateRoot, { agentOnly: true });
+  titleGateReloaded.workspace.current = { ...titleGateWorkspace };
+  titleGateReloaded.config.loadWorkspaceConfig(titleGateWorkspace.path);
+  registerOfflineFixtureModel(titleGateReloaded, 'first-title-retry-model');
+  titleGateReloaded.setConversation('first-title-retry');
+  titleGateReloaded.setModel('first-title-retry-model');
+  titleGateReloaded.setIntelligence('high');
+  (titleGateReloaded as unknown as { engineModel: () => FakeProvider }).engineModel = () => titleGateProvider;
+  const secondTitleGateTokens = await titleGateReloaded.process('SECOND_SEND must never become the title source');
+  const titleGateStateFile = path.join(titleGateReloaded.workspace.current!.path, 'conversations', 'state.json');
+  const titleGateState = JSON.parse(fs.readFileSync(titleGateStateFile, 'utf-8')) as { conversations?: Record<string, { titleRequestMessageId?: string; firstAgentResponseStarted?: boolean; chatMessages?: Array<{ role?: string; messageId?: string }> }> };
+  const titleGateEntry = Object.values(titleGateState.conversations || {}).find(entry => entry.chatMessages?.some(message => message.role === 'user'));
+  const firstTitleGateMessageId = titleGateEntry?.chatMessages?.find(message => message.role === 'user')?.messageId || '';
+  assert(titleGateChatCalls === 5
+    && titleGatePrompts.every(prompt => prompt.includes('FIRST_TITLE_SOURCE') && !prompt.includes('SECOND_SEND')),
+  'conversation title hard gate: a later send never reuses another prompt as the title source');
+  assert(titleGateStreamCalls === 2
+    && secondTitleGateTokens.map(token => token.text || '').join('').includes('FORMAL_AGENT_AFTER_TITLE_GATE')
+    && titleGateEntry?.titleRequestMessageId === firstTitleGateMessageId
+    && titleGateEntry?.firstAgentResponseStarted === true,
+  'conversation title hard gate: automatic retry persists the first message identity before allowing the formal response');
+  assert(titleGateIntelligenceTiers.every(tier => tier === 'high')
+    && titleGateTitleModels.every(modelName => modelName === 'first-title-retry-model')
+    && titleGateTitleModels.length === 5
+    && titleGateFormalModels.length === 2
+    && titleGateFormalModels[0] === 'first-title-retry-model'
+    && titleGateTitleReasoningTiers.length === 5
+    && titleGateTitleReasoningTiers.every(tier => tier === 'high')
+    && titleGateFormalReasoningTiers.length === 2
+    && titleGateFormalReasoningTiers[0] === 'high',
+  'conversation title hard gate: automatic title retries and formal responses share the frozen model, intelligence, and native reasoning tier');
+  const legacyTitleGateRoot = path.join(TEST_DIR, 'legacy-first-title-gate-runtime');
+  const legacyTitleGateAgent = new Agent(legacyTitleGateRoot, { agentOnly: true });
+  const legacyTitleGateWorkspace = legacyTitleGateAgent.createInternalWorkspace('legacy-first-title-workspace');
+  legacyTitleGateAgent.setConversation('legacy-first-title');
+  legacyTitleGateAgent.chatMessages = [
+    { role: 'user', content: 'legacy prompt', mode: 'Build', model: legacyTitleGateAgent.model, timestamp: 'legacy-title-user' },
+    { role: 'assistant', content: 'legacy response', mode: 'Build', model: legacyTitleGateAgent.model, timestamp: 'legacy-title-assistant' },
+  ];
+  legacyTitleGateAgent.history = [
+    { role: 'user', content: 'legacy prompt' },
+    { role: 'assistant', content: 'legacy response' },
+  ];
+  legacyTitleGateAgent.flushConversationState();
+  const legacyTitleGateStateFile = path.join(legacyTitleGateWorkspace.path, 'conversations', 'state.json');
+  const legacyTitleGateState = JSON.parse(fs.readFileSync(legacyTitleGateStateFile, 'utf-8')) as { conversations?: Record<string, Record<string, unknown>> };
+  const legacyTitleGateEntry = Object.values(legacyTitleGateState.conversations || {})
+    .find(entry => Array.isArray(entry.chatMessages) && entry.chatMessages.some((message: ChatMessage) => message.role === 'assistant'));
+  if (legacyTitleGateEntry) delete legacyTitleGateEntry.firstAgentResponseStarted;
+  fs.writeFileSync(legacyTitleGateStateFile, JSON.stringify(legacyTitleGateState, null, 2), 'utf-8');
+  const legacyTitleGateReloaded = new Agent(legacyTitleGateRoot, { agentOnly: true });
+  legacyTitleGateReloaded.workspace.current = { ...legacyTitleGateWorkspace };
+  legacyTitleGateReloaded.config.loadWorkspaceConfig(legacyTitleGateWorkspace.path);
+  legacyTitleGateReloaded.setConversationFromStorage('legacy-first-title');
+  assert(legacyTitleGateReloaded.getConversationTitleGateState().firstAgentResponseStarted === true,
+    'conversation title hard gate: legacy conversations with formal response history migrate as already started');
+  const explicitFalseMirrorSource = {
+    chatMessages: [{ role: 'user' as const, content: 'blocked first input', mode: 'Build', model: legacyTitleGateReloaded.model, timestamp: 'blocked-title-user', messageId: 'blocked-title-message' }],
+    history: [{ role: 'user' as const, content: 'blocked first input' }],
+    conversationPlan: { items: [] },
+    titleGateState: {
+      titleRequestMessageId: 'blocked-title-message',
+      firstAgentResponseStarted: false,
+    },
+  };
+  legacyTitleGateReloaded.mirrorConversationStateFrom('explicit-false-title-gate', explicitFalseMirrorSource);
+  legacyTitleGateReloaded.setConversation('explicit-false-title-gate');
+  assert(legacyTitleGateReloaded.getConversationTitleGateState().titleRequestMessageId === 'blocked-title-message'
+    && legacyTitleGateReloaded.getConversationTitleGateState().firstAgentResponseStarted === false,
+  'conversation mirror: preserves explicit failed-title identity and false gate state in memory');
+  const explicitFalseMirrorReloaded = new Agent(legacyTitleGateRoot, { agentOnly: true });
+  explicitFalseMirrorReloaded.workspace.current = { ...legacyTitleGateWorkspace };
+  explicitFalseMirrorReloaded.config.loadWorkspaceConfig(legacyTitleGateWorkspace.path);
+  explicitFalseMirrorReloaded.setConversationFromStorage('explicit-false-title-gate');
+  assert(explicitFalseMirrorReloaded.getConversationTitleGateState().titleRequestMessageId === 'blocked-title-message'
+    && explicitFalseMirrorReloaded.getConversationTitleGateState().firstAgentResponseStarted === false,
+  'conversation mirror: persists explicit failed-title identity and false gate state across restart');
   scopedAgentReloaded.setConversation('conv-one');
   const activeSwitchReloaded = new Agent(TEST_DIR);
   assert(activeSwitchReloaded.activeConversationId === 'conv-one', 'conversation chat: setConversation persists active conversation immediately');
@@ -3999,7 +4345,7 @@ async function main() {
   const pureAgent = new Agent(path.join(TEST_DIR, 'pure-agent-runtime'), { agentOnly: true });
   registerOfflineFixtureModel(pureAgent, 'pure-agent-test-model');
   pureAgent.setModel('pure-agent-test-model');
-  const pureProvider = new FakeProvider(['PURE_AGENT_NO_WORKSPACE_OK']);
+  const pureProvider = new FakeProvider(['Pure Agent Runtime', 'PURE_AGENT_NO_WORKSPACE_OK']);
   (pureAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => pureProvider;
   const pureTokens = await pureAgent.process('run without workspace');
   assert(pureTokens.map(t => t.text).join('').includes('PURE_AGENT_NO_WORKSPACE_OK') && pureAgent.workspace.current === null, 'pure Agent mode: process runs without workspace dependency');
@@ -4007,7 +4353,7 @@ async function main() {
   const formatAgent = new Agent(path.join(TEST_DIR, 'format-agent-runtime'), { agentOnly: true });
   registerOfflineFixtureModel(formatAgent, 'format-agent-test-model');
   formatAgent.setModel('format-agent-test-model');
-  const formatProvider = new FakeProvider(['<think>hidden reasoning</think>\n做了什么\n- visible result\n</think>\nfinal']);
+  const formatProvider = new FakeProvider(['Response Cleanup', '<think>hidden reasoning</think>\n做了什么\n- visible result\n</think>\nfinal']);
   (formatAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => formatProvider;
   const formatTokens = await formatAgent.process('test response cleanup');
   const formatText = formatTokens.map(t => t.text).join('');
@@ -4019,7 +4365,7 @@ async function main() {
   linkedPlanAgent.createInternalWorkspace('linked-plan-auto-write');
   linkedPlanAgent.setModel('linked-plan-test-model');
   linkedPlanAgent.setMode('plan');
-  const linkedPlanProvider = new FakeProvider(['# Implementation plan\n\n1. Inspect the target.\n2. Apply and verify the change.']);
+  const linkedPlanProvider = new FakeProvider(['Implementation Planning', '# Implementation plan\n\n1. Inspect the target.\n2. Apply and verify the change.']);
   (linkedPlanAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => linkedPlanProvider;
   await linkedPlanAgent.process('Create the implementation plan');
   assert(linkedPlanAgent.getLinkedPlan().markdown === '' && linkedPlanAgent.getLinkedPlan().revision === 0,
@@ -4046,7 +4392,7 @@ async function main() {
   registerOfflineFixtureModel(reactivatingAgent, 'reactivating-agent-test-model');
   const reactivatingWorkspace = reactivatingAgent.createInternalWorkspace('goal-sequence-workspace');
   reactivatingAgent.setModel('reactivating-agent-test-model');
-  const reactivatingProvider = new FakeProvider(['Not done yet.', 'Goal Complete!']);
+  const reactivatingProvider = new FakeProvider(['Deterministic Goal Test', 'Not done yet.', 'Goal Complete!']);
   (reactivatingAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => reactivatingProvider;
   reactivatingAgent.setConversation('goal-sequence');
   reactivatingAgent.history.push({ role: 'user', content: 'LEGACY_UNFINISHED_TASK must remain dormant' });
@@ -4064,11 +4410,11 @@ async function main() {
   );
   reactivatingAgent.history.unshift({ role: 'user', content: 'LEGACY_UNFINISHED_TASK must remain dormant' });
   const reactivationDeadline = Date.now() + 3000;
-  while ((reactivatingProvider.calls < 2 || reactivatingKernel.isRunning(reactivatingTarget)) && Date.now() < reactivationDeadline) {
+  while ((reactivatingProvider.calls < 3 || reactivatingKernel.isRunning(reactivatingTarget)) && Date.now() < reactivationDeadline) {
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   const goalRuns = reactivatingAgent.workRuns.filter(run => run.target.conversationId === 'goal-sequence');
-  assert(reactivatingProvider.calls === 2 && goalRuns.length === 2, 'goal process: unfinished response starts exactly one new Build block');
+  assert(reactivatingProvider.calls === 3 && goalRuns.length === 2, 'goal process: title probe plus unfinished response starts exactly one new Build block');
   assert(goalRuns[0].runId !== goalRuns[1].runId
     && goalRuns[0].status === 'completed'
     && goalRuns[1].status === 'completed'
@@ -4282,6 +4628,7 @@ async function main() {
       }
     },
     async chat(): Promise<string> {
+      if (memoryReceiptRound === 0) return 'Memory Receipt Update';
       return JSON.stringify({ name: 'receipt-gated-memory', description: 'receipt gate', tags: ['#Receipt-Gate'], content: 'Receipt gated content.', kind: 'file' });
     },
   };
@@ -4308,7 +4655,9 @@ async function main() {
         yield { type: 'text', text: 'MUST_NOT_COMPLETE_WITHOUT_RECEIPT' };
       }
     },
-    async chat(): Promise<string> { return '{}'; },
+    async chat(): Promise<string> {
+      return memoryFailureRound === 0 ? 'Memory Reindex Failure' : '{}';
+    },
   };
   (memoryFailureAgent as any).forcedProvider = memoryFailureProvider;
   (memoryFailureAgent as any).reindexMemoryLab = async () => { throw new Error('simulated rebuild failure'); };
@@ -4549,6 +4898,15 @@ async function main() {
   assert(croppedImage.width === 60 && croppedImage.height === 30 && inspectCrop.output.scale === 3, 'image_inspect: crops exact source pixels and magnifies with bounded dimensions');
   const inspectOutOfBounds = await visionAgent.handleImageInspect(JSON.stringify({ action: 'crop', x: 95, y: 70, width: 20, height: 20 }));
   assert(inspectOutOfBounds.includes('exceeds source bounds 100x80'), 'image_inspect: rejects crop rectangles outside the submitted image');
+  const visionWorkspacePath = visionAgent.workspace.current?.path || TEST_DIR;
+  const workspaceInspectPath = path.join(visionWorkspacePath, 'workspace-vision-inspect.png');
+  fs.writeFileSync(workspaceInspectPath, Buffer.from(inspectDataUrl.split(',')[1], 'base64'));
+  const workspaceInspect = JSON.parse(await visionAgent.handleImageInspect(JSON.stringify({ action: 'inspect', path: 'workspace-vision-inspect.png' })));
+  assert(workspaceInspect.ok === true && workspaceInspect.source === 'workspace' && workspaceInspect.width === 100 && workspaceInspect.height === 80
+    && String(workspaceInspect.image_data_url || '').startsWith('data:image/png;base64,'),
+  'image_inspect: loads a validated workspace image for current-turn model vision');
+  const workspaceInspectOutside = await visionAgent.handleImageInspect(JSON.stringify({ action: 'inspect', path: path.join(TEST_DIR, '..', 'outside.png') }));
+  assert(workspaceInspectOutside.includes('inside the active workspace'), 'image_inspect: rejects workspace image paths outside the active workspace');
 
   const inspectMessagesSeen: Array<Array<Record<string, unknown>>> = [];
   let inspectRound = 0;
@@ -4578,6 +4936,35 @@ async function main() {
   assert(inspectVisionContent.some(part => part.type === 'image_url' && String(part.image_url?.url || '').startsWith('data:image/png;base64,')), 'image_inspect kernel: returns the crop as a synchronized structured vision observation');
   assert(String(inspectToolMessage?.content || '').includes('"crop"') && !String(inspectToolMessage?.content || '').includes('image_data_url'), 'image_inspect kernel: exposes crop metadata without leaking base64 into visible tool text');
   assert(afterInspectDataUrls === beforeInspectDataUrls + 1 && !JSON.stringify(visionAgent.history).includes('image_data_url'), 'image_inspect privacy: persists only the user attachment, not the derived crop data URL');
+  let workspaceInspectRound = 0;
+  const workspaceInspectMessages: Array<Array<Record<string, unknown>>> = [];
+  const workspaceInspectProvider = {
+    intelligenceConfig: () => ({ temperature: 0, maxTokens: 100 }),
+    async *chatStreamWithTools(_model: string, messages: Array<Record<string, unknown>>): AsyncGenerator<StreamToken> {
+      workspaceInspectMessages.push(messages);
+      if (workspaceInspectRound++ === 0) {
+        yield { type: 'tool_call', text: '', toolCall: { id: 'provision-workspace-image-inspect', name: 'tool_provision', arguments: JSON.stringify({ names: ['image_inspect'] }) } };
+      } else if (workspaceInspectRound === 2) {
+        yield { type: 'tool_call', text: '', toolCall: { id: 'call-workspace-image-inspect', name: 'image_inspect', arguments: JSON.stringify({ action: 'inspect', path: 'workspace-vision-inspect.png' }) } };
+      } else {
+        yield { type: 'text', text: 'WORKSPACE_IMAGE_VISION_DONE' };
+      }
+    },
+  };
+  (visionAgent as any).forcedProvider = workspaceInspectProvider;
+  const beforeWorkspaceInspectDataUrls = (JSON.stringify(visionAgent.history).match(/data:image\//g) || []).length;
+  const workspaceInspectTokens = await visionAgent.process('Inspect workspace-vision-inspect.png with model vision');
+  const workspaceInspectProviderMessages = workspaceInspectMessages[2] || [];
+  const workspaceInspectToolMessage = [...workspaceInspectProviderMessages].reverse().find(message => message.role === 'tool' && message.name === 'image_inspect');
+  const workspaceInspectVisionMessage = [...workspaceInspectProviderMessages].reverse().find(message => message.role === 'user' && Array.isArray(message.content) && message.content.some((part: Record<string, any>) => part?.type === 'image_url'));
+  const workspaceInspectVisionContent = Array.isArray(workspaceInspectVisionMessage?.content) ? workspaceInspectVisionMessage.content as Array<Record<string, any>> : [];
+  const afterWorkspaceInspectDataUrls = (JSON.stringify(visionAgent.history).match(/data:image\//g) || []).length;
+  assert(workspaceInspectTokens.map(token => token.text || '').join('').includes('WORKSPACE_IMAGE_VISION_DONE')
+    && workspaceInspectVisionContent.some(part => part.type === 'image_url' && String(part.image_url?.url || '').startsWith('data:image/png;base64,')),
+  'image_inspect kernel: Agent can send a workspace image to the current validated vision model and continue');
+  assert(String(workspaceInspectToolMessage?.content || '').includes('"source": "workspace"') && !String(workspaceInspectToolMessage?.content || '').includes('image_data_url')
+    && afterWorkspaceInspectDataUrls === beforeWorkspaceInspectDataUrls,
+  'image_inspect workspace privacy: model gets one current-turn image while tool text and durable history omit base64');
   (visionAgent as any).forcedProvider = null;
 
   // ---- 8. Input Mode Tests ----
@@ -4650,18 +5037,21 @@ async function main() {
     { role: 'assistant', content: 'keep response', mode: 'Build', model: archiveAgent.model, timestamp: 'ta2' },
   ];
   archiveAgent.flushConversationState();
+  archiveAgent.renameConversation('keep-active', 'same title');
   archiveAgent.setConversation('archive-target');
   archiveAgent.chatMessages = [
     { role: 'user', content: 'same title', mode: 'Build', model: archiveAgent.model, timestamp: 'tb' },
     { role: 'assistant', content: 'duplicate response', mode: 'Build', model: archiveAgent.model, timestamp: 'tb2' },
   ];
   archiveAgent.flushConversationState();
+  archiveAgent.renameConversation('archive-target', 'same title');
   archiveAgent.setConversation('archive-target-duplicate');
   archiveAgent.chatMessages = [
     { role: 'user', content: 'same title', mode: 'Build', model: archiveAgent.model, timestamp: 'tc' },
     { role: 'assistant', content: 'duplicate response', mode: 'Build', model: archiveAgent.model, timestamp: 'tc2' },
   ];
   archiveAgent.flushConversationState();
+  archiveAgent.renameConversation('archive-target-duplicate', 'same title');
   const sameTitleConversations = archiveAgent.listConversationStates().filter(c => c.title === 'same title');
   assert(sameTitleConversations.length === 2 && sameTitleConversations.some(c => c.id === 'keep-active') && sameTitleConversations.some(c => c.id === 'archive-target-duplicate'), 'conversation registry: exact duplicate content registers only the newest id while different same-title content remains');
   archiveAgent.setConversation('keep-active');
@@ -5997,8 +6387,8 @@ async function main() {
     && providerSource.includes('// 就近降级：取强度不超过目标档位的最高已映射档位'),
     'provider: LLMProvider resolves native effort through the per-model thinking tier map with exact match, downward fallback, and default passthrough when unconfigured');
   assert(packageJson.includes('"test:thinking-tier-map-cache-stress"')
-    && packageJson.includes('"test:desktop:built": "node dist/tests/verify.js && node dist/tests/thinkingTierMapCacheStressVerify.js'),
-    'package: thinking tier map cache stress is registered standalone and as the first gate of test:desktop:built');
+    && packageJson.includes('node dist/tests/thinkingTierMapCacheStressVerify.js'),
+    'package: thinking tier map cache stress is registered standalone and in test:desktop:built');
   assert(fs.readFileSync(path.join(process.cwd(), 'src', 'tests', 'thinkingTierMapCacheStressVerify.ts'), 'utf-8').includes('dev-0.4.3 模型原生思考强度档位映射（thinking_tier_map）缓存命中压力测试')
     && fs.readFileSync(path.join(process.cwd(), 'src', 'tests', 'thinkingTierMapCacheStressVerify.ts'), 'utf-8').includes('mapping determinism')
     && fs.readFileSync(path.join(process.cwd(), 'src', 'tests', 'thinkingTierMapCacheStressVerify.ts'), 'utf-8').includes('cache prefix: mapped effort never leaks into the system prompt'),
@@ -6044,12 +6434,16 @@ async function main() {
 
   // ---- 15. OpenCode Engine Fallback ----
   console.log('\n🔗 OpenCode Integration');
-  agent.engine = 'opencode';
-  const ocTokens = await agent.process('test');
+  const openCodeAgent = new Agent(path.join(TEST_DIR, 'opencode-agent-runtime'), { agentOnly: true });
+  registerOfflineFixtureModel(openCodeAgent, 'opencode-title-probe-model');
+  openCodeAgent.setModel('opencode-title-probe-model');
+  const openCodeTitleProvider = new FakeProvider(['OpenCode Integration']);
+  (openCodeAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => openCodeTitleProvider;
+  openCodeAgent.engine = 'opencode';
+  const ocTokens = await openCodeAgent.process('test');
   assert(ocTokens.length >= 1, 'opencode engine: produces output');
   assert(ocTokens[0].text.includes('Error') || ocTokens[0].text.includes('built-in'),
     'opencode: graceful fallback when CLI not found');
-  agent.engine = 'builtin'; // restore
 
   // ---- 16. dev-0.4.3 Task-list Regressions ----
   console.log('\n🧭 dev-0.4.3 task-list regressions');

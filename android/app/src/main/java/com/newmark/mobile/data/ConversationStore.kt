@@ -68,7 +68,13 @@ class ConversationStore(context: Context) {
                     },
                 )
             }
+            val legacyFormalResponseExists = normalizedMessages.any { it.role == "assistant" } ||
+                normalizedContext.any { it.role == "assistant" } ||
+                normalizedBranch?.nodes?.values?.any { node ->
+                    node.messages.any { it.role == "assistant" }
+                } == true
             conversation.copy(
+                firstAgentResponseStarted = conversation.firstAgentResponseStarted || legacyFormalResponseExists,
                 messages = normalizedMessages,
                 modelContext = normalizedContext,
                 branchTree = normalizedBranch,

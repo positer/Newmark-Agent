@@ -16,6 +16,7 @@ import { executeWorkspaceBash } from './core/nativeBash';
 import { currentAppVersion } from './core/installUpdate';
 import { confirmPairing, ensureMobileToken, lanIpv4, pairingStatus, tailscaleIpv4 } from './core/mobilePairing';
 import { WorkEventCoalescer } from './core/workEventCoalescer';
+import { publicSearchMcpManifest } from './core/searchMcpPool';
 
 const PORT = 47890;
 let agent: Agent | null = null;
@@ -904,6 +905,28 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           conversationCount: agent.listConversationStates().length,
           activeConversationId: agent.activeConversationId,
         });
+        return;
+      }
+      case '/api/mobile/web-search': {
+        const input = JSON.parse(body || '{}') as { query?: unknown };
+        const query = String(input.query || '').trim();
+        if (!query) { mobileJson(res, { ok: false, error: 'query is required' }, 400); return; }
+        if (query.length > 2_000) { mobileJson(res, { ok: false, error: 'query is too long' }, 400); return; }
+        const result = await agent.tools.webSearchDetailed(query);
+        mobileJson(res, result);
+        return;
+      }
+      case '/api/mobile/web-search-mcp': {
+        const input = JSON.parse(body || '{}') as { query?: unknown };
+        const query = String(input.query || '').trim();
+        if (!query) { mobileJson(res, { ok: false, error: 'query is required' }, 400); return; }
+        if (query.length > 2_000) { mobileJson(res, { ok: false, error: 'query is too long' }, 400); return; }
+        const result = await agent.tools.webSearchMcpOnly(query);
+        mobileJson(res, result);
+        return;
+      }
+      case '/api/mobile/search-mcp-manifest': {
+        mobileJson(res, { version: 1, endpoints: publicSearchMcpManifest(appRoot) });
         return;
       }
       case '/api/mobile/state': {

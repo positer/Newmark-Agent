@@ -1,6 +1,7 @@
 package com.newmark.mobile.ui
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.view.View
 import android.webkit.WebChromeClient
@@ -127,7 +128,12 @@ import com.newmark.mobile.vm.ChatViewModel
 import com.newmark.mobile.vm.DesktopLinkViewModel
 import com.newmark.mobile.vm.WorkspaceUploadProgress
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import org.json.JSONObject
+import java.io.Closeable
 import kotlin.math.roundToInt
 
 enum class RightSidebarTab(val label: String, val icon: ImageVector) {
@@ -145,6 +151,248 @@ private fun availableRightTabs(remoteMode: Boolean): List<RightSidebarTab> = if 
     // Uploads is local/global UI state, so it remains available even when
     // the conversation is local and remote workspace tabs are unavailable.
     listOf(RightSidebarTab.Plan, RightSidebarTab.Browser, RightSidebarTab.Uploads)
+}
+
+private const val BrowserTextScript =
+    "(function(){var b=document.body;return b?(b.innerText||b.textContent||''):'';})()"
+
+private fun WebView.applyNewmarkBrowserSettings() {
+    setBackgroundColor(AndroidColor.TRANSPARENT)
+    settings.javaScriptEnabled = true
+    settings.domStorageEnabled = true
+    settings.loadsImagesAutomatically = true
+    settings.cacheMode = WebSettings.LOAD_DEFAULT
+    settings.allowFileAccess = false
+    settings.allowContentAccess = false
+    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+    settings.javaScriptCanOpenWindowsAutomatically = true
+    settings.setSupportMultipleWindows(true)
+    settings.setGeolocationEnabled(false)
+    settings.mediaPlaybackRequiresUserGesture = true
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+        settings.safeBrowsingEnabled = true
+    }
+}
+
+private fun WebView.updateBrowserSessionText(session: BrowserSessionState, onComplete: (() -> Unit)? = null) {
+    evaluateJavascript(BrowserTextScript) { encoded ->
+        val text = runCatching { org.json.JSONArray("[$encoded]").optString(0) }.getOrDefault("")
+        session.onPublicText(text)
+        onComplete?.invoke()
+    }
+}
+
+private fun bindBrowserClients(
+    context: Context,
+    webView: WebView,
+    session: BrowserSessionState,
+    onPageSettled: (() -> Unit)? = null,
+) {
+    webView.webViewClient = object : WebViewClient() {
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            val target = BrowserUrlPolicy.normalizeNavigation(request.url.toString())
+            return if (target != null) {
+                false
+            } else {
+                session.onNavigationError(
+                    "已阻止非网页链接：${request.url.scheme ?: "unknown"}",
+                    view.canGoBack(),
+                    view.canGoForward(),
+                )
+                onPageSettled?.invoke()
+                true
+            }
+        }
+
+        override fun onSafeBrowsingHit(
+            view: WebView,
+            request: WebResourceRequest,
+            threatType: Int,
+            callback: android.webkit.SafeBrowsingResponse,
+        ) {
+            callback.backToSafety(true)
+            session.onNavigationError("安全浏览已阻止危险网页", view.canGoBack(), view.canGoForward())
+            onPageSettled?.invoke()
+        }
+
+        override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+            session.onNavigationStarted(url)
+        }
+
+        override fun onPageFinished(view: WebView, url: String) {
+            session.onNavigationFinished(url, view.canGoBack(), view.canGoForward())
+            view.updateBrowserSessionText(session, onPageSettled)
+        }
+
+        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+            if (request.isForMainFrame) {
+                session.onNavigationError(
+                    error.description?.toString() ?: "网页加载失败",
+                    view.canGoBack(),
+                    view.canGoForward(),
+                )
+                onPageSettled?.invoke()
+            }
+        }
+
+        override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+            if (request.isForMainFrame && errorResponse.statusCode >= 400) {
+                session.onNavigationError(
+                    "网页返回 HTTP ${errorResponse.statusCode}",
+                    view.canGoBack(),
+                    view.canGoForward(),
+                )
+                onPageSettled?.invoke()
+            }
+        }
+    }
+    webView.webChromeClient = object : WebChromeClient() {
+        override fun onCreateWindow(
+            view: WebView,
+            isDialog: Boolean,
+            isUserGesture: Boolean,
+            resultMsg: android.os.Message,
+        ): Boolean {
+            val popup = WebView(context).apply {
+                settings.javaScriptEnabled = view.settings.javaScriptEnabled
+                settings.domStorageEnabled = view.settings.domStorageEnabled
+                webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(popupView: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                        BrowserUrlPolicy.normalizeNavigation(url)?.let {
+                            session.navigate(it)
+                            popupView.stopLoading()
+                            popupView.destroy()
+                        }
+                    }
+
+                    override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
+                        BrowserUrlPolicy.normalizeNavigation(request.url.toString())?.let {
+                            session.navigate(it)
+                            popupView.stopLoading()
+                            popupView.destroy()
+                            return true
+                        }
+                        return true
+                    }
+                }
+            }
+            val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
+            transport.webView = popup
+            resultMsg.sendToTarget()
+            return true
+        }
+
+        override fun onProgressChanged(view: WebView, newProgress: Int) {
+            session.onNavigationProgress(newProgress)
+            session.onHistoryChanged(view.canGoBack(), view.canGoForward())
+        }
+
+        override fun onReceivedTitle(view: WebView, title: String?) {
+            session.onTitle(title)
+        }
+    }
+}
+
+/**
+ * WebView host for visible=false. It lives outside Compose/AndroidView, is never attached to a
+ * ViewGroup, and therefore cannot bind to, display in, or draw the right sidebar.
+ */
+@SuppressLint("SetJavaScriptEnabled")
+class BackgroundBrowserHost(
+    context: Context,
+    private val session: BrowserSessionState,
+    private val correctOcr: suspend (String, String) -> String = { _, _ -> "" },
+) : Closeable {
+    private val webView = WebView(context.applicationContext).apply {
+        applyNewmarkBrowserSettings()
+        visibility = View.GONE
+    }
+    private val recognition = BrowserRecognition(context.applicationContext, webView)
+    private var settled = CompletableDeferred<Unit>().apply { complete(Unit) }
+    private var handledCommandId = -1L
+    private var closed = false
+    private val recognitionHandler: suspend (String, Int) -> JSONObject = { url, maxChars ->
+        val receipt = recognition.recognize(url, maxChars)
+        val raw = receipt.optString("text")
+        if (raw.isNotBlank()) {
+            val corrected = correctOcr(raw, receipt.optString("profile"))
+            if (corrected.isNotBlank()) {
+                receipt.put("corrected_text", corrected.take(maxChars))
+                receipt.put("fallback", "mini_ocr_llm")
+                receipt.put("uncertainty", "preserved")
+                receipt.put("warning", "视觉输入不可用；内容来自本地 OCR 和文本模型保守校正，可能不完整")
+            }
+        }
+        receipt
+    }
+
+    init {
+        bindBrowserClients(context.applicationContext, webView, session) {
+            if (!settled.isCompleted) settled.complete(Unit)
+        }
+        session.bindRecognition(recognitionHandler)
+    }
+
+    val isAttachedToUi: Boolean
+        get() = webView.parent != null
+
+    suspend fun execute(args: JSONObject): com.newmark.mobile.data.ToolResult = withContext(Dispatchers.Main.immediate) {
+        if (closed) return@withContext com.newmark.mobile.data.ToolResult.err("后台浏览器会话已关闭")
+        val action = args.optString("action").trim().lowercase()
+        if (action !in setOf("observe", "navigate", "wait", "extract", "back", "forward", "reload")) {
+            return@withContext session.executeTool(args)
+        }
+        when (action) {
+            "navigate", "back", "forward", "reload" -> {
+                val result = session.executeTool(args)
+                if (result.ok && handledCommandId != session.command.id) dispatchPendingCommand()
+                result
+            }
+            "wait" -> {
+                if (handledCommandId != session.command.id) dispatchPendingCommand()
+                val duration = args.optLong("duration_ms", 500L).coerceIn(0L, 10_000L)
+                if (!settled.isCompleted) kotlinx.coroutines.withTimeoutOrNull(duration) { settled.await() }
+                val refreshed = CompletableDeferred<Unit>()
+                webView.updateBrowserSessionText(session) { refreshed.complete(Unit) }
+                kotlinx.coroutines.withTimeoutOrNull(2_000L) { refreshed.await() }
+                session.executeTool(JSONObject().put("action", "wait").put("duration_ms", 0L))
+            }
+            "observe", "extract" -> {
+                if (handledCommandId != session.command.id) dispatchPendingCommand()
+                if (!settled.isCompleted) kotlinx.coroutines.withTimeoutOrNull(10_000L) { settled.await() }
+                val refreshed = CompletableDeferred<Unit>()
+                webView.updateBrowserSessionText(session) { refreshed.complete(Unit) }
+                kotlinx.coroutines.withTimeoutOrNull(2_000L) { refreshed.await() }
+                session.executeTool(args)
+            }
+            else -> session.executeTool(args)
+        }
+    }
+
+    private fun dispatchPendingCommand() {
+        val command = session.command
+        if (command.id == handledCommandId) return
+        handledCommandId = command.id
+        settled = CompletableDeferred()
+        when (command.kind) {
+            BrowserCommandKind.Navigate -> webView.loadUrl(command.url)
+            BrowserCommandKind.Back -> if (webView.canGoBack()) webView.goBack() else settled.complete(Unit)
+            BrowserCommandKind.Forward -> if (webView.canGoForward()) webView.goForward() else settled.complete(Unit)
+            BrowserCommandKind.Reload -> webView.reload()
+        }
+    }
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        session.unbindRecognition(recognitionHandler)
+        recognition.close()
+        webView.stopLoading()
+        webView.loadUrl("about:blank")
+        webView.clearHistory()
+        webView.removeAllViews()
+        webView.destroy()
+    }
 }
 
 /** PC #right：横向 tabs、可关闭内容区；内容展开时占据第三栏并让聊天区避让。 */
@@ -169,15 +417,6 @@ fun MobileRightSidebar(
     val tabs = remember(remoteMode) { availableRightTabs(remoteMode) }
     val tab = selectedTab.takeIf { it in tabs } ?: tabs.first()
     var selectedSubagent by remember { mutableStateOf<RemoteSubagent?>(null) }
-    var browserPrewarmReady by remember(browserSession) { mutableStateOf(false) }
-
-    LaunchedEffect(browserSession) {
-        // Let the main conversation surface finish its first composition, then
-        // create one resident WebView off-screen so opening Browser is cheap.
-        delay(450)
-        browserPrewarmReady = true
-    }
-
     LaunchedEffect(remoteMode, vm.selectedConversationWorkspaceId, vm.selectedConversationId) {
         if (remoteMode && !vm.selectedConversationWorkspaceId.isNullOrBlank() && !vm.selectedConversationId.isNullOrBlank()) {
             vm.refreshRightSidebar()
@@ -222,14 +461,13 @@ fun MobileRightSidebar(
         )
         if (expanded) {
             Box(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 8.dp)) {
-                // Keep the conversation-bound WebView alive even while the
-                // sidebar is folded or another right-panel tab is selected.
-                // This lets browser_use navigate/extract in the background,
-                // then reveal the exact same page and history when requested.
+                // Mount the right-sidebar WebView only after the user opens the
+                // Browser tab or the default/visible tool lane requests it.
+                // visible=false owns BackgroundBrowserHost and never reaches
+                // this Compose/AndroidView branch.
                 BrowserPanel(
                     session = browserSession,
                     visible = tab == RightSidebarTab.Browser,
-                    keepMounted = browserPrewarmReady,
                     localVm = localVm,
                     modifier = Modifier.fillMaxSize().graphicsLayer {
                         alpha = if (tab == RightSidebarTab.Browser) 1f else 0f
@@ -1070,12 +1308,11 @@ private fun SubagentHistoryContent(agent: RemoteSubagent, modifier: Modifier = M
 private fun BrowserPanel(
     session: BrowserSessionState,
     visible: Boolean,
-    keepMounted: Boolean,
     localVm: ChatViewModel? = null,
     modifier: Modifier = Modifier,
 ) {
     key(session) {
-        if (visible || session.hasActivity || keepMounted) {
+        if (visible || session.hasActivity) {
             ConversationBrowserPanel(session, visible, localVm, modifier)
         }
     }
@@ -1209,111 +1446,11 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
         AndroidView(
             factory = {
                 WebView(context).apply {
-                    setBackgroundColor(AndroidColor.TRANSPARENT)
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.loadsImagesAutomatically = true
-                    settings.cacheMode = WebSettings.LOAD_DEFAULT
-                    settings.allowFileAccess = false
-                    settings.allowContentAccess = false
-                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     // Route target=_blank/window.open into this conversation's
                     // single browser session so the resulting page keeps the
                     // address bar and Reload action.
-                    settings.javaScriptCanOpenWindowsAutomatically = true
-                    settings.setSupportMultipleWindows(true)
-                    settings.setGeolocationEnabled(false)
-                    settings.mediaPlaybackRequiresUserGesture = true
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                        settings.safeBrowsingEnabled = true
-                    }
-                    webViewClient = object : WebViewClient() {
-                        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                            val target = BrowserUrlPolicy.normalizeNavigation(request.url.toString())
-                            return if (target != null) {
-                                // Return false and let WebView continue this exact request.
-                                // Calling loadUrl here duplicates navigation and can bypass
-                                // redirect bookkeeping.
-                                false
-                            } else {
-                                session.onNavigationError("已阻止非网页链接：${request.url.scheme ?: "unknown"}", view.canGoBack(), view.canGoForward())
-                                true
-                            }
-                        }
-                        override fun onSafeBrowsingHit(
-                            view: WebView,
-                            request: WebResourceRequest,
-                            threatType: Int,
-                            callback: android.webkit.SafeBrowsingResponse,
-                        ) {
-                            callback.backToSafety(true)
-                            session.onNavigationError("安全浏览已阻止危险网页", view.canGoBack(), view.canGoForward())
-                        }
-                        override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                            session.onNavigationStarted(url)
-                        }
-                        override fun onPageFinished(view: WebView, url: String) {
-                            session.onNavigationFinished(url, view.canGoBack(), view.canGoForward())
-                            view.evaluateJavascript(
-                                "(function(){var b=document.body;return b?(b.innerText||b.textContent||''):'';})()",
-                            ) { encoded ->
-                                val text = runCatching { org.json.JSONArray("[$encoded]").optString(0) }.getOrDefault("")
-                                session.onPublicText(text)
-                            }
-                        }
-                        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                            if (request.isForMainFrame) {
-                                session.onNavigationError(error.description?.toString() ?: "网页加载失败", view.canGoBack(), view.canGoForward())
-                            }
-                        }
-                        override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
-                            if (request.isForMainFrame && errorResponse.statusCode >= 400) {
-                                session.onNavigationError("网页返回 HTTP ${errorResponse.statusCode}", view.canGoBack(), view.canGoForward())
-                            }
-                        }
-                    }
-                    webChromeClient = object : WebChromeClient() {
-                        override fun onCreateWindow(
-                            view: WebView,
-                            isDialog: Boolean,
-                            isUserGesture: Boolean,
-                            resultMsg: android.os.Message,
-                        ): Boolean {
-                            val popup = WebView(context).apply {
-                                settings.javaScriptEnabled = view.settings.javaScriptEnabled
-                                settings.domStorageEnabled = view.settings.domStorageEnabled
-                                webViewClient = object : WebViewClient() {
-                                    override fun onPageStarted(popupView: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                                        BrowserUrlPolicy.normalizeNavigation(url)?.let {
-                                            session.navigate(it)
-                                            popupView.stopLoading()
-                                            popupView.destroy()
-                                        }
-                                    }
-                                    override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
-                                        BrowserUrlPolicy.normalizeNavigation(request.url.toString())?.let {
-                                            session.navigate(it)
-                                            popupView.stopLoading()
-                                            popupView.destroy()
-                                            return true
-                                        }
-                                        return true
-                                    }
-                                }
-                            }
-                            val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
-                            transport.webView = popup
-                            resultMsg.sendToTarget()
-                            return true
-                        }
-                        override fun onProgressChanged(view: WebView, newProgress: Int) {
-                            session.onNavigationProgress(newProgress)
-                            session.onHistoryChanged(view.canGoBack(), view.canGoForward())
-                        }
-                        override fun onReceivedTitle(view: WebView, title: String?) {
-                            session.onTitle(title)
-                        }
-                    }
+                    applyNewmarkBrowserSettings()
+                    bindBrowserClients(context, this, session)
                     val handler: suspend (String, Int) -> org.json.JSONObject = { url, maxChars ->
                         val browserRecognition = recognition
                             ?: BrowserRecognition(

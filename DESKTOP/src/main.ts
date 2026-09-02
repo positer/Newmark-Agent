@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, utilityProcess, Tray, Menu, nativeImage, nativeTheme, webContents, shell, protocol, session } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, utilityProcess, Tray, Menu, nativeImage, nativeTheme, webContents, WebContentsView, shell, protocol, session } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -144,6 +144,29 @@ const mobileServerWorkEventSubscribers = new Set<(event: AgentWorkEvent) => void
 const browserGuestContentsByHost = new Map<number, number>();
 const browserGuestBindingsByRuntime = new Map<string, { hostId: number; guestId: number; workspaceId: string; conversationId: string }>();
 const browserGuestKeyboardBridgeIds = new Set<number>();
+// visible=false Browser-Use sessions are never attached to a BrowserWindow or
+// renderer DOM. Each runtime gets one main-process-owned WebContentsView whose
+// WebContents preserves observe/action continuity until the run is cleared.
+const backgroundBrowserViewsByRuntime = new Map<string, Electron.WebContentsView>();
+
+function backgroundBrowserPartition(runtimeKey: string): string {
+  const digest = createHash('sha256').update(String(runtimeKey || 'default')).digest('hex').slice(0, 24);
+  return `newmark-browser-use-background-${digest}`;
+}
+
+function releaseBackgroundBrowserWebContents(runtimeKey: string, expectedContentsId?: number): void {
+  const trustedRuntimeKey = String(runtimeKey || '').trim();
+  if (!trustedRuntimeKey) return;
+  const view = backgroundBrowserViewsByRuntime.get(trustedRuntimeKey);
+  if (!view || (expectedContentsId && view.webContents.id !== expectedContentsId)) return;
+  backgroundBrowserViewsByRuntime.delete(trustedRuntimeKey);
+  const contents = view.webContents;
+  if (!contents.isDestroyed()) contents.close({ waitForBeforeUnload: false });
+}
+
+function releaseAllBackgroundBrowserWebContents(): void {
+  for (const runtimeKey of [...backgroundBrowserViewsByRuntime.keys()]) releaseBackgroundBrowserWebContents(runtimeKey);
+}
 
 function browserGuestRuntimeKey(target: ConversationRuntimeTarget): string {
   return normalizeConversationTarget(target).runtimeKey;
@@ -310,6 +333,7 @@ function dispatchAgentWorkEvent(event: unknown, mirrorToMobile = true): void {
   if ((workEvent.type === 'done' || workEvent.type === 'error') && workEvent.runtimeKey) {
     browserUseEngine?.clearRuntime(workEvent.runtimeKey);
     electronBrowserUseHost?.clear({ runtimeKey: workEvent.runtimeKey, owner: '' });
+    releaseBackgroundBrowserWebContents(workEvent.runtimeKey);
   }
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
@@ -946,10 +970,51 @@ async function ensureBrowserWebContents(boundContentsId?: number, runtimeKey?: s
   return await waitForRegisteredBrowserGuest(host, runtimeKey, 12_000);
 }
 
+async function ensureBackgroundBrowserWebContents(boundContentsId?: number, runtimeKey?: string): Promise<Electron.WebContents> {
+  const trustedRuntimeKey = String(runtimeKey || '').trim();
+  if (!trustedRuntimeKey) throw new Error('Background Browser-Use requires a runtimeKey');
+  if (boundContentsId) {
+    const bound = webContents.fromId(boundContentsId);
+    const registered = backgroundBrowserViewsByRuntime.get(trustedRuntimeKey)?.webContents;
+    if (bound && registered && !bound.isDestroyed() && registered.id === bound.id) return bound;
+  }
+  const existing = backgroundBrowserViewsByRuntime.get(trustedRuntimeKey);
+  if (existing && !existing.webContents.isDestroyed()) return existing.webContents;
+  if (existing) backgroundBrowserViewsByRuntime.delete(trustedRuntimeKey);
+
+  const view = new WebContentsView({
+    webPreferences: {
+      partition: backgroundBrowserPartition(trustedRuntimeKey),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      javascript: true,
+      allowRunningInsecureContent: false,
+      backgroundThrottling: false,
+    },
+  });
+  const contents = view.webContents;
+  backgroundBrowserViewsByRuntime.set(trustedRuntimeKey, view);
+  contents.on('will-prevent-unload', event => event.preventDefault());
+  contents.once('destroyed', () => {
+    if (backgroundBrowserViewsByRuntime.get(trustedRuntimeKey)?.webContents.id === contents.id) {
+      backgroundBrowserViewsByRuntime.delete(trustedRuntimeKey);
+    }
+  });
+  ensureElectronBrowserUseHost().attach(contents);
+  await contents.loadURL('about:blank');
+  return contents;
+}
+
 function ensureElectronBrowserUseHost(): ElectronBrowserUseHost {
   if (!electronBrowserUseHost) {
     electronBrowserUseHost = new ElectronBrowserUseHost({
-      resolveContents: async (scope, boundContentsId) => await ensureBrowserWebContents(boundContentsId, scope.runtimeKey),
+      resolveContents: async (scope, boundContentsId) => scope.visible === false
+        ? await ensureBackgroundBrowserWebContents(boundContentsId, scope.runtimeKey)
+        : await ensureBrowserWebContents(boundContentsId, scope.runtimeKey),
+      releaseContents: (scope, contents) => {
+        if (scope.visible === false) releaseBackgroundBrowserWebContents(scope.runtimeKey, contents.id);
+      },
       openExternal: async url => { await shell.openExternal(url); },
     });
   }
@@ -2575,6 +2640,7 @@ if (isViewerArg) {
       browserUseEngine = null;
       electronBrowserUseHost?.dispose();
       electronBrowserUseHost = null;
+      releaseAllBackgroundBrowserWebContents();
       BrowserControl.setBackend(null);
       browserGuestContentsByHost.clear();
       browserGuestBindingsByRuntime.clear();
@@ -2698,6 +2764,7 @@ if (isViewerArg) {
       cancelBrowserUseTarget: runtimeKey => {
         browserUseEngine?.clearRuntime(runtimeKey);
         electronBrowserUseHost?.clear({ runtimeKey, owner: '' });
+        releaseBackgroundBrowserWebContents(runtimeKey);
       },
       runAutomation: async (tool, payload, signal) => {
         if (!agent) throw new Error('Automation manager is unavailable');

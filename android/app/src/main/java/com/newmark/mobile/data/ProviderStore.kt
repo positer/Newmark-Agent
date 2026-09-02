@@ -30,14 +30,17 @@ class ProviderStore(context: Context) {
         }
         return runCatching {
             val type = object : TypeToken<List<ProviderConfig>>() {}.type
-            gson.fromJson<List<ProviderConfig>>(file.readText(), type) ?: emptyList()
+            val parsed = gson.fromJson<List<ProviderConfig>>(file.readText(), type) ?: emptyList()
+            val normalized = normalizeMobileProviderConfigs(parsed)
+            if (normalized != parsed) save(normalized)
+            normalized
         }.getOrDefault(emptyList())
     }
 
     fun save(list: List<ProviderConfig>) {
         runCatching {
             dir.mkdirs()
-            file.writeText(gson.toJson(list))
+            file.writeText(gson.toJson(normalizeMobileProviderConfigs(list)))
         }
     }
 

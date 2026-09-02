@@ -17,4 +17,18 @@ class ProviderStoreCleanInstallContractTest {
         assertFalse(store.contains("NewmarkPresets"))
         assertFalse(presets.exists())
     }
+
+    @Test
+    fun providerPersistenceNormalizesLegacyProtocolAliasesWithoutDroppingFields() {
+        val store = File("src/main/java/com/newmark/mobile/data/ProviderStore.kt").readText()
+        val legacyStore = File("src/main/java/com/newmark/mobile/data/AppConfigStore.kt").readText()
+        val executor = File("src/main/java/com/newmark/mobile/data/LocalToolExecutor.kt").readText()
+
+        assertTrue(store.contains("val normalized = normalizeMobileProviderConfigs(parsed)"))
+        assertTrue(store.contains("if (normalized != parsed) save(normalized)"))
+        assertTrue(store.contains("gson.toJson(normalizeMobileProviderConfigs(list))"))
+        assertTrue(legacyStore.contains("parsed.copy(protocol = normalizeMobileProviderProtocol(parsed.protocol))"))
+        assertTrue(legacyStore.contains("config.copy(protocol = normalizeMobileProviderProtocol(config.protocol))"))
+        assertTrue(executor.contains("val cleaned = normalizeMobileProviderConfigs("))
+    }
 }

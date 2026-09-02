@@ -97,6 +97,12 @@ data class NewmarkThemeColors(
     val border2: Color,
     val green: Color,
     val red: Color,
+    val codeKeyword: Color,
+    val codeString: Color,
+    val codeComment: Color,
+    val codeNumber: Color,
+    val codeType: Color,
+    val codeTag: Color,
 )
 
 val NewmarkDarkThemeColors = NewmarkThemeColors(
@@ -114,6 +120,12 @@ val NewmarkDarkThemeColors = NewmarkThemeColors(
     border2 = NewmarkBorder2,
     green = NewmarkGreen,
     red = NewmarkRed,
+    codeKeyword = Color(0xFFC792EA),
+    codeString = Color(0xFFC3E88D),
+    codeComment = Color(0xFF546E7A),
+    codeNumber = Color(0xFFF78C6C),
+    codeType = Color(0xFFFFCB6B),
+    codeTag = Color(0xFFF07178),
 )
 
 val NewmarkLightThemeColors = NewmarkThemeColors(
@@ -131,6 +143,12 @@ val NewmarkLightThemeColors = NewmarkThemeColors(
     border2 = NewmarkLightBorder2,
     green = NewmarkGreen,
     red = NewmarkRed,
+    codeKeyword = Color(0xFF7A4BBF),
+    codeString = Color(0xFF1B7F3B),
+    codeComment = Color(0xFF5B6678),
+    codeNumber = Color(0xFF9A5A00),
+    codeType = Color(0xFF7C6A00),
+    codeTag = Color(0xFFB83A45),
 )
 
 val LocalNewmarkColors = staticCompositionLocalOf { NewmarkDarkThemeColors }

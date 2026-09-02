@@ -360,6 +360,10 @@ export async function verifyMobileWorkspaceApi(record: VerifyAssert): Promise<vo
     `const root = ${JSON.stringify(fixture.root)};`,
     `const port = ${port};`,
     "const { Agent } = require(path.join(path.dirname(filename), 'core', 'agent.js'));",
+    "const { ToolExecutor } = require(path.join(path.dirname(filename), 'tools', 'index.js'));",
+    "ToolExecutor.prototype.webSearchMcpOnly = async function(query) {",
+    "  return { invocationId: 'mobile-mcp-only-fixture', checkedAt: '2026-09-01T00:00:00.000Z', ok: false, provider: '', text: '', attempts: [{ id: 'fixture', name: 'Fixture MCP', status: 'error', durationMs: 1, error: 'offline' }] };",
+    "};",
     "Agent.prototype.process = async function(input) {",
     "  const message = typeof input === 'string' ? input : String(input.text || '');",
     "  this.status = 'working';",
@@ -443,6 +447,18 @@ export async function verifyMobileWorkspaceApi(record: VerifyAssert): Promise<vo
     record(unauthorizedModelMutation.status === 401,
       'mobile remote model selection: mutation remains protected by the mobile token gate',
       JSON.stringify(unauthorizedModelMutation.body));
+
+    const unauthorizedSearchMcp = await requestJsonWithBearer(port, 'wrong-mobile-token', 'POST', '/api/mobile/web-search-mcp', { query: 'fixture query' });
+    const searchMcp = await requestJsonWithBearer(port, fixture.token, 'POST', '/api/mobile/web-search-mcp', { query: 'fixture query' });
+    record(unauthorizedSearchMcp.status === 401
+      && searchMcp.status === 200
+      && searchMcp.body.ok === false
+      && searchMcp.body.text === ''
+      && searchMcp.body.provider === ''
+      && Array.isArray(searchMcp.body.attempts)
+      && searchMcp.body.attempts[0]?.name === 'Fixture MCP',
+    'mobile search MCP bridge: bearer-authenticated endpoint returns only the MCP pool miss contract',
+    JSON.stringify({ unauthorizedStatus: unauthorizedSearchMcp.status, response: searchMcp.body }));
 
     const snapshotB = await requestJson(
       port,

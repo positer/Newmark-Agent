@@ -50,4 +50,43 @@ class ProviderCatalogMergeTest {
         val preserved = mergeProviderCatalogEntries(listOf(localSecret), listOf(exported))
         assertEquals("local-secret", preserved.providers.single().apiKey)
     }
+
+    @Test
+    fun responsesProtocolAliasesNormalizeDuringCatalogMigration() {
+        val imported = mergeProviderCatalogEntries(
+            existing = emptyList(),
+            incoming = listOf(
+                ProviderConfig(
+                    id = "responses-provider",
+                    name = "Responses",
+                    baseUrl = "https://responses.test/v1",
+                    apiKey = "secret",
+                    protocol = "responses",
+                    models = listOf(ModelConfig(name = "gpt-response")),
+                ),
+            ),
+        )
+
+        assertEquals("openai_responses", imported.providers.single().protocol)
+
+        val mergedAlias = mergeProviderCatalogEntries(
+            existing = listOf(imported.providers.single()),
+            incoming = listOf(imported.providers.single().copy(id = "alias-id", protocol = "responses")),
+        )
+        assertEquals(1, mergedAlias.providers.size)
+    }
+
+    @Test
+    fun persistedAndFullReplacementProviderListsNormalizeProtocolAliases() {
+        val providers = listOf(
+            ProviderConfig(id = "responses", name = "Responses", protocol = "responses"),
+            ProviderConfig(id = "legacy", name = "Legacy", protocol = "openai-compatible"),
+        )
+
+        val normalized = normalizeMobileProviderConfigs(providers)
+
+        assertEquals(listOf("openai_responses", "openai"), normalized.map { it.protocol })
+        assertEquals(providers.map { it.id }, normalized.map { it.id })
+        assertEquals(providers.map { it.name }, normalized.map { it.name })
+    }
 }

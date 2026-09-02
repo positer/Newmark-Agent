@@ -318,6 +318,7 @@ internal fun sidebarRailForLayout(isCompact: Boolean, expandedLayoutRail: Boolea
 private data class ConversationUiActions(
     val send: (String) -> Unit,
     val sendImages: (String, List<com.newmark.mobile.data.LocalImageAttachment>) -> Unit,
+    val guide: (String) -> Boolean,
     val stop: () -> Unit,
     val selectModel: (ModelOption) -> Unit,
     val selectIntelligence: (String) -> Unit,
@@ -560,6 +561,9 @@ private fun NewmarkAppContent(
     // the remaining distance instead of replaying from the old endpoint.
     var rightSidebarTab by remember { mutableStateOf(RightSidebarTab.Files) }
     val browserSessions = remember { BrowserSessionRegistry() }
+    val backgroundBrowserHosts = remember {
+        mutableMapOf<String, BackgroundBrowserHost>()
+    }
     var compactSubagent by remember { mutableStateOf<RemoteSubagent?>(null) }
     var retainedCompactSubagent by remember { mutableStateOf<RemoteSubagent?>(null) }
     LaunchedEffect(compactSubagent) {
@@ -628,19 +632,55 @@ private fun NewmarkAppContent(
     } else {
         "local:${vm.currentId.orEmpty()}"
     }
-    val browserSession = browserSessions.session(browserTargetKey)
+    val browserSession = browserSessions.visibleSession(browserTargetKey)
     val localBrowserConversationId = vm.currentId.orEmpty()
-    DisposableEffect(useRemote, localBrowserConversationId, browserSession, vm) {
+    DisposableEffect(useRemote, localBrowserConversationId, browserTargetKey, browserSession, vm, context) {
         if (useRemote || localBrowserConversationId.isBlank()) return@DisposableEffect onDispose { }
-        val handler: suspend (org.json.JSONObject) -> com.newmark.mobile.data.ToolResult = { args ->
-            // browser_use operates the conversation-scoped WebView in the
-            // background. Sidebar visibility is presentation state only; a
-            // tool must never force the user's right sidebar open or switch
-            // its selected tab.
-            browserSession.executeTool(args)
+        val handler: suspend (org.json.JSONObject) -> com.newmark.mobile.data.ToolResult = handler@{ args ->
+            val visible = when {
+                !args.has("visible") -> true
+                args.opt("visible") is Boolean -> args.getBoolean("visible")
+                else -> return@handler com.newmark.mobile.data.ToolResult.err("browser_use.visible 必须是 boolean")
+            }
+            if (visible) {
+                // Default/true keeps the historical conversation-scoped right
+                // sidebar session. Visibility is presentation state only; the
+                // tool never expands the sidebar or switches its tab.
+                browserSession.executeTool(args)
+            } else {
+                // The false lane owns a separate unattached WebView. It never
+                // resolves the right-sidebar session and never enters Compose.
+                val host = backgroundBrowserHosts[browserTargetKey]
+                    ?: withContext(Dispatchers.Main.immediate) {
+                        backgroundBrowserHosts.getOrPut(browserTargetKey) {
+                            BackgroundBrowserHost(
+                                context = context.applicationContext,
+                                session = browserSessions.backgroundSession(browserTargetKey),
+                                correctOcr = vm::correctFinalVisualOcr,
+                            )
+                        }
+                    }
+                host.execute(args)
+            }
         }
         vm.bindLocalBrowserTools(localBrowserConversationId, handler)
         onDispose { vm.unbindLocalBrowserTools(localBrowserConversationId, handler) }
+    }
+    DisposableEffect(backgroundBrowserHosts) {
+        onDispose {
+            backgroundBrowserHosts.forEach { (targetKey, host) ->
+                host.close()
+                browserSessions.releaseBackgroundSession(targetKey)
+            }
+            backgroundBrowserHosts.clear()
+        }
+    }
+    LaunchedEffect(backgroundBrowserHosts, browserTargetKey) {
+        val staleTargets = backgroundBrowserHosts.keys.filter { it != browserTargetKey }
+        staleTargets.forEach { targetKey ->
+            backgroundBrowserHosts.remove(targetKey)?.close()
+            browserSessions.releaseBackgroundSession(targetKey)
+        }
     }
     val selectedRightSidebarTab = when {
         useRemote -> rightSidebarTab
@@ -701,6 +741,10 @@ private fun NewmarkAppContent(
     val conversationActions = if (useRemote) ConversationUiActions(
         send = linkVm::sendToDesktop,
         sendImages = { text, _ -> linkVm.sendToDesktop(text) },
+        guide = { text ->
+            linkVm.guideRemoteConversation(text)
+            true
+        },
         stop = { if (remoteUi.flow?.running == true) linkVm.pauseRemoteFlow() else linkVm.stopRemoteConversation() },
         selectModel = linkVm::selectRemoteModel,
         selectIntelligence = linkVm::selectRemoteIntelligence,
@@ -719,6 +763,7 @@ private fun NewmarkAppContent(
     ) else ConversationUiActions(
         send = { text -> if (vm.isSending) vm.enqueueLocal(text) else vm.send(text) },
         sendImages = { text, images -> if (!vm.isSending) vm.sendWithImages(text, images) else vm.enqueueLocal(text) },
+        guide = vm::guideLocalConversation,
         stop = vm::stop,
         selectModel = { vm.selectModel(it.providerId, it.modelName) },
         selectIntelligence = vm::selectIntelligence,
@@ -1488,6 +1533,7 @@ private fun ConversationSurfaceContent(
         onNewChat = surface.onNewChat,
         onSend = surface.actions.send,
         onSendWithImages = surface.actions.sendImages,
+        onGuide = surface.actions.guide,
         onStop = surface.actions.stop,
         escalating = surface.escalating,
         showConnectRemote = surface.showConnectRemote,

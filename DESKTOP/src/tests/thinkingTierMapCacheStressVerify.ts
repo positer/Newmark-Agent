@@ -49,13 +49,14 @@ type CaptureServer = {
 
 function startCaptureServer(
   handler: (req: http.IncomingMessage, res: http.ServerResponse, body: string) => void,
+  record?: (body: string) => boolean,
 ): Promise<CaptureServer> {
   const requests: CaptureServer['requests'] = [];
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
-      requests.push({ url: String(req.url || ''), body });
+      if (record?.(body) !== false) requests.push({ url: String(req.url || ''), body });
       handler(req, res, body);
     });
   });
@@ -220,12 +221,23 @@ async function main(): Promise<void> {
   const runner = new Agent(root, { agentOnly: true });
   try {
     let buildToolCounter = 0;
+    let titleProbeCount = 0;
     const toolRoundsPerBuild = 8;
     const builds = 5;
     const inputTokensPerCall = 1000;
     const outputTokensPerCall = 40;
     const cacheReadPerCall = 950;
     const agentServer = await startCaptureServer((_req, res, rawBody) => {
+      let stream = false;
+      try {
+        stream = JSON.parse(rawBody).stream === true;
+      } catch { /* title/probe or malformed requests are handled below */ }
+      if (!stream) {
+        titleProbeCount += 1;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ choices: [{ message: { content: 'CACHE_MAP_TITLE' } }] }));
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write(usageBody(inputTokensPerCall, cacheReadPerCall, outputTokensPerCall));
       try {
@@ -241,6 +253,8 @@ async function main(): Promise<void> {
       }
       res.write(DONE);
       res.end();
+    }, rawBody => {
+      try { return JSON.parse(rawBody).stream === true; } catch { return false; }
     });
     try {
       const base = `http://127.0.0.1:${agentServer.port}/v1`;
@@ -264,6 +278,7 @@ async function main(): Promise<void> {
 
       const requestsPerBuild = toolRoundsPerBuild + 1;
       const totalCalls = builds * requestsPerBuild;
+      check(titleProbeCount === 1, `title probe: one non-stream model availability request is isolated before the first formal Build`);
       check(agentServer.requests.length === totalCalls, `volume: ${totalCalls} agent provider requests across ${builds} Builds (${agentServer.requests.length})`);
 
       // 全链路映射：medium Build 全部 balanced，ultra Build 全部 deep

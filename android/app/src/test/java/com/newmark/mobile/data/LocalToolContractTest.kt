@@ -58,6 +58,19 @@ class LocalToolContractTest {
         assertEquals("New", patchedProvider.name)
         assertEquals("secret", patchedProvider.apiKey)
         assertEquals(provider.models, patchedProvider.models)
+        val protocolOnlyPatch = patchProviderConfig(
+            provider,
+            JSONObject().put("id", "provider-a").put("protocol", "responses"),
+        )
+        assertEquals("openai_responses", protocolOnlyPatch.protocol)
+        assertEquals(provider.baseUrl, protocolOnlyPatch.baseUrl)
+        assertEquals(provider.apiKey, protocolOnlyPatch.apiKey)
+        assertEquals(provider.models, protocolOnlyPatch.models)
+        assertEquals(provider.enabled, protocolOnlyPatch.enabled)
+        assertEquals(provider.hasApiKey, protocolOnlyPatch.hasApiKey)
+        assertTrue(runCatching {
+            patchProviderConfig(provider, JSONObject().put("id", "provider-a").put("protocol", "unknown"))
+        }.isFailure)
 
         val patchedModel = patchModelConfig(provider.models.single(), JSONObject().put("name", "model-a").put("display", "New model"))
         assertEquals("New model", patchedModel.display)
@@ -95,6 +108,9 @@ class LocalToolContractTest {
         assertTrue(settings.has("model"))
         assertTrue(settings.has("action"))
         assertTrue(definition("settings_update").getString("description").contains("增量更新"))
+        val protocolValues = settings.getJSONObject("provider").getJSONObject("properties")
+            .getJSONObject("protocol").getJSONArray("enum")
+        assertTrue((0 until protocolValues.length()).map(protocolValues::getString).contains("openai_responses"))
 
         val memory = definition("memory_lab_update").getJSONObject("parameters").getJSONObject("properties")
         assertTrue(memory.has("component"))
@@ -175,7 +191,7 @@ class LocalToolContractTest {
     fun buildExposesEverySupportedLocalAgentCapability() {
         assertEquals(
             setOf(
-                "read_file", "write_file", "list_dir", "recent_files", "image_display",
+                "read_file", "write_file", "list_dir", "recent_files", "image_display", "image_inspect",
                 "terminal_exec",
                 "memory_lab_read", "memory_lab_query", "memory_lab_update", "memory_lab_delete", "memory_lab_reindex",
                 "settings_read", "settings_update",
@@ -254,7 +270,7 @@ class LocalToolContractTest {
     @Test
     fun planKeepsOnlyReadOnlyToolsAndReadOnlyBrowserActions() {
         assertEquals(setOf(
-            "read_file", "list_dir", "recent_files", "image_display", "memory_lab_read", "memory_lab_query", "settings_read",
+            "read_file", "list_dir", "recent_files", "image_display", "image_inspect", "memory_lab_read", "memory_lab_query", "settings_read",
             "web_search", "web_fetch", "browser_use", "task_read", "calendar_read",
         ), LocalToolCatalog.planNames)
         assertEquals(setOf("observe", "navigate", "wait", "extract"), LocalToolCatalog.planBrowserActions)

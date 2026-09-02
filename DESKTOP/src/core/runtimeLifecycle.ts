@@ -11,7 +11,7 @@ export interface RuntimeLifecycleState {
   startedAt: string;
   previousOwnerAlive: boolean;
   unexpectedExit: boolean;
-  active: true;
+  active: boolean;
 }
 
 const processStates = new Map<string, RuntimeLifecycleState>();
@@ -153,6 +153,35 @@ export function markRuntimeLifecycleClean(root: string, role: RuntimeLifecycleRo
       // Leaving the marker active is safer than claiming a clean exit after a
       // failed durable write.
     }
+  }
+}
+
+/** Parent-side fallback for a worker that died before it could clean its own marker. */
+export function markRuntimeLifecycleExitedByPid(
+  root: string,
+  role: RuntimeLifecycleRole,
+  pid: number,
+  input: { unexpected: boolean; exitCode?: number | null; error?: string } = { unexpected: true },
+): void {
+  const directory = path.join(root, '.newmark-runtime');
+  let files: string[] = [];
+  try {
+    files = fs.readdirSync(directory).filter(file => file.startsWith(`lifecycle-${role}-`) && file.endsWith('.json'));
+  } catch { return; }
+  for (const name of files) {
+    const file = path.join(directory, name);
+    const state = readState(file);
+    if (!state || Number(state.pid) !== Math.floor(Number(pid) || 0) || state.active !== true) continue;
+    try {
+      writeState(root, role, {
+        ...state,
+        active: false,
+        unexpectedExit: input.unexpected,
+        exitedAt: new Date().toISOString(),
+        exitCode: input.exitCode,
+        error: String(input.error || '').slice(-800),
+      });
+    } catch {}
   }
 }
 

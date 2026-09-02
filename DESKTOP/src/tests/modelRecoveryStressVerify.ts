@@ -259,6 +259,12 @@ async function main(): Promise<void> {
           if (url.includes('quota-primary.invalid')) {
             const rawBody = String((init as RequestInit | undefined)?.body || '');
             const body = rawBody ? JSON.parse(rawBody) as Record<string, unknown> : {};
+            if (body.stream !== true) {
+              return new Response(JSON.stringify({ choices: [{ message: { content: `TITLE_OK_${round}` } }] }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
             const requestedModel = String(body.model || '');
             if (requestedModel === 'shared-model') {
               primaryRequests += 1;

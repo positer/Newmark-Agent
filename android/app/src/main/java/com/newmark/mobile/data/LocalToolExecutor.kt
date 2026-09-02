@@ -122,6 +122,7 @@ class LocalToolExecutor(
         .readTimeout(30, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
+    private val searchMcpPool = MobileSearchMcpPool(appContext, webClient)
     private var cwd = root
     private val richDocuments = RichDocumentReader(appContext) { images, prompt ->
         val args = JSONObject().put("prompt", prompt).put("images", JSONArray(images.map { image ->
@@ -163,6 +164,7 @@ class LocalToolExecutor(
                 "list_dir" -> ls(args.optString("path"))
                 "recent_files" -> recentFiles(args)
                 "image_display" -> imageDisplay(args)
+                "image_inspect" -> imageInspect(args)
                 "terminal_exec" -> terminalExec(args.optString("command"))
                 "memory_lab_read" -> mlRead(args.optString("component"))
                 "memory_lab_query" -> mlQuery(args.optString("query"))
@@ -241,6 +243,71 @@ class LocalToolExecutor(
         return ToolResult.ok(receipt, image)
     }
 
+    private suspend fun imageInspect(args: JSONObject): ToolResult {
+        val path = args.optString("path").trim()
+        if (path.isBlank()) return ToolResult.err("image_inspect 需要 path")
+        val maxBytes = 10L * 1024L * 1024L
+        val uri = runCatching { Uri.parse(path) }.getOrNull()
+        val sourceName: String
+        val bytes: ByteArray
+        if (uri?.scheme == ContentResolver.SCHEME_CONTENT) {
+            if (!capabilities.externalFilesEnabled()) return ToolResult.err("请先开启文件读取权限后再检查 content URI")
+            val resolver = appContext.contentResolver
+            sourceName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (!cursor.moveToFirst()) "authorized-image" else {
+                    val size = if (cursor.isNull(1)) -1L else cursor.getLong(1)
+                    if (size > maxBytes) return ToolResult.err("图片必须大于 0 且不超过 10 MiB")
+                    cursor.getString(0).orEmpty().ifBlank { "authorized-image" }
+                }
+            } ?: "authorized-image"
+            bytes = resolver.openInputStream(uri)?.use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                var total = 0L
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    if (total > maxBytes) return ToolResult.err("图片必须大于 0 且不超过 10 MiB")
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            } ?: return ToolResult.err("无法读取该系统图片 URI")
+        } else {
+            val raw = File(path)
+            val file = if (raw.isAbsolute) {
+                runCatching { resolve(path) }.getOrElse {
+                    if (!capabilities.externalFilesEnabled() || !capabilities.allFilesGranted()) {
+                        return ToolResult.err("共享存储图片需要文件开关和系统授权")
+                    }
+                    safeSharedPath(path)
+                }
+            } else resolve(path)
+            if (!file.isFile) return ToolResult.err("图片不存在或不是文件：$path")
+            if (file.length() <= 0L || file.length() > maxBytes) return ToolResult.err("图片必须大于 0 且不超过 10 MiB")
+            sourceName = file.name
+            bytes = file.readBytes()
+        }
+        if (bytes.isEmpty() || bytes.size > maxBytes) return ToolResult.err("图片必须大于 0 且不超过 10 MiB")
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val mime = bounds.outMimeType.orEmpty().lowercase().replace("image/jpg", "image/jpeg")
+        if (mime !in setOf("image/png", "image/jpeg") || bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return ToolResult.err("image_inspect 仅支持有效 PNG/JPEG")
+        }
+        if (bounds.outWidth.toLong() * bounds.outHeight.toLong() > 40_000_000L) {
+            return ToolResult.err("图片像素数不能超过 4000 万")
+        }
+        val dataUrl = "data:$mime;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+        val internalArgs = JSONObject()
+            .put("name", sourceName)
+            .put("mime_type", mime)
+            .put("data_url", dataUrl)
+            .put("prompt", args.optString("prompt").trim().ifBlank { "请客观描述这张图片，并回答与当前任务相关的可见信息。" })
+        return runtimeTool?.invoke("__image_visual_read", internalArgs)
+            ?: ToolResult.err("当前执行环境没有可用的模型视觉桥")
+    }
+
     private fun fetch(url: String): String {
         val request = Request.Builder().url(url).header("User-Agent", "NewmarkMobile/1.0").build()
         return webClient.newCall(request).execute().use { response ->
@@ -265,21 +332,16 @@ class LocalToolExecutor(
             .fold({ ToolResult.ok(it.ifBlank { "网页没有可提取正文。" }) }, { ToolResult.err("[web_fetch] ${it.message ?: it}") })
     }
 
-    private fun webSearch(query: String): ToolResult {
+    private suspend fun webSearch(query: String): ToolResult {
         if (query.isBlank()) return ToolResult.err("需要 query")
+        val mcp = searchMcpPool.search(query)
+        mcp.result?.takeIf { it.text.isNotBlank() }?.let { result ->
+            return ToolResult.ok(result.text)
+        }
         val encoded = java.net.URLEncoder.encode(query, Charsets.UTF_8.name())
-        val errors = mutableListOf<String>()
-        runCatching {
-            val html = fetch("https://html.duckduckgo.com/html/?q=$encoded")
-            val blocks = Regex("(?is)<a[^>]+class=\"result__a\"[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>[\\s\\S]*?class=\"result__snippet\"[^>]*>(.*?)</(?:a|div)>")
-                .findAll(html).take(8).map { match ->
-                    val title = readableText(match.groupValues[2], 500)
-                    val snippet = readableText(match.groupValues[3], 800)
-                    "$title\n${match.groupValues[1]}\n$snippet"
-                }.toList()
-            if (blocks.isNotEmpty()) return ToolResult.ok(blocks.joinToString("\n\n"))
-            errors += "DuckDuckGo 无可解析结果"
-        }.onFailure { errors += "DuckDuckGo: ${it.message ?: it}" }
+        val errors = mcp.attempts.map { attempt ->
+            "${attempt.provider}: ${attempt.reason.ifBlank { if (attempt.ok) "empty" else "unavailable" }}"
+        }.toMutableList()
         runCatching {
             val html = fetch("https://www.bing.com/search?q=$encoded")
             val blocks = Regex("(?is)<li class=\"b_algo\".*?</li>").findAll(html).take(8).mapNotNull { block ->
@@ -291,6 +353,17 @@ class LocalToolExecutor(
             if (blocks.isNotEmpty()) return ToolResult.ok(blocks.joinToString("\n\n"))
             errors += "Bing 无可解析结果"
         }.onFailure { errors += "Bing: ${it.message ?: it}" }
+        runCatching {
+            val html = fetch("https://html.duckduckgo.com/html/?q=$encoded")
+            val blocks = Regex("(?is)<a[^>]+class=\"result__a\"[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>[\\s\\S]*?class=\"result__snippet\"[^>]*>(.*?)</(?:a|div)>")
+                .findAll(html).take(8).map { match ->
+                    val title = readableText(match.groupValues[2], 500)
+                    val snippet = readableText(match.groupValues[3], 800)
+                    "$title\n${match.groupValues[1]}\n$snippet"
+                }.toList()
+            if (blocks.isNotEmpty()) return ToolResult.ok(blocks.joinToString("\n\n"))
+            errors += "DuckDuckGo 无可解析结果"
+        }.onFailure { errors += "DuckDuckGo: ${it.message ?: it}" }
         return ToolResult.err("[web_search] No results. ${errors.joinToString("; ")}")
     }
 
@@ -715,7 +788,9 @@ class LocalToolExecutor(
             val providers = runCatching { gson.fromJson<List<ProviderConfig>>(arr.toString(), type) }
                 .getOrNull()
             if (providers == null) return ToolResult.err("providers 解析失败：需为 ProviderConfig 数组（snake_case 字段）")
-            val cleaned = providers.filter { it.id.isNotBlank() || it.name.isNotBlank() }
+            val cleaned = normalizeMobileProviderConfigs(
+                providers.filter { it.id.isNotBlank() || it.name.isNotBlank() },
+            )
             providerStore.save(cleaned)
             changes += "providers(${cleaned.size})"
         }

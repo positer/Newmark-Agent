@@ -19,6 +19,7 @@ async function evaluate(cdp, expression) { const result=await cdp.call('Runtime.
   const electron=path.join(desktopRoot,'node_modules','electron','dist','electron.exe');
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'NewmarkWorkReviewBars-'));
   const screenshot=path.join(repoRoot,'archive','2026-07-12-work-review-bars-smoke.png');
+  const buildToggleScreenshot=path.join(repoRoot,'archive','20260831-dev-0.5.13-build-toggle-dark-held.png');
   const port=await freeTcpPort();
   let child,cdp;
   try {
@@ -100,8 +101,30 @@ async function evaluate(cdp, expression) { const result=await cdp.call('Runtime.
       return {badges:element.querySelectorAll('.conversation-work-change-badge').length,expanded:element.classList.contains('expanded'),pseudoDisplay:pseudo.display,scale:style.scale,transitionDuration:style.transitionDuration,animationName:style.animationName,transform:style.transform,filter:style.filter,chevronTransitionDuration:chevronStyle.transitionDuration,liquidFloats:document.querySelectorAll('.liquid-selection-float').length};
     })()`);
     if(repeatedBuildToggle.badges!==1||repeatedBuildToggle.expanded||repeatedBuildToggle.pseudoDisplay!=='none'||(repeatedBuildToggle.scale&&repeatedBuildToggle.scale!=='1'&&repeatedBuildToggle.scale!=='none')||repeatedBuildToggle.transitionDuration!=='0s'||repeatedBuildToggle.animationName!=='none'||(repeatedBuildToggle.transform&&repeatedBuildToggle.transform!=='none')||(repeatedBuildToggle.filter&&repeatedBuildToggle.filter!=='none')||repeatedBuildToggle.chevronTransitionDuration!=='0s'||repeatedBuildToggle.liquidFloats!==0)fail(`repeated Build toggle duplicated review or retained glass/motion: ${JSON.stringify(repeatedBuildToggle)}`);
+    const buildTogglePoint=await evaluate(cdp,`(() => {
+      document.documentElement.setAttribute('data-theme','dark');
+      const element=document.querySelector('.conversation-work-run[data-run-id="review-toggle-dedup-smoke"]');
+      const head=element&&element.querySelector('.conversation-work-run-head');
+      if(!element||!head)return null;
+      if(!element.classList.contains('expanded'))window.toggleConversationWorkRun(head);
+      head.scrollIntoView({block:'center'});
+      const rect=head.getBoundingClientRect();
+      return{x:rect.left+rect.width/2,y:rect.top+rect.height/2};
+    })()`);
+    if(!buildTogglePoint)fail('dark Build toggle fixture missing');
+    await cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:buildTogglePoint.x,y:buildTogglePoint.y});
+    await cdp.call('Input.dispatchMouseEvent',{type:'mousePressed',x:buildTogglePoint.x,y:buildTogglePoint.y,button:'left',buttons:1,clickCount:1});
+    await sleep(100);
+    const heldBuildToggle=await evaluate(cdp,`(() => {
+      const head=document.querySelector('.conversation-work-run[data-run-id="review-toggle-dedup-smoke"] .conversation-work-run-head');
+      const style=getComputedStyle(head);const pseudo=getComputedStyle(head,'::after');
+      return{backgroundColor:style.backgroundColor,backgroundImage:style.backgroundImage,filter:style.filter,pseudoDisplay:pseudo.display,expanded:head.closest('.conversation-work-run').classList.contains('expanded')};
+    })()`);
+    const heldShot=await cdp.call('Page.captureScreenshot',{format:'png',fromSurface:true},30000);fs.mkdirSync(path.dirname(buildToggleScreenshot),{recursive:true});fs.writeFileSync(buildToggleScreenshot,Buffer.from(heldShot.data,'base64'));
+    await cdp.call('Input.dispatchMouseEvent',{type:'mouseReleased',x:buildTogglePoint.x,y:buildTogglePoint.y,button:'left',buttons:0,clickCount:1});
+    if(heldBuildToggle.backgroundColor!=='rgba(0, 0, 0, 0)'||heldBuildToggle.backgroundImage!=='none'||heldBuildToggle.filter!=='none'||heldBuildToggle.pseudoDisplay!=='none'||!heldBuildToggle.expanded)fail(`dark held Build toggle gained a material background: ${JSON.stringify(heldBuildToggle)}`);
     const shot=await cdp.call('Page.captureScreenshot',{format:'png',fromSurface:true},30000);fs.mkdirSync(path.dirname(screenshot),{recursive:true});fs.writeFileSync(screenshot,Buffer.from(shot.data,'base64'));if(fs.statSync(screenshot).size<10000)fail('screenshot too small');
-    console.log(`[release-ui-work-review-bars-smoke] PASS ${JSON.stringify({state,liveToolFold,repeatedBuildToggle})} screenshot=${screenshot}`);
+    console.log(`[release-ui-work-review-bars-smoke] PASS ${JSON.stringify({state,liveToolFold,repeatedBuildToggle,heldBuildToggle})} screenshot=${screenshot} buildToggleScreenshot=${buildToggleScreenshot}`);
   } finally {
     try{cdp?.ws.close();}catch{}
     if(child?.pid)spawnSync('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore',timeout:15000});

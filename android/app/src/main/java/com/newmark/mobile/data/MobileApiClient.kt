@@ -32,6 +32,10 @@ class MobileApiClient {
     /** 供 SSE 长连接复用（读超时由流式消费控制） */
     val rawClient: OkHttpClient get() = client
 
+    fun evictConnections() {
+        client.connectionPool.evictAll()
+    }
+
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
     private fun authedUrl(pair: PairInfo, path: String): String =
@@ -107,6 +111,18 @@ class MobileApiClient {
     /** Explicit user-initiated provider migration, including credentials. */
     suspend fun exportProviderCatalog(pair: PairInfo): Result<JSONObject> =
         privatePost(pair, "/api/mobile/provider-catalog-export", JSONObject())
+
+    /**
+     * Execute the desktop-owned search MCP pool. Android passes only the
+     * bounded query and manifest order; arbitrary MCP methods/tools are never
+     * exposed through the paired-device API.
+     */
+    suspend fun webSearchMcp(
+        pair: PairInfo,
+        query: String,
+    ): Result<JSONObject> = privatePost(pair, "/api/mobile/web-search-mcp", JSONObject().apply {
+        put("query", query)
+    })
 
     suspend fun selectModel(pair: PairInfo, model: String): Result<JSONObject> =
         post(pair, "/api/mobile/model", JSONObject().apply { put("model", model) })

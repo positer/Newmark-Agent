@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { app, utilityProcess } from 'electron';
 import { spawn } from 'child_process';
+import { appendRuntimeDiagnostic } from './runtimeDiagnostics';
+import { markRuntimeLifecycleExitedByPid } from './runtimeLifecycle';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, normalizeConversationTarget } from './conversationTarget';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
 import { ConversationQueueAction, ConversationQueueActionInput } from './conversationKernel';
@@ -1002,7 +1004,13 @@ export class ElectronUtilityAgentClient {
   }>();
   private listeners = new Set<(event: AgentWorkEvent) => void>();
   private hostToolHandler: UtilityHostToolHandler | null = null;
-  private hostToolRuns = new Map<string, { generation: number; controller: AbortController }>();
+  private hostToolRuns = new Map<string, {
+    generation: number;
+    controller: AbortController;
+    tool: string;
+    startedAt: number;
+    stage: 'received' | 'running' | 'responding';
+  }>();
   private childGeneration = 0;
   private readyGeneration = 0;
   private invalidGenerations = new Set<number>();
@@ -1011,6 +1019,7 @@ export class ElectronUtilityAgentClient {
   private childRootIdentity: { generation: number; pid: number; creationIdentity: string } | null = null;
   private sequence = 0;
   private lastError = '';
+  private expectedExit = false;
   // A failed force-stop means an old descendant may still own target-scoped
   // resources.  This is intentionally sticky for the lifetime of this client:
   // only rebuilding the Electron main-process runtime pool may clear it.
@@ -1088,6 +1097,11 @@ export class ElectronUtilityAgentClient {
     const generation = ++this.childGeneration;
     this.readyGeneration = 0;
     this.lastError = '';
+    this.expectedExit = false;
+    appendRuntimeDiagnostic(this.root, {
+      event: 'utility_runtime_started', runtimeKey: this.target.runtimeKey,
+      generation, pid: Number(child.pid || 0),
+    });
     child.on('message', message => this.handleMessage(child, generation, message));
     child.on('error', (_type, _location, report) => {
       if (this.child === child) this.lastError = String(report || 'Utility runtime fatal error').slice(-2000);
@@ -1228,6 +1242,7 @@ export class ElectronUtilityAgentClient {
     if (this.forceStopPromise) return await this.forceStopPromise;
     const child = this.child;
     if (!child) return;
+    this.expectedExit = true;
     if (!this.restartQuarantine && this.readyGeneration === this.childGeneration) {
       try { await this.request('shutdown', undefined, 2_000); } catch {}
     }
@@ -1477,7 +1492,13 @@ export class ElectronUtilityAgentClient {
       || this.child !== child) return;
     let result: UtilityHostToolResult;
     const controller = new AbortController();
-    this.hostToolRuns.set(request.requestId, { generation, controller });
+    const run = { generation, controller, tool: String(request.tool), startedAt: Date.now(), stage: 'received' as const };
+    this.hostToolRuns.set(request.requestId, run);
+    appendRuntimeDiagnostic(this.root, {
+      event: 'utility_host_rpc_started', runtimeKey: this.target.runtimeKey,
+      generation, pid: Number(child.pid || 0), requestId: request.requestId,
+      tool: request.tool, stage: run.stage,
+    });
     const allowed = new Set<UtilityHostToolRequest['tool']>(['browser_control', 'browser_use', 'screen_capture', 'computer_use', 'automation', 'terminal_takeover']);
     if (!allowed.has(request.tool)) {
       result = { requestId: request.requestId, ok: false, error: `Electron host tool is not allowed: ${String(request.tool)}` };
@@ -1487,12 +1508,23 @@ export class ElectronUtilityAgentClient {
       result = { requestId: request.requestId, ok: false, error: 'Electron host tool handler is unavailable' };
     } else {
       try {
+        const active = this.hostToolRuns.get(request.requestId);
+        if (active) active.stage = 'running';
         result = { requestId: request.requestId, ok: true, result: await this.hostToolHandler(request, controller.signal) as UtilityHostToolResult['result'] };
       } catch (error) {
         result = { requestId: request.requestId, ok: false, error: error instanceof Error ? error.message : String(error) };
       }
     }
+    const active = this.hostToolRuns.get(request.requestId);
+    if (active) active.stage = 'responding';
     this.hostToolRuns.delete(request.requestId);
+    appendRuntimeDiagnostic(this.root, {
+      event: result.ok ? 'utility_host_rpc_completed' : 'utility_host_rpc_failed',
+      level: result.ok ? 'info' : 'warn', runtimeKey: this.target.runtimeKey,
+      generation, pid: Number(child.pid || 0), requestId: request.requestId,
+      tool: request.tool, stage: active?.stage || 'responding',
+      durationMs: Date.now() - run.startedAt, error: result.ok ? '' : result.error,
+    });
     if (controller.signal.aborted
       || this.restartQuarantine
       || this.invalidGenerations.has(generation)
@@ -1511,12 +1543,30 @@ export class ElectronUtilityAgentClient {
 
   private handleExit(child: UtilityChild, code: number): void {
     if (this.child !== child) return;
-    const error = new Error(`Electron utility runtime exited (${code}): ${this.lastError || 'no stderr'}`);
+    const expected = this.expectedExit || !!this.restartQuarantine;
+    const lastHostRun = [...this.hostToolRuns.entries()]
+      .filter(([, run]) => run.generation === this.childGeneration)
+      .sort((left, right) => right[1].startedAt - left[1].startedAt)[0];
+    const hostSuffix = lastHostRun
+      ? `; last host RPC ${lastHostRun[1].tool}/${lastHostRun[1].stage} (${Date.now() - lastHostRun[1].startedAt} ms)`
+      : '';
+    const error = new Error(`Electron utility runtime exited (${code}): ${this.lastError || 'no stderr'}${hostSuffix}`);
+    appendRuntimeDiagnostic(this.root, {
+      event: expected ? 'utility_runtime_stopped' : 'utility_runtime_unexpected_exit',
+      level: expected ? 'info' : 'error', runtimeKey: this.target.runtimeKey,
+      generation: this.childGeneration, pid: Number(child.pid || 0), exitCode: code,
+      expected, requestId: lastHostRun?.[0], tool: lastHostRun?.[1].tool,
+      stage: lastHostRun?.[1].stage, durationMs: lastHostRun ? Date.now() - lastHostRun[1].startedAt : 0,
+      error: this.lastError || (expected ? '' : 'no stderr'),
+    });
+    markRuntimeLifecycleExitedByPid(this.root, 'utility', Number(child.pid || 0), {
+      unexpected: !expected, exitCode: code, error: this.lastError || '',
+    });
     // Surface unexpected worker death as a target-scoped terminal error. A
     // silent child exit used to leave the renderer with a generic interrupted
     // state and no explanation of whether the provider, runtime, or process
     // supervisor was responsible.
-    if (code !== 0 && !this.restartQuarantine) {
+    if (!expected && !this.restartQuarantine) {
       const event: AgentWorkEvent = {
         id: `utility-runtime-exit-${process.pid}-${Date.now()}`,
         conversationId: this.target.conversationId,
@@ -1533,6 +1583,7 @@ export class ElectronUtilityAgentClient {
       for (const listener of this.listeners) listener(event);
     }
     this.detachChild(child, error);
+    this.expectedExit = false;
   }
 
   private detachChild(child: UtilityChild, error: Error): void {

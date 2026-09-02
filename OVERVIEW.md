@@ -2,7 +2,7 @@
 
 ## dev-0.5.13 双端累计交付与当前 r5 APK + Windows MSI
 
-全平台 `dev-0.5.13` 发行规范：Tag `dev-0.5.13`，Release 标题 `Newmark Agent dev-0.5.13`；`DESKTOP/scripts/release-tag-audit.cjs` 强制该格式，并保留远端历史 `dev-*` 正式 Tag。Windows、Linux、Android 六资产已通过本地 release-assets 校验，路径记录在 `DESKTOP/scripts/release-notes-dev-0.5.13.md`。
+全平台 `dev-0.5.13` 发行规范：Tag `dev-0.5.13`，Release 标题 `Newmark Agent dev-0.5.13`；`DESKTOP/scripts/release-tag-audit.cjs` 强制该格式，并保留远端历史 `dev-*` 正式 Tag。Windows、Linux、Android 六资产已通过本地 release-assets 校验，随后又通过 GitHub 远端下载哈希核对与 Windows/MSI、WSL AppImage/deb/ZIP 打包态 smoke，完整路径记录在 `DESKTOP/scripts/release-notes-dev-0.5.13.md`；发布归档见 `archive/20260902-182301-dev-0.5.13-full-platform-release.md`。
 
 - PC 当前源码与构建产物已覆盖标题先行门禁、Search MCP 池、`browser_use.visible`、图片视觉、PDF 整体工具超时、局部快照稳定性、Build 暗色按压和中断回复恢复；typecheck、build 与完整 `test:full-release` 通过，包括 1702/1702 主验证、thinking tier 68/68、压缩压力 34/34、模型恢复、TUI、SSH/WSL、CLI 与三端压力。无供应商标题门禁错误同时保留 `No LLM configured` 可操作诊断。`pdf_read` 一个累计 deadline 覆盖异步文件读取、pdf.js 全文解析和扫描页浏览器观察，阶段性超时返回可恢复回执并允许同一 Agent 继续响应。既有 PC MSI/ZIP 早于本轮最终源码，因此本次不把它们作为当前交付物。
 - Android 当前源码已覆盖标题先行门禁、冻结 provider/model/intelligence/native reasoning、OpenAI Responses、Search MCP 兼容层、后台 Agent 服务与恢复、输入/Guide、设置玻璃返回按钮、模型视觉 `image_inspect`、离线 Markdown/LaTeX 字体、代码块约束内软换行与亮暗主题高亮色板；Responses 聚焦 32/32、70 suites / 269/269 JVM、Vital Lint、R8、资源收缩及隔离 clean Release assembly 通过。

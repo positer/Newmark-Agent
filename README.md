@@ -17,6 +17,8 @@ Windows 当前交付包为 `release-0.5.13-r5-title-retry-msi-20260902-3/Newmark
 - Linux ZIP：`1622B63C6ABC5320D2353850B852288F73455346407221955627A555845D94E1`
 - Android APK：`05A26E0EE66541F656E39412384A689B06AAA2A4ABA363043516C2B862D6A1FE`
 
+远端核验已完成：`verify-github-release-assets.cjs` 下载六个发行资产并用远端 SHA-256 与本地逐一比对，六项大小和哈希全部一致；Windows ZIP/MSI、WSL AppImage/deb/ZIP 打包态 smoke 以及 packaged dev-0.0.8/dev-0.0.9 feature smoke 全部通过。Tag/Release 审计脚本检查本地 60 个、远端 59 个正式 Tag，远端名称均符合 `dev-<major>.<minor>.<patch>`，Release 标题均符合 `Newmark Agent dev-<version>`；本地额外保留的历史未发布 `dev-0.5.5` 未推送到远端，本次发布不包含该 Tag。
+
 APK 已核对包名 `com.newmark.mobile`、版本 `0.5.13` / `513`、compileSdk 36、minSdk 24、targetSdk 36、可启动 `MainActivity`、四 ABI、`specialUse` 前台服务、`stopWithTask=false`、4-byte/16 KiB 对齐与 APK Signature Scheme v2。逐 Zip entry 字节扫描未发现开发者 profile/workspace、其他用户目录、Bearer/API Key 或私钥材料；裸数字 `12252` 只命中 6 个 vendor 文件，4 个来自 PDFBox CMap、2 个来自 BouncyCastle SIKE 常量，4 ABI 的 ML Kit 库只含第三方通用 `/home/build` 标记，均不是开发机路径。安装者运行时仍可显示其本机实际 `user/.Newmark` 位置。该包使用工程既有 Android Debug 证书，适合开发预览/侧载，不是 Google Play 生产签名。API 35 `emulator-5554` 冷启动恢复在线后执行 `adb install -r` 成功；显式重启 `MainActivity` 后 2 秒与 7 秒均为 topResumed，PID 3173 保持不变，目标进程 FATAL/ANR 为 0。该冒烟不替代设置玻璃逐帧、真实供应商、配对 PC stdio bridge及真机锁屏/切网/划走/长时后台验收。
 
 ### dev-0.5.13 移动端设置返回按钮玻璃画布修复

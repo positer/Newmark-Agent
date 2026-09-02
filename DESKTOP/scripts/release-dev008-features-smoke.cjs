@@ -236,7 +236,8 @@ function startMockProvider() {
         response.end(JSON.stringify({ error: { message: 'not found' } }));
         return;
       }
-      if (parsed.stream !== true) {
+      const isTitleProbe = JSON.stringify(parsed.messages || []).includes('You are a conversation title generator.');
+      if (isTitleProbe) {
         response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         response.end(JSON.stringify({ choices: [{ message: { content: 'DEV008_TITLE_OK' } }] }));
         return;

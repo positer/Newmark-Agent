@@ -13,6 +13,7 @@ import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.Jsoup
 import java.io.File
 import java.net.URI
 import java.util.concurrent.TimeUnit
@@ -122,6 +123,7 @@ class LocalToolExecutor(
         .readTimeout(30, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
+    private val webCatchClient = webClient.newBuilder().followRedirects(false).followSslRedirects(false).build()
     private val searchMcpPool = MobileSearchMcpPool(appContext, webClient)
     private var cwd = root
     private val richDocuments = RichDocumentReader(appContext) { images, prompt ->
@@ -177,6 +179,7 @@ class LocalToolExecutor(
                 })
                 "web_search" -> webSearch(args.optString("query"))
                 "web_fetch" -> webFetch(args.optString("url"))
+                "web_catch" -> webCatch(args)
                 "files_read_all" -> readSharedFile(args.optString("path"))
                 "apps_list" -> listApps()
                 "files_manage" -> manageSharedFile(args)
@@ -330,6 +333,91 @@ class LocalToolExecutor(
         val url = normalizedWebUrl(raw) ?: return ToolResult.err("仅支持带有效主机名的 http:// 或 https:// 网页地址")
         return runCatching { readableText(fetch(url)) }
             .fold({ ToolResult.ok(it.ifBlank { "网页没有可提取正文。" }) }, { ToolResult.err("[web_fetch] ${it.message ?: it}") })
+    }
+
+    private data class CaughtWebResource(val finalUrl: String, val contentType: String, val bytes: ByteArray)
+
+    private fun publicWebUrl(raw: String): String? {
+        val uri = runCatching { URI(raw.trim()) }.getOrNull() ?: return null
+        val host = uri.host?.lowercase().orEmpty()
+        if (uri.scheme?.lowercase() !in setOf("http", "https") || host.isBlank()) return null
+        if (host == "localhost" || host.endsWith(".localhost") || host == "::1" ||
+            host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.") ||
+            Regex("^172\\.(1[6-9]|2\\d|3[01])\\.").containsMatchIn(host)
+        ) return null
+        return URI(uri.scheme, null, uri.host, uri.port, uri.path, uri.query, uri.fragment).toASCIIString()
+    }
+
+    private fun catchWebResource(rawUrl: String, maxBytes: Long): CaughtWebResource {
+        var current = publicWebUrl(rawUrl) ?: error("仅支持公开 http:// 或 https:// 地址；拒绝本机和私有网络")
+        repeat(6) { redirect ->
+            val host = URI(current).host ?: error("URL 缺少主机名")
+            val unsafeAddress = InetAddress.getAllByName(host).firstOrNull { address ->
+                val bytes = address.address
+                address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress ||
+                    (bytes.size == 16 && (bytes[0].toInt() and 0xFE) == 0xFC)
+            }
+            if (unsafeAddress != null) error("URL 解析到本机或私有网络地址")
+            val request = Request.Builder().url(current).header("User-Agent", "NewmarkMobile/1.0").build()
+            webCatchClient.newCall(request).execute().use { response ->
+                if (response.code in setOf(301, 302, 303, 307, 308)) {
+                    val location = response.header("Location") ?: error("重定向缺少 Location")
+                    if (redirect == 5) error("重定向次数超过限制")
+                    current = publicWebUrl(response.request.url.resolve(location)?.toString().orEmpty())
+                        ?: error("重定向到了不允许的地址")
+                    return@use
+                }
+                if (!response.isSuccessful) error("HTTP ${response.code}")
+                val declared = response.body?.contentLength() ?: -1L
+                if (declared > maxBytes) error("响应超过 max_bytes：$declared > $maxBytes")
+                val bytes = response.body?.bytes() ?: byteArrayOf()
+                if (bytes.size.toLong() > maxBytes) error("响应超过 max_bytes：${bytes.size} > $maxBytes")
+                return CaughtWebResource(
+                    finalUrl = response.request.url.toString(),
+                    contentType = response.header("Content-Type").orEmpty().ifBlank { "application/octet-stream" },
+                    bytes = bytes,
+                )
+            }
+        }
+        error("重定向次数超过限制")
+    }
+
+    private fun webCatch(args: JSONObject): ToolResult {
+        val action = args.optString("action").ifBlank { "download" }
+        if (action !in setOf("download", "save_page", "capture_component")) return ToolResult.err("action 必须是 download、save_page 或 capture_component")
+        val destinationText = args.optString("destination").trim()
+        if (destinationText.isBlank()) return ToolResult.err("需要 destination")
+        val destination = runCatching { resolve(destinationText) }.getOrElse { return ToolResult.err(it.message ?: "目标路径无效") }
+        if (destination.exists() && !args.optBoolean("overwrite", false)) return ToolResult.err("目标已存在；需要明确 overwrite=true 才能覆盖")
+        val maxBytes = args.optLong("max_bytes", 50L * 1024L * 1024L).coerceIn(1L, 100L * 1024L * 1024L)
+        return runCatching {
+            var caught = catchWebResource(args.optString("url"), maxBytes)
+            if (action == "capture_component") {
+                val selector = args.optString("selector").trim()
+                require(selector.isNotBlank()) { "capture_component 需要 selector" }
+                val element = Jsoup.parse(caught.bytes.toString(Charsets.UTF_8), caught.finalUrl).selectFirst(selector)
+                    ?: error("没有组件匹配 selector：$selector")
+                val requested = args.optString("asset_attribute").trim()
+                val attribute = requested.ifBlank { listOf("src", "href", "poster").firstOrNull(element::hasAttr).orEmpty() }
+                val assetUrl = attribute.takeIf(String::isNotBlank)?.let(element::absUrl).orEmpty()
+                caught = if (assetUrl.isNotBlank()) catchWebResource(assetUrl, maxBytes)
+                else CaughtWebResource(caught.finalUrl, "text/html; charset=utf-8", element.outerHtml().toByteArray())
+            }
+            destination.parentFile?.mkdirs()
+            val temp = File(destination.parentFile, ".${destination.name}.newmark-${System.nanoTime()}.tmp")
+            try {
+                temp.writeBytes(caught.bytes)
+                if (destination.exists() && !destination.delete()) error("无法替换现有目标")
+                if (!temp.renameTo(destination)) error("无法原子写入目标")
+            } finally {
+                if (temp.exists()) temp.delete()
+            }
+            val sha = MessageDigest.getInstance("SHA-256").digest(caught.bytes).joinToString("") { "%02x".format(it) }
+            ToolResult.ok(JSONObject()
+                .put("ok", true).put("action", action).put("source_url", caught.finalUrl)
+                .put("destination", destination.path).put("bytes", caught.bytes.size)
+                .put("content_type", caught.contentType).put("sha256", sha).toString(2))
+        }.getOrElse { ToolResult.err("[web_catch] ${it.message ?: it}") }
     }
 
     private suspend fun webSearch(query: String): ToolResult {

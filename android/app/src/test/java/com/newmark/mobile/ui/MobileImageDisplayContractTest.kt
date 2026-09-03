@@ -32,8 +32,15 @@ class MobileImageDisplayContractTest {
         assertTrue(app.contains("attachments = message.imageAttachments.map"))
         assertTrue(app.contains("origin = \"user\""))
         assertTrue(row.contains("if (isUser) ConversationImageAttachments(attachments)"))
+        assertTrue(row.contains("if (!isUser) WorkDisplayImagePreviews(displayedImages)"))
+        assertTrue(row.contains("displayedImages: List<com.newmark.mobile.data.WorkDisplayImage> = emptyList()"))
+        assertTrue(app.contains("WorkRunProjection.displayedImages"))
         assertTrue(
             row.indexOf("if (isUser) ConversationImageAttachments(attachments)") <
+                row.indexOf("MarkdownBody("),
+        )
+        assertTrue(
+            row.indexOf("if (!isUser) WorkDisplayImagePreviews(displayedImages)") <
                 row.indexOf("MarkdownBody("),
         )
     }

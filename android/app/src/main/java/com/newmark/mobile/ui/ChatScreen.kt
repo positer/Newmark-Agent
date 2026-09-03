@@ -317,6 +317,7 @@ sealed interface ChatItem {
         val messageId: String = "",
         val messageIndex: Int = -1,
         val attachments: List<RemoteConversationImage> = emptyList(),
+        val displayedImages: List<com.newmark.mobile.data.WorkDisplayImage> = emptyList(),
         val branchPager: ConversationBranchPagerUi? = null,
     ) : ChatItem {
         /** LazyColumn 稳定 key：优先用唯一 keyHint，避免同秒同内容消息碰撞导致滚动/渲染错乱 */
@@ -986,6 +987,7 @@ private fun ChatBubble(
                     timestamp = item.timestamp, mode = item.mode, model = item.model, content = run.text,
                     messageIndex = item.messageIndex,
                     attachments = emptyList(),
+                    displayedImages = item.displayedImages,
                     branchPager = item.branchPager,
                     onInspectBranch = onInspectBranch,
                     onEditUserMessage = onEditUserMessage,
@@ -998,6 +1000,7 @@ private fun ChatBubble(
                 timestamp = item.timestamp, mode = item.mode, model = item.model, content = item.content,
                 messageIndex = item.messageIndex,
                 attachments = item.attachments,
+                displayedImages = item.displayedImages,
                 branchPager = item.branchPager,
                 onInspectBranch = onInspectBranch,
                 onEditUserMessage = onEditUserMessage,
@@ -1045,6 +1048,7 @@ private fun ChatMessageRow(
     content: String,
     messageIndex: Int,
     attachments: List<RemoteConversationImage>,
+    displayedImages: List<com.newmark.mobile.data.WorkDisplayImage> = emptyList(),
     branchPager: ConversationBranchPagerUi?,
     onInspectBranch: (String, Int) -> Unit,
     onEditUserMessage: (Int, String) -> Unit,
@@ -1084,6 +1088,7 @@ private fun ChatMessageRow(
                 onEdit = if (isUser && messageIndex >= 0) ({ editing = true }) else null,
             )
             if (isUser) ConversationImageAttachments(attachments)
+            if (!isUser) WorkDisplayImagePreviews(displayedImages)
             if (editing) {
                 MessageInlineEditor(
                     value = editedText,
@@ -1530,7 +1535,9 @@ private fun toolActivityKey(name: String): String {
         n == "memory_lab_update" || n == "memory_lab_reindex" -> "memory_lab"
         n == "image_inspect" || n == "computer_use" -> "images"
         n == "write" || n == "edit" -> "files"
-        n == "read" || n == "glob" || n == "grep" || n == "web_search" || n == "web_fetch" || n.contains("snapshot") -> "search"
+        n == "web_search" -> "searched_web"
+        n == "web_fetch" || n == "web_catch" -> "fetched_web"
+        n == "read" || n == "glob" || n == "grep" || n.contains("snapshot") -> "search"
         n == "bash" || n == "pwd" || n.startsWith("git_") || n.startsWith("gh_") || n.contains("terminal") -> "commands"
         else -> "tool_call"
     }
@@ -1550,6 +1557,8 @@ private fun toolActivityLabel(key: String, count: Int, completed: Boolean): Stri
     "commands" -> if (count > 1) "运行了多个命令" else "运行了命令"
     "files" -> if (count > 1) "编辑了多个文件" else "编辑了文件"
     "images" -> "已查看 $count 张图像"
+    "searched_web" -> if (completed) "搜索了网页" else "正在搜索网页"
+    "fetched_web" -> if (completed) "抓取了网页" else "正在抓取网页"
     "search" -> if (count > 1) "读取并检索了多项内容" else "读取并检索了内容"
     else -> if (completed) "$key · 已完成" else key
 }
@@ -1580,20 +1589,26 @@ private fun toolGroupLabel(events: List<LocalWorkEvent>, completed: Boolean): St
     val skills = mutableListOf<String>()
     val mcps = mutableListOf<String>()
     val subagents = mutableListOf<String>()
+    var webSearches = 0
+    var webFetches = 0
     events.forEach { e ->
         val n = publicToolNameForUi(e.toolName).lowercase()
         when {
             n == "skill" || n == "skill_load" || n == "skill_read" || n == "skill_download" -> skills += toolCommandLabel(e)
             isMcpName(n) -> mcps += toolCommandLabel(e)
             n == "task" || n.startsWith("subagent_") -> subagents += toolCommandLabel(e)
+            n == "web_search" -> webSearches++
+            n == "web_fetch" || n == "web_catch" -> webFetches++
         }
     }
-    val commands = maxOf(0, events.size - files - skills.size - mcps.size - subagents.size)
+    val commands = maxOf(0, events.size - files - skills.size - mcps.size - subagents.size - webSearches - webFetches)
     val parts = mutableListOf<String>()
     if (files > 0) parts += if (files > 1) "编辑了多个文件" else "编辑了文件"
     if (skills.isNotEmpty()) parts += skills.joinToString("，")
     if (mcps.isNotEmpty()) parts += mcps.joinToString("，")
     if (subagents.isNotEmpty()) parts += subagents.joinToString("，")
+    if (webSearches > 0) parts += if (completed) if (webSearches > 1) "搜索了多个网页" else "搜索了网页" else "正在搜索网页"
+    if (webFetches > 0) parts += if (completed) if (webFetches > 1) "抓取了多个网页" else "抓取了网页" else "正在抓取网页"
     if (commands > 0) parts += if (commands > 1) "运行了多个命令" else "运行了命令"
     if (parts.isEmpty()) return if (completed) "调用了工具" else "正在调用工具"
     return if (completed) parts.joinToString("，") else parts.joinToString("，正在")
@@ -1620,6 +1635,7 @@ private fun toolCommandLabel(e: LocalWorkEvent): String {
         }
         n == "skill_download" -> return "安装 Skill · " + (args.optString("name").ifBlank { args.optString("source") })
         n == "web_fetch" -> return "web_fetch · " + (args.optString("url").ifBlank { args.optString("uri") })
+        n == "web_catch" -> return "web_catch · " + (args.optString("url").ifBlank { args.optString("destination") })
         n == "web_search" -> return "web_search · " + (args.optString("url").ifBlank { args.optString("query").ifBlank { args.optString("q") } })
         isMcpName(n) -> {
             var server = args.optString("server").ifBlank { args.optString("server_name").ifBlank { args.optString("mcp_server") } }
@@ -1865,6 +1881,12 @@ private fun WorkDisplayImagePreview(image: com.newmark.mobile.data.WorkDisplayIm
             modifier = Modifier.padding(top = 2.dp),
         )
     }
+}
+
+/** 最终 Agent 回复的 image_display 顺序画廊：图片始终排在回复正文之前。 */
+@Composable
+private fun WorkDisplayImagePreviews(images: List<com.newmark.mobile.data.WorkDisplayImage>) {
+    images.forEach { image -> WorkDisplayImagePreview(image) }
 }
 
 /** text/response 投影：正文必须在 Build 内显示，未完成 run 额外标出片段属性。 */

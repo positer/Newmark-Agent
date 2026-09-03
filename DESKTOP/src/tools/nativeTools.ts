@@ -19,6 +19,7 @@ export const NATIVE_TOOL_CATALOG: NativeToolCatalogEntry[] = [
   { name: 'grep', label: 'Search files', description: 'Search workspace text by regex.', category: 'core', defaultEnabled: true, protected: true, availability: 'required' },
   { name: 'web_search', label: 'Web search', description: 'Search the web from the Agent.', category: 'web', defaultEnabled: true },
   { name: 'web_fetch', label: 'Web fetch', description: 'Fetch and extract URL text.', category: 'web', defaultEnabled: true },
+  { name: 'web_catch', label: 'Web catch', description: 'Download a webpage, provided download, or selected page component to the workspace.', category: 'web', defaultEnabled: true },
   { name: 'browser_open', label: 'Browser open', description: 'Open a URL in the built-in browser control.', category: 'browser', defaultEnabled: true },
   { name: 'browser_snapshot', label: 'Browser snapshot', description: 'Read URL, title, and page text from the built-in browser.', category: 'browser', defaultEnabled: true },
   { name: 'browser_click', label: 'Browser click', description: 'Click a CSS selector in the built-in browser.', category: 'browser', defaultEnabled: true },

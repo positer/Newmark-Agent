@@ -1,5 +1,16 @@
 # Newmark Agent Project Taste
 
+## dev-0.5.14 时序与下载工具准则
+
+- 首次标题不是 Build 的尾随装饰：必须先独立生成、持久化并向当前 UI 发布元数据，再启动首次正式 Agent provider 请求；标题事件不进入 WorkRun 或模型历史。
+- Guide 和队列是会话内核拥有的有序数据，不允许桌面 renderer 私存一个移动端不可见的平行队列。缺失序号的兼容数据必须按相邻权威事件/时间定位，禁止使用 `0` 或 `MAX_VALUE` 偷懒置顶/置底。
+- 拖拽反馈必须在越过目标行中点时实时产生避让；落点使用同一中点判定，视觉目标与提交给内核的 id 顺序必须一致。
+- `web_catch` 是会写本地文件的高级能力：基础 prompt 只声明存在，PC 完整 schema 经 `tool_provision`；Android 不使用 `tool_provision`，在本地 Build/Goal 直接暴露完整 schema。Plan/Chat 均不暴露或执行。每个 URL（包括重定向和组件资源）都要重新做公网校验，下载有上限，默认不覆盖，并采用临时文件后原子落盘。
+- 模型与网页工具必须共享同一代理语义：`proxy.enabled/url/auth` 生效，或未显式禁用且存在 `HTTPS_PROXY/HTTP_PROXY` 时，Chat/Responses/Anthropic/GitHub Models/模型探测、编辑补全和 `web_*` 都走 `undici.ProxyAgent`；`Agent.providerProxyConfig()` 未配置时必须保留 `enabled=undefined`，不能误传 `false` 屏蔽系统环境代理；显式禁用配置优先，回环地址不代理。
+- Android 的网络可用性不能只信 `NET_CAPABILITY_VALIDATED` 回调：`TRANSPORT_VPN` 必须直接可用，且等待恢复时先做实际状态检查，避免代理/VPN 已通但后台仍空等；API 29+ 使用 `WIFI_MODE_FULL_LOW_LATENCY` 维持后台低时延。
+- web 工具的活动文案按语义打 tag：`web_search` 是“搜索了网页”，`web_fetch` 与 `web_catch` 是“抓取了网页”；PC 与移动端的分组和行标签保持一致，不把网页调用并成普通命令。
+- `image_display` 的证据不是工具页装饰：同一份已校验 `displayImage` 必须在 PC GUI、PC TUI 与移动端 Build 过程之外，再次按 `sequence → timestamp → id` 顺序出现在最终 Agent 回复正文之前；不得改写模型历史，也不得用最终回复文本代替图片。
+
 ## Release artifact traceability
 
 - 同版本累计修复的最终产物必须从当前源码重新构建，并以源码时间、构建日志、包内版本、签名和 SHA-256 共同证明；同版本旧包不能因版本号相同而冒充最新候选。

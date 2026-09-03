@@ -6,7 +6,14 @@
       "count": 24,
       "unique": 24,
       "orderMatches": true,
-      "galleryImmediatelyAfterBuild": true
+      "galleryImmediatelyAfterBuild": true,
+      "finalResponse": {
+        "count": 24,
+        "unique": 24,
+        "orderMatches": true,
+        "galleryBeforeText": true,
+        "text": "POSITION STRESS FINAL SUMMARY"
+      }
     },
     "expanded": {
       "count": 24,
@@ -26,28 +33,28 @@
         "rows": 24,
         "outputRows": 24,
         "validWidth": true,
-        "maxScroll": 15
+        "maxScroll": 39
       },
       {
         "columns": 100,
         "rows": 30,
         "outputRows": 30,
         "validWidth": true,
-        "maxScroll": 9
+        "maxScroll": 33
       },
       {
         "columns": 120,
         "rows": 40,
         "outputRows": 40,
         "validWidth": true,
-        "maxScroll": 0
+        "maxScroll": 23
       },
       {
         "columns": 160,
         "rows": 50,
         "outputRows": 50,
         "validWidth": true,
-        "maxScroll": 0
+        "maxScroll": 13
       }
     ]
   },

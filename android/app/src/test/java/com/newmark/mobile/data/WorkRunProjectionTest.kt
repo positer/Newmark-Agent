@@ -147,6 +147,36 @@ class WorkRunProjectionTest {
         assertEquals("请优先检查移动端", collapsed.single().event.content)
     }
 
+    @Test
+    fun displayedImagesFollowAgentPresentationOrderForFinalReply() {
+        val second = WorkDisplayImage(
+            id = "second",
+            origin = "agent",
+            name = "second.png",
+            caption = "第二张",
+            mimeType = "image/png",
+            dataUrl = "data:image/png;base64,Ag==",
+        )
+        val first = WorkDisplayImage(
+            id = "first",
+            origin = "agent",
+            name = "first.png",
+            caption = "第一张",
+            mimeType = "image/png",
+            dataUrl = "data:image/png;base64,AQ==",
+        )
+        val events = listOf(
+            event(20, "tool_result", toolName = "image_display", displayImage = second),
+            event(10, "tool_result", toolName = "image_display", displayImage = first),
+            event(30, "final_response", content = "最终回复"),
+        )
+
+        assertEquals(
+            listOf("first", "second"),
+            WorkRunProjection.displayedImages(events).map { it.id },
+        )
+    }
+
     private fun event(
         sequence: Long,
         type: String,
@@ -156,6 +186,7 @@ class WorkRunProjectionTest {
         toolArgs: String = "",
         clientMessageId: String = "",
         status: String = "",
+        displayImage: WorkDisplayImage? = null,
     ) = LocalWorkEvent(
         id = "$sequence:$type",
         type = type,
@@ -167,5 +198,6 @@ class WorkRunProjectionTest {
         sequence = sequence,
         clientMessageId = clientMessageId,
         status = status,
+        displayImage = displayImage,
     )
 }

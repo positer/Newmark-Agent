@@ -1,6 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { ProxyAgent } from 'undici';
+import { load as loadHtml } from 'cheerio';
+import { lookup } from 'dns/promises';
 import { pathToFileURL } from 'url';
 // glob v7 - imported via require for CommonJS compatibility
 const globSync: (pattern: string, opts?: { cwd?: string; ignore?: string | string[] }) => string[]
@@ -363,6 +366,15 @@ export class ToolExecutor {
       t('grep', 'Search file content with regex', { pattern: { type: 'string' }, path: { type: 'string' } }, ['pattern', 'path']),
       t('web_search', 'Search the web', { query: { type: 'string' } }, ['query']),
       t('web_fetch', 'Fetch and extract URL content', { url: { type: 'string' } }, ['url']),
+      t('web_catch', 'Download a public web resource, save a webpage, or capture one page component into an exact workspace destination. Advanced Build/Goal tool; unavailable in Plan and Chat. This writes only the requested local output and never changes the remote page.', {
+        action: { type: 'string', enum: ['download', 'save_page', 'capture_component'], description: 'download saves response bytes; save_page stores the HTML response; capture_component selects one CSS element and saves its src/href asset, or its outer HTML when no asset attribute exists.' },
+        url: { type: 'string', description: 'Public http:// or https:// URL.' },
+        destination: { type: 'string', description: 'Exact output file path. Relative paths resolve inside the active workspace.' },
+        selector: { type: 'string', description: 'CSS selector required by capture_component.' },
+        asset_attribute: { type: 'string', enum: ['src', 'href', 'poster'], description: 'Optional component attribute to resolve and download. Without it, src/href/poster are tried in that order, then outer HTML is saved.' },
+        overwrite: { type: 'boolean', description: 'Replace an existing destination only when true. Defaults to false.' },
+        max_bytes: { type: 'number', minimum: 1, maximum: 104857600, description: 'Maximum downloaded bytes; defaults to 52428800 (50 MiB).' },
+      }, ['action', 'url', 'destination']),
       t('browser_open', 'Open a URL in Newmark browser control. Uses Chromium/CDP backend in Desktop. URL must be http, https, file, or about:blank.', { url: { type: 'string' } }, ['url']),
       t('browser_snapshot', 'Return the current browser URL, title, and readable page text from Newmark browser control.', { max_chars: { type: 'number' } }, []),
       t('browser_click', 'Click an element in the controlled browser by CSS selector.', { selector: { type: 'string' } }, ['selector']),
@@ -736,6 +748,8 @@ export class ToolExecutor {
         case 'file_audit':
         case 'pdf_read':
           return resolve(g('path'));
+        case 'web_catch':
+          return resolve(g('destination'));
         case 'git_clone':
           return resolve(g('path'));
         case 'ssh_workspace':
@@ -772,6 +786,7 @@ export class ToolExecutor {
         case 'grep': return this.grep(g('pattern'), resolve(g('path')));
         case 'web_search': return await this.wsearch(g('query'), context.signal);
         case 'web_fetch': return await this.wfetch(g('url'), context.signal);
+        case 'web_catch': return await this.wcatch(args, resolve(g('destination')), context.signal);
         case 'browser_open': return await this.browserRun({ action: 'open', url: g('url') }, context.signal, context, wsPath);
         case 'browser_snapshot': return await this.browserRun({ action: 'snapshot', maxChars: Number((args as Record<string, unknown>).max_chars || 12000) }, context.signal, context, wsPath);
         case 'browser_click': return await this.browserRun({ action: 'click', selector: g('selector') }, context.signal, context, wsPath);
@@ -1405,25 +1420,35 @@ export class ToolExecutor {
     } catch (e) { return `[grep] ${e}`; }
   }
 
-  private async createProxyAgent(): Promise<unknown> {
-    const proxyUrl = this.config.getStr('proxy', 'url');
-    const proxyEnabled = this.config.getBool('proxy', 'enabled');
-    if (!proxyEnabled || !proxyUrl) return null;
-    const mod = await import('https-proxy-agent');
-    const proxyAuth = this.config.getStr('proxy', 'auth');
-    return new mod.HttpsProxyAgent(proxyUrl, proxyAuth ? { headers: { 'Proxy-Authorization': 'Basic ' + Buffer.from(proxyAuth).toString('base64') } } : undefined);
+  private createProxyAgent(): ProxyAgent | null {
+    const configuredEnabled = this.config.get<boolean>('proxy', 'enabled');
+    const configuredUrl = this.config.getStr('proxy', 'url');
+    const proxyUrl = configuredUrl
+      || process.env.HTTPS_PROXY || process.env.HTTP_PROXY
+      || process.env.https_proxy || process.env.http_proxy || '';
+    if (configuredEnabled === false || !proxyUrl) return null;
+    const proxyAuth = configuredUrl ? this.config.getStr('proxy', 'auth') : '';
+    return proxyAuth
+      ? new ProxyAgent({
+          uri: proxyUrl,
+          token: `Basic ${Buffer.from(proxyAuth, 'utf8').toString('base64')}`,
+        })
+      : new ProxyAgent(proxyUrl);
   }
 
   private async proxyFetch(url: string, options: RequestInit = {}): Promise<Response> {
-    const agent = await this.createProxyAgent();
-    if (agent) return fetch(url, { ...options, agent } as RequestInit & { agent: unknown });
+    const dispatcher = this.createProxyAgent();
+    if (dispatcher) return fetch(url, { ...options, dispatcher } as RequestInit & { dispatcher: ProxyAgent });
     return fetch(url, options);
   }
 
   private proxyEnvironment(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = { ...process.env };
-    const proxyUrl = this.config.getStr('proxy', 'url');
-    if (!this.config.getBool('proxy', 'enabled') || !proxyUrl) return env;
+    const configuredEnabled = this.config.get<boolean>('proxy', 'enabled');
+    const proxyUrl = this.config.getStr('proxy', 'url')
+      || process.env.HTTPS_PROXY || process.env.HTTP_PROXY
+      || process.env.https_proxy || process.env.http_proxy || '';
+    if (configuredEnabled === false || !proxyUrl) return env;
     env.HTTP_PROXY = proxyUrl;
     env.HTTPS_PROXY = proxyUrl;
     env.http_proxy = proxyUrl;
@@ -1629,18 +1654,14 @@ export class ToolExecutor {
 
   private extractReadableText(html: string, url: string): string {
     try {
-      const { JSDOM } = require('jsdom') as typeof import('jsdom');
-      const { Readability } = require('@mozilla/readability') as typeof import('@mozilla/readability');
-      const dom = new JSDOM(html, { url });
-      const article = new Readability(dom.window.document).parse();
-      if (!article) return '';
-      const parts = [
-        article.title ? `# ${article.title}` : '',
-        article.byline ? `By ${article.byline}` : '',
-        article.excerpt ? `Summary: ${article.excerpt}` : '',
-        article.textContent || '',
-      ].filter(Boolean);
-      return parts.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+      const document = loadHtml(html);
+      document('script, style, noscript, template, svg').remove();
+      const title = document('title').first().text().replace(/\s+/g, ' ').trim();
+      const readable = document('article').first().length
+        ? document('article').first()
+        : (document('main').first().length ? document('main').first() : document('body').first());
+      const text = readable.text().replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+      return [title ? `# ${title}` : '', text].filter(Boolean).join('\n\n');
     } catch {
       return '';
     }
@@ -1723,6 +1744,112 @@ export class ToolExecutor {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(target, JSON.stringify(workflow, null, 2), 'utf-8');
     return `[flow_save] OK (${action}): ${cleanName}.Flow.json`;
+  }
+
+  private checkedPublicWebUrl(raw: string): URL {
+    const parsed = new URL(String(raw || '').trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Only http:// and https:// URLs are supported.');
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (!host || host === 'localhost' || host.endsWith('.localhost') || host === '::1'
+      || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host)
+      || /^169\.254\./.test(host) || /^172\.(?:1[6-9]|2\d|3[01])\./.test(host)) {
+      throw new Error('Local and private-network URLs are not allowed.');
+    }
+    parsed.username = '';
+    parsed.password = '';
+    return parsed;
+  }
+
+  private async assertPublicWebHost(url: URL): Promise<void> {
+    const addresses = await lookup(url.hostname, { all: true });
+    if (!addresses.length) throw new Error('URL hostname did not resolve.');
+    const privateAddress = addresses.find(({ address }) => {
+      const value = address.toLowerCase();
+      return value === '::1' || value.startsWith('fc') || value.startsWith('fd') || value.startsWith('fe80:')
+        || /^127\./.test(value) || /^10\./.test(value) || /^192\.168\./.test(value)
+        || /^169\.254\./.test(value) || /^172\.(?:1[6-9]|2\d|3[01])\./.test(value);
+    });
+    if (privateAddress) throw new Error('URL resolves to a local or private-network address.');
+  }
+
+  private async catchResponse(url: URL, maxBytes: number, signal?: AbortSignal): Promise<{ response: Response; bytes: Buffer }> {
+    const guard = abortGuard(signal, 60_000);
+    try {
+      let current = url;
+      let response: Response | null = null;
+      for (let redirect = 0; redirect <= 5; redirect += 1) {
+        await this.assertPublicWebHost(current);
+        response = await this.proxyFetch(current.toString(), {
+          headers: { 'User-Agent': 'NewmarkAgent/1.0' },
+          redirect: 'manual',
+          signal: guard.signal,
+        });
+        if (![301, 302, 303, 307, 308].includes(response.status)) break;
+        const location = response.headers.get('location');
+        if (!location || redirect === 5) throw new Error('Too many or invalid redirects.');
+        current = this.checkedPublicWebUrl(new URL(location, current).toString());
+      }
+      if (!response) throw new Error('No web response received.');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const declared = Number(response.headers.get('content-length') || 0);
+      if (declared > maxBytes) throw new Error(`Response exceeds max_bytes (${declared} > ${maxBytes}).`);
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length > maxBytes) throw new Error(`Response exceeds max_bytes (${bytes.length} > ${maxBytes}).`);
+      return { response, bytes };
+    } finally {
+      guard.dispose();
+    }
+  }
+
+  private async wcatch(args: Record<string, unknown>, destination: string, signal?: AbortSignal): Promise<string> {
+    const action = String(args.action || 'download');
+    const maxBytes = Math.max(1, Math.min(100 * 1024 * 1024, Number(args.max_bytes || 50 * 1024 * 1024)));
+    const sourceUrl = this.checkedPublicWebUrl(String(args.url || ''));
+    let caught = await this.catchResponse(sourceUrl, maxBytes, signal);
+    let bytes = caught.bytes;
+    let finalUrl = caught.response.url || sourceUrl.toString();
+    let contentType = caught.response.headers.get('content-type') || 'application/octet-stream';
+    if (action === 'capture_component') {
+      const selector = String(args.selector || '').trim();
+      if (!selector) throw new Error('capture_component requires selector.');
+      const document = loadHtml(bytes.toString('utf8'));
+      const node = document(selector).first();
+      if (!node.length) throw new Error(`No component matched selector: ${selector}`);
+      const requestedAttribute = String(args.asset_attribute || '').trim();
+      const attribute = requestedAttribute || ['src', 'href', 'poster'].find(name => node.attr(name) !== undefined) || '';
+      const asset = attribute ? node.attr(attribute) : '';
+      if (asset) {
+        const assetUrl = this.checkedPublicWebUrl(new URL(asset, finalUrl).toString());
+        caught = await this.catchResponse(assetUrl, maxBytes, signal);
+        bytes = caught.bytes;
+        finalUrl = caught.response.url || assetUrl.toString();
+        contentType = caught.response.headers.get('content-type') || 'application/octet-stream';
+      } else {
+        bytes = Buffer.from(document.html(node), 'utf8');
+        contentType = 'text/html; charset=utf-8';
+      }
+    } else if (action !== 'download' && action !== 'save_page') {
+      throw new Error('action must be download, save_page, or capture_component.');
+    }
+    const destinationExists = fs.existsSync(destination);
+    if (destinationExists && args.overwrite !== true) throw new Error('Destination already exists; set overwrite=true to replace it.');
+    if (destinationExists && !fs.statSync(destination).isFile()) throw new Error('Destination exists and is not a file.');
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    const temp = `${destination}.newmark-${crypto.randomUUID()}.tmp`;
+    const backup = destinationExists ? `${destination}.newmark-${crypto.randomUUID()}.bak` : '';
+    try {
+      fs.writeFileSync(temp, bytes, { flag: 'wx' });
+      if (destinationExists) fs.renameSync(destination, backup);
+      fs.renameSync(temp, destination);
+      if (backup) fs.unlinkSync(backup);
+    } catch (error) {
+      if (backup && fs.existsSync(backup) && !fs.existsSync(destination)) fs.renameSync(backup, destination);
+      throw error;
+    } finally {
+      try { if (fs.existsSync(temp)) fs.unlinkSync(temp); } catch {}
+      try { if (backup && fs.existsSync(backup)) fs.unlinkSync(backup); } catch {}
+    }
+    return JSON.stringify({ ok: true, action, source_url: finalUrl, destination, bytes: bytes.length, content_type: contentType, sha256: crypto.createHash('sha256').update(bytes).digest('hex') }, null, 2);
   }
 
   private memoryLabRead(selector: string): string {

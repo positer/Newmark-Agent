@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'crypto';
 import { spawn, spawnSync } from 'child_process';
 import { Agent, ConversationBranchLocator, FlowSuspensionRecord } from './core/agent';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope } from './core/types';
-import { AgentPromptMessage, ConversationKernel, ConversationTargetInput } from './core/conversationKernel';
+import { AgentPromptMessage, ConversationKernel, ConversationQueueAction, ConversationTargetInput } from './core/conversationKernel';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, conversationStateWorkspacePrefix, normalizeConversationTarget } from './core/conversationTarget';
 import { AutomationManager } from './core/automation';
 import { AutomationWakeScheduler, WakeSyncResult } from './core/automationWake';
@@ -134,6 +134,7 @@ let lastWakeSync: WakeSyncResult | null = null;
 let mcpManager: McpManager | null = null;
 let tray: Tray | null = null;
 let _forceQuit = false;
+let appQuitRequested = false;
 let forcedExitTimer: NodeJS.Timeout | null = null;
 let electronBrowserUseHost: ElectronBrowserUseHost | null = null;
 let browserUseEngine: BrowserUseEngine | null = null;
@@ -769,6 +770,69 @@ function logStartupFailure(stage: string, error: unknown): void {
   } catch {
     try { fs.appendFileSync(path.join(require('os').tmpdir(), 'newmark-agent-startup.log'), line, 'utf-8'); } catch {}
   }
+}
+
+// The startup receipt is the only evidence a launch that never reached the
+// ready gate leaves behind, so it has to be written from the earliest point
+// that knows where the runtime root is. It stays silent for an ordinary
+// `npm start` unless the same gate `recordStartup` uses is open.
+function startupTraceEnabled(): boolean {
+  return app.isPackaged || process.env.NEWMARK_STARTUP_LOG === '1';
+}
+
+function trimStartupLogIfNeeded(): void {
+  try {
+    const file = startupLogPath();
+    const stat = fs.statSync(file);
+    if (stat.size <= 512 * 1024) return;
+    const bytes = fs.readFileSync(file);
+    let start = bytes.length - 256 * 1024;
+    while (start < bytes.length && bytes[start] !== 10) start += 1;
+    if (start >= bytes.length) return;
+    fs.writeFileSync(file, bytes.subarray(start), 'utf-8');
+  } catch {
+    // A diagnostic file must never be the reason the app will not start.
+  }
+}
+
+function traceStartupStage(stage: string, detail = ''): void {
+  if (!startupTraceEnabled()) return;
+  try {
+    trimStartupLogIfNeeded();
+    fs.appendFileSync(
+      startupLogPath(),
+      `[${new Date().toISOString()}] ${stage}:${detail} pid=${process.pid}\n`,
+      'utf-8',
+    );
+  } catch {
+    try {
+      fs.appendFileSync(
+        path.join(require('os').tmpdir(), 'newmark-agent-startup.log'),
+        `[${new Date().toISOString()}] ${stage}:${detail} pid=${process.pid}\n`,
+        'utf-8',
+      );
+    } catch {}
+  }
+}
+
+function reportStartupBlocker(title: string, body: string): void {
+  traceStartupStage('startup:blocked', title.replace(/\s+/g, '-'));
+  try {
+    if (app.isReady() || BrowserWindow.getAllWindows().length > 0) {
+      dialog.showMessageBox({
+        type: 'warning',
+        title,
+        message: title,
+        detail: `${body}\n\n${startupLogPath()}`,
+        buttons: ['OK'],
+        noLink: true,
+      }).catch(() => undefined);
+      return;
+    }
+  } catch {}
+  try {
+    dialog.showErrorBox(title, `${body}\n\nSee ${startupLogPath()}`);
+  } catch {}
 }
 
 process.on('uncaughtException', error => {
@@ -1765,10 +1829,14 @@ if (isViewerArg) {
         if (contents.session === session.fromPartition('persist:newmark-browser')) registerBrowserGuest(win.webContents, contents);
       });
       win.webContents.on('render-process-gone', (_event, details) => {
-        if (_forceQuit || win.isDestroyed()) return;
+        // Windows tears renderer processes down before Electron's final
+        // `will-quit` callback during sign-out/restart. Treat before-quit as
+        // authoritative so the crash-recovery loop cannot keep reloading and
+        // refocusing a window while the OS is closing the session.
+        if (_forceQuit || appQuitRequested || win.isDestroyed()) return;
         logStartupFailure('renderer-process-gone', new Error(`${details.reason} (exit ${details.exitCode})`));
         setTimeout(() => {
-          if (win.isDestroyed()) return;
+          if (appQuitRequested || win.isDestroyed()) return;
           if (startupComplete) win.reload();
           else void runStartupAttempt();
           win.show();
@@ -2580,7 +2648,12 @@ if (isViewerArg) {
     const markMainLifecycleCleanIfSafe = (): void => {
       if (!hasUnsettledGoalOrFlow()) markRuntimeLifecycleClean(root, 'main');
     };
+    app.on('before-quit', () => {
+      appQuitRequested = true;
+      recordStartup('before-quit');
+    });
     app.on('will-quit', event => {
+      appQuitRequested = true;
       recordStartup('will-quit');
       // Window-close and tray-exit both enter this path. The runtime pools
       // must get a bounded graceful-shutdown window regardless of which
@@ -4310,6 +4383,20 @@ if (isViewerArg) {
       if (session) session.buffer = terminalOutput.history(sessionId);
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('pty:data', sessionId, text);
     });
+    ipcMain.handle('agent:queueAction', async (_event, actionInput: string, input: Record<string, unknown> = {}, targetInput?: ConversationTargetInput) => {
+      const target = conversationRuntimeTarget(targetInput);
+      const action = String(actionInput || '').replace(/^queue_/, '') as ConversationQueueAction;
+      if (!['enqueue', 'update', 'delete', 'reorder', 'toggle_pause', 'guide'].includes(action)) {
+        return { ok: false, error: 'Unknown queue action' };
+      }
+      try {
+        return wslBackendEnabled()
+          ? await ensureWslConversationPool()!.queueAction(target, action, input)
+          : await ensureElectronUtilityPool().queueAction(target, action, input);
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
     const sendTerminalData = (sessionId: string, session: BottomTerminalSession, text: string): void => {
       terminalOutput.push(sessionId, text);
       session.buffer = terminalOutput.history(sessionId);
@@ -4696,7 +4783,7 @@ if (isViewerArg) {
         let fallbackAdded = false;
         let catalogWarning = '';
         try {
-          const listed = await new LLMProvider('GitHub Copilot', 'https://models.github.ai', token, 'github_models', currentAgent.config.openAIApiMode()).listModels();
+          const listed = await new LLMProvider('GitHub Copilot', 'https://models.github.ai', token, 'github_models', currentAgent.config.openAIApiMode(), currentAgent.config.contextFlag('provider_adapters_v2'), undefined, undefined, currentAgent.providerProxyConfig()).listModels();
           catalogModels = listed.length;
           for (const modelName of listed) {
             if (currentAgent.config.addModelToProvider('GitHub Copilot', modelName, modelName, 'Listed by GitHub Models catalog after browser login.')) {

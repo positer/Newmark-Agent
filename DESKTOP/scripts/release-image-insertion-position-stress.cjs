@@ -141,7 +141,10 @@ function verifyTui() {
   const firstImage = collapsed.output.indexOf('[示意图]');
   const summary = collapsed.output.indexOf('POSITION STRESS FINAL SUMMARY');
   if (!(firstBlock >= 0 && firstBlock < firstImage && firstImage < summary)) fail('TUI collapsed gallery is not at the beginning of the Build overview');
-  if ((collapsed.output.match(/\[示意图\]/g) || []).length !== IMAGE_COUNT) fail('TUI collapsed placeholder count mismatch');
+  const expectedPlaceholderCount = IMAGE_COUNT * 2;
+  const placeholderCount = (collapsed.output.match(/\[示意图\]/g) || []).length;
+  if (placeholderCount !== expectedPlaceholderCount) fail(`TUI collapsed placeholder count mismatch: expected ${expectedPlaceholderCount}, got ${placeholderCount}`);
+  if (collapsed.output.lastIndexOf('[示意图]') >= summary) fail('TUI final summary placeholders must appear before the summary text');
   if (/位置示意图|Enter 打开/.test(collapsed.output)) fail('TUI unfocused image rows exposed title or Enter action');
   for (let index = 0; index < IMAGE_COUNT; index++) {
     const number = String(index + 1).padStart(3, '0');
@@ -222,19 +225,37 @@ function verifyTui() {
         if((index+1)%4===0) await new Promise(resolve=>setTimeout(resolve,0));
       }
       send({id:'done',type:'done',status:'completed',content:'POSITION STRESS COMPLETE'});
+      window.renderAgentWorkEvent({
+        runId, conversationId, type: 'final_response', content: 'POSITION STRESS FINAL SUMMARY',
+        status: 'completed', sequence: sequence++, timestamp: new Date().toISOString()
+      });
       await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
       const run=document.querySelector('.conversation-work-run[data-run-id="'+runId+'"]');
       const wrapper=run?.closest('.work-run-message');
       if(!wrapper) throw new Error('GUI stress run missing');
+      const expected=Array.from({length:count},(_,i)=>'position-image-'+String(i+1).padStart(3,'0'));
+      const finalMessage=document.querySelector('.chat-msg.run-final-response[data-run-id="'+runId+'"]');
+      const finalBody=finalMessage?.querySelector('.msg-body');
+      const finalGallery=finalBody?.querySelector(':scope > .conversation-work-display-images');
+      const finalNodes=Array.from(finalGallery?.querySelectorAll('.conversation-work-display-image')||[]);
+      const finalIds=finalNodes.map(node=>node.getAttribute('data-display-image-id'));
+      const finalText=finalBody?.querySelector('.md-rendered')?.textContent||'';
+      const finalResponse={
+        count:finalIds.length,
+        unique:new Set(finalIds).size,
+        orderMatches:finalIds.length===count&&finalIds.every((id,index)=>id===expected[index]),
+        galleryBeforeText:!!finalGallery&&!!finalBody&&finalBody.firstElementChild===finalGallery,
+        text:finalText
+      };
       const stack=wrapper.querySelector(':scope > .work-run-collapsed-images');
       const ids=Array.from(stack.querySelectorAll('.conversation-work-display-image')).map(node=>node.getAttribute('data-display-image-id'));
-      const expected=Array.from({length:count},(_,i)=>'position-image-'+String(i+1).padStart(3,'0'));
       const badge=document.createElement('div');badge.className='image-position-badge';badge.innerHTML='<strong>GUI INSERTION POSITION</strong><br>'+count+' images · collapsed order PASS<br>gallery immediately after Build: '+(stack.previousElementSibling===run?'PASS':'FAIL');document.body.appendChild(badge);
       wrapper.scrollIntoView({block:'start'});
       window.__imagePositionStress={runId,wrapper,badge};
-      return {count:ids.length,unique:new Set(ids).size,orderMatches:ids.every((id,i)=>id===expected[i]),galleryImmediatelyAfterBuild:stack.previousElementSibling===run};
+      return {count:ids.length,unique:new Set(ids).size,orderMatches:ids.every((id,i)=>id===expected[i]),galleryImmediatelyAfterBuild:stack.previousElementSibling===run,finalResponse};
     })()`);
     if (guiCollapsed.count !== IMAGE_COUNT || guiCollapsed.unique !== IMAGE_COUNT || !guiCollapsed.orderMatches || !guiCollapsed.galleryImmediatelyAfterBuild) fail(`GUI collapsed position mismatch: ${JSON.stringify(guiCollapsed)}`);
+    if (guiCollapsed.finalResponse.count !== IMAGE_COUNT || guiCollapsed.finalResponse.unique !== IMAGE_COUNT || !guiCollapsed.finalResponse.orderMatches || !guiCollapsed.finalResponse.galleryBeforeText || guiCollapsed.finalResponse.text !== 'POSITION STRESS FINAL SUMMARY') fail(`GUI final response image placement mismatch: ${JSON.stringify(guiCollapsed.finalResponse)}`);
     await sleep(250);
     await capture(cdp, guiCollapsedPath);
 

@@ -12,8 +12,8 @@ android {
         applicationId = "com.newmark.mobile"
         minSdk = 24
         targetSdk = 36
-        versionCode = 513
-        versionName = "0.5.13"
+        versionCode = 514
+        versionName = "0.5.14"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -67,6 +67,12 @@ androidComponents {
         // product minSdk 24 declared in defaultConfig.
         variantBuilder.minSdk = 26
     }
+    beforeVariants(selector().withBuildType("stress")) { variantBuilder ->
+        // The stress variant is a debug-like, isolated pressure lane; it has
+        // the same POI/Log4j dexing constraint as debug and must stay above
+        // API 25 so D8 can produce the APK.
+        variantBuilder.minSdk = 26
+    }
 }
 
 dependencies {
@@ -86,6 +92,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jsoup:jsoup:1.18.3")
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")

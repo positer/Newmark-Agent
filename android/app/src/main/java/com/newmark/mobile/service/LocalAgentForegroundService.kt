@@ -67,7 +67,8 @@ class LocalAgentForegroundService : Service() {
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
             reportNetworkAvailability(
                 capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+                    (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ||
+                        capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)),
             )
         }
 
@@ -139,7 +140,14 @@ class LocalAgentForegroundService : Service() {
         if (serviceWifiLock?.isHeld != true) {
             val wifi = applicationContext.getSystemService(WifiManager::class.java)
             @Suppress("DEPRECATION")
-            serviceWifiLock = wifi?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "Newmark:AgentWifi")?.apply {
+            serviceWifiLock = wifi?.createWifiLock(
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                },
+                "Newmark:AgentWifi",
+            )?.apply {
                 setReferenceCounted(false)
                 acquire()
             }
@@ -345,11 +353,15 @@ class LocalAgentForegroundService : Service() {
         /** Suspend a provider retry without polling while Android has no usable network. */
         suspend fun awaitUsableNetwork(context: android.content.Context) {
             val appContext = context.applicationContext
-            while (currentCoroutineContext().isActive &&
-                (!usableNetwork.value || !hasUsableNetwork(appContext))
-            ) {
-                usableNetwork.filter { it }.first()
-                if (!hasUsableNetwork(appContext)) delay(250L)
+            if (hasUsableNetwork(appContext)) return
+            while (currentCoroutineContext().isActive) {
+                // Does not trust a stale callback snapshot: VPN/proxy routes can be
+                // reachable even before the system marks the network VALIDATED.
+                // This direct check also prevents background work from sleeping
+                // behind a missing availability callback.
+                if (hasUsableNetwork(appContext)) return
+                if (!usableNetwork.value) usableNetwork.filter { it }.first()
+                delay(250L)
             }
         }
 
@@ -408,7 +420,8 @@ class LocalAgentForegroundService : Service() {
             val network = manager.activeNetwork ?: return false
             val capabilities = manager.getNetworkCapabilities(network) ?: return false
             return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ||
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN))
         }
     }
 }

@@ -2634,6 +2634,8 @@ button.left-ws-item {
 .conversation-work-display-image img { display:block; width:auto; max-width:100%; height:auto; max-height:420px; object-fit:contain; object-position:left center; border:1px solid var(--glass-border-2); border-radius:var(--radius-sm); background:rgba(0,0,0,.18); }
 .conversation-work-display-image span { font:10px/1.4 var(--font-ui); }
 .conversation-work-display-image:hover span, .conversation-work-display-image:focus-visible span { color:var(--accent); }
+.conversation-work-display-images { display:flex; flex-direction:column; align-items:flex-start; gap:8px; margin:0 0 6px; }
+.conversation-work-display-images .conversation-work-display-image { margin-left:0; }
 .work-run-collapsed-images { display:none; flex-direction:column; gap:8px; margin:0 34px 8px 0; }
 .work-run-message:has(.conversation-work-run.collapsed) > .work-run-collapsed-images { display:flex; }
 .work-run-collapsed-images .conversation-work-display-image { margin-left:0; }
@@ -3325,6 +3327,7 @@ button.todo-item { background: transparent; }
 .queue-item:hover { background: rgba(255,255,255,0.05); }
 [data-theme="light"] .queue-item:hover { background: rgba(45,58,92,0.055); }
 .queue-item.dragging { opacity: 0.58; transform: scale(0.99); }
+.queue-item.queue-drag-displaced { transition: transform 120ms var(--ease-out-expo); }
 
 .queue-drag {
   width: 22px;
@@ -9287,6 +9290,36 @@ function hydrateWorkDisplayImages(root, images) {
   }
 }
 
+/** image_display 的呈现顺序：与 Build 内共用的 sequence → timestamp → id 规则一致。 */
+function workRunDisplayImages(run) {
+  return (Array.isArray(run && run.events) ? run.events : [])
+    .map(function(event) { return { event: event, image: normalizeWorkDisplayImage(event && event.displayImage) }; })
+    .filter(function(item) { return !!item.image; })
+    .sort(function(left, right) { return compareConversationWorkEvents(left.event, right.event); })
+    .map(function(item) { return item.image; });
+}
+
+function workDisplayImageGalleryHtml(images) {
+  var normalized = (Array.isArray(images) ? images : []).map(normalizeWorkDisplayImage).filter(Boolean);
+  if (!normalized.length) return '';
+  return '<div class="conversation-work-display-images">' + normalized.map(renderWorkDisplayImage).join('') + '</div>';
+}
+
+/** 最终 Agent 回复复用同一组公开图片：图片在 Markdown 正文之前按调用顺序插入。 */
+function appendWorkDisplayImages(body, runId, target) {
+  if (!body || !runId) return [];
+  var scope = target || currentConversationTarget();
+  var run = (workRunsForTarget(scope) || []).find(function(item) { return String(item.runId || '') === String(runId || ''); });
+  var images = run ? workRunDisplayImages(run) : [];
+  if (!images.length) return [];
+  var gallery = document.createElement('div');
+  gallery.className = 'conversation-work-display-images';
+  gallery.innerHTML = images.map(renderWorkDisplayImage).join('');
+  body.insertBefore(gallery, body.firstChild);
+  hydrateWorkDisplayImages(gallery, images);
+  return images;
+}
+
 function promptAttachmentsForConversation() {
   return normalizeConversationImageAttachments((state.promptAttachments || []).map(function(item) {
     return Object.assign({}, item, { origin: 'user', mimeType: item.type || '' });
@@ -9334,6 +9367,7 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
     for (var finalIndex = 0; finalIndex < finalRows.length; finalIndex++) {
       if (String(finalRows[finalIndex].getAttribute('data-run-id') || '') !== owningRunId) continue;
       updateMsg(finalRows[finalIndex], text, role, mode, model);
+      appendWorkDisplayImages(finalRows[finalIndex].querySelector('.msg-body'), owningRunId, messageMeta && messageMeta.target);
       return finalRows[finalIndex];
     }
   }
@@ -9374,6 +9408,9 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
     (metaInfo ? '<span class="meta-extra"> | ' + esc(metaInfo) + '</span>' : '') + messageActionsHtml(role, text, messageIndex) + '</div><div class="msg-body">' + renderMessageContent(text) + '</div>';
   div._newmarkMessageText = String(text || '');
   div._newmarkMessageAttachments = appendConversationImageAttachments(div.querySelector('.msg-body'), messageMeta && messageMeta.attachments);
+  div._newmarkDisplayImages = role === 'assistant' && owningRunId
+    ? appendWorkDisplayImages(div.querySelector('.msg-body'), owningRunId, messageMeta && messageMeta.target)
+    : [];
   div._newmarkMessageTarget = messageMeta && messageMeta.target ? {
     workspaceId: String(messageMeta.target.workspaceId || ''),
     conversationId: String(messageMeta.target.conversationId || 'default')
@@ -9619,6 +9656,8 @@ function updateMsg(div, text, role, mode, model, options) {
     // node; the terminal `done`/`final_response` path renders Markdown once.
     if (streaming && String(text || '').length >= STREAMING_PLAIN_TEXT_THRESHOLD) body.textContent = text;
     else body.innerHTML = renderMessageContent(text);
+    var owningRunId = div.getAttribute && div.getAttribute('data-run-id');
+    if (owningRunId) div._newmarkDisplayImages = appendWorkDisplayImages(body, owningRunId, div._newmarkMessageTarget || currentConversationTarget());
   }
   var meta = div.querySelector('.meta');
   if (meta && (mode || model) && !streaming) {
@@ -10212,7 +10251,11 @@ function mergeGuideWorkEvent(previous, incoming) {
   var previousStatus = guideWorkEventStatus(previous);
   var incomingStatus = guideWorkEventStatus(incoming);
   if ((rank[incomingStatus] || 0) < (rank[previousStatus] || 0)) return previous;
-  return Object.assign({}, previous, incoming);
+  var merged = Object.assign({}, previous, incoming);
+  if (incoming.syntheticReceipt && !previous.syntheticReceipt && Number(previous.sequence || 0) > 0) {
+    merged.sequence = previous.sequence;
+  }
+  return merged;
 }
 
 function dedupeGuideWorkEvents(events) {
@@ -10528,7 +10571,9 @@ function workToolActivity(event) {
   if (name === 'memory_lab_update' || name === 'memory_lab_reindex') return { key: 'memory_lab', type: 'tool_memory_lab' };
   if (name === 'image_inspect' || name === 'computer_use') return { key: 'images', type: 'tool_images' };
   if (name === 'write' || name === 'edit') return { key: 'files', type: 'tool_files' };
-  if (name === 'read' || name === 'glob' || name === 'grep' || name === 'web_search' || name === 'web_fetch' || name.indexOf('snapshot') >= 0) return { key: 'search', type: 'tool_search' };
+  if (name === 'web_search') return { key: 'searched_web', type: 'tool_search' };
+  if (name === 'web_fetch' || name === 'web_catch') return { key: 'fetched_web', type: 'tool_search' };
+  if (name === 'read' || name === 'glob' || name === 'grep' || name.indexOf('snapshot') >= 0) return { key: 'search', type: 'tool_search' };
   if (name === 'bash' || name === 'pwd' || name.indexOf('git_') === 0 || name.indexOf('gh_') === 0 || name.indexOf('terminal') >= 0) return { key: 'commands', type: 'tool_commands' };
   return { key: name, type: 'tool_call' };
 }
@@ -10545,6 +10590,8 @@ function workToolActivityLabel(activity, count, completed) {
   if (activity.key === 'commands') return zh ? (count > 1 ? '运行了多个命令' : '运行了命令') : (count > 1 ? 'Ran multiple commands' : 'Ran a command');
   if (activity.key === 'files') return zh ? (count > 1 ? '编辑了多个文件' : '编辑了文件') : (count > 1 ? 'Edited multiple files' : 'Edited a file');
   if (activity.key === 'images') return zh ? ('已查看 ' + count + ' 张图像') : ('Inspected ' + count + (count === 1 ? ' image' : ' images'));
+  if (activity.key === 'searched_web') return completed ? (zh ? '搜索了网页' : 'Searched the web') : (zh ? '正在搜索网页' : 'Searching the web');
+  if (activity.key === 'fetched_web') return completed ? (zh ? '抓取了网页' : 'Fetched a web page') : (zh ? '正在抓取网页' : 'Fetching a web page');
   if (activity.key === 'search') return zh ? (count > 1 ? '读取并检索了多项内容' : '读取并检索了内容') : (count > 1 ? 'Read and searched multiple items' : 'Read and searched content');
   return activity.key + (completed ? (zh ? ' · 已完成' : ' · completed') : '');
 }
@@ -10579,6 +10626,9 @@ function workToolCommandLabel(item) {
   }
   if (normalizedName === 'web_fetch') {
     return 'web_fetch · ' + String(args.url || args.uri || '').trim();
+  }
+  if (normalizedName === 'web_catch') {
+    return 'web_catch · ' + String(args.url || args.destination || '').trim();
   }
   if (normalizedName === 'web_search') {
     return 'web_search · ' + String(args.url || args.query || args.q || '').trim();
@@ -10654,18 +10704,24 @@ function workToolGroupLabel(items, completed) {
   var skills = [];
   var mcps = [];
   var subagents = [];
+  var webSearches = 0;
+  var webFetches = 0;
   (items || []).forEach(function(item) {
     var name = publicToolNameForUi(item && item.toolName).toLowerCase();
     if (name === 'skill' || name === 'skill_load' || name === 'skill_read' || name === 'skill_download') skills.push(workToolCommandLabel(item));
     else if (name === 'mcp' || name.indexOf('mcp__') === 0 || /^mcp[:._-]/.test(name) || /[:._-]mcp[:._-]/.test(name)) mcps.push(workToolCommandLabel(item));
     else if (isSubagentCreateToolName(name) || name.indexOf('subagent_') === 0) subagents.push(workToolCommandLabel(item));
+    else if (name === 'web_search') webSearches += 1;
+    else if (name === 'web_fetch' || name === 'web_catch') webFetches += 1;
   });
-  var commands = Math.max(0, (items || []).length - files - skills.length - mcps.length - subagents.length);
+  var commands = Math.max(0, (items || []).length - files - skills.length - mcps.length - subagents.length - webSearches - webFetches);
   var parts = [];
   if (files) parts.push(zh ? (files > 1 ? '编辑了多个文件' : '编辑了文件') : (files > 1 ? 'Edited multiple files' : 'Edited a file'));
   if (skills.length) parts.push(skills.join('，'));
   if (mcps.length) parts.push(mcps.join('，'));
   if (subagents.length) parts.push(subagents.join('，'));
+  if (webSearches) parts.push(completed ? (zh ? (webSearches > 1 ? '搜索了多个网页' : '搜索了网页') : (webSearches > 1 ? 'Searched multiple pages' : 'Searched the web')) : (zh ? '正在搜索网页' : 'Searching the web'));
+  if (webFetches) parts.push(completed ? (zh ? (webFetches > 1 ? '抓取了多个网页' : '抓取了网页') : (webFetches > 1 ? 'Fetched multiple pages' : 'Fetched a web page')) : (zh ? '正在抓取网页' : 'Fetching a web page'));
   if (commands) parts.push(zh ? (commands > 1 ? '运行了多个命令' : '运行了命令') : (commands > 1 ? 'ran multiple commands' : 'ran a command'));
   if (!parts.length) return completed ? (zh ? '调用了工具' : 'Used tools') : (zh ? '正在调用工具' : 'Using tools');
   if (!completed) return zh ? parts.join('，正在') : parts.join(' and ');
@@ -11613,6 +11669,16 @@ function renderChatMessages(messages, target) {
   }
 }
 
+function nextGuideSequenceForRun(runId, target) {
+  var run = workRunsForTarget(target || currentConversationTarget()).find(function(item) {
+    return String(item && item.runId || '') === String(runId || '');
+  });
+  if (!run) return 1;
+  return Math.max(Number(run.sequence || 0), (run.events || []).reduce(function(max, event) {
+    return Math.max(max, Number(event && event.sequence || 0));
+  }, 0)) + 1;
+}
+
 function terminalAssistantResponseForRun(run) {
   var events = Array.isArray(run && run.events) ? run.events : [];
   for (var finalIndex = events.length - 1; finalIndex >= 0; finalIndex--) {
@@ -12092,6 +12158,22 @@ function appendAgentWorkEvent(event) {
   // and never touch the main conversation's chat/runtime state.
   if (String(event.actorId || '')) {
     appendSubagentPeerEvent(event);
+    return;
+  }
+  if (String(event.type || '') === 'conversation_title') {
+    var titleConversationId = String(event.conversationId || (event.target && event.target.conversationId) || 'default');
+    var titleText = String(event.title || event.content || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (titleText) {
+      var titleLists = [state.conversations, currentWorkspaceConversations()];
+      titleLists.forEach(function(list) {
+        (Array.isArray(list) ? list : []).forEach(function(conversation) {
+          if (String(conversation && conversation.id || '') !== titleConversationId) return;
+          conversation.summary = titleText;
+          conversation.title = titleText;
+        });
+      });
+      scheduleConversationsRender();
+    }
     return;
   }
   event = publicWorkEventForUi(event);
@@ -14993,7 +15075,7 @@ function syncQueueItemsFromSnapshot(snapshot, target) {
 
 window.queueAction = function(action, input) {
   if (!api.queueAction) return Promise.resolve({ ok: false, error: 'queueAction unavailable' });
-  return api.queueAction(action, input);
+  return api.queueAction(action, input, currentConversationTarget());
 };
 function setBackendQueueForTarget(queue, target) {
   var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
@@ -15090,7 +15172,7 @@ window.renderQueuePanel = function() {
       '<button type="button" class="stack-icon-btn queue-guide-btn" onclick="window.guideQueueItem(' + queueIndex + ')" title="' + escAttr(t('queue.guideNow')) + '">' + iconSvg('corner-down-right', t('queue.guideNow'), 'tiny') + '<span>' + esc(t('queue.guideAction')) + '</span></button>' +
       '<button class="stack-icon-btn" onclick="window.focusQueueItem(' + queueIndex + ')" title="' + escAttr(t('common.edit')) + '">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</button>' +
       '<button class="stack-icon-btn danger" onclick="window.deleteQueueItem(' + queueIndex + ')" title="' + escAttr(t('common.delete')) + '">' + iconSvg('trash', t('common.delete'), 'tiny') + '</button>' : '';
-    html += '<div class="queue-item"' + dragAttributes + '>' +
+    html += '<div class="queue-item" data-queue-index="' + queueIndex + '"' + dragAttributes + '>' +
       dragHandle +
       '<input class="queue-edit" value="' + escAttr(state.nextQueue[queueIndex] || '') + '"' + inputAttributes + '>' +
       '<span class="stack-actions">' + actions + '</span>' +
@@ -15232,19 +15314,47 @@ window.startQueueDrag = function(event, idx) {
     return;
   }
   state.queueDragIndex = idx;
+  state.queueDragTargetIndex = idx;
   if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
   var row = event.currentTarget;
   if (row) row.classList.add('dragging');
 };
 
-window.overQueueDrag = function(event) {
+function queueDropTargetIndex(event, hoveredIndex) {
+  var row = event && event.currentTarget;
+  var after = false;
+  if (row && typeof row.getBoundingClientRect === 'function' && Number.isFinite(event.clientY)) {
+    var rect = row.getBoundingClientRect();
+    after = event.clientY > rect.top + rect.height / 2;
+  }
+  var insertion = hoveredIndex + (after ? 1 : 0);
+  if (insertion > state.queueDragIndex) insertion -= 1;
+  return Math.max(0, Math.min((state.nextQueue || []).length - 1, insertion));
+}
+
+function previewQueueDrag(targetIndex) {
+  state.queueDragTargetIndex = targetIndex;
+  var from = state.queueDragIndex;
+  document.querySelectorAll('#queue-list .queue-item').forEach(function(row) {
+    var index = Number(row.getAttribute('data-queue-index'));
+    var displacement = 0;
+    if (from < targetIndex && index > from && index <= targetIndex) displacement = -28;
+    else if (from > targetIndex && index >= targetIndex && index < from) displacement = 28;
+    row.classList.toggle('queue-drag-displaced', displacement !== 0);
+    if (index !== from) row.style.transform = displacement ? ('translateY(' + displacement + 'px)') : '';
+  });
+}
+
+window.overQueueDrag = function(event, idx) {
   event.preventDefault();
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  if (state.queueDragIndex >= 0) previewQueueDrag(queueDropTargetIndex(event, idx));
 };
 
 window.dropQueueDrag = function(event, idx) {
   event.preventDefault();
   var from = state.queueDragIndex;
+  idx = typeof queueDropTargetIndex === 'function' ? queueDropTargetIndex(event, idx) : idx;
   if (!state.nextQueue || from < 0 || from === idx || from >= state.nextQueue.length) return;
   var sourceRequest = state.nextQueueRequests && state.nextQueueRequests[from];
   var destinationRequest = state.nextQueueRequests && state.nextQueueRequests[idx];
@@ -15276,6 +15386,11 @@ window.dropQueueDrag = function(event, idx) {
 
 window.endQueueDrag = function(event) {
   state.queueDragIndex = -1;
+  state.queueDragTargetIndex = -1;
+  document.querySelectorAll('#queue-list .queue-item').forEach(function(row) {
+    row.classList.remove('queue-drag-displaced', 'dragging');
+    row.style.transform = '';
+  });
   if (event.currentTarget) event.currentTarget.classList.remove('dragging');
 };
 
@@ -15456,16 +15571,28 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   }
 
   if (effectiveInputMode === 'next' && !opts.fromQueue && conversationRunning) {
-    if (!state.nextQueue) state.nextQueue = [];
-    if (!state.nextQueueRequests) state.nextQueueRequests = [];
-    state.nextQueue.push(displayText);
     var queuedModeRequest = bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget, queueBranchPathForTarget(lockedTarget, 'runtime'));
+    queuedModeRequest.clientMessageId = String(queuedModeRequest.clientMessageId || ((window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('queue-' + Date.now() + '-' + Math.random().toString(16).slice(2))));
     queuedModeRequest.requestedMode = requestedMode;
     if (requestedMode === 'goal') {
       queuedModeRequest.goalDeclaration = true;
       queuedModeRequest.goalObjective = rawText;
     }
-    state.nextQueueRequests.push(queuedModeRequest);
+    var queueResult = await window.queueAction('queue_enqueue', {
+      id: queuedModeRequest.clientMessageId,
+      text: rawText,
+      requestedMode: requestedMode,
+      goalObjective: requestedMode === 'goal' ? rawText : '',
+      images: queuedModeRequest.images,
+      createdAt: queuedModeRequest.createdAt || new Date().toISOString()
+    });
+    if (!queueResult || queueResult.ok === false) {
+      showUiNotice(queueResult && queueResult.error ? queueResult.error : (currentLang() === 'zh' ? '消息加入队列失败' : 'Failed to queue message'), 'error', 'queue-enqueue-' + queuedModeRequest.clientMessageId);
+      return queueResult || { ok: false };
+    }
+    if (queueResult.queued) setBackendQueueForTarget(queueResult.queued, lockedTarget);
+    if (Array.isArray(queueResult.queueItems)) setQueueItemsForTarget(queueResult.queueItems, lockedTarget);
+    window.syncNextQueueFromBackend(queueResult.queued || backendQueueForTarget(lockedTarget), lockedTarget);
     els.prompt.value = '';
     clearActiveConversationDraft();
     if (usesPromptAttachments) clearPromptAttachments();
@@ -15559,7 +15686,8 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
           workspaceId: lockedTarget.workspaceId,
           conversationId: lockedTarget.conversationId,
           runId: receipt.runId || envelope.runId,
-          sequence: receipt.sequence || 0,
+          sequence: receipt.sequence || nextGuideSequenceForRun(receipt.runId || envelope.runId, lockedTarget),
+          syntheticReceipt: true,
           guideStatus: 'deferred',
           clientMessageId: clientMessageId,
           guide: guideMessagesForTarget(lockedTarget)[clientMessageId]
@@ -15597,7 +15725,8 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         workspaceId: lockedTarget.workspaceId,
         conversationId: lockedTarget.conversationId,
         runId: receipt.runId || envelope.runId,
-        sequence: receipt.sequence || 0,
+        sequence: receipt.sequence || nextGuideSequenceForRun(receipt.runId || envelope.runId, lockedTarget),
+        syntheticReceipt: true,
         guideStatus: status,
         clientMessageId: clientMessageId,
         guide: guideRecord

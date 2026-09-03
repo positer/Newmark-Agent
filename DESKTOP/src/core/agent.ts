@@ -399,6 +399,7 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - grep: Search file contents with regex
 - web_search: Search through the configured search-only MCP pool, then fall back to Bing HTTP and finally DuckDuckGo HTTP
 - web_fetch: Fetch and extract content from URLs
+- web_catch: Advanced Build/Goal-only downloader for saving public webpage files, whole pages, or selected component assets to an exact workspace path; provision its full schema before use
 - browser_use: Preferred native built-in-browser workflow. Observe first, then use the returned page generation, observation id, and opaque refs for click/type/select/scroll/key/navigation/wait/extraction. Recognition order is enforced as rendered DOM text first, then an ephemeral screenshot sent to a validated vision model when text is unavailable, and only then local OCR. A successful action receipt is enough to continue the Build; do not wait for the browser session or window to close. Every receipt is bound to the current workspace/conversation runtime and actor. Stale page capabilities are rejected; observe again to recover.
 - browser_open/browser_snapshot/browser_click/browser_type/browser_eval/browser_back/browser_forward/browser_reload/browser_cdp: Legacy and expert Chromium controls. Prefer browser_use for normal interactive work; raw eval/CDP remain advanced escape hatches.
 - computer_use: Native desktop Computer Use control for full desktop or app-scoped observe/move/click/scroll/type/key/wait against Windows desktop applications. A successful takeover_start receipt means the persistent control surface started and the Build may continue immediately; do not wait for takeover_stop or closure before taking the next step. Use takeover_stop when control is no longer needed. Use app_list/app_observe/app_activate/app_click/app_scroll/app_type/app_key when the task can be scoped to a visible taskbar application by title, process name, PID, or window handle; this narrows screenshots and actions to that application. Use observe/app_observe first, reason over returned screenshot plus UI Automation objects. If the model supports vision, Newmark sends the screenshot image and UI object tree together in the same tool-result context; use both for stable decisions. Prefer target_id from perception.scene_summary.high_priority_objects or perception.objects for move/click/scroll when available; fall back to exact coordinates only when necessary.
@@ -538,6 +539,15 @@ export class Agent {
   private subagentPrompt = '';
   private forcedProvider: LLMProvider | null = null;
   private forcedProviderDeployment = '';
+  /** dev-0.5.14: every model request follows the user-configured proxy settings. */
+  providerProxyConfig(): { enabled?: boolean; url: string; auth: string } {
+    const configured = this.config.get<boolean>('proxy', 'enabled');
+    return {
+      enabled: configured,
+      url: this.config.getStr('proxy', 'url') || '',
+      auth: this.config.getStr('proxy', 'auth') || '',
+    };
+  }
   private processingConversationId: string | null = null;
   private processDepth = 0;
   private goalContinuationGate: (() => boolean) | null = null;
@@ -1990,6 +2000,25 @@ export class Agent {
     }
     if (preservedLiveRun && !changed) return { runs: normalized, changed: false };
     return { runs: normalized, changed };
+  }
+
+  private publishConversationTitle(title: string, conversationId: string): void {
+    const event: AgentWorkEvent = {
+      id: `conversation-title-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      conversationId,
+      type: 'conversation_title',
+      content: title,
+      title,
+      mode: this.modeName(),
+      model: this.model,
+      timestamp: this.nowIso(),
+      workspaceId: this.currentConversationTarget(conversationId).workspaceId,
+    };
+    // This is conversation metadata, not Build activity. Publish it directly
+    // so the PC sidebar can repaint before the formal Agent request starts.
+    for (const sub of this.workEventSubscribers) {
+      try { sub(event); } catch { /* ignore subscriber errors */ }
+    }
   }
 
   /** Close tool calls left without results by a hard worker exit. */
@@ -4043,6 +4072,7 @@ export class Agent {
         current.title = title;
         current.updatedAt = this.nowIso();
         this.writeStoredConversationState(latest, workspace);
+        this.publishConversationTitle(title, conversationId);
         return true;
       }
       if (signal?.aborted) return false;
@@ -7301,7 +7331,7 @@ export class Agent {
       this.modelValidationProgress = { ...this.modelValidationProgress, currentModel, currentCheck: 'catalog' };
       const inferredVision = !!m.vision || inferModelVisionCapability(m.name, m.display, m.description, m.provider, m.provider_protocol);
       const inferredImageOutput = !!m.image_output || /(?:^|[-_.])(gpt-image|dall-e|imagen|imagegen|image-generation)(?:$|[-_.])/i.test(m.name);
-      const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(m));
+      const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(m), this.providerProxyConfig());
       let catalog = catalogByProvider.get(m.provider_id);
       if (!catalog && m.provider_url && m.api_key) {
         try { catalog = await p.modelCatalog(); } catch { catalog = []; }
@@ -7460,7 +7490,7 @@ export class Agent {
     }
     const m = this.activeModelConfig();
     if (!m) return null;
-    return new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(m));
+    return new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(m), this.providerProxyConfig());
   }
 
   /**
@@ -7505,8 +7535,8 @@ export class Agent {
     ) || models.find(model => model.evaluation?.status === 'available') || models[0];
     if (!selected?.api_key || !selected.provider_url) return { ok: false, text: '', error: 'No available editor prediction model.' };
     const provider = input.completion
-      ? new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, 'chat_stream', this.config.contextFlag('provider_adapters_v2'), EDITOR_COMPLETION_TIMEOUT_MS, this.modelThinkingTierMaps(selected))
-      : new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(selected));
+      ? new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, 'chat_stream', this.config.contextFlag('provider_adapters_v2'), EDITOR_COMPLETION_TIMEOUT_MS, this.modelThinkingTierMaps(selected), this.providerProxyConfig())
+      : new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(selected), this.providerProxyConfig());
     const language = path.extname(String(input.path || '')).replace(/^\./, '') || 'text';
     const system = input.completion
       ? 'You are an inline code completion engine. Return only the exact text to insert at the cursor. Do not use Markdown fences or explanations.'
@@ -7646,7 +7676,7 @@ export class Agent {
 
   private async discoverProviderModels(providerName: string, baseUrl: string, key: string, protocol?: ProviderProtocol): Promise<{ models: string[]; source: 'models_endpoint' | 'heuristic'; warning?: string }> {
     try {
-      const listed = await new LLMProvider(providerName, baseUrl, key, protocol || inferProviderProtocol(providerName, baseUrl), this.config.openAIApiMode()).listModels();
+      const listed = await new LLMProvider(providerName, baseUrl, key, protocol || inferProviderProtocol(providerName, baseUrl), this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, undefined, this.providerProxyConfig()).listModels();
       if (listed.length) {
         return { models: listed.slice(0, 12), source: 'models_endpoint' };
       }
@@ -8751,7 +8781,7 @@ export class Agent {
     const activeModel = this.activeModelConfig();
     const activeProvider = this.engineModel();
     const assignedProvider = assignedModel && assignedModel.provider_id !== activeModel?.provider_id
-      ? new LLMProvider(assignedModel.provider, assignedModel.provider_url, assignedModel.api_key, assignedModel.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(assignedModel))
+      ? new LLMProvider(assignedModel.provider, assignedModel.provider_url, assignedModel.api_key, assignedModel.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(assignedModel), this.providerProxyConfig())
       : activeProvider;
     if (!assignedProvider || !model) {
       throw new Error('No LLM configured. Add provider in Settings > Models.');

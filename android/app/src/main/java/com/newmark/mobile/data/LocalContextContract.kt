@@ -127,6 +127,7 @@ internal object LocalContextContract {
                     appendLine("Chat mode: use the existing terminal_exec tool only with date, time, or now when the user asks for the current local time; otherwise first use web_search for online evidence, then web_fetch authoritative pages when useful. Only web_search, web_fetch, and this restricted time-only terminal_exec are permitted.")
                     appendLine("Once the evidence is sufficient, summarize the evidence into a concise answer with usable sources instead of extending the request into a long-running workflow.")
                 }
+                appendLine("Advanced local web_catch can save a public download, webpage, or selected component asset to an exact local-workspace path; it is unavailable in Plan/Chat and may be used only when its full schema is exposed in Build/Goal.")
                 appendLine("Memory Lab protocol: read/query before mutation. Create with name/tags/content. For an existing component, call memory_lab_update with component + latest expected_updated_at and only changed fields; prefer content_append or old_text/new_text for small edits. Delete with component + latest expected_updated_at. Keep tool calls structured and do not print schemas or full indexes.")
                 append("This focus block is request-only runtime metadata and must not be copied into final answers, summaries, or durable history.")
             },

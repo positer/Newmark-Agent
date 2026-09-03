@@ -7,7 +7,7 @@ object LocalToolCatalog {
         "terminal_exec",
         "memory_lab_read", "memory_lab_query", "memory_lab_update", "memory_lab_delete", "memory_lab_reindex",
         "settings_read", "settings_update",
-        "web_search", "web_fetch", "browser_use",
+        "web_search", "web_fetch", "web_catch", "browser_use",
         "task_read", "task_create",
         "build_history_query", "context_compress", "context_history_manage",
         "calendar_create", "calendar_read",

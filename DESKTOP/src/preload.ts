@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   sendMessage: (message: string | Record<string, unknown>, target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:send', message, target),
   enqueueGuide: (envelope: Record<string, unknown>) => ipcRenderer.invoke('agent:enqueueGuide', envelope),
+  queueAction: (action: string, input: Record<string, unknown>, target: string | Record<string, unknown>) => ipcRenderer.invoke('agent:queueAction', action, input, target),
   checkpointConversation: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:checkpointConversation', request),
   compressContext: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:compressContext', request),
   rateAutoRoute: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:rateAutoRoute', request),

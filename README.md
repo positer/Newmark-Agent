@@ -1,6 +1,31 @@
 # Newmark Agent
 
-### dev-0.5.13 双端累计改动 r5 APK + Windows MSI（当前）
+### dev-0.5.14 启动恢复、双端时间线与 web_catch（当前源码）
+
+`dev-0.5.14` 修复 Windows 同版本 MSI 更新后重启可能同时损坏 GUI/TUI 的安装事务边界：升级前按安装目录终止全部 Newmark 可执行进程，并清理只指向该安装目录的待重命名/删除项；系统注销/重启进入 `before-quit` 后也不再触发 renderer reload 恢复循环。用户状态继续独立保存在 `.Newmark`，安装器不迁移或删除该目录。
+
+PC 首轮标题在独立标题探测成功并持久化后，立即通过不进入 Build 历史的元数据事件刷新侧边栏，然后才允许首次正式 Agent 请求。Guide 回执缺失序号时使用当前 Build 尾序号，不再跳到顶部；Android 对旧 guides-only 快照按真实回执时间推断插入位置，不再强制置底。PC 运行中 Next 现直接写入会话内核，移动端可通过同一 `queueItems`/`queue_update` 看到、编辑和重排；PC 拖拽按指针越过行中点计算落点，并实时让相邻项避让。
+
+Agent 运行时网络现在与 web 工具使用同一代理链路：PC 的模型/Validate/Editor/GitHub/Anthropic 请求和 `web_search`/`web_fetch`/`web_catch` 都通过 `proxy.enabled/url/auth` 或 `HTTPS_PROXY/HTTP_PROXY` 环境变量走 `undici.ProxyAgent`；未显式配置时环境变量回退（已修复 Agent 误传 `enabled=false` 导致屏蔽环境代理的问题），显式禁用配置优先，本机回环保持直连；Android 接受 `TRANSPORT_VPN` 网络，即使系统尚未标记 `VALIDATED` 也允许代理/VPN 线路，并禁用旧回调快照导致的等待。移动端后台同时升级为 API 29+ 的 `WIFI_MODE_FULL_LOW_LATENCY`（旧版本保留 `FULL_HIGH_PERF`），保持长连接低时延。
+
+新增高级 `web_catch`：PC 与移动端本地 Build/Goal 可将公开 HTTP(S) 下载、整页或 CSS selector 组件资源保存到指定工作区文件。该工具默认拒绝覆盖，限制 100 MiB，拒绝本机/私网及不安全重定向；Plan/Chat 不可用。PC 基础 prompt 仅提示能力存在，完整 schema 必须经 `tool_provision` 暴露；移动端不使用 `tool_provision`，在本地 Build/Goal 直接暴露完整 schema。工具活动标签已区分：`web_search` 显示“搜索了网页”，`web_fetch`/`web_catch` 显示“抓取了网页”，PC 与移动端均生效。
+
+`image_display` 的公开图片现在按调用顺序同时呈现在两端：Build 工具页保留原有行内/折叠证据，PC GUI、PC TUI 与移动端最终 Agent 回复还会在正文之前按 `sequence → timestamp → id` 顺序具体展示每张图片；图片仅复制自同一已校验的 `displayImage` 事件，不重复写入模型历史。
+
+源码门禁已完成：最终 `npm run test:full-release`、Desktop build 与主验证 `1708/1708`、工具 provisioning `80/80 schema + 80/80 reachability`、TUI/GUI launcher `28/28`、带图队列/Guide 聚焦回归、Android `71 suites / 270/270` JVM 及 release APK assembly 全部通过。真实公网 `https://example.com/` 组件抓取生成 `<h1>Example Domain</h1>`，同时验证默认拒绝覆盖及 Plan 执行拒绝。Android release APK 为 `android/app/build/outputs/apk/release/app-release.apk`（66,771,458 bytes，SHA-256 `CBD98838B95344F0C6262165928DFFA6B19C57574B74F2B0B2D5AE245B981470`，当前使用 Android Debug 签名）。免安装 unpack 已构建并完成 packaged SSH/TUI、CLI、上下文压缩、console-wrapper、asar/图标和 ZIP 冒烟；同时生成但未安装 0.5.14 MSI。仍未执行真实 Windows 重启后的安装态 GUI/TUI 黑盒复验，因此不把源码诊断替代为安装态结论。
+
+全平台 `dev-0.5.14` 六个资产已生成于 `release-0.5.14-full-platform/`：
+
+| 资产 | 大小（bytes） | SHA-256 |
+| --- | ---: | --- |
+| `Newmark-Agent-0.5.14-x64.msi` | 246,488,754 | `9576F6D5902CBFEC1ADFAF0B322ACFDDB4F6BD1B3610DCCC2A2A748EC95C8969` |
+| `Newmark-Agent-0.5.14-win-unpacked-x64.zip` | 321,603,037 | `68541B0A44F2788CCC06C232721080DDAC7534A4197DB508229AEB7BB72EAEF1` |
+| `Newmark-Agent-0.5.14-x86_64.AppImage` | 217,240,535 | `02818508563A229DDC57F2F64541D6538DB1B0C0688807BC75D34CE0BEBB685A` |
+| `Newmark-Agent-0.5.14-amd64.deb` | 166,895,176 | `D478F4E3D4F8B036B0D438997E5229F3F737C34987D70FCBCBA69EDB58F6DA80` |
+| `Newmark-Agent-0.5.14-linux-unpacked-x64.zip` | 212,960,786 | `B1035B594CF7B843355D7034FE811DEBA6DFED267A5DC993F71404E39DE055CC` |
+| `Newmark-Agent-0.5.14-android.apk` | 66,771,458 | `B609B36B382E7753A98789A8B415C5478142975AAE6E5F6C160F65A630A628F9` |
+
+### dev-0.5.13 双端累计改动 r5 APK + Windows MSI（上一发行版）
 
 PC 与 Android 当前 `0.5.13` 累计源码已完成一致性核验。桌面端 typecheck、build 和完整 `test:full-release` 通过，其中主验证 1702/1702、thinking tier 压力 68/68、压缩压力 34/34、模型恢复压力、TUI、真实 loopback SSH、WSL TUI、CLI 与 GUI/TUI/CLI 三端压力均通过；无供应商标题门禁错误同时保留 `No LLM configured` 可操作诊断。`pdf_read` 的 1–120 秒预算现在覆盖异步文件读取、pdf.js 全文解析和扫描页浏览器观察，任一阶段超时都返回可恢复工具回执并允许同一 Agent 继续给出正式响应。Android 首轮标题探测与正式首轮共享冻结的 provider/model/intelligence/native reasoning 映射；新增 `image_inspect` 可把安全工作区或已授权文件 URI 的有效 PNG/JPEG 一次性送入当前冻结视觉模型，图片字节不写入工具文本或持久历史。Android Responses 聚焦 32/32、69 suites / 267/267 JVM、Vital Lint、R8、资源收缩及隔离 clean Release assembly 通过。当前 Android 交付包为 `APK/Newmark-Agent-0.5.13-dual-platform-final-r5-release.apk`，大小 52,794,422 bytes，SHA-256 `C87DFA53B309D4FE1790FCB5F1EB2084F67BE6E44FC27D76D5E8E4E84A30A14B`。
 
@@ -98,7 +123,7 @@ PC 对话中的 Build 展开/折叠标题在暗色模式按住时继续保持透
 
 Newmark Agent 是面向本地工作区的多端 AI Agent。它把对话、Build/Plan/Goal/Flow、文件与终端、浏览器、Memory Lab、自动化和多 Agent 协作整合在同一套本地状态模型中，并提供 Windows/Linux 桌面端、终端界面、CLI 与 Android 客户端。
 
-当前开发版本：`dev-0.5.13`。PC Build Block 的展开/折叠标题在暗色模式按住时保持透明，不再出现白色原生按钮底；移动端右侧栏折叠态统一改为仅支持右缘左滑展开；新建本地对话默认 Chat；Chat 模式复用既有 `terminal_exec` 权限，并在执行边界只允许 `date`、`time`、`now` 获取本地时间，不新增工具；模式/模型选择弹窗圆角与内部玻璃浮块匹配。移动端 Memory Lab 的返回键与文字操作胶囊统一使用四边 8dp 透明光学画布，玻璃浮起、折射边缘和阴影不再被按钮自身 RenderNode 截断；发送按钮按 PC 契约显式区分空闲发送、运行中停止、运行中继续发送三态，并修正工作态图标居中。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本。
+当前开发版本：`dev-0.5.14`。本版修复 Windows 重启后的同版本安装完整性、PC 首轮标题门禁、双端 Guide/排队时间线与拖拽落点，在 PC/Android 本地 Build/Goal 增加受工作区和公网边界约束的高级 `web_catch`，并让 `image_display` 图片进入最终回复正文之前。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本。
 
 dev-0.5.11 同时优化 PC 冷启动。历史生命周期 marker 不再由 `Agent` 构造函数同步逐个读取，而是在轻量启动页显示后按批异步清理；正常退出直接删除当前 marker，避免运行目录随启动次数线性增长。历史日志基线为 Agent 8.122s、主界面 14.974s；在 1000 个旧 marker 压力下，当前实测轻量启动页 721ms、主页面导航 2567ms、输入可用 2772ms，Windows 进程无响应采样为 0，目录最终仅保留当前进程 1 个 marker。
 

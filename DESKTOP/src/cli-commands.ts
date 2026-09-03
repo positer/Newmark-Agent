@@ -549,10 +549,11 @@ async function discoverCliProviderModels(
   providerName: string,
   baseUrl: string,
   key: string,
-  protocol?: ProviderProtocol
+  protocol?: ProviderProtocol,
+  proxy?: { enabled?: boolean; url: string; auth: string },
 ): Promise<{ models: string[]; source: 'models_endpoint' | 'heuristic'; warning?: string }> {
   try {
-    const listed = await new LLMProvider(providerName, baseUrl, key, protocol || inferProviderProtocol(providerName, baseUrl)).listModels();
+    const listed = await new LLMProvider(providerName, baseUrl, key, protocol || inferProviderProtocol(providerName, baseUrl), undefined, undefined, undefined, undefined, proxy).listModels();
     if (listed.length) return { models: listed.slice(0, 12), source: 'models_endpoint' };
     return { models: [], source: 'heuristic', warning: 'Provider /models endpoint returned no model ids. Falling back to heuristic candidates.' };
   } catch {
@@ -628,7 +629,7 @@ async function runCliFuzzyInject(
     if (!providerName || !baseUrl) return { ok: false, warning: 'Provider name and API URL are required.' };
     if (!apiKey) return { ok: false, warning: 'API key is required for new providers or existing providers without a saved key.' };
     cliDebug('fuzzy: discover models');
-    discovery = await discoverCliProviderModels(providerName, baseUrl, apiKey, safeProtocol);
+    discovery = await discoverCliProviderModels(providerName, baseUrl, apiKey, safeProtocol, agent.providerProxyConfig());
   }
   cliDebug('fuzzy: upsert provider');
   config.upsertProvider(providerName, baseUrl, apiKey, safeProtocol);

@@ -34,6 +34,7 @@ export interface ConversationQueueActionInput {
   requestedMode?: string;
   goalObjective?: string;
   createdAt?: string;
+  images?: AgentPromptMessage['images'];
   orderedIds?: string[];
 }
 export interface AgentPromptMessage {
@@ -282,7 +283,7 @@ export class ConversationKernel {
 
   enqueueNext(
     target: ConversationTargetInput,
-    input: { id: string; text: string; requestedMode?: string; goalObjective?: string; createdAt?: string },
+    input: { id: string; text: string; requestedMode?: string; goalObjective?: string; createdAt?: string; images?: AgentPromptMessage['images'] },
   ): ConversationQueueItemSnapshot {
     const runtime = this.findRuntime(target);
     if (!runtime?.activePromise || !runtime.runId) throw new Error('Target conversation is not running');
@@ -299,6 +300,7 @@ export class ConversationKernel {
         visibleUserInput: text,
         visibleMode: String(input.requestedMode || 'build'),
         goalObjective: String(input.goalObjective || '') || undefined,
+        images: Array.isArray(input.images) ? input.images.slice(0, 6).map(image => ({ ...image })) : undefined,
         clientMessageId: id,
         runId: runtime.runId,
         createdAt,
@@ -426,6 +428,7 @@ export class ConversationKernel {
         requestedMode: input.requestedMode,
         goalObjective: input.goalObjective,
         createdAt: input.createdAt,
+        images: input.images,
       });
     } else if (action === 'update') {
       this.updateQueueItem(runtime.target, String(input.id || ''), String(input.text || ''));

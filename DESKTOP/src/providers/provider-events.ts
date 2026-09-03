@@ -4,6 +4,13 @@ import { NormalizedAgentRequest, SerializedProviderRequest, TransportResponse } 
  * Shared SSE parsing and usage normalization used by both adapters.
  */
 
+let defaultProviderDispatcher: unknown = null;
+
+/** dev-0.5.14: let non-LLMProvider adapter fallbacks also honor the configured proxy. */
+export function setDefaultProviderDispatcher(dispatcher: unknown): void {
+  defaultProviderDispatcher = dispatcher || null;
+}
+
 /**
  * Default HTTP transport used by adapter `execute` when the LLM provider does
  * not inject a loopback / fallback-aware transport.
@@ -12,12 +19,16 @@ export function defaultProviderTransport(
   request: SerializedProviderRequest,
   signal: AbortSignal,
 ): Promise<TransportResponse> {
-  return fetch(request.url, {
+  const init: RequestInit = {
     method: 'POST',
     headers: request.headers,
     body: JSON.stringify(request.body),
     signal,
-  });
+  };
+  if (defaultProviderDispatcher) {
+    (init as RequestInit & { dispatcher: unknown }).dispatcher = defaultProviderDispatcher;
+  }
+  return fetch(request.url, init);
 }
 
 /**

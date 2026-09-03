@@ -762,7 +762,7 @@ test("Build image display stays visible when collapsed and Enter opens its dedic
   state.historySelectedIndex = 0;
   state.historySelectedImageIndex = 0;
   output = stripAnsi(render(state, 120, 30));
-  assert.match(output, /\[示意图\].*Release architecture.*Enter 打开/);
+  assert.match(output, /\[示意图\][\s\S]*Release architecture[^\n]*Enter 打开/);
   assert.deepEqual(toggleSelectedBuildBlock(state), { ok: true });
   assert.equal(opened.id, image.id);
   state.historySelectedImageIndex = -1;
@@ -1560,4 +1560,3 @@ test("TUI chrome follows the selected language", () => {
   assert.match(output, /WORKSPACES/);
   assert.doesNotMatch(output, /工作区/);
 });
-

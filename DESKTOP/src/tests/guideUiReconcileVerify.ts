@@ -41,6 +41,12 @@ function createFixture(): {
   const names = [
     'normalizeConversationImageAttachments',
     'appendConversationImageAttachments',
+    'normalizeWorkDisplayImage',
+    'renderWorkDisplayImage',
+    'hydrateWorkDisplayImages',
+    'workRunDisplayImages',
+    'appendWorkDisplayImages',
+    'compareConversationWorkEvents',
     'normalizeGuideUiStatus',
     'guideUiStatusLabel',
     'guideMessagesForTarget',

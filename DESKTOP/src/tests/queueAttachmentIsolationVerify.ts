@@ -249,7 +249,7 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
     'markConversationTracked', 'composePromptTextForSend', 'clearPromptAttachments',
     'updateSubmitButtonState', 'recordGuideUiMessage', 'addMsg', 'normalizeGuideUiStatus',
     'applyAgentWorkEventToRun', 'renderPendingGuideMessages', 'showUiNotice', 'currentLang',
-    `${helpers}\nfunction queueBranchPathForTarget(){ return ''; }\n${normalizeAttachmentsSource}\n${restoreQueueSource}\n${recoverableGuideRejectionSource}\nwindow.bindQueuedRequestToTarget = bindQueuedRequestToTarget;\nwindow.sendMessage = ${sendMessageSource};\nwindow.guideQueueItem = ${guideQueueSource};
+    `${helpers}\nfunction queueBranchPathForTarget(){ return ''; }\nfunction nextGuideSequenceForRun(){ return 1; }\n${normalizeAttachmentsSource}\n${restoreQueueSource}\n${recoverableGuideRejectionSource}\nwindow.bindQueuedRequestToTarget = bindQueuedRequestToTarget;\nwindow.sendMessage = ${sendMessageSource};\nwindow.guideQueueItem = ${guideQueueSource};
     window.queueAction = function(action, input){ return Promise.resolve({ ok: true }); };`,
   );
   install(

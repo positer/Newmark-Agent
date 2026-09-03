@@ -404,9 +404,13 @@ function finalSummaryMessage(run) {
   };
 }
 
-function appendChatMessage(historyRows, message, messageWidth, roleColumnWidth, p) {
+function appendChatMessage(historyRows, message, messageWidth, roleColumnWidth, p, displayImages = []) {
   const roleName = message.role === "user" ? "YOU" : message.role === "assistant" ? "NEWMARK" : String(message.role || "system").toUpperCase();
   const roleColor = message.role === "user" ? p.cyan : message.role === "assistant" ? p.brand : p.amber;
+  const images = Array.isArray(displayImages) ? displayImages : (message.images || []);
+  images.forEach((_image) => {
+    historyRows.push(`${" ".repeat(roleColumnWidth)}${p.cyan}[示意图]${p.reset}`);
+  });
   const messageRows = wrapText(message.content, messageWidth);
   messageRows.forEach((row, index) => {
     const prefix = index === 0
@@ -524,7 +528,7 @@ function chatView(state, width, height, p) {
     const assistantSummary = [...ownedMessages].reverse().find((message) => (
       message.role === "assistant" && String(message.content || "").trim()
     )) || finalSummaryMessage(run);
-    appendChatMessage(historyRows, assistantSummary, messageWidth, roleColumnWidth, p);
+    appendChatMessage(historyRows, assistantSummary, messageWidth, roleColumnWidth, p, runDisplayImages(run));
     historyBlockRanges[index] = { runId: run.runId, start, end };
     if (state.conversationHistoryFocus && state.historyEventFocus
       && Number.isInteger(state.historyEventFocusLine) && state.historyEventFocusLine >= 0) {

@@ -91,6 +91,7 @@ import com.newmark.mobile.data.RemoteSubagent
 import com.newmark.mobile.data.RemoteWorkRun
 import com.newmark.mobile.data.RemoteTrackingContract
 import com.newmark.mobile.data.RemotePayloadNormalizer
+import com.newmark.mobile.data.WorkRunProjection
 import com.newmark.mobile.data.ThemeStore
 import com.newmark.mobile.data.WorkspaceInfo
 import com.newmark.mobile.ui.theme.LocalNewmarkColors
@@ -191,12 +192,19 @@ internal fun remoteRunToLocal(run: RemoteWorkRun): LocalWorkRun {
     // the complete remote boundary once before constructing strict local UI
     // models; otherwise Release/R8 crashes one omitted field at a time.
     val remoteEvents = normalizedRun.events.orEmpty()
+    val guideReceiptsByKey = normalizedRun.guides.orEmpty().associateBy { guide ->
+        guide.clientMessageId.orEmpty().ifBlank { guide.guideId.orEmpty() }
+    }
     val times = remoteEvents.map { parseIsoMs(it.timestamp.orEmpty()) }
     val events = remoteEvents.mapIndexed { i, e ->
+        val eventGuideKey = e.clientMessageId.orEmpty().ifBlank {
+            e.guide?.clientMessageId.orEmpty().ifBlank { e.guideId.orEmpty() }
+        }
+        val effectiveGuide = guideReceiptsByKey[eventGuideKey] ?: e.guide
         LocalWorkEvent(
             type = e.type.orEmpty(),
             id = e.id.orEmpty(),
-            content = e.content.orEmpty(),
+            content = e.content.orEmpty().ifBlank { effectiveGuide?.content.orEmpty() },
             mode = e.mode.orEmpty(),
             model = e.model.orEmpty(),
             toolCallId = e.toolCallId.orEmpty(),
@@ -208,7 +216,7 @@ internal fun remoteRunToLocal(run: RemoteWorkRun): LocalWorkRun {
             status = e.status.orEmpty(),
             clientMessageId = e.clientMessageId.orEmpty(),
             guideId = e.guideId.orEmpty(),
-            guide = e.guide?.let { guide ->
+            guide = effectiveGuide?.let { guide ->
                 WorkGuide(
                     clientMessageId = guide.clientMessageId.orEmpty(),
                     guideId = guide.guideId.orEmpty(),
@@ -247,19 +255,34 @@ internal fun remoteRunToLocal(run: RemoteWorkRun): LocalWorkRun {
             durationMs = if (i + 1 < times.size) maxOf(0L, times[i + 1] - times[i]) else 0L,
         )
     }
-    val guideEvents = normalizedRun.guides.orEmpty().mapIndexed { i, guide ->
+    val authoritativeGuideKeys = remoteEvents.mapNotNull { event ->
+        event.clientMessageId.orEmpty().ifBlank { event.guide?.clientMessageId.orEmpty() }.takeIf(String::isNotBlank)
+    }.toSet()
+    val guideEvents = normalizedRun.guides.orEmpty().filter { guide ->
+        guide.clientMessageId.orEmpty().ifBlank { guide.guideId.orEmpty() } !in authoritativeGuideKeys
+    }.mapIndexed { _, guide ->
         val guideStatus = guide.status.orEmpty()
         val guideClientMessageId = guide.clientMessageId.orEmpty()
         val guideId = guide.guideId.orEmpty()
         val guideCreatedAt = guide.createdAt.orEmpty()
         val guideUpdatedAt = guide.updatedAt.orEmpty()
+        val guideTime = parseIsoMs(guideUpdatedAt.ifBlank { guideCreatedAt })
+        // Older desktop snapshots may export a guide receipt without its
+        // authoritative event. Anchor that compatibility event at the first
+        // event at/after its receipt time instead of assigning MAX_VALUE,
+        // which incorrectly forced every PC-injected Guide to the bottom.
+        val inferredSequence = remoteEvents.indices.firstOrNull { index ->
+            val eventTime = times[index]
+            guideTime > 0L && eventTime > 0L && eventTime >= guideTime
+        }?.let { remoteEvents[it].sequence }
+            ?: ((remoteEvents.maxOfOrNull { it.sequence } ?: 0L) + 1L)
         LocalWorkEvent(
             type = "guide_${guideStatus.ifBlank { "accepted" }}",
             id = "guide:${guideClientMessageId.ifBlank { guideId }}",
             content = guide.content.orEmpty(),
-            timestamp = parseIsoMs(guideUpdatedAt.ifBlank { guideCreatedAt }),
+            timestamp = guideTime,
             timestampText = guideUpdatedAt.ifBlank { guideCreatedAt },
-            sequence = Long.MAX_VALUE / 2 + i,
+            sequence = inferredSequence,
             status = guideStatus,
             clientMessageId = guideClientMessageId,
             guideId = guideId,
@@ -1658,6 +1681,13 @@ private fun projectRemoteConversationItems(linkVm: DesktopLinkViewModel): List<C
             messageId = message.id,
             messageIndex = index,
             attachments = message.attachments,
+            displayedImages = if (
+                message.role == "assistant" && associatedRun != null
+            ) {
+                WorkRunProjection.displayedImages(remoteRunToLocal(associatedRun).events)
+            } else {
+                emptyList()
+            },
             branchPager = remotePagersByIndex[index],
         )
         if (associatedRun != null && message.role == "user" && associatedRun.runId !in matchedRunIds) {
@@ -1692,6 +1722,11 @@ private fun projectLocalConversationItems(vm: ChatViewModel): List<ChatItem> {
         val renderedRun = associatedRun?.let { run ->
             if (message.role == "assistant" && message.workRun != null) run.copy(text = "") else run
         }
+        val displayedImages = if (message.role == "assistant") {
+            associatedRun?.let { run -> WorkRunProjection.displayedImages(run.events) }.orEmpty()
+        } else {
+            emptyList()
+        }
         val runItems = renderedRun?.let { run ->
             if (!renderedRunIds.add(run.runId)) emptyList() else listOf(
                 ChatItem.Bubble(
@@ -1723,6 +1758,7 @@ private fun projectLocalConversationItems(vm: ChatViewModel): List<ChatItem> {
                     height = image.height,
                 )
             },
+            displayedImages = displayedImages,
             branchPager = pager?.let {
                 ConversationBranchPagerUi(
                     groupId = it.groupId,
@@ -1765,11 +1801,13 @@ private fun remoteRunItems(
     val recoveredFinal = if ("assistant" in messageRoles) null else run.events
         .asReversed()
         .firstOrNull { it.type.equals("final_response", ignoreCase = true) && it.content.isNotBlank() }
+    val localRun = remoteRunToLocal(run)
     items += ChatItem.Bubble(
         role = "assistant",
         content = "",
         timestamp = recoveredFinal?.timestamp ?: run.startedAt,
-        workRun = remoteRunToLocal(run).copy(text = recoveredFinal?.content.orEmpty()),
+        workRun = localRun.copy(text = recoveredFinal?.content.orEmpty()),
+        displayedImages = WorkRunProjection.displayedImages(localRun.events),
         keyHint = "$keyPrefix:${run.runId}",
     )
     return items

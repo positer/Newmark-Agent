@@ -84,6 +84,8 @@ async function main(): Promise<void> {
       'every provider-visible tool schema is closed before provisioning');
     assert.ok(names.includes('screen_capture') && names.includes('computer_use') && names.includes('browser_use') && names.includes('image_generate'),
       'desktop catalog includes platform and model-dependent tools');
+    assert.ok(names.includes('web_catch') && !agentKernelRunnerInternals.BASIC_INITIAL_TOOL_NAMES.has('web_catch'),
+      'web_catch is catalogued as an advanced provision-only tool');
 
     const Session = agentKernelRunnerInternals.ToolProvisionSession;
     const basicNames = [...agentKernelRunnerInternals.BASIC_INITIAL_TOOL_NAMES].filter(name => names.includes(name));
@@ -191,6 +193,7 @@ async function main(): Promise<void> {
       'Windows Desktop Plan catalog retains its parameter-scoped read-only browser and desktop tools');
     assert.ok(!planNames.some(name => ['write', 'edit', 'browser_click', 'browser_type', 'browser_eval', 'browser_cdp'].includes(name)),
       'Plan broker catalog excludes mutating standalone tools');
+    assert.ok(!planNames.includes('web_catch'), 'Plan broker does not expose the local-writing web_catch tool');
     const planBrowser = planCatalog.find(definition => toolName(definition) === 'browser_use')!;
     const planComputer = planCatalog.find(definition => toolName(definition) === 'computer_use')!;
     assert.deepEqual((planBrowser.function.parameters as any).properties.action.enum, ['observe', 'navigate', 'wait', 'extract']);

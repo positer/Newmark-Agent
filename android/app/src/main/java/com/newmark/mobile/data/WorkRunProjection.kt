@@ -157,6 +157,23 @@ object WorkRunProjection {
         return output
     }
 
+    /**
+     * 以 Agent 的呈现顺序返回 image_display 公开图片。
+     *
+     * 按 PC sequence → 时间戳 → id 的稳定规则排序，保留每次展示调用；
+     * 调用方只负责把同一列表渲染到 Build 工具页与最终 Agent 回复两处。
+     */
+    fun displayedImages(events: List<LocalWorkEvent>): List<WorkDisplayImage> =
+        events.asSequence()
+            .filter { it.displayImage != null }
+            .sortedWith(
+                compareBy<LocalWorkEvent> { it.sequence }
+                    .thenBy { timestampSortKey(it) }
+                    .thenBy { it.id },
+            )
+            .mapNotNull { it.displayImage }
+            .toList()
+
     /** PC collapsed WorkRun keeps only intervening Guide user messages visible. */
     fun collapsedGuides(events: List<LocalWorkEvent>, runStatus: String): List<Item.Guide> =
         project(events, runStatus).filterIsInstance<Item.Guide>()

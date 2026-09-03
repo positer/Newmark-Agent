@@ -25,7 +25,9 @@ import {
   TransportResponse,
   assembleCompatibleToolArguments,
   readProviderStreamChunk,
+  setDefaultProviderDispatcher,
 } from '../providers';
+import { ProxyAgent } from 'undici';
 
 export interface IntelligenceConfig {
   temperature: number;
@@ -35,6 +37,12 @@ export interface IntelligenceConfig {
 export type IntelligenceTier = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 export type ProviderProtocol = 'openai' | 'anthropic' | 'github_models';
 export type OpenAITransportMode = 'chat_stream' | 'chat' | 'responses';
+
+export interface ProviderProxyOptions {
+  enabled?: boolean;
+  url?: string;
+  auth?: string;
+}
 
 type AnthropicMessage = {
   role: 'user' | 'assistant';
@@ -122,6 +130,8 @@ export class LLMProvider {
   static nodeHttpTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<NodeHttpResult>) | null = null;
   static powershellTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<NodeHttpResult>) | null = null;
   private readonly temperatureUnsupported = new Set<string>();
+  private proxyDispatcher: ProxyAgent | null | undefined;
+  private nodeProxyAgent: unknown | null | undefined;
 
   constructor(
     public name: string,
@@ -133,7 +143,86 @@ export class LLMProvider {
     public requestTimeoutMs = DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
     /** dev-0.4.3 模型原生思考强度档位映射（模型名 → { 模型原生档位: Newmark 档位 }）。 */
     public thinkingTierMaps?: Record<string, Record<string, string>>,
+    /** dev-0.5.14 Agent 模型传输也走用户配置的 HTTP/HTTPS 代理，与 web 工具一致。 */
+    public proxy: ProviderProxyOptions = {},
   ) {}
+
+  private effectiveProxyUrl(): string {
+    const configured = String(this.proxy?.url || '').trim();
+    if (this.proxy?.enabled === false) return '';
+    if (configured) return configured;
+    return process.env.HTTPS_PROXY || process.env.HTTP_PROXY
+      || process.env.https_proxy || process.env.http_proxy || '';
+  }
+
+  private proxyAuthValue(proxyUrl: string): string {
+    if (this.proxy?.enabled === true || this.proxy?.url) {
+      return String(this.proxy?.auth || '').trim();
+    }
+    try {
+      const parsed = new URL(proxyUrl);
+      if (!parsed.username && !parsed.password) return '';
+      return decodeURIComponent(parsed.username) + ':' + decodeURIComponent(parsed.password);
+    } catch {
+      return '';
+    }
+  }
+
+  private resolveProxyDispatcher(): ProxyAgent | null {
+    if (this.proxyDispatcher !== undefined) return this.proxyDispatcher;
+    const proxyUrl = this.effectiveProxyUrl();
+    if (!proxyUrl) {
+      this.proxyDispatcher = null;
+      return null;
+    }
+    try {
+      const auth = this.proxyAuthValue(proxyUrl);
+      this.proxyDispatcher = auth
+        ? new ProxyAgent({
+            uri: proxyUrl,
+            token: `Basic ${Buffer.from(auth, 'utf8').toString('base64')}`,
+          })
+        : new ProxyAgent(proxyUrl);
+    } catch {
+      this.proxyDispatcher = null;
+    }
+    setDefaultProviderDispatcher(this.proxyDispatcher);
+    return this.proxyDispatcher;
+  }
+
+  private resolveNodeProxyAgent(): unknown | null {
+    if (this.nodeProxyAgent !== undefined) return this.nodeProxyAgent;
+    const proxyUrl = this.effectiveProxyUrl();
+    if (!proxyUrl) {
+      this.nodeProxyAgent = null;
+      return null;
+    }
+    const auth = this.proxyAuthValue(proxyUrl);
+    try {
+      const { HttpsProxyAgent } = require('https-proxy-agent') as {
+        HttpsProxyAgent: new (url: string, options?: { headers?: Record<string, string> }) => unknown;
+      };
+      this.nodeProxyAgent = auth
+        ? new HttpsProxyAgent(proxyUrl, {
+            headers: { 'Proxy-Authorization': `Basic ${Buffer.from(auth, 'utf8').toString('base64')}` },
+          })
+        : new HttpsProxyAgent(proxyUrl);
+    } catch {
+      this.nodeProxyAgent = null;
+    }
+    return this.nodeProxyAgent;
+  }
+
+  private async providerFetch(input: string | URL | Request, init: RequestInit = {}): Promise<Response> {
+    const dispatcher = this.resolveProxyDispatcher();
+    const url = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : String(input.url || '');
+    if (!dispatcher || this.isPlainHttpLoopback(url)) return fetch(input, init);
+    return fetch(input, { ...init, dispatcher } as RequestInit & { dispatcher: ProxyAgent });
+  }
 
   private effectiveRequestTimeout(timeoutMs: number): number {
     const requested = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 0;
@@ -385,7 +474,7 @@ export class LLMProvider {
       ? setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout)
       : undefined;
     try {
-      const response = await fetch(url, {
+      const response = await this.providerFetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
@@ -421,7 +510,7 @@ export class LLMProvider {
       ? setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout)
       : undefined;
     try {
-      const response = await fetch(url, { method: 'GET', headers, signal: abort.signal });
+      const response = await this.providerFetch(url, { method: 'GET', headers, signal: abort.signal });
       return response;
     } catch (e) {
       if (abort.signal.aborted) throw abortFailure(abort.signal);
@@ -472,14 +561,17 @@ export class LLMProvider {
       if (body) {
         requestHeaders['Content-Length'] = Buffer.byteLength(body);
       }
-      const req = client.request({
+      const proxyAgent = this.isPlainHttpLoopback(urlValue) ? null : this.resolveNodeProxyAgent();
+      const requestOptions: http.RequestOptions = {
         protocol: parsed.protocol,
         hostname: parsed.hostname,
         port: parsed.port || undefined,
         path: `${parsed.pathname}${parsed.search}`,
         method,
         headers: requestHeaders,
-      }, (res) => {
+        ...(proxyAgent ? { agent: proxyAgent as http.Agent } : {}),
+      };
+      const req = client.request(requestOptions, (res) => {
         res.setEncoding('utf8');
         let responseBody = '';
         let settled = false;
@@ -1147,7 +1239,7 @@ export class LLMProvider {
           : undefined;
         try {
           try {
-            let response = await fetch(request.url, {
+            let response = await this.providerFetch(request.url, {
               method: 'POST',
               headers: request.headers,
               body: JSON.stringify(request.body),
@@ -1159,7 +1251,7 @@ export class LLMProvider {
                 this.temperatureUnsupported.add(this.temperatureCapabilityKey(request.url, request.body));
                 const retryBody = { ...request.body };
                 delete retryBody.temperature;
-                response = await fetch(request.url, {
+                response = await this.providerFetch(request.url, {
                   method: 'POST',
                   headers: request.headers,
                   body: JSON.stringify(retryBody),
@@ -1325,7 +1417,7 @@ export class LLMProvider {
     try {
       let response: Response;
       try {
-        response = await fetch(url, {
+        response = await this.providerFetch(url, {
           method: 'POST',
           headers: this.openAIHeaders(),
           body: JSON.stringify(body),
@@ -1513,7 +1605,7 @@ export class LLMProvider {
     const convertedTools = this.anthropicTools(tools);
     if (convertedTools.length) body.tools = convertedTools;
 
-    const response = await fetch(`${this.cleanBaseUrl()}/messages`, {
+    const response = await this.providerFetch(`${this.cleanBaseUrl()}/messages`, {
       method: 'POST',
       headers: this.anthropicHeaders(),
       body: JSON.stringify(body),
@@ -1682,7 +1774,7 @@ export class LLMProvider {
         family = 'openai_chat';
       }
 
-      const response = await fetch(url, {
+      const response = await this.providerFetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),

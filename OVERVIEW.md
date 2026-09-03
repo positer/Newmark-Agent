@@ -1,5 +1,17 @@
 # Newmark Agent Overview
 
+## dev-0.5.14 当前源码状态
+
+当前统一版本为 Desktop/root `0.5.14`、Android `versionName=0.5.14` / `versionCode=514`。本轮修改覆盖：`DESKTOP/src/main.ts` 的退出生命周期和桌面队列 IPC，`DESKTOP/scripts/patch-msi-project.cjs` 的安装目录进程/待删除保护，`DESKTOP/src/core/agent.ts` 与 `DESKTOP/src/ui/index.html` 的首标题、Guide 和 PC 队列时间线，`DESKTOP/src/tools/` 的 provision-only `web_catch`，以及 Android `LocalTool*`、`NewmarkApp.kt` 的本地工具与跨端投影；`ChatScreen.kt` 既有的中点阈值避让/落点实现由全量契约继续覆盖。`DESKTOP/src/llm/provider.ts`、`providers/provider-events.ts`、`tools/index.ts` 新增统一的 `undici.ProxyAgent` 模型/网页代理链路；Android `LocalAgentForegroundService.kt` 接受 `TRANSPORT_VPN`、不依赖 VALIDATED 回调快照，并使用 API 29+ 低延迟 Wi-Fi 锁。`archive/` 保存每轮诊断、验证和发行证据；历史 `dev-0.5.13` 交付物保持原样，不冒充 0.5.14 候选。
+
+`DESKTOP/src/ui/index.html` 的 `workRunDisplayImages`/`appendWorkDisplayImages`、`ChatItem.Bubble.displayedImages`/`WorkDisplayImagePreviews` 以及 TUI `appendChatMessage` 共同承担 `image_display` 的最终回复投影：Build 工具页证据保留，PC GUI、PC TUI 与移动端最终回复均按调用顺序在正文之前展示公开图片。
+
+主要数据流：首用户输入 → 独立标题探测/持久化 → `conversation_title` 元数据刷新 → 正式 Agent Build；PC/移动端 Next → ConversationKernel 稳定队列 id → `queue_update`/snapshot → 双端同序投影；Guide → WorkRun 权威 sequence → 双端原位渲染；`web_catch` → 模式策略 → PC `tool_provision` / Android Build-Goal 直接 schema 暴露 → 公网/容量/工作区边界 → 临时文件原子落盘；模型/网页请求 → `proxy` 配置或 `HTTPS_PROXY/HTTP_PROXY`（未显式禁用时环境变量回退，且 `providerProxyConfig()` 不再误传 `enabled=false`）→ `undici.ProxyAgent`（显式禁用配置优先，回环直连）；Android 网络可用性 → INTERNET + (VALIDATED 或 VPN) + 实际状态直接检查。
+
+当前验证基线：最终 `npm run test:full-release`、Desktop build、主验证 `1708/1708`、tool provisioning `80/80 + 80/80`、launcher `28/28`、带图队列/Guide 聚焦回归、PC/Mobile/TUI `image_display` 最终回复顺序画廊（24 张压力）以及 Android `71 suites / 270/270` JVM、lintVitalRelease 与 release assembly。生成的 release APK 位于 `android/app/build/outputs/apk/release/app-release.apk`，免安装输出目录另有 `Newmark-Agent-0.5.14-android.apk`。免安装 unpack 已构建并通过 packaged SSH/TUI、CLI、上下文压缩、console-wrapper、asar/图标和 ZIP 冒烟；0.5.14 MSI 已生成但未安装，仍未执行重启后的安装态 GUI/TUI 黑盒复验。
+
+`release-0.5.14-full-platform/` 六个发行资产：Windows MSI `9576F6D5902CBFEC1ADFAF0B322ACFDDB4F6BD1B3610DCCC2A2A748EC95C8969`，Windows ZIP `68541B0A44F2788CCC06C232721080DDAC7534A4197DB508229AEB7BB72EAEF1`，Linux AppImage `02818508563A229DDC57F2F64541D6538DB1B0C0688807BC75D34CE0BEBB685A`，Linux Deb `D478F4E3D4F8B036B0D438997E5229F3F737C34987D70FCBCBA69EDB58F6DA80`，Linux ZIP `B1035B594CF7B843355D7034FE811DEBA6DFED267A5DC993F71404E39DE055CC`，Android APK `B609B36B382E7753A98789A8B415C5478142975AAE6E5F6C160F65A630A628F9`。
+
 ## dev-0.5.13 双端累计交付与当前 r5 APK + Windows MSI
 
 全平台 `dev-0.5.13` 发行规范：Tag `dev-0.5.13`，Release 标题 `Newmark Agent dev-0.5.13`；`DESKTOP/scripts/release-tag-audit.cjs` 强制该格式，并保留远端历史 `dev-*` 正式 Tag。Windows、Linux、Android 六资产已通过本地 release-assets 校验，随后又通过 GitHub 远端下载哈希核对与 Windows/MSI、WSL AppImage/deb/ZIP 打包态 smoke，完整路径记录在 `DESKTOP/scripts/release-notes-dev-0.5.13.md`；发布归档见 `archive/20260902-182301-dev-0.5.13-full-platform-release.md`。

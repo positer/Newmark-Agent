@@ -286,6 +286,20 @@ object LocalTools {
             mapOf("url" to prop("string", "完整 http:// 或 https:// 网页地址")),
             listOf("url"),
         ),
+        function(
+            "web_catch",
+            "高级 Build/Goal 工具：把公开网页下载内容、网页本身或 CSS selector 指定组件的 src/href/poster 资源保存到移动端本地工作区的指定文件。远端只读；Plan/Chat 不暴露。",
+            mapOf(
+                "action" to enumProp(listOf("download", "save_page", "capture_component"), "download 保存响应字节；save_page 保存网页；capture_component 抓取一个组件资源或外层 HTML"),
+                "url" to prop("string", "公开 http:// 或 https:// 地址"),
+                "destination" to prop("string", "移动端本地工作区内的目标文件路径"),
+                "selector" to prop("string", "capture_component 必填的 CSS selector"),
+                "asset_attribute" to enumProp(listOf("src", "href", "poster"), "可选资源属性；省略时按 src、href、poster 探测，无资源属性则保存 outerHtml"),
+                "overwrite" to prop("boolean", "目标存在时是否覆盖，默认 false"),
+                "max_bytes" to prop("integer", "最大下载字节数，默认 50 MiB，上限 100 MiB"),
+            ),
+            listOf("action", "url", "destination"),
+        ),
         browserUse(LocalToolCatalog.buildBrowserActions),
         function(
             "task_read",

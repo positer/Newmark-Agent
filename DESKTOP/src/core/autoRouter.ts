@@ -198,19 +198,6 @@ function inScope(deployment: DeploymentRef, scope: AutoScope): boolean {
   return scope.kind === 'global' || deployment.providerId === scope.providerId;
 }
 
-function validationEligible(candidate: AutoRouteCandidate, now: number): string[] {
-  const reasons: string[] = [];
-  if (candidate.validation.level !== 'standard' && candidate.validation.level !== 'extended') {
-    reasons.push(`validation_level:${candidate.validation.level}`);
-  }
-  if (candidate.validation.status !== 'verified' && candidate.validation.status !== 'degraded') {
-    reasons.push(`validation_status:${candidate.validation.status}`);
-  }
-  const checkedAt = Date.parse(candidate.validation.checkedAt);
-  if (!Number.isFinite(checkedAt) || now - checkedAt > VALIDATION_TTL_MS) reasons.push('validation_expired');
-  return reasons;
-}
-
 export function normalizeAutoPreference(value: string): RouteMode {
   switch (String(value || '').toLowerCase()) {
     case 'performance':
@@ -350,7 +337,6 @@ export class AutoRouter {
       return decision;
     }
 
-    const requiredCapabilities = new Set([...policy.requiredCapabilities, ...request.requiredCapabilities].map(item => String(item).toLowerCase()));
     const eligible: AutoRouteCandidate[] = [];
     for (const candidate of candidates) {
       const reasons: string[] = [];
@@ -359,10 +345,8 @@ export class AutoRouter {
       if (!inSubset(candidate.deployment, selection.subset)) reasons.push('outside_subset');
       if (candidate.fallbackOnly) reasons.push('fallback_only');
       if (candidate.preview && !policy.allowPreview) reasons.push('preview_disallowed');
-      reasons.push(...validationEligible(candidate, now));
       if (request.estimatedInputTokens + request.expectedOutputTokens > Math.max(0, candidate.maxContextTokens || 0)) reasons.push('context_too_small');
-      const capabilities = new Set(candidate.capabilities.map(item => String(item).toLowerCase()));
-      for (const capability of requiredCapabilities) if (!capabilities.has(capability)) reasons.push(`missing_capability:${capability}`);
+
       if (policy.privacy !== 'default' && !candidate.privacy.includes(policy.privacy)) reasons.push(`privacy:${policy.privacy}`);
       if (policy.dataRegion) {
         const requiredRegion = policy.dataRegion.toLowerCase();
@@ -378,7 +362,7 @@ export class AutoRouter {
       if (policy.maxExpectedCostUsd !== undefined && (expectedCost === undefined || expectedCost > policy.maxExpectedCostUsd)) {
         reasons.push(expectedCost === undefined ? 'unknown_cost' : 'budget_exceeded');
       }
-      if (this.circuitState(candidate.deployment, now, false) === 'open') reasons.push('circuit_open');
+
       if (reasons.length) decision.excludedCandidates.push({ deployment: { ...candidate.deployment }, reasons: [...new Set(reasons)] });
       else eligible.push(candidate);
     }
@@ -473,9 +457,7 @@ export class AutoRouter {
       && inSubset(candidate.deployment, subset)
       && !sameDeployment(candidate.deployment, current)
       && !attemptedDeployments.some(attempted => sameDeployment(candidate.deployment, attempted))
-      && validationEligible(candidate, now).length === 0
-      && this.passedInitialHardFilters(decision, candidate)
-      && this.circuitState(candidate.deployment, now, false) !== 'open');
+      && this.passedInitialHardFilters(decision, candidate));
     const equivalent = currentGroup
       ? eligible.find(candidate => candidate.deployment.logicalModelGroupId === currentGroup && !candidate.fallbackOnly)
       : undefined;

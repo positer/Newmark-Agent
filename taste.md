@@ -1,5 +1,27 @@
 # Newmark Agent Project Taste
 
+- Development releases use tag/title `dev-X.Y.Z` / `Newmark Agent dev-X.Y.Z`, numeric package version X.Y.Z, synchronized Android versionCode, and the established six Windows/Linux/Android assets. Release notes contain complete English then complete Simplified Chinese, version-local changes, measured validation and asset hashes. Never substitute auto-generated notes for the reviewed bilingual body. Preserve the existing Android signing certificate across release updates.
+
+## 2026-09-07 Observations never disable model communication
+
+- Provider headers and editable endpoints are outside the vertical glass gesture rail. Keep the vertical rail below the horizontal protocol rail. Persist endpoint drafts only after explicit valid HTTP(S) save, preserving provider identity, credentials and model settings.
+- Serialize builds within each platform: never rewrite Desktop dist during ASAR packaging or launch concurrent Gradle packaging against one intermediate directory. Keep failed candidates separate from verified delivery artifacts.
+
+- Keep provider-qualified deployment identity through snapshot, request, idle selection and persistence. A legacy bare-name echo may reuse a known binding; an unbound ambiguous name must never guess another provider's credentials.
+- User `enabled` is independent of response health. Only explicit user switches hide configured models. Missing/failed/expired capability probes, balance warnings and health circuits never exclude later requests or strip image/tool inputs.
+- Record actual response outcomes per deployment and facet. A text-only success cannot heal failed vision; one successful image response heals vision immediately. Cancellation is not model failure. Atomic diagnostic receipts must contain no credentials, payloads or raw server errors and must never break communication.
+- Send attached images first. Only actual visual rejection triggers built-in OCR and conservative text correction; preserve the user task, uncertainty and recovered answer in conversation history. Retry images normally in subsequent turns. Current-request fallback avoids revisiting failed deployments without persisting a request-blocking blacklist.
+- Click toggles once; confirmed drag uses the released track endpoint; cancellation retains state. Keep the glass material visible through endpoint movement and landing. Visual stretch must not move the center anchor. PC switches share the existing optical renderer and Android tests measure after graphics transforms.
+- Reasoning tokens count against title completion budgets. Keep semantic titles short without a 64-token transport cap that repeatedly truncates a valid provider and prevents the first dialogue.
+- These rules supersede earlier Standard-only model visibility/capability gates and switch release rules that removed the lens before movement completed. Preserve user scope/privacy/budget policies and already-published release identities.
+
+
+## 2026-09-07 Conversation reorder continuity and portrait overflow
+
+- A keyed pointer-input node can outlive the list order captured by its callbacks. Refresh gesture callbacks with rememberUpdatedState without restarting an owned pointer. Memoized local function references must also read the current conversation snapshot; remove the dragged ID itself on commit instead of removing a cached index. Test a first-to-last move followed by a second hold that reverses above its new origin, for both local and remote rows.
+- Drawer material owns its clipping on a background sibling. Do not wrap conversation floats in a Material Surface that clips all children. Preserve the drawer width, window insets and outer navigation gesture owner.
+- Conversation lenses retain the full 28dp horizontal envelope. Their center displacement is half the previous value at every frame: 1dp times lift plus 7dp times horizontal expansion, reaching 8dp at full lift. The left anchor compensates half of the original rightward growth. Both terms return to zero at source and destination color blocks. This supersedes the earlier 2dp right-edge-anchor rule.
+
 ## 2026-09-07 dev-0.5.15 release identity
 
 - Bind release assets to the verified source commit and version, retaining separate byte hashes for locally built and CI artifacts. Fresh CI Android runners generate a different default debug keystore unless an existing signing identity is restored; never replace an upgrade-compatible local APK with a CI APK merely because its version matches.

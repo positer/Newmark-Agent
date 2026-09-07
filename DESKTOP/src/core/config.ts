@@ -1,3 +1,4 @@
+import { readModelResponseHealth, ModelResponseHealth } from './modelResponseHealth';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
@@ -42,6 +43,7 @@ export interface ProviderConfig {
 }
 
 export interface ModelConfig {
+  response_health?: ModelResponseHealth;
   name: string;
   display: string;
   description: string;
@@ -231,7 +233,12 @@ export class ConfigManager {
   }
 
   providers(): ProviderConfig[] {
-    return this.normalizeProviders((this.getGlobal<ProviderConfig[]>('models', 'providers')) || []);
+    return this.normalizeProviders((this.getGlobal<ProviderConfig[]>('models', 'providers')) || []).map(provider => ({
+      ...provider,
+      models: provider.models.map(model => ({ ...model, response_health: readModelResponseHealth(this.rootPath, {
+        providerId: provider.id, modelId: model.name, endpoint: provider.base_url, protocol: provider.protocol, credential: provider.api_key,
+      }) })),
+    }));
   }
 
   allModels(): Array<ModelConfig & { provider: string; provider_id: string; provider_url: string; api_key: string; provider_protocol: ProviderProtocol }> {

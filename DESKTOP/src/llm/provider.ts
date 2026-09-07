@@ -1128,7 +1128,7 @@ export class LLMProvider {
           yield* this.adapterResponsesBridge(model, messages, systemPrompt, temperature, maxTokens, tools, signal, downgradeTier);
           return;
         }
-        yield { type: 'text', text: event.error };
+        yield { type: 'text', text: event.error, providerError: true };
         return;
       }
     }
@@ -1193,7 +1193,7 @@ export class LLMProvider {
         continue;
       }
       if (event.type === 'response.failed') {
-        yield { type: 'text', text: event.error };
+        yield { type: 'text', text: event.error, providerError: true };
         return;
       }
     }
@@ -1435,7 +1435,7 @@ export class LLMProvider {
       } else if (event.type === 'usage.updated') {
         yield { type: 'usage', text: '', usage: this.toStreamUsage(event.usage) };
       } else if (event.type === 'response.failed') {
-        yield { type: 'text', text: event.error };
+        yield { type: 'text', text: event.error, providerError: true };
         return;
       }
     }
@@ -1489,7 +1489,7 @@ export class LLMProvider {
     }
     if (failure) { yield { type: 'text', text: failure }; return; }
     if (completeCalls.some(block => !block.id || !block.name || !block.input || typeof block.input !== 'object' || Array.isArray(block.input))) {
-      yield { type: 'text', text: '[LLM Error] Provider returned incomplete or invalid tool-call arguments.' };
+      yield { type: 'text', text: '[LLM Error] Provider returned incomplete or invalid tool-call arguments.', providerError: true };
       return;
     }
     for (const block of completeCalls) {

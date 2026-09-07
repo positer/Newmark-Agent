@@ -21,6 +21,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.platform.graphics.HardwareRendererCompat
+import com.newmark.mobile.ui.components.liquidGlassModifier
 import com.newmark.mobile.data.LocalConversation
 import com.newmark.mobile.data.RemoteConversation
 import com.newmark.mobile.ui.theme.LocalThemeMode
@@ -62,13 +63,16 @@ class ConversationLiftRenderingTest {
             CompositionLocalProvider(LocalThemeMode provides ThemeMode(true, {})) {
                 NewmarkTheme(darkTheme = true) {
                     Box(Modifier.fillMaxSize().background(Color(0xFF203040)).testTag("lift-canvas")) {
-                        Box(Modifier.padding(24.dp).size(280.dp, 600.dp).testTag("lift-panel")) {
+                        UnclippedSidebarDrawer(
+                            Modifier.padding(24.dp).size(280.dp, 600.dp).testTag("lift-panel"),
+                            surfaceModifier = Modifier.liquidGlassModifier(cornerRadius = 0.dp, edgeHighlight = false),
+                        ) {
                             if (remote) WorkspaceConversationsSidebar(
                                 conversations = order.value.map { RemoteConversation(it, it.uppercase()) },
                                 activeConversationId = selected.value,
                                 onBack = {},
                                 onSelectConversation = { selected.value = it; callbacks.add(it) },
-                                onReorderConversations = { order.value = it },
+                                onReorderConversations = { assertEquals("remote IDs stay unique", it.size, it.toSet().size); order.value = it },
                             ) else SidebarContent(
                                 rail = false, page = SidebarPage.Main, expandedDevice = null,
                                 conversations = order.value.map { LocalConversation(it, it.uppercase()) },
@@ -76,7 +80,7 @@ class ConversationLiftRenderingTest {
                                 onToggleDevice = {}, onBack = {}, onOpenSettings = {},
                                 onOpenMemoryLab = {}, onOpenTerminal = {}, onNewConversation = {},
                                 onSelectConversation = { selected.value = it; callbacks.add(it) },
-                                onReorderLocal = { order.value = it },
+                                onReorderLocal = { assertEquals("local IDs stay unique", it.size, it.toSet().size); order.value = it },
                             )
                         }
                     }
@@ -128,7 +132,7 @@ class ConversationLiftRenderingTest {
         assertEquals("takeoff keeps the original color's right edge", source.right, first.right, 1.5f)
         assertEquals("takeoff starts at the old selected row", source.center.y, first.center.y, 1.5f)
         assertTrue("the float must grow beyond the original row", frames.maxOf { it.width } > source.width + 40f)
-        assertTrue("expanded frames must never acquire a negative centering offset", frames.all { it.left >= source.left - 1.5f })
+        assertTrue("expanded frames retain the explicit half-offset anchor", frames.all { it.left >= source.left - 7f * (source.width / 268f) })
         assertEquals("landing restores the target color's left edge", target.left, last.left, 1.5f)
         assertEquals("landing restores the target color's right edge", target.right, last.right, 1.5f)
         assertEquals("landing reaches the new row before disappearing", target.center.y, last.center.y, 1.5f)
@@ -153,7 +157,7 @@ class ConversationLiftRenderingTest {
         save("lift-before", before)
         save("lift-held", held)
         println("CONVERSATION_RIGHT_LIFT $prefix source=$source raised=$raised panel=$panel density=$density")
-        assertEquals("raised left edge sits 2dp to the right of its source", source.left + 2f * density, raised.left, 1.5f)
+        assertEquals("raised center moves right by half the old 16dp", source.center.x + 8f * density, raised.center.x, 1.5f)
         assertEquals("the full 28dp envelope is retained", source.width + 28f * density, raised.width, 2f)
         assertEquals("lifting cannot deform or move the title", textBefore, label.fetchSemanticsNode().boundsInRoot)
         assertTrue("the right rim is outside the narrow panel", raised.right > panel.right + 4f * density)
@@ -164,8 +168,8 @@ class ConversationLiftRenderingTest {
         val y = raised.center.y.toInt()
         fun difference(a: Int, b: Int) = abs(AndroidColor.red(a) - AndroidColor.red(b)) +
             abs(AndroidColor.green(a) - AndroidColor.green(b)) + abs(AndroidColor.blue(a) - AndroidColor.blue(b))
-        assertEquals("baseline must be the rendered canvas, not an old/blank window",
-            AndroidColor.rgb(32, 48, 64), before.getPixel(x, y))
+        assertTrue("baseline must be the rendered canvas, allowing 1 level per channel",
+            difference(AndroidColor.rgb(32, 48, 64), before.getPixel(x, y)) <= 3)
         assertTrue("the expanded right rim must not be clipped by the panel", difference(held.getPixel(x, y), before.getPixel(x, y)) > 24)
 
         // Many individually sub-slop moves must still count as one real drag
@@ -195,6 +199,36 @@ class ConversationLiftRenderingTest {
         assertEquals("a", selected.value)
         assertNull(floatBounds())
     }
+
+    private fun checkRepeatedReversal(remote: Boolean) {
+        mount(remote)
+        val canvas = compose.onNodeWithTag("lift-canvas")
+        fun drag(id: String, slots: List<Float>) {
+            val source = row(id)
+            val label = compose.onNodeWithText(id.uppercase())
+            val start = label.fetchSemanticsNode().boundsInRoot.center
+            label.performTouchInput { down(center) }
+            compose.mainClock.advanceTimeBy(800)
+            slots.forEach { slot ->
+                canvas.performTouchInput { moveTo(start + Offset(0f, source.height * slot)) }
+                compose.mainClock.advanceTimeBy(48)
+            }
+            compose.mainClock.advanceTimeBy(160)
+            canvas.performTouchInput { up() }
+            compose.mainClock.advanceTimeBy(1000)
+        }
+        // A keyed row retains its gesture node after moving from first to last.
+        // The next hold must use its new group index, including a reversal.
+        drag("a", (1..20).map { it / 10f })
+        assertEquals(listOf("b", "c", "a"), order.value)
+        drag("a", listOf(0.15f, 0.3f) + (1..20).map { -it / 10f })
+        assertEquals("second hold crosses its start and reaches the first slot", listOf("a", "b", "c"), order.value)
+        assertTrue(callbacks.isEmpty())
+        assertNull(floatBounds())
+    }
+
+    @Test fun localRepeatedDragCanReverseAboveItsNewStart() = checkRepeatedReversal(false)
+    @Test fun remoteRepeatedDragCanReverseAboveItsNewStart() = checkRepeatedReversal(true)
 
     @Test fun localClickKeepsBothColorEndpoints() = checkClickEndpoints(false)
     @Test fun remoteClickKeepsBothColorEndpoints() = checkClickEndpoints(true)

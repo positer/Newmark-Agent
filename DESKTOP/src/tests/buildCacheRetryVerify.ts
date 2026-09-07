@@ -115,7 +115,7 @@ async function changedDeployment(root: string): Promise<void> {
   check(calls.length === 3 && calls[0].model === calls[1].model && !!replacement && output.includes('CAPABILITY_FALLBACK_RECOVERED'), 'capability change: one safe same-model retry precedes the real fixed-model fallback');
   check(!!replacement && replacement.system !== first.system, 'capability change: replacement model gets refreshed system disclosure');
   const broker = (call: Request) => String(call.tools.find(tool => tool.function?.name === 'tool_provision')?.function?.description || '');
-  check(broker(first).includes('image_generate:') && !!replacement && !broker(replacement).includes('image_generate:') && !broker(replacement).includes('image_inspect:'), 'capability change: unavailable image schemas are revoked from the compact catalog');
+  check(broker(first).includes('image_generate:') && !!replacement && !broker(replacement).includes('image_generate:') && broker(replacement).includes('image_inspect:'), 'capability change: image inspection remains available despite vision observations');
   check(!!replacement && !JSON.stringify(replacement.messages).includes('CAPABILITY_PRIMARY_UNAVAILABLE'), 'capability change: failed assistant is removed before fallback');
   check(agent.model === 'fallback-text', 'capability change: actual Agent deployment selection follows fallback');
 }

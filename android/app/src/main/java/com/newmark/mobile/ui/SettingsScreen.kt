@@ -1231,18 +1231,42 @@ private fun ProviderDetailPage(
     onBack: () -> Unit,
     onCreateModel: () -> Unit,
 ) {
-    val p = LocalNewmarkColors.current
     val provider = vm.providers.find { it.id == providerId }
-    var railSelected by remember { mutableIntStateOf(0) }
-    val railCoordinator = rememberProviderRailMotionCoordinator()
-
     if (provider == null) {
         LaunchedEffect(Unit) { onBack() }
         return
     }
+    ProviderDetailPanel(
+        provider = provider,
+        onSaveEndpoint = { endpoint ->
+            vm.providers.find { it.id == providerId }?.let { vm.updateProvider(it.copy(baseUrl = endpoint)) }
+        },
+        onProtocolChange = { vm.updateProviderProtocol(providerId, it) },
+        onCreateModel = onCreateModel,
+        onDeleteProvider = { vm.removeProvider(providerId); onBack() },
+        onToggleModel = { vm.toggleModel(providerId, it) },
+        onDeleteModel = { vm.removeModel(providerId, it) },
+    )
+}
+
+@Composable
+internal fun ProviderDetailPanel(
+    provider: ProviderConfig,
+    onSaveEndpoint: (String) -> Unit,
+    onProtocolChange: (String) -> Unit,
+    onCreateModel: () -> Unit,
+    onDeleteProvider: () -> Unit,
+    onToggleModel: (String) -> Unit,
+    onDeleteModel: (String) -> Unit,
+) {
+    val p = LocalNewmarkColors.current
+    var railSelected by remember(provider.id) { mutableIntStateOf(0) }
+    val railCoordinator = rememberProviderRailMotionCoordinator()
+    var endpoint by remember(provider.id, provider.baseUrl) { mutableStateOf(provider.baseUrl) }
+    var endpointError by remember(provider.id) { mutableStateOf("") }
 
     val emptyOffset = if (provider.models.isEmpty()) 1 else 0
-    val modelStart = 4 + emptyOffset
+    val modelStart = 1 + emptyOffset
     val deleteIndex = modelStart + provider.models.size
     val railCount = deleteIndex + 1
 
@@ -1252,38 +1276,52 @@ private fun ProviderDetailPage(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
+            ProviderCapsuleRow("供应商", detail = provider.label)
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ProviderCapsuleField("API 接口", endpoint, { endpoint = it; endpointError = "" }, "https://api.example.com/v1")
+                TextButton(
+                    enabled = endpoint.trim() != provider.baseUrl,
+                    onClick = {
+                        val value = endpoint.trim()
+                        val uri = runCatching { java.net.URI(value) }.getOrNull()
+                        if (uri == null || uri.scheme !in listOf("http", "https") || uri.host.isNullOrBlank()) {
+                            endpointError = "请输入有效的 HTTP 或 HTTPS API 接口"
+                        } else runCatching { onSaveEndpoint(value) }
+                            .onFailure { endpointError = it.message ?: "API 接口保存失败" }
+                    },
+                ) { Text("保存 API 接口") }
+                if (endpointError.isNotBlank()) Text(endpointError, color = p.red, fontSize = 12.sp)
+            }
+        }
+        item {
+            ProviderProtocolRail(
+                options = listOf("openai" to "OpenAI Chat", "openai_responses" to "Responses", "anthropic" to "Anthropic", "github_models" to "GitHub"),
+                value = normalizeMobileProviderProtocol(provider.protocol),
+                coordinator = railCoordinator,
+                onValueChange = onProtocolChange,
+            )
+        }
+        item {
             ProviderVerticalCapsuleRail(
+                modifier = Modifier.padding(top = 12.dp),
                 itemCount = railCount,
                 selectedIndex = railSelected.coerceIn(0, railCount - 1),
                 coordinator = railCoordinator,
-                horizontalBarrierIndices = setOf(2),
                 onSelected = {
                     railSelected = it
                     when (it) {
-                        3 -> onCreateModel()
+                        0 -> onCreateModel()
                         deleteIndex -> {
-                            vm.removeProvider(provider.id)
-                            onBack()
+                            onDeleteProvider()
                         }
                     }
                 },
             ) {
                 when {
-                    it == 0 -> ProviderCapsuleRow("供应商", detail = provider.label, active = railSelected == it)
-                    it == 1 -> ProviderCapsuleRow("API 接口", detail = provider.baseUrl.ifBlank { "未配置接口" }, active = railSelected == it)
-                    it == 2 -> ProviderProtocolRail(
-                        options = listOf(
-                            "openai" to "OpenAI Chat",
-                            "openai_responses" to "Responses",
-                            "anthropic" to "Anthropic",
-                            "github_models" to "GitHub",
-                        ),
-                        value = normalizeMobileProviderProtocol(provider.protocol),
-                        coordinator = railCoordinator,
-                        onValueChange = { protocol -> vm.updateProviderProtocol(provider.id, protocol) },
-                    )
-                    it == 3 -> ProviderCapsuleRow("＋ 新建模型", active = true)
-                    emptyOffset == 1 && it == 4 -> ProviderCapsuleRow("暂无模型", detail = "请新建供应商内模型", active = railSelected == it)
+                    it == 0 -> ProviderCapsuleRow("＋ 新建模型", active = true)
+                    emptyOffset == 1 && it == 1 -> ProviderCapsuleRow("暂无模型", detail = "请新建供应商内模型", active = railSelected == it)
                     it in modelStart until deleteIndex -> {
                         val model = provider.models[it - modelStart]
                         val caps = buildList {
@@ -1299,7 +1337,7 @@ private fun ProviderDetailPage(
                         ) {
                             LiquidGlassSwitch(
                                 checked = model.enabled,
-                                onCheckedChange = { vm.toggleModel(provider.id, model.name) },
+                                onCheckedChange = { onToggleModel(model.name) },
                                 modifier = Modifier.scale(0.8f),
                             )
                             Spacer(Modifier.width(6.dp))
@@ -1307,7 +1345,7 @@ private fun ProviderDetailPage(
                                 imageVector = Icons.Filled.Delete,
                                 contentDescription = "删除模型",
                                 tint = p.red,
-                                modifier = Modifier.size(28.dp).clickable { vm.removeModel(provider.id, model.name) }.padding(6.dp),
+                                modifier = Modifier.size(28.dp).clickable { onDeleteModel(model.name) }.padding(6.dp),
                             )
                         }
                     }

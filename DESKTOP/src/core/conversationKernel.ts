@@ -544,7 +544,7 @@ export class ConversationKernel {
   } {
     const normalized = this.normalizeTarget(target);
     const runtime = this.findRuntime(normalized) || this.runtime(normalized, {
-      mode: this.host.mode, model: this.host.model, intelligence: this.host.intelligence,
+      mode: this.host.mode, model: this.host.modelSelectionValue(), intelligence: this.host.intelligence,
       inputMode: this.host.inputMode, engine: this.host.engine,
     });
     runtime.runId ||= randomUUID();
@@ -644,7 +644,7 @@ export class ConversationKernel {
     let runtime = this.findRuntime(normalized);
     const runner = runtime?.runner || this.createRunner(normalized);
     if (!runtime && runner.conversationContinuations().length) {
-      runtime = this.runtime(normalized, { mode: runner.mode, model: runner.model, intelligence: runner.intelligence, inputMode: runner.inputMode, engine: runner.engine }, runner);
+      runtime = this.runtime(normalized, { mode: runner.mode, model: runner.modelSelectionValue(), intelligence: runner.intelligence, inputMode: runner.inputMode, engine: runner.engine }, runner);
       // Recovered user input remains visible and manageable until its owner
       // explicitly restores the persisted queue policy or resumes the queue.
       runtime.queuePaused = true;
@@ -661,7 +661,7 @@ export class ConversationKernel {
       workEvents: this.events(normalized),
       runtime: this.runtimeState(normalized),
       mode: runner.mode,
-      model: runner.model,
+      model: runner.modelSelectionValue(),
       intelligence: runner.intelligence,
       status: runner.status,
       goal: conversationSnapshot.goal,
@@ -961,7 +961,8 @@ export class ConversationKernel {
     const runner = runtime?.runner || this.createRunner(normalized);
     if (!runtime || !runtime.activePromise) {
       // No Build block is running: the selection applies immediately.
-      runner.setModel(model);
+      runner.setModel(model, true);
+      if (runtime) runtime.options.model = runner.modelSelectionValue();
     } else {
       // A Build block is running. The in-flight block keeps its current model
       // until the next Guide/Next re-enters it; record the newly selected model
@@ -970,7 +971,7 @@ export class ConversationKernel {
       runtime.options.model = model;
     }
     runner.saveWorkspaceConversationState(true);
-    return runner.model;
+    return runner.modelSelectionValue();
   }
 
   async toggleGoalPause(target: ConversationTargetInput): Promise<boolean> {
@@ -980,7 +981,7 @@ export class ConversationKernel {
       const runner = this.createRunner(normalized);
       runtime = this.runtime(normalized, {
         mode: runner.mode,
-        model: runner.model,
+        model: runner.modelSelectionValue(),
         intelligence: runner.intelligence,
         inputMode: runner.inputMode,
         engine: runner.engine,
@@ -1743,7 +1744,12 @@ export class ConversationKernel {
     // Host-global state can belong to a different foreground conversation.
     const restoredMode = agent.getConversationSnapshot(agent.activeConversationId).mode;
     agent.setMode(restoredMode || options.mode);
-    agent.setModel(options.model);
+    // Older clients may echo a bare display name from a snapshot. Preserve
+    // an already restored exact deployment in that case; never guess between
+    // providers for an unbound or different ambiguous model name.
+    if (options.model !== agent.model || !agent.activeDeployment()) {
+      agent.setModel(options.model);
+    }
     agent.setIntelligence(options.intelligence);
     agent.inputMode = options.inputMode;
     agent.engine = options.engine;
@@ -1770,7 +1776,7 @@ export class ConversationKernel {
         newContent: d.newContent,
       })),
       mode: runtime.runner.mode,
-      model: runtime.runner.model,
+      model: runtime.runner.modelSelectionValue(),
       status: runtime.runner.status,
       goal: runtime.runner.goal ? { objective: runtime.runner.goal.objective, paused: runtime.runner.goal.paused } : null,
       options: runtime.runner.pendingOptions,

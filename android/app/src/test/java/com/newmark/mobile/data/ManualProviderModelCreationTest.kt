@@ -89,7 +89,7 @@ class ManualProviderModelCreationTest {
         assertTrue(detailPage.contains("＋ 新建模型"))
         assertTrue(detailPage.contains("ProviderProtocolRail("))
         assertTrue(detailPage.contains("openai_responses"))
-        assertTrue(detailPage.contains("vm.updateProviderProtocol(provider.id, protocol)"))
+        assertTrue(detailPage.contains("vm.updateProviderProtocol(providerId, it)"))
         assertTrue(settings.contains("vm.upsertProvider(provider)"))
         assertTrue(settings.contains("vm.upsertModel(target.providerId, model)"))
         assertTrue(vm.contains("fun upsertModel(providerId: String, model: ModelConfig)"))

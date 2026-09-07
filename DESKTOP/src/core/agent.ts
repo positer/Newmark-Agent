@@ -1,3 +1,4 @@
+import { observeModelResponses, recordModelResponseHealth } from './modelResponseHealth';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -1293,13 +1294,12 @@ export class Agent {
   }
 
   private defaultModelCandidate(): ReturnType<ConfigManager['allModels']>[number] | undefined {
-    const rejected = new Set(['unavailable', 'auth_error', 'invalid_config']);
     return this.config.allModels()
       .map((model, index) => {
         const validationStatus = effectiveModelValidationStatus(model);
         const evaluationStatus = validationStatus === 'degraded' ? 'degraded' : String(model.evaluation?.status || '').toLowerCase();
         const level = String(model.validation?.level || '').toLowerCase();
-        if (model.enabled === false || rejected.has(validationStatus) || rejected.has(evaluationStatus) || evaluationStatus.startsWith('error')) {
+        if (model.enabled === false) {
           return null;
         }
         let score = 0;
@@ -1784,8 +1784,8 @@ export class Agent {
     const reference = parsed.image as DisplayImageAttachment | undefined;
     const hydrated = this.hydrateDisplayImage(reference);
     const model = this.activeModelConfig();
-    const provider = model?.vision ? this.engineModel() : null;
-    if (!provider || !model?.vision || !hydrated?.dataUrl || !hydrated.sha256) return raw;
+    const provider = this.engineModel();
+    if (!provider || !hydrated?.dataUrl || !hydrated.sha256) return raw;
     throwIfAgentAborted(signal);
     const deployment = this.activeDeployment();
     const cacheKey = `${deployment?.providerId || ''}:${this.activeModelName()}:${hydrated.sha256}`;
@@ -4202,7 +4202,9 @@ export class Agent {
       // The title request uses the same transport policy and cancellation owner
       // as the formal response. A healthy slow model must not be turned into
       // five failed requests by an unrelated 15-second title deadline.
-      const generated = await this.chatWithConversationUsage(provider, modelName, [{ role: 'user', content: prompt }], system, temperature, 64, signal, reasoningEffort);
+      // Reasoning tokens share the completion budget. A 64-token cap can
+      // truncate even a short title and block every first conversation request.
+      const generated = await this.chatWithConversationUsage(provider, modelName, [{ role: 'user', content: prompt }], system, temperature, 2048, signal, reasoningEffort);
       if (signal?.aborted) return '';
       const title = this.normalizeConversationRenameTitle(generated);
       const source = String(firstUserInput || '').replace(/\s+/g, ' ').trim();
@@ -7410,7 +7412,7 @@ export class Agent {
         preference: Number.isFinite(Number(routeMetadata.route_preference)) ? Number(routeMetadata.route_preference) : undefined,
         fallbackOnly: !!model.fallback_only,
       };
-    }).filter(candidate => !this.isBalanceBlockedDeployment(candidate.deployment));
+    });
   }
 
   private persistRouteDecision(decision: RouteDecision): void {
@@ -7458,15 +7460,11 @@ export class Agent {
   }
 
   allModelNames(): string[] {
-    const names = this.config.allModels().filter(m => {
-      const status = String(m.evaluation?.status || 'unvalidated');
-      const validationStatus = m.validation?.status;
-      return status === 'available' || status === 'unvalidated' || validationStatus === 'verified' || validationStatus === 'degraded';
-    }).map(m => {
+    const names = this.config.allModels().filter(m => m.enabled !== false).map(m => {
       const label = m.display || m.name;
       return `${m.provider} / ${label}`;
     });
-    return this.config.autoSwitchEnabled() && this.config.allModels().length > 0 ? ['auto', ...names] : names;
+    return this.config.autoSwitchEnabled() && names.length > 0 ? ['auto', ...names] : names;
   }
 
   async evaluateAndSwitch(task: string, override: AgentPromptMessage['routePolicy'] = undefined): Promise<boolean> {
@@ -7549,36 +7547,24 @@ export class Agent {
   }
 
   shouldExposeToolInterface(): boolean {
-    // Fixed selections and pre-Standard legacy configurations keep the
-    // historical behavior. Auto can safely suppress schemas because its
-    // eligible deployments have explicit Standard/Extended evidence.
-    if (this.model !== 'auto') return true;
-    const model = this.activeModelConfig();
-    if (!model) return false;
-    const validation = model.validation;
-    if (validation?.level !== 'standard' && validation?.level !== 'extended') return true;
-    return validation.capabilities?.tool_use === true || validation.capabilities?.tools === true;
+    return true;
   }
 
   modelIsUnavailable(modelName: string): boolean {
     const model = modelName === this.model || modelName === 'auto'
-      ? this.activeModelConfig()
-      : this.config.findModel(modelName);
-    if (!model) return true;
-    const validationStatus = effectiveModelValidationStatus(model);
-    // `discovered` means unvalidated, not a failed endpoint. Explicit fixed
-    // selections remain usable for backwards compatibility; only an executed
-    // Basic/Standard/Extended validation may pre-emptively mark them bad.
-    if (model.validation?.level !== 'discovered'
-      && (validationStatus === 'unavailable' || validationStatus === 'auth_error' || validationStatus === 'invalid_config')) return true;
-    const status = validationStatus === 'degraded' ? 'degraded' : String(model?.evaluation?.status || '').toLowerCase();
-    return status === 'unavailable' || status.startsWith('error');
+      ? this.activeModelConfig() : (parseDeploymentSelectionValue(modelName) ? this.config.findDeployment(parseDeploymentSelectionValue(modelName)!) : this.config.findModel(modelName));
+    // Only configuration/user switches can prevent a request. Response and
+    // validation observations are labels, never permission to disable a model.
+    return !model || model.enabled === false;
   }
+
+  private failedDeploymentsThisRun = new Set<string>();
 
   switchToFallbackModel(errorText = 'transport failure'): string | null {
     const fallbackEnabled = this.config.getBool('models', 'fallback_on_unavailable');
     const observedFailure = classifyRouteFailure(errorText);
     const observedDeployment = this.activeDeployment();
+    if (observedDeployment) this.failedDeploymentsThisRun.add(deploymentIdentity(observedDeployment));
     // Keep balance exhaustion scoped to the deployment that actually failed.
     // Provider adapters normally record this before returning an error, but
     // fallback callers are also a public recovery boundary and must not rely
@@ -7644,7 +7630,7 @@ export class Agent {
     const all = this.scopedSwitchModels(current).filter(m => !currentDeployment
       || deploymentIdentity(this.deploymentRef(m)) !== deploymentIdentity(currentDeployment));
     if (!all.length) return null;
-    const usable = all.filter(m => !this.isBalanceBlockedDeployment(this.deploymentRef(m)) && !modelConfigIsUnavailable(m));
+    const usable = all.filter(m => !modelConfigIsUnavailable(m) && !this.failedDeploymentsThisRun.has(deploymentIdentity(this.deploymentRef(m))));
     if (!usable.length) return null;
     const pref = this.config.autoSwitchPreference();
     const ranked = [...usable].sort((a, b) => this.modelScore(b, pref, false, false) - this.modelScore(a, pref, false, false));
@@ -7867,19 +7853,13 @@ export class Agent {
   /**
    * Final visual safety net: OCR each submitted image and ask a text-only
    * request to conservatively repair the OCR. This is intentionally callable
-   * only after a visual-input refusal and after same-provider vision routing
-   * has been exhausted; the original image is never sent again.
+   * only after a real visual-input refusal. Cached capabilities never bypass
+   * the initial image request, and OCR does not disable later image attempts.
    */
   async finalVisualFallback(errorText: string, signal?: AbortSignal): Promise<string | null> {
     if (!/(?:vision|image|multimodal|image_url|input_image).*(?:not supported|unsupported|拒绝|不支持|failed|failure|invalid)|(?:not supported|unsupported|拒绝|不支持).*(?:vision|image|multimodal|image_url|input_image)/i.test(String(errorText || ''))) return null;
     const current = this.activeModelConfig();
     if (!current) return null;
-    const alternateVision = this.config.allModels().some(model =>
-      model.enabled !== false && model.provider_id === current.provider_id &&
-      model.name !== current.name && !!model.vision && !!model.api_key && !!model.provider_url &&
-      !['unavailable', 'auth_error', 'invalid_config'].includes(String(model.evaluation?.status || model.validation?.status || '').toLowerCase()),
-    );
-    if (alternateVision) return null;
     const latest = [...this.history].reverse().find(item => item?.role === 'user');
     const parts = latest?.content && Array.isArray(latest.content) ? latest.content as Array<Record<string, unknown>> : [];
     const images = parts.map(part => {
@@ -7892,22 +7872,23 @@ export class Agent {
       try {
         const result = await this.tools.finalVisualFallbackOcr(image, signal);
         if (result.ok && result.text.trim()) ocr.push({ index: index + 1, text: result.text.slice(0, 50_000), confidence: result.confidence });
-      } catch {}
+      } catch (error) { if (signal?.aborted) throw error; }
     }
+    if (signal?.aborted) throw signal.reason || new Error('Aborted');
     if (!ocr.length) return JSON.stringify({ ok: false, fallback: 'mini_ocr_llm', error: 'Local OCR returned no readable text; no visual content was fabricated.' });
-    const task = typeof latest?.content === 'string' ? latest.content : '';
+    const task = typeof latest?.content === 'string' ? latest.content : parts.filter(part => part.type === 'text').map(part => String(part.text || '')).join('\n');
     const evidence = ocr.map(item => `Image ${item.index} (OCR confidence ${item.confidence.toFixed(1)}):\n${item.text}`).join('\n\n');
     const prompt = `The provider rejected image input. Answer the user's task using only this approximate OCR evidence. Correct obvious character, spacing, and line-break errors only when supported by context. Preserve [uncertain] markers for ambiguity and never invent missing visual content.\nUser task:\n${task.slice(0, 12_000)}\nOCR evidence:\n${evidence}`;
     let corrected = '';
     try {
       const provider = this.engineModel();
       if (provider) corrected = String(await this.chatWithConversationUsage(provider, this.activeModelName(), [{ role: 'user', content: prompt }], 'You are a text-only OCR correction assistant. Be conservative and explicit about uncertainty.', 0.05, 3000, signal) || '').trim();
-    } catch {}
+    } catch (error) { if (signal?.aborted) throw error; }
     return JSON.stringify({
       ok: !!(corrected || ocr.length),
       fallback: 'mini_ocr_llm',
       approximate: true,
-      warning: '视觉输入被拒绝；以下内容来自本地 OCR，并经文本模型保守校正，可能不完整。',
+      warning: corrected ? '视觉输入被拒绝；以下内容来自本地 OCR，并经文本模型保守校正，可能不完整。' : '视觉输入被拒绝，文本校正请求也未成功；以下为未经校正的本地 OCR 结果，可能不完整。',
       raw_ocr: ocr,
       corrected: corrected || ocr.map(item => item.text).join('\n\n'),
       uncertainty: corrected ? 'preserved' : 'raw_ocr_only',
@@ -7936,7 +7917,12 @@ export class Agent {
     const adapters = this.config.contextFlag('provider_adapters_v2');
     const thinkingMaps = this.modelThinkingTierMaps(m);
     const proxy = this.providerProxyConfig();
-    const create = () => new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, apiMode, adapters, undefined, thinkingMaps, proxy);
+    const create = () => observeModelResponses(
+      new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, apiMode, adapters, undefined, thinkingMaps, proxy),
+      updates => recordModelResponseHealth(this.config.rootPath, {
+        providerId: m.provider_id, modelId: m.name, endpoint: m.provider_url, protocol: m.provider_protocol, credential: m.api_key,
+      }, updates),
+    );
     if (!cache) return create();
 
     // Match the provider's configured-proxy/environment precedence. A changed
@@ -8251,6 +8237,7 @@ export class Agent {
     }
 
     if (this.processDepth === 0) {
+      this.failedDeploymentsThisRun.clear();
       this.processingConversationId = this.activeConversationId || 'default';
       this.activeProcessAbortController = new AbortController();
       this.subagents.resumeScheduling();
@@ -8270,26 +8257,6 @@ export class Agent {
     this.pendingOptions = [];
 
     try {
-      if (this.model === 'auto') {
-        // Auto routing re-resolves each turn; drop a stale blocked deployment
-        // so the router can pick an unblocked candidate instead of failing here.
-        if (this.resolvedDeployment && this.isBalanceBlockedDeployment(this.resolvedDeployment)) {
-          this.resolvedDeployment = null;
-          this.lastRouteDecision = null;
-          this.pendingAutoAttempts = [];
-        }
-      } else {
-        const blockedMs = this.balanceBlockedMs();
-        if (blockedMs > 0) {
-          const waitSeconds = Math.max(1, Math.ceil(blockedMs / 1000));
-          const deployment = this.activeDeployment();
-          const label = deployment ? `${deployment.providerId}/${deployment.modelId}` : this.model;
-          const message = `Provider balance exhausted (HTTP 402) for ${label}. Requests on this deployment are paused for ${waitSeconds}s; switch provider or model to continue immediately.`;
-          this.status = 'error';
-          this.emitWorkEvent({ type: 'error', content: message });
-          throw new Error(message);
-        }
-      }
       let text = typeof input === 'string' ? input : String(input.text || '');
       const inputEnvelope = typeof input === 'string' ? null : input as AgentPromptMessage & { clientMessageId?: string; runId?: string; batchGuides?: NonNullable<AgentPromptMessage['batchGuides']> };
       let hiddenUserInput = inputEnvelope?.hiddenUserInput === true;
@@ -8379,17 +8346,6 @@ export class Agent {
       if (images.length && this.model === 'auto') {
         await this.evaluateAndSwitch(`${text}\n[image attachment]`, inputEnvelope?.routePolicy);
         autoRouteEvaluated = true;
-      }
-      const selectedModel = this.activeModelConfig();
-      if (images.length && !selectedModel?.vision) {
-        // Give the normal route planner first chance to select another
-        // same-provider vision deployment. If none is available, the kernel
-        // preflight invokes the final mini-OCR + text-only correction path.
-        const hasSameProviderVision = selectedModel && this.config.allModels().some(model =>
-          model.enabled !== false && model.provider_id === selectedModel.provider_id &&
-          model.name !== selectedModel.name && !!model.vision,
-        );
-        if (hasSameProviderVision) this.switchToFallbackModel('vision input not supported by the selected model');
       }
       const now = this.nowLabel();
       const visibleUserInput = inputEnvelope?.visibleUserInput === undefined
@@ -9450,9 +9406,7 @@ export class Agent {
 
   subagentToolDefinitions(defs: unknown[]): unknown[] {
     const modelCapabilities = this.activeModelConfig();
-    const visionFiltered = modelCapabilities?.vision
-      ? defs
-      : defs.filter((tool: any) => tool.function?.name !== 'image_inspect');
+    const visionFiltered = defs;
     const withImageGeneration = modelCapabilities?.image_output
       ? [...visionFiltered, {
         type: 'function',
@@ -9491,7 +9445,6 @@ export class Agent {
   }
 
   async handleImageInspect(args: string): Promise<string> {
-    if (!this.activeModelConfig()?.vision) return '[Image inspect unavailable] The selected model has not passed vision validation.';
     let input: Record<string, unknown> = {};
     try { input = JSON.parse(args); } catch {}
     const action = String(input.action || '').trim();
@@ -10790,7 +10743,9 @@ function routeProviderFingerprint(provider: ReturnType<ConfigManager['providers'
 }
 
 function modelConfigurationFingerprint(model: Record<string, unknown>): string {
-  const { validation, evaluation, _previous_name, previous_name, ...configuration } = model;
+  const { validation, evaluation, response_health, enabled, _previous_name, previous_name, ...configuration } = model;
+  void response_health;
+  void enabled;
   void validation;
   void evaluation;
   void _previous_name;
@@ -10833,11 +10788,7 @@ function resetEditedModelValidationEvidence(incomingProviders: unknown[], existi
 }
 
 function modelConfigIsUnavailable(model: ModelConfig): boolean {
-  const validationStatus = effectiveModelValidationStatus(model);
-  if (model.validation?.level !== 'discovered'
-    && (validationStatus === 'unavailable' || validationStatus === 'auth_error' || validationStatus === 'invalid_config')) return true;
-  const evaluationStatus = validationStatus === 'degraded' ? 'degraded' : String(model.evaluation?.status || '').toLowerCase();
-  return evaluationStatus === 'unavailable' || evaluationStatus.startsWith('error');
+  return model.enabled === false;
 }
 
 function parseDeploymentSelectionValue(value: string): DeploymentRef | null {

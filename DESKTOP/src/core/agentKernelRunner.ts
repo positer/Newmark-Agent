@@ -573,16 +573,20 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   try {
     const linkedPlanRevisionBeforeRun = agent.getLinkedPlan().revision;
     const modelBeforeKernelRun = agent.model;
-    const preflightVisualFallback = !agent.activeModelConfig()?.vision
-      ? await agent.finalVisualFallback('vision input not supported by the selected model', processSignal)
-      : null;
-    let lastTurn: KernelTurnOutcome = preflightVisualFallback
-      ? { text: preflightVisualFallback, stopReason: 'stop', errorMessage: '' }
-      : await runWithCompressionResume([], false);
-    if (preflightVisualFallback) {
-      tokens.push({ type: 'text', text: preflightVisualFallback });
-      agent.recordWorkStatus('Final visual fallback used: local mini OCR plus conservative text correction.');
+    let lastTurn: KernelTurnOutcome = await runWithCompressionResume([], false);
+    if (kernelTurnFailed(agent, lastTurn)) {
+      const visualFallback = await agent.finalVisualFallback(lastTurn.errorMessage || lastTurn.text, processSignal);
+      if (visualFallback) {
+        tokens.push({ type: 'text', text: visualFallback });
+        agent.emitWorkEvent({ type: 'final_response', content: visualFallback });
+        agent.chatMessages.push({ role: 'assistant', content: visualFallback, mode: agent.modeName(), model: agent.model, timestamp: agent.nowLabel(), runId: agent.currentWorkRunId() || undefined });
+        agent.history.push({ role: 'assistant', content: visualFallback, run_id: agent.currentWorkRunId() || undefined });
+        agent.saveWorkspaceConversationState();
+        agent.recordWorkStatus('Final visual fallback used: local mini OCR plus conservative text correction.');
+        lastTurn = { ...lastTurn, text: visualFallback, errorMessage: '', stopReason: 'stop' };
+      }
     }
+
     if (modelBeforeKernelRun && modelBeforeKernelRun !== agent.model && !tokens.some(t => t.text?.includes('[Model fallback]'))) {
       const notice = `[Model fallback] ${modelBeforeKernelRun} unavailable; switched to ${agent.model}.`;
       tokens.unshift({ type: 'text', text: notice });
@@ -689,14 +693,6 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       kernel.state.tools = toKernelTools(agent, fallbackToolSurface.definitions, toolProvisioning);
       await agent.waitForPlannedRouteRetry();
       lastTurn = await runWithCompressionResume([], false);
-    }
-    if (kernelTurnFailed(agent, lastTurn)) {
-      const visualFallback = await agent.finalVisualFallback(lastTurn.errorMessage || lastTurn.text, processSignal);
-      if (visualFallback) {
-        tokens.push({ type: 'text', text: visualFallback });
-        agent.recordWorkStatus('Final visual fallback used: local mini OCR plus conservative text correction.');
-        lastTurn = { ...lastTurn, text: visualFallback, errorMessage: '', stopReason: 'stop' };
-      }
     }
     if (kernelTurnFailed(agent, lastTurn)) {
       throw new ProviderRunError(normalizePublicProviderError(lastTurn.errorMessage || lastTurn.text, [agent.activeModelConfig()?.api_key]));
@@ -1244,7 +1240,7 @@ function toKernelModel(agent: Agent): KernelModel {
     provider: m?.provider || 'newmark',
     baseUrl: m?.provider_url || '',
     reasoning: !!m?.thinking,
-    input: m?.vision ? ['text', 'image'] : ['text'],
+    input: ['text', 'image'],
     cost: {
       input: Number(m?.cost_per_1k_input || 0) * 1000,
       output: Number(m?.cost_per_1k_output || 0) * 1000,
@@ -1838,7 +1834,6 @@ function capturedImageToolText(name: string, text: string, attachmentId?: string
 function visualFallbackImageInput(agent: Agent, name: string, text: string): { imagePath?: string; image?: string; mimeType?: string } {
   if (name !== 'screen_capture' && name !== 'computer_use' && name !== 'browser_use' && name !== 'pdf_read') return {};
   const model = agent.activeModelConfig();
-  if (!model?.vision) return {};
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
     const nested = name === 'pdf_read' && parsed.result && typeof parsed.result === 'object'
@@ -1967,7 +1962,7 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
     workspaceId: terminalTakeoverWorkspaceId(wsDir),
     backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
     allowEphemeralVisionImage: (name === 'screen_capture' || name === 'computer_use' || name === 'browser_use' || name === 'pdf_read' || name === 'ocr_read')
-      && !!agent.activeModelConfig()?.vision,
+,
     signal,
   });
   if (signal?.aborted) throw abortError();

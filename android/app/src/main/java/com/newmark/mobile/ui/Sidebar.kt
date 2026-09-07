@@ -322,6 +322,7 @@ private fun MainSidebar(
     onTogglePinLocal: (String) -> Unit = {},
     onReorderLocal: (List<String>) -> Unit = {},
 ) {
+    val currentConversationOrder by rememberUpdatedState(conversations)
     val pc = pcSecondaryPalette()
     val setSidebarGestureLock = LocalSidebarGestureLock.current
     val glass = LocalGlassMode.current
@@ -437,14 +438,14 @@ private fun MainSidebar(
     fun finishLocalDrag(moved: Boolean) {
         val sourceId = draggingLocalId
         if (moved && sourceId != null) {
-            val source = conversations.firstOrNull { it.id == sourceId }
+            val source = currentConversationOrder.firstOrNull { it.id == sourceId }
             if (source != null) {
-                val group = conversations.filter { it.pinned == source.pinned }.map { it.id }.toMutableList()
+                val group = currentConversationOrder.filter { it.pinned == source.pinned }.map { it.id }.toMutableList()
                 val original = group.toList()
                 val sourceGroupIndex = localDragSourceGroupIndex
                 val destinationGroupIndex = localDragDestinationGroupIndex
                 if (sourceGroupIndex >= 0 && destinationGroupIndex >= 0) {
-                    group.removeAt(sourceGroupIndex)
+                    group.remove(sourceId)
                     group.add(destinationGroupIndex.coerceIn(0, group.size), sourceId)
                     if (group != original) {
                         rebaseConversationBounds(localConversationBounds, original, group)
@@ -480,7 +481,7 @@ private fun MainSidebar(
         }
     }
     LaunchedEffect(conversations.map { it.id }) {
-        localConversationBounds.keys.toList().filterNot { id -> conversations.any { it.id == id } }
+        localConversationBounds.keys.toList().filterNot { id -> currentConversationOrder.any { it.id == id } }
             .forEach(localConversationBounds::remove)
     }
     LaunchedEffect(currentConversationId, localConversationGlassVisible) {
@@ -550,7 +551,7 @@ private fun MainSidebar(
                     val sourceIndex = conversations.indexOfFirst { it.id == draggingLocalId }
                     val previewHeight = draggingLocalId?.let(localConversationBounds::get)?.height ?: 0f
                     val sourcePinned = draggingLocalId
-                        ?.let { id -> conversations.firstOrNull { it.id == id } }
+                        ?.let { id -> currentConversationOrder.firstOrNull { it.id == id } }
                         ?.pinned
                     val groupIndices = conversations.indices.filter { conversations[it].pinned == sourcePinned }
                     val sourceGroupIndex = localDragSourceGroupIndex
@@ -603,12 +604,12 @@ private fun MainSidebar(
                                         itemHeightPx = previewHeight,
                                     ),
                                     onDragStart = {
-                                        if (localConversationBounds[conv.id] == null || conversations.none { it.id == conv.id }) return@LocalConversationRow
+                                        if (localConversationBounds[conv.id] == null || currentConversationOrder.none { it.id == conv.id }) return@LocalConversationRow
                                         draggingLocalId = conv.id
                                         localDragPointerY = localConversationBounds[conv.id]?.center?.y ?: 0f
                                         localDragOriginY = localDragPointerY
-                                        val sourcePinned = conversations.firstOrNull { it.id == conv.id }?.pinned
-                                        val group = conversations.filter { it.pinned == sourcePinned }
+                                        val sourcePinned = currentConversationOrder.firstOrNull { it.id == conv.id }?.pinned
+                                        val group = currentConversationOrder.filter { it.pinned == sourcePinned }
                                         localDragSourceGroupIndex = group.indexOfFirst { it.id == conv.id }
                                         localDragDestinationGroupIndex = localDragSourceGroupIndex
                                         localDragItemHeight = localConversationBounds[conv.id]?.height ?: 0f
@@ -617,8 +618,8 @@ private fun MainSidebar(
                                     },
                                     onDragDelta = { deltaY ->
                                         if (draggingLocalId == conv.id) {
-                                            val sourcePinned = conversations.firstOrNull { it.id == conv.id }?.pinned
-                                            val groupSize = conversations.count { it.pinned == sourcePinned }
+                                            val sourcePinned = currentConversationOrder.firstOrNull { it.id == conv.id }?.pinned
+                                            val groupSize = currentConversationOrder.count { it.pinned == sourcePinned }
                                             val previousPointerY = localDragPointerY
                                             val nextPointerY = clampConversationDragDelta(
                                                 sourceIndex = localDragSourceGroupIndex,
@@ -645,12 +646,14 @@ private fun MainSidebar(
                         if (localConversationGlassVisible) {
                             val edgePx = with(localDensity) { MobileInteractionGlassEdge.toPx() }
                             val horizontalEdgePx = with(localDensity) { MobileConversationGlassHorizontalEdge.toPx() }
-                            val travelCenterCorrectionPx = with(localDensity) { 2.dp.toPx() } * localConversationGlassLift.value
+                            val travelCenterCorrectionPx = with(localDensity) { 1.dp.toPx() } * localConversationGlassLift.value -
+                                horizontalEdgePx * 0.5f * localConversationGlassScaleX.value
                             Box(
                                 Modifier
                                     // An oversized requiredWidth otherwise receives an implicit
                                     // negative centering offset from the rail's constraints.
-                                    // Keep the source anchor explicit and grow the lens rightward.
+                                    // Keep the source anchor explicit; halve the center shift while
+                                    // retaining the full lens width and both color endpoints.
                                     .wrapContentSize(Alignment.TopStart, unbounded = true)
                                     .requiredWidth(with(localDensity) { (localConversationGlassWidth + horizontalEdgePx * 2f * localConversationGlassScaleX.value).toDp() })
                                     .requiredHeight(with(localDensity) { (localConversationGlassHeight + edgePx * 2f * localConversationGlassScaleY.value).toDp() })
@@ -1799,6 +1802,7 @@ fun WorkspaceConversationsSidebar(
     archivePendingIds: Set<String> = emptySet(),
     respectStatusBars: Boolean = false,
 ) {
+    val currentConversationOrder by rememberUpdatedState(conversations)
     val pc = pcSecondaryPalette()
     val surface = pc.panel.compositeOver(pc.canvas)
     val sidebarSurfaceAlpha = if (pc == PcSecondaryLight) 0.90f else 0.72f
@@ -1917,14 +1921,14 @@ fun WorkspaceConversationsSidebar(
     fun finishDrag(moved: Boolean) {
         val sourceId = draggingConversationId
         if (moved && sourceId != null) {
-            val source = conversations.firstOrNull { it.id == sourceId }
+            val source = currentConversationOrder.firstOrNull { it.id == sourceId }
             if (source != null) {
-                val group = conversations.filter { it.pinned == source.pinned }.map { it.id }.toMutableList()
+                val group = currentConversationOrder.filter { it.pinned == source.pinned }.map { it.id }.toMutableList()
                 val original = group.toList()
                 val sourceGroupIndex = dragSourceGroupIndex
                 val destinationGroupIndex = dragDestinationGroupIndex
                 if (sourceGroupIndex >= 0 && destinationGroupIndex >= 0) {
-                    group.removeAt(sourceGroupIndex)
+                    group.remove(sourceId)
                     group.add(destinationGroupIndex.coerceIn(0, group.size), sourceId)
                     if (group != original) {
                         rebaseConversationBounds(conversationBounds, original, group)
@@ -1960,9 +1964,9 @@ fun WorkspaceConversationsSidebar(
         }
     }
     LaunchedEffect(conversations.map { it.id }) {
-        conversationBounds.keys.toList().filterNot { id -> conversations.any { it.id == id } }
+        conversationBounds.keys.toList().filterNot { id -> currentConversationOrder.any { it.id == id } }
             .forEach(conversationBounds::remove)
-        if (draggingConversationId != null && conversations.none { it.id == draggingConversationId }) clearDrag()
+        if (draggingConversationId != null && currentConversationOrder.none { it.id == draggingConversationId }) clearDrag()
     }
     LaunchedEffect(activeConversationId, flyingConversationGlass) {
         if (!flyingConversationGlass) visualActiveConversationId = activeConversationId
@@ -2026,7 +2030,7 @@ fun WorkspaceConversationsSidebar(
         val sourceIndex = conversations.indexOfFirst { it.id == draggingConversationId }
         val previewHeight = draggingConversationId?.let(conversationBounds::get)?.height ?: 0f
         val sourcePinned = draggingConversationId
-            ?.let { id -> conversations.firstOrNull { it.id == id } }
+            ?.let { id -> currentConversationOrder.firstOrNull { it.id == id } }
             ?.pinned
         val groupIndices = if (sourcePinned == null) emptyList() else {
             conversations.indices.filter { conversations[it].pinned == sourcePinned }
@@ -2089,12 +2093,12 @@ fun WorkspaceConversationsSidebar(
                         itemHeightPx = previewHeight,
                     ),
                     onDragStart = {
-                        if (renamingConversationId == null && conversationBounds[conv.id] != null && conversations.any { it.id == conv.id }) {
+                        if (renamingConversationId == null && conversationBounds[conv.id] != null && currentConversationOrder.any { it.id == conv.id }) {
                             draggingConversationId = conv.id
                             dragPointerY = conversationBounds[conv.id]?.center?.y ?: 0f
                             dragOriginY = dragPointerY
-                            val sourcePinned = conversations.firstOrNull { it.id == conv.id }?.pinned
-                            val group = conversations.filter { it.pinned == sourcePinned }
+                            val sourcePinned = currentConversationOrder.firstOrNull { it.id == conv.id }?.pinned
+                            val group = currentConversationOrder.filter { it.pinned == sourcePinned }
                             dragSourceGroupIndex = group.indexOfFirst { it.id == conv.id }
                             dragDestinationGroupIndex = dragSourceGroupIndex
                             dragItemHeight = conversationBounds[conv.id]?.height ?: 0f
@@ -2104,8 +2108,8 @@ fun WorkspaceConversationsSidebar(
                     },
                     onDragDelta = { deltaY ->
                         if (draggingConversationId == conv.id) {
-                            val sourcePinned = conversations.firstOrNull { it.id == conv.id }?.pinned
-                            val groupSize = conversations.count { it.pinned == sourcePinned }
+                            val sourcePinned = currentConversationOrder.firstOrNull { it.id == conv.id }?.pinned
+                            val groupSize = currentConversationOrder.count { it.pinned == sourcePinned }
                             val previousPointerY = dragPointerY
                             val nextPointerY = clampConversationDragDelta(
                                 sourceIndex = dragSourceGroupIndex,
@@ -2132,7 +2136,8 @@ fun WorkspaceConversationsSidebar(
         if (flyingConversationGlass) {
             val edgePx = with(density) { MobileInteractionGlassEdge.toPx() }
             val horizontalEdgePx = with(density) { MobileConversationGlassHorizontalEdge.toPx() }
-            val travelCenterCorrectionPx = with(density) { 2.dp.toPx() } * flyingGlassLift.value
+            val travelCenterCorrectionPx = with(density) { 1.dp.toPx() } * flyingGlassLift.value -
+                                horizontalEdgePx * 0.5f * flyingGlassScaleX.value
             Box(
                 Modifier
                     // Match local conversations: no implicit overflow centering.

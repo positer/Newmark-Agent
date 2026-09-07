@@ -40,7 +40,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DrawerState
-import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.DrawerDefaults
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -60,7 +62,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalDensity
@@ -1318,6 +1319,19 @@ private suspend fun readIncomingContent(
     }
 }
 
+/** Surface clipping belongs to the material, never to the floating children. */
+@Composable
+internal fun UnclippedSidebarDrawer(
+    modifier: Modifier = Modifier,
+    surfaceModifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Box(modifier.fillMaxHeight()) {
+        Box(Modifier.matchParentSize().then(surfaceModifier))
+        Column(Modifier.windowInsetsPadding(DrawerDefaults.windowInsets)) { content() }
+    }
+}
+
 @Composable
 private fun CompactMainLayout(
     drawerState: DrawerState,
@@ -1347,10 +1361,9 @@ private fun CompactMainLayout(
         modifier = gestureModifier,
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet(
-                modifier = Modifier
-                    .width(drawerWidth)
-                    .liquidGlassModifier(
+            UnclippedSidebarDrawer(
+                modifier = Modifier.width(drawerWidth),
+                surfaceModifier = Modifier.liquidGlassModifier(
                         backdrop = liquidBackdrop,
                         cornerRadius = 0.dp,
                         alpha = scaledGlassAlpha(0.72f, glass.alpha),
@@ -1369,10 +1382,6 @@ private fun CompactMainLayout(
                         // glass edges and pointer glow.
                         edgeHighlight = false,
                     ),
-                drawerContainerColor = Color.Transparent,
-                drawerContentColor = palette.textPrimary,
-                drawerShape = RectangleShape,
-                drawerTonalElevation = 0.dp,
             ) { sidebar() }
         },
         gesturesEnabled = gesturesEnabled,

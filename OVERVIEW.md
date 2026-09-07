@@ -1,5 +1,42 @@
 # Newmark Agent Overview
 
+## dev-0.6.0 全平台发行
+
+`VERSION`、Desktop package/lock 与 Android Gradle 绑定 0.6.0／600。`.github/workflows/release-linux.yml` 构建既有六平台资产，并读取 `DESKTOP/scripts/release-notes-dev-0.6.0.md` 的英文／简体中文发行说明。`archive/20260907-dev-0.6.0-release/` 保存本轮构建、哈希和上传校验记录。
+
+## 2026-09-07 PC P0 与跨端开关修复
+
+移动端 `SettingsScreen.kt` 的 `ProviderDetailPanel` 将静态供应商名、可编辑 API 接口、横向协议轨道、竖向模型轨道拆为独立区域；端点保存调用现有 ProviderStore 持久化路径。`ProviderDetailEditingTest.kt` 检查浮块上界、端点保存及无效地址不写入。交付验证记录位于 `archive/20260907-p0-pc-model-binding/`。
+
+| 文件或目录 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/core/modelResponseHealth.ts` | 按部署、端点、协议与凭据摘要隔离原子响应记录；独立合并 text/vision/tools 标识，观察失败不阻断通信。 |
+| `DESKTOP/src/core/conversationKernel.ts` | 快照、切换及请求默认参数保留供应商部署标识，兼容已有裸名快照的已绑定会话。 |
+| `DESKTOP/src/core/agent.ts`、`agentKernelRunner.ts` | 去除观察状态禁用；绑定真实结果、OCR 纠错及持久化；回退仅在当前请求内排除已失败部署。 |
+| `DESKTOP/src/core/config.ts`、`autoRouter.ts` | 提供最新观察信息，保留用户启用与路由范围策略。 |
+| `DESKTOP/src/llm/provider.ts`、`core/types.ts` | 传输错误携带明确来源，避免把正常回答中的错误字样误标为失败。 |
+| `DESKTOP/src/ui/index.html` | 全宽模型行、灰色异常提示、用户开关、浮块完整生命周期与实时警告刷新。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidGlass.kt` | 点击/拖动分离、取消清理、固定中心锚点与先移动后落下。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/LiquidSwitchRenderingTest.kt` | 四项实际 Compose 手势、浮块阶段及端点坐标回归。 |
+| `DESKTOP/scripts/test-conversation-model-binding.cjs`、`test-model-response-health.cjs`、`test-image-ocr-recovery.cjs` | 实际 HTTP、跨部署隔离、冷加载、视觉重试及内置 OCR 恢复测试。 |
+| `DESKTOP/scripts/test-liquid-switch-ui.cjs`、`test-live-pc-model-recovery.cjs` | Electron 实际输入/布局/截图与隔离真实供应商首轮测试；真实调用测试不加入自动测试链。 |
+| `archive/20260907-p0-pc-model-binding/` | 本轮复现、被否决中间候选、测试日志、截图及最终验证边界。 |
+
+
+## dev-0.5.15 本机 MSI 安装（2026-09-07）
+
+已通过共享 MSI 安装器安装到 `C:\Program Files\Newmark Agent`，机器注册版本 `0.5.15.0`，MSI 返回 0。292 个安装文件与发行包一致，21,021 个既有 `.Newmark` 文件哈希未变；普通用户实际 CLI／GUI 均验证为 `0.5.15`。`archive/20260907-132934-install-dev0515/REPORT.md` 记录结果；同目录 `result.json`、`request.json` 和 MSI 日志记录身份与过程，`installed-smoke.log`／`installed-runtime.json` 记录独立运行验证，用户文件清单和 pending-operation 记录用于本地审计。此前发布报告的“未安装”边界保留为历史记录；本次安装未改变并行移动端工作。
+
+## dev-0.6.0 移动端侧栏修复
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidHoldGesture.kt` | 持续刷新长按回调，保持已有指针生命周期，使重排后的手势使用当前列表。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` | `UnclippedSidebarDrawer` 分离背景材质与内容，保留抽屉尺寸及系统栏避让，允许浮块溢出。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/Sidebar.kt` | 本地和远程浮块的中心右移从 16dp 减为 8dp，起落归零。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/ConversationLiftRenderingTest.kt` | 实际抽屉材质下的包边像素、起落色块绑定和连续反向重排验证。 |
+| `archive/20260907-dev-0.6.0-mobile-sidebar/` | `REPORT.md` 为验收报告；`*.log` 为中间与最终门禁，`geometry.log` 为坐标；`validation.json` 为源码及包身份，`changes.patch` 为评审补丁；`pixels/` 保留初版截图，`*-held-final.png` 为最终截图，`installed-base.apk` 为安装回读字节。不代表 dev-0.6.0 已发布。 |
+
 ## dev-0.5.15 发布构造（2026-09-07）
 
 `VERSION`、`DESKTOP/package.json`／lock 与 `android/app/build.gradle.kts` 绑定 0.5.15／515。`.github/workflows/release-linux.yml` 提供 Windows／Linux／Android 原生 runner 构建；手工 dispatch 只构建，dev 标签触发预发布；`publish.yml` 同标签触发 npm。`DESKTOP/scripts/dist-portable.cjs` 与 `dist-linux.cjs` 生成桌面资产；`verify-github-release-assets.cjs` 重新下载六资产并校验。当前发布计划与检查表位于 `tasks/`，每项执行日志、候选和最终身份在 `archive/20260907-113605-dev-0.5.15-release/`。

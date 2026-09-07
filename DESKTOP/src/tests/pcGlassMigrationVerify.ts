@@ -546,10 +546,10 @@ function main(): void {
     html.includes("input.style.setProperty('--liquid-switch-x'") &&
     html.includes("input.style.setProperty('--liquid-switch-progress'") &&
     /liquid-switch-dragging::before\s*\{[^}]*width:\s*22px[^}]*scale\(1\.22\)/s.test(html) &&
-    html.includes('var next = dragging ? fraction >= 0.5 : !input.checked') &&
-    html.includes('Math.hypot(deltaX, deltaY) < dragThreshold') &&
-    html.includes('if (!commit || canceledToScroll) return') &&
-    html.indexOf("input.dataset.liquidSuppressClick = 'true'") < html.indexOf('function update(clientX)'),
+    html.includes('dragging ? fraction >= 0.5 : !initial') &&
+    html.includes('Math.hypot(dx, dy) < dragThreshold') &&
+    html.includes('commit && !canceledToScroll') &&
+    html.includes("float.classList.add('landing')") && html.includes('input._liquidSettling = true'),
     'PC 开关点击直接反转；仅水平越过阈值后跟手并按松手档位吸附');
   check(/\.left-ws-item\s*\{[^}]*border-radius:\s*var\(--radius-full\)/s.test(html) &&
     /\.left-ws-item \.ws-icon\s*\{[^}]*border-radius:\s*50%/s.test(html) &&

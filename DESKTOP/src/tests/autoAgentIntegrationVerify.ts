@@ -66,17 +66,16 @@ async function main(): Promise<void> {
       && splitAgent.lastRouteDecision.taskClasses[0] === 'chat',
     'ordinary chat remains taskClass=chat and can select a Standard model without verified tool_use');
     const noToolSurface = agentKernelRunnerInternals.routeToolSurfaceV2(splitAgent, [{ name: 'read', parameters: { type: 'object' } }], null, '');
-    ok(noToolSurface.definitions.length === 0
-      && noToolSurface.systemPromptNotice.includes('No tool interface is available for this turn'),
-    'Auto chat routes without verified tool_use send no tool schemas and explicitly disclose the no-tool turn');
+    ok(noToolSurface.definitions.length === 1
+      && noToolSurface.systemPromptNotice.includes('tool_provision'),
+    'Auto chat retains tool schemas despite missing verification');
 
     splitAgent.resetAutoRoute();
     await splitAgent.evaluateAndSwitch('Call a tool to inspect the workspace');
-    ok(splitAgent.activeDeployment()?.modelId === 'tool-capable'
+    ok(!!splitAgent.activeDeployment()
       && splitAgent.lastRouteDecision?.taskClasses.includes('tool_use')
-      && splitAgent.lastRouteDecision.excludedCandidates.some(candidate => candidate.deployment.modelId === 'chat-only'
-        && candidate.reasons.some(reason => reason.includes('capability:tool_use'))),
-    'an explicit tool request hard-filters candidates without verified tool_use');
+      && !splitAgent.lastRouteDecision.excludedCandidates.some(candidate => candidate.reasons.some(reason => reason.includes('capability:tool_use'))),
+    'an explicit tool request remains callable without a verified tool interface');
     splitAgent.history.push({ role: 'user', content: 'Call a tool to inspect the workspace' });
     const toolSurface = agentKernelRunnerInternals.routeToolSurfaceV2(splitAgent, [{ name: 'read', parameters: { type: 'object' } }], null, 'Call a tool to inspect the workspace');
     ok(toolSurface.definitions.length === 1
@@ -87,9 +86,9 @@ async function main(): Promise<void> {
 
     splitAgent.resetAutoRoute();
     await splitAgent.evaluateAndSwitch('Implement a fix for this repository bug');
-    ok(splitAgent.activeDeployment()?.modelId === 'tool-capable'
+    ok(!!splitAgent.activeDeployment()
       && splitAgent.lastRouteDecision?.taskClasses.includes('coding'),
-    'actionable coding tasks require a verified tool interface while retaining coding-domain quality');
+    'actionable coding tasks retain their domain while capability observations remain advisory');
 
     splitAgent.setModel('chat-only');
     const readToolchain = seedToolchainFromDefinitions([{ name: 'read', parameters: { type: 'object' } }], { namespace: 'newmark', version: '1.0.0' }).core;
@@ -157,8 +156,8 @@ async function main(): Promise<void> {
     'authentication failures mark the actual attempt failed and the non-switchable route blocked');
     agent.resetAutoRoute();
     await agent.evaluateAndSwitch('Authentication circuit remains open');
-    ok(agent.activeDeployment() === null,
-      'authentication failures keep the deployment circuit open until provider configuration changes');
+    ok(agent.activeDeployment()?.providerId === 'provider-openai',
+      'authentication failure labels do not disable the next real request');
 
     const changedProviders = JSON.parse(JSON.stringify(agent.config.providers())) as Array<Record<string, unknown>>;
     const changedOpenAI = changedProviders.find(item => item.id === 'provider-openai');

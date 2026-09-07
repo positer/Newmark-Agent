@@ -181,7 +181,7 @@ async function verifyConversationTitleLifecycle(options = {}) {
             ? /empty.*title/i.test(item.error) && !/503|get_channel_failed/.test(item.error)
             : /HTTP 503/.test(item.error) && (scenario === 'key-code' ? /service unavailable/.test(item.error) : /get_channel_failed/.test(item.error))],
           [`${scenario}: excludes credentials, private URL and raw body`, !/fixture-key|private-provider|fixture-token|RAW_BODY_SENTINEL|PRIVATE_TRACE_SENTINEL|new_api_error/.test(item.error)],
-          [`${scenario}: preserves frozen deployment, 64-token budget and reasoning`, item.outbound.every(request => request.model === 'gpt-5-fixture' && request.maxTokens === 64 && request.reasoningEffort === 'low')],
+          [`${scenario}: preserves frozen deployment, reasoning-safe title budget and reasoning`, item.outbound.every(request => request.model === 'gpt-5-fixture' && request.maxTokens === 2048 && request.reasoningEffort === 'low')],
           [`${scenario}: retains persisted input and prevents formal response`, item.formalCalls === 0 && item.persistedUserCount === 1 && item.firstAgentResponseStarted === false],
           [`${scenario}: releases busy ownership`, item.status === 'error' && item.processDepth === 0 && item.processingConversationId === null],
         ];

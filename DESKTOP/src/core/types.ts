@@ -48,6 +48,8 @@ export interface ProviderUsageReported {
 }
 
 export interface StreamToken {
+  /** Transport-originated failure, distinct from model-generated prose. */
+  providerError?: boolean;
   type: 'text' | 'tool_call' | 'status' | 'usage';
   text: string;
   toolCall?: { id: string; name: string; arguments: string };

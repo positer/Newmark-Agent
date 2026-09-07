@@ -1,0 +1,63 @@
+const fs=require('fs'),path=require('path'),os=require('os'),http=require('http'),assert=require('assert/strict');
+const {spawn}=require('child_process');
+const {waitForPromotedMainUi}=require('./cdp-main-ui-ready');
+const desktop=path.resolve(__dirname,'..'), root=fs.mkdtempSync(path.join(os.tmpdir(),'newmark-switch-ui-'));
+ const out=path.resolve(process.env.NEWMARK_UI_TEST_OUTPUT||path.resolve(desktop,'../archive/20260907-p0-pc-model-binding'));
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const get=url=>new Promise((resolve,reject)=>http.get(url,r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>{try{resolve(JSON.parse(b));}catch(e){reject(e);}});}).on('error',reject));
+(async()=>{
+ const config={models:{providers:[{id:'fixture',name:'Fixture',protocol:'openai',base_url:'http://127.0.0.1:49997/v1',api_key:'synthetic',enabled:true,models:[{name:'abnormal-model',display:'Abnormal model',enabled:true,vision:false,max_tokens:32000,validation:{level:'standard',status:'unavailable',capabilities:{}}},{name:'another-model',enabled:true,max_tokens:32000}]}],default_model:'deployment:fixture:abnormal-model',auto_switch:false},general:{language:'zh'}};
+ fs.writeFileSync(path.join(root,'config.json'),JSON.stringify(config));
+ const port=49276;
+ const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
+ fs.mkdirSync(out,{recursive:true});
+ const child=spawn(process.env.NEWMARK_TEST_EXE||path.join(desktop,'node_modules/electron/dist/electron.exe'),[...(process.env.NEWMARK_TEST_EXE?[]:[desktop]),'--root',root,`--remote-debugging-port=${port}`,'--no-sandbox'],{cwd:desktop,windowsHide:true,stdio:['ignore','pipe','pipe'],env});
+ child.stdout.pipe(fs.createWriteStream(path.join(out,"electron-ui-stdout.log")));
+ child.stderr.pipe(fs.createWriteStream(path.join(out,"electron-ui-stderr.log")));
+ let ws;
+ try{
+  let target;for(let i=0;i<100;i++){try{target=(await get(`http://127.0.0.1:${port}/json/list`)).find(t=>t.type==='page'&&t.url.includes('index.html'));if(target)break;}catch{}await sleep(300);}
+  assert.ok(target,'Electron renderer ready');
+  ws=new WebSocket(target.webSocketDebuggerUrl);const ready=new Promise((r,j)=>{ws.onopen=r;ws.onerror=j;});
+  let id=0;const pending=new Map();ws.onmessage=e=>{const m=JSON.parse(e.data);const p=pending.get(m.id);if(p){pending.delete(m.id);m.error?p.reject(m.error):p.resolve(m.result);}};
+  const call=(method,params={})=>new Promise((resolve,reject)=>{const key=++id;const timer=setTimeout(()=>{pending.delete(key);reject(Error('CDP timeout: '+method));},15000);pending.set(key,{resolve:r=>{clearTimeout(timer);resolve(r)},reject:e=>{clearTimeout(timer);reject(e)}});ws.send(JSON.stringify({id:key,method,params}));});
+  const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description||r.exceptionDetails.text);return r.result.value;};
+  const waitUntil=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await sleep(100);}console.log(await evaluate(`JSON.stringify({enabled:state.providers[0].models[0].enabled,float:document.querySelector('.liquid-switch-float')?.className,checked:document.querySelector('.model-enable-switch')?.checked,disabled:document.querySelector('.model-enable-switch')?.disabled,events:window.switchEvents,notices:document.body.innerText.slice(-1200)})`));throw Error('Timed out: '+expression);};
+  const cdp={ready,call};
+  await cdp.ready;
+  await waitForPromotedMainUi(cdp);
+  console.log('Main UI ready');
+  await call('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
+  for(let i=0;i<60;i++){if(await evaluate('typeof state !== "undefined" && state.providers.length > 0'))break;await sleep(250);}
+  await evaluate("window.openSettings('models')");await sleep(400);
+  let passed=0;const check=(name,condition)=>{assert.ok(condition,name);passed++;console.log('PASS '+name);};
+  const rows=await evaluate(`Array.from(document.querySelectorAll('.model-chip')).map(r=>{const b=r.getBoundingClientRect();return {left:b.left,right:b.right,width:b.width,actions:Array.from(r.querySelector('.model-chip-actions').children).map(c=>({tag:c.tagName,x:c.getBoundingClientRect().left,type:c.type})),warning:r.querySelector('.model-response-warning')?.textContent}})`);
+  check('model rows share both left and right boundaries',rows.length===2&&Math.abs(rows[0].left-rows[1].left)<1&&Math.abs(rows[0].right-rows[1].right)<1);
+  check('controls ordered switch, edit, delete',rows.every(r=>r.actions.length===3&&r.actions[0].type==='checkbox'&&r.actions[0].x<r.actions[1].x&&r.actions[1].x<r.actions[2].x));
+  check('abnormal warning remains visible',rows[0].warning?.includes('响应异常'));
+  check('abnormal model remains selectable',await evaluate(`Array.from(document.querySelector('#model-select').options).some(o=>o.value.includes('abnormal-model'))`));
+  const shot=async name=>{const r=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});fs.writeFileSync(path.join(out,name),Buffer.from(r.data,'base64'));};
+  await shot('provider-model-rows.png');
+  const pos=await evaluate(`(()=>{const r=document.querySelector('.model-enable-switch').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);
+  const mouse=(type,x=pos.x,y=pos.y)=>call('Input.dispatchMouseEvent',{type,x,y,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1});
+  await evaluate(`window.switchEvents=[];window.switchFrames=[];['pointerdown','pointerup','pointercancel','lostpointercapture','change'].forEach(type=>document.addEventListener(type,e=>{if(e.target.matches('.model-enable-switch')){window.switchEvents.push({type,checked:e.target.checked,time:performance.now()});if(type==='pointerup'){let count=0;function sample(){const f=document.querySelector('.liquid-switch-float');window.switchFrames.push({className:f?.className,left:f?.style.left});if(++count<40)requestAnimationFrame(sample)}requestAnimationFrame(sample)}}},true))`);
+  await mouse('mousePressed');await sleep(100);
+  check('PC glass float exists while held',await evaluate(`!!document.querySelector('.liquid-switch-float.visible')`));
+  await mouse('mouseReleased');
+  await sleep(65);
+  await waitUntil(`!document.querySelector('.liquid-switch-float') && state.providers[0].models[0].enabled === false`);
+  check('glass remains raised while traveling after click',await evaluate(`window.switchFrames.some(f=>f.className?.includes('visible')&&!f.className?.includes('landing')) && window.switchFrames.some(f=>f.className?.includes('landing'))`));
+  check('single click disables exactly once',await evaluate(`state.providers[0].models[0].enabled === false`));
+  check('only user-disabled model is hidden',await evaluate(`!Array.from(document.querySelector('#model-select').options).some(o=>o.value.includes('abnormal-model')) && Array.from(document.querySelector('#model-select').options).some(o=>o.value.includes('another-model'))`));
+  const saved=JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8'));const providers=saved.models.providers.value||saved.models.providers;
+  check('user switch persists independently of health',providers[0].models[0].enabled===false);
+  await mouse('mousePressed');await sleep(850);await mouse('mouseMoved',pos.x+30);await mouse('mouseMoved',pos.x-30);await mouse('mouseReleased',pos.x-30);await sleep(450);
+  check('held drag back to off does not toggle',await evaluate(`state.providers[0].models[0].enabled === false`));
+  await waitUntil(`!document.querySelector('.liquid-switch-float')`);
+  const finalPos=await evaluate(`(()=>{const r=document.querySelector('.model-enable-switch').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`);
+  await mouse('mousePressed',finalPos.x,finalPos.y);await mouse('mouseReleased',finalPos.x,finalPos.y);
+  await waitUntil(`state.providers[0].models[0].enabled === true && Array.from(document.querySelector('#model-select').options).some(o=>o.value.includes('abnormal-model'))`);
+  check('second click restores visibility despite abnormal response flag',await evaluate(`state.providers[0].models[0].enabled === true && Array.from(document.querySelector('#model-select').options).some(o=>o.value.includes('abnormal-model'))`));
+  fs.writeFileSync(path.join(out,'ui-switch-results.json'),JSON.stringify({passed,rows},null,2));console.log(JSON.stringify({passed}));
+ }finally{ws?.close();child.kill();}
+})().catch(e=>{console.error(e);process.exitCode=1;});

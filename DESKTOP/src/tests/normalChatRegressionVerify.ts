@@ -461,8 +461,8 @@ async function main(): Promise<void> {
     const fallbackBroker = finalFallbackCall?.tools.find(tool => tool.function?.name === 'tool_provision');
     assert.ok(fallbackBroker
       && !String(fallbackBroker.function.description).includes('image_generate:')
-      && !String(fallbackBroker.function.description).includes('image_inspect:'),
-    'fallback rebuilds the compact tool catalog for replacement-model capabilities');
+      && String(fallbackBroker.function.description).includes('image_inspect:'),
+    'fallback retains image inspection despite cached vision capability while preserving image-output policy');
 
     fallbackAgent.setModel('primary-vision');
     assert.equal(fallbackAgent.switchToFallbackModel('HTTP 401 Unauthorized'), null, 'fixed fallback never crosses an authentication failure');

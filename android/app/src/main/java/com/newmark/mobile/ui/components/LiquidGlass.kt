@@ -47,6 +47,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.runtime.rememberUpdatedState
@@ -1200,6 +1201,11 @@ fun LiquidGlassSwitch(
     enabled: Boolean = true,
 ) {
     val p = LocalNewmarkColors.current
+    val scope = rememberCoroutineScope()
+    val currentChecked by rememberUpdatedState(checked)
+    val currentOnCheckedChange by rememberUpdatedState(onCheckedChange)
+    var settling by remember { mutableStateOf(false) }
+    var glassVisible by remember { mutableStateOf(false) }
     val contact = rememberLiquidContactState()
     var thumbCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var pressed by remember { mutableStateOf(false) }
@@ -1208,11 +1214,7 @@ fun LiquidGlassSwitch(
     // leaves [0, 1], while a held glass thumb can still lean into a blocked
     // direction with increasing, damped displacement.
     var boundaryOverscroll by remember { mutableStateOf(0f) }
-    val settledFraction by animateFloatAsState(
-        targetValue = if (checked) 1f else 0f,
-        animationSpec = tween(durationMillis = 180),
-        label = "liquid-switch-settle",
-    )
+    val settledFraction = if (checked) 1f else 0f
     val fraction = draggedFraction ?: settledFraction
     val visualFraction = (fraction + boundaryOverscroll).coerceIn(-0.34f, 1.34f)
     val thumbWidth by animateDpAsState(
@@ -1220,12 +1222,36 @@ fun LiquidGlassSwitch(
         animationSpec = tween(durationMillis = 120),
         label = "liquid-switch-capsule-width",
     )
-    val thumbOffset = 14.dp + 20.dp * visualFraction - thumbWidth / 2
+    val thumbOffset = 14.dp + 20.dp * visualFraction - 12.dp
     val thumbScale by animateFloatAsState(
         targetValue = if (pressed) 1.22f else 1f,
         animationSpec = tween(durationMillis = 100),
         label = "liquid-switch-lift",
     )
+    fun settle(next: Boolean) {
+        if (settling) return
+        settling = true
+        val from = draggedFraction ?: if (currentChecked) 1f else 0f
+        pressed = true
+        glassVisible = true
+        scope.launch {
+            try {
+                boundaryOverscroll = 0f
+                androidx.compose.animation.core.animate(from, if (next) 1f else 0f,
+                    animationSpec = tween(durationMillis = 180)) { value, _ -> draggedFraction = value }
+                pressed = false
+                // Keep the glass material through the landing, at the final anchor.
+                delay(120)
+                if (next != currentChecked) currentOnCheckedChange(next)
+                delay(32)
+            } finally {
+                glassVisible = false
+                pressed = false
+                draggedFraction = null
+                settling = false
+            }
+        }
+    }
     val density = LocalDensity.current
     val trackShape = RoundedCornerShape(14.dp)
     Box(
@@ -1247,27 +1273,32 @@ fun LiquidGlassSwitch(
                 role = Role.Switch
                 stateDescription = if (checked) "On" else "Off"
                 onClick {
-                    if (enabled) onCheckedChange(!checked)
+                    if (enabled && !settling) settle(!currentChecked)
                     enabled
                 }
             }
             .trackLiquidContact(if (enabled) contact else null)
-            .pointerInput(enabled, checked, density) {
+            .pointerInput(enabled, density) {
                 if (!enabled) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
+                    if (settling) return@awaitEachGesture
                     pressed = true
+                    glassVisible = true
                     val startPx = with(density) { 14.dp.toPx() }
                     val travelPx = with(density) { 20.dp.toPx() }
                     fun fractionAt(x: Float) = ((x - startPx) / travelPx).coerceIn(0f, 1f)
-                    val initialFraction = if (checked) 1f else 0f
+                    val initialFraction = if (currentChecked) 1f else 0f
                     var releaseFraction = initialFraction
                     var lastRawFraction = initialFraction
                     var dragging = false
                     var verticalScroll = false
+                    var released = false
+                    try {
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        val externallyConsumed = change.isConsumed
                         val distance = change.position - down.position
                         if (!dragging && !verticalScroll && distance.getDistance() > viewConfiguration.touchSlop) {
                             if (kotlin.math.abs(distance.x) >= kotlin.math.abs(distance.y)) {
@@ -1278,7 +1309,7 @@ fun LiquidGlassSwitch(
                             }
                         }
                         if (dragging) {
-                            lastRawFraction = (change.position.x - startPx) / travelPx
+                            lastRawFraction = initialFraction + (change.position.x - down.position.x) / travelPx
                             releaseFraction = lastRawFraction.coerceIn(0f, 1f)
                             draggedFraction = releaseFraction
                             val blockedPull = when {
@@ -1296,18 +1327,22 @@ fun LiquidGlassSwitch(
                             boundaryOverscroll = resistedPull.coerceIn(-0.085f, 0.085f)
                             change.consume()
                         }
-                        if (!change.pressed) break
+                        if (!change.pressed) { released = !externallyConsumed; break }
                     }
-                    pressed = false
-                    draggedFraction = null
-                    boundaryOverscroll = 0f
-                    if (!verticalScroll) {
-                        onCheckedChange(liquidSwitchReleaseValue(checked, dragging, releaseFraction))
+                    } finally {
+                        if (!released) {
+                            pressed = false
+                            glassVisible = false
+                            draggedFraction = null
+                            boundaryOverscroll = 0f
+                        }
                     }
+                    if (released) settle(if (verticalScroll) currentChecked else
+                        liquidSwitchReleaseValue(currentChecked, dragging, releaseFraction))
                 }
             },
     ) {
-        val thumbModifier = if (pressed) {
+        val thumbModifier = if (glassVisible) {
             Modifier.liquidGlassModifier(
                 shape = RoundedCornerShape(50),
                 alpha = 0.10f,
@@ -1331,14 +1366,15 @@ fun LiquidGlassSwitch(
         }
         Box(
             Modifier
-                .size(width = thumbWidth, height = 24.dp)
+                .size(24.dp)
                 .graphicsLayer {
                     val pull = kotlin.math.abs(boundaryOverscroll)
-                    scaleX = thumbScale * (1f + pull * 0.22f)
+                    scaleX = thumbScale * (thumbWidth / 24.dp) * (1f + pull * 0.22f)
                     scaleY = thumbScale * (1f - pull * 0.10f)
                     translationX = thumbOffset.toPx()
                     translationY = if (pressed) 0f else 2.dp.toPx()
                 }
+                .testTag(if (glassVisible) "liquid-switch-float" else "liquid-switch-thumb")
                 .onGloballyPositioned { thumbCoordinates = it }
                 .then(thumbModifier),
         )

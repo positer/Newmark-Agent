@@ -1,8 +1,22 @@
 # Newmark Agent
 
+## dev-0.6.0 响应观察、模型开关与玻璃开关修复
+
+模型与供应商部署身份在会话快照、再次发送和冷加载中保持一致。未检测或响应异常的模型保持可选、可发送；模型名称后以灰色“（响应异常）”提示，真实成功响应恢复对应能力标识。图片不受历史视觉判断拦截；实际视觉拒绝后进入内置 miniOCR 与同模型文本纠错，保留原始任务与不确定性，后续图片仍尝试原模型。用户关闭模型开关才会在选择器隐藏该模型。
+
+供应商模型行统一左右留白，信息左对齐，右侧依次为开关、编辑、删除。PC 与 Android 开关点击反转状态；长按拖动按松手档位提交，取消手势不提交。玻璃浮块从源端浮起，连续移动到目标端后再落下。PC 浮块复用现有折射渲染器，Android 视觉伸缩不改变中心锚点。
+
+本轮不修改 OpenCode 特殊请求头。DeepSeek 首轮标题请求另修正 64-token 截断问题，保留简短标题约束并提供 2048-token 完成预算。验证、已知边界与候选交付见 [本轮记录](archive/20260907-p0-pc-model-binding/REPORT.md)。
+
+### dev-0.6.0 移动端侧栏修复
+
+移动端供应商详情的名称与 API 接口独立显示；API 接口支持编辑并显式保存。横向协议轨道与下方竖向模型轨道隔离，竖向玻璃浮块不会进入名称、接口或跨过协议轨道。
+
+对话胶囊支持重排后的连续长按与反向拖动；竖屏抽屉允许玻璃浮块完整绘制在侧栏边界之外。浮块保持原有扩展尺寸，向右的中心位移减半，起点和终点仍与对应色块重合。已通过 365 项 JVM 测试、30 项模拟器设备测试和 Release 构建；本轮验证与交付边界见 [记录](archive/20260907-dev-0.6.0-mobile-sidebar/REPORT.md)。
+
 Newmark Agent 将桌面、命令行与原生 Android 客户端连接到同一套会话和工作区能力，面向需要本地工具执行、多模型协作及跨设备工作连续性的开发者。
 
-当前开发预发布版本 **dev-0.5.15** 已发布，统一 Desktop 0.5.15 与 Android 515，提供 Windows x64 MSI／便携 ZIP、Linux x64 AppImage／deb／便携 ZIP 和 Android APK。完整版本说明与六个资产见 [GitHub Release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.5.15)，CLI／TUI 也可通过 [npm `newmark-agent@0.5.15`](https://www.npmjs.com/package/newmark-agent/v/0.5.15) 获取。Windows 包未进行代码签名；Android APK 沿用开发证书，面向开发测试分发。
+当前开发预发布版本为 **dev-0.6.0**，统一 Desktop 0.6.0 与 Android 0.6.0／600，提供 Windows x64 MSI／便携 ZIP、Linux x64 AppImage／deb／便携 ZIP 和 Android APK。完整版本说明与六个资产见 [GitHub Release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.6.0)。CLI／TUI 通过 [npm `newmark-agent`](https://www.npmjs.com/package/newmark-agent) 分发。Windows 包未进行代码签名；Android APK 沿用开发证书，面向开发测试分发。下方旧版本构建、安装与验证记录保留各自历史边界。
 
 ### SubAgent 连续工作与通信缓存（2026-09-07）
 

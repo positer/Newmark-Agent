@@ -5414,17 +5414,20 @@ html.newmark-memory-overview-viewer body {
 }
 
 .model-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  margin: 2px;
-  border-radius: var(--radius-sm);
-  background: rgba(91,120,255,0.1);
-  border: 1px solid rgba(91,120,255,0.2);
-  font-size: 11px;
-  color: var(--text-accent);
+  display:flex; align-items:center; gap:12px; box-sizing:border-box;
+  width:100%; min-width:0; margin:6px 0; padding:10px 12px;
+  border-radius:var(--radius-sm); background:rgba(91,120,255,0.1);
+  border:1px solid rgba(91,120,255,0.2); font-size:11px; color:var(--text-accent);
 }
+.model-chip-info { flex:1; min-width:0; text-align:left; overflow-wrap:anywhere; }
+.model-chip-actions { display:flex; flex:0 0 auto; align-items:center; gap:6px; margin-left:auto; }
+.model-response-warning { color:var(--text-dim); font-size:inherit; margin-left:4px; font-weight:400; }
+.model-enable-switch { width:38px; height:22px; padding:2px; border-radius:999px; border:1px solid var(--glass-border-1); background:var(--glass-bg-1); cursor:pointer; flex:none; }
+.model-enable-thumb { display:block; width:16px; height:16px; border-radius:50%; background:rgba(255,255,255,.55); transform:translateX(0); transition:transform 180ms var(--ease-out-expo); }
+.model-enable-switch[aria-checked="true"] { background:rgba(91,120,255,.35); }
+.model-enable-switch[aria-checked="true"] .model-enable-thumb { transform:translateX(16px); }
+.model-enable-switch:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.model-enable-switch:disabled { opacity:.6; }
 
 .model-chip .remove {
   cursor: pointer;
@@ -6273,7 +6276,7 @@ input[type="checkbox"].liquid-switch-dragging::before {
   transition: opacity 105ms var(--ease-out-expo), transform 105ms var(--ease-out-expo);
 }
 .liquid-switch-float.visible { opacity: 1; transform: translate(-50%, -50%) scale(1.22); }
-.liquid-switch-float.landing { opacity: 0; transform: translate(-50%, -50%) scale(.86); }
+.liquid-switch-float.landing { opacity: 1; transform: translate(-50%, -50%) scale(.8181818); }
 
 /* Center composer and terminal stay solid. Only their left/right edge catches
    light so the glass sidebars remain the visual frame. */
@@ -7169,6 +7172,8 @@ var NEWMARK_I18N = {
     'model.available': 'available',
     'model.degraded': 'available (limited capabilities)',
     'model.unavailable': 'unavailable',
+    'model.responseAnomaly': '(response abnormal)',
+    'model.enabled': 'Enable model',
     'model.no': 'no',
     'model.yes': 'yes',
     'model.notChecked': 'not checked',
@@ -7910,6 +7915,8 @@ var NEWMARK_I18N = {
     'model.available': '可用',
     'model.degraded': '可用（部分能力受限）',
     'model.unavailable': '不可用',
+    'model.responseAnomaly': '（响应异常）',
+    'model.enabled': '启用模型',
     'model.no': '否',
     'model.yes': '是',
     'model.notChecked': '未检测',
@@ -16157,82 +16164,99 @@ requestAnimationFrame(function() {
   wireDirectPopupOptionPress();
 });
 
-// Checkbox switches use one pointer-captured glass thumb that follows the
-// pointer continuously, then commits to the nearest binary stop on release.
+// The body-level glass thumb survives settings rerenders and lands only after
+// reaching the released endpoint. Native keyboard clicks keep checkbox semantics.
 document.addEventListener('pointerdown', function(event) {
   var input = event.target && event.target.closest ? event.target.closest('input[type="checkbox"]') : null;
-  if (!input || input.disabled || event.button !== 0) return;
+  if (!input || input.disabled || event.button !== 0 || input._liquidSettling) return;
   event.preventDefault();
-  var rect = input.getBoundingClientRect();
-  var pointer = event.pointerId;
-  var fraction = input.checked ? 1 : 0;
-  var startX = event.clientX;
-  var startY = event.clientY;
-  var dragging = false;
-  var canceledToScroll = false;
+  var rect = input.getBoundingClientRect(), pointer = event.pointerId;
+  var initial = input.checked, fraction = initial ? 1 : 0;
+  var startX = event.clientX, startY = event.clientY;
+  var dragging = false, canceledToScroll = false, finished = false;
   var dragThreshold = event.pointerType === 'mouse' ? 4 : 8;
+  var float = document.createElement('div');
+  float.className = 'liquid-switch-float';
+  float.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(float);
+  float.style.width = '22px'; float.style.height = '22px';
+  attachKyantLiquidRenderer(float, liquidBackdropCachedFrame);
+  captureLiquidBackdropFrame().then(function(frame) {
+    if (float.isConnected && frame) attachKyantLiquidRenderer(float, frame);
+  });
   input.dataset.liquidSuppressClick = 'true';
   clearTimeout(input._liquidSuppressClickTimer);
-  input._liquidSuppressClickTimer = setTimeout(function() {
-    delete input.dataset.liquidSuppressClick;
-    delete input._liquidSuppressClickTimer;
-  }, 700);
-  function update(clientX) {
-    fraction = ((clientX - rect.left - 12) / Math.max(1, rect.width - 24));
-    fraction = Math.max(0, Math.min(1, fraction));
-    input.style.setProperty('--liquid-switch-x', (18 * fraction) + 'px');
-    input.style.setProperty('--liquid-switch-progress', (100 * fraction) + '%');
+  function paint(value, lift) {
+    fraction = value;
+    input.style.setProperty('--liquid-switch-x', (18 * value) + 'px');
+    input.style.setProperty('--liquid-switch-progress', (100 * value) + '%');
+    float.style.left = (rect.left + 12 + 18 * value) + 'px';
+    float.style.top = (rect.top + rect.height / 2 - (lift ? 2 : 0)) + 'px';
+    if (float._renderKyantGlass) float._renderKyantGlass({left:rect.left + 1 + 18 * value,top:rect.top + rect.height / 2 - 11 - (lift ? 2 : 0),width:22,height:22},true);
   }
   function finish(commit) {
+    if (finished) return;
+    finished = true;
     input.removeEventListener('pointermove', move);
     input.removeEventListener('pointerup', up);
     input.removeEventListener('pointercancel', cancel);
-    input.classList.remove('liquid-switch-dragging');
-    input.style.removeProperty('--liquid-switch-x');
-    input.style.removeProperty('--liquid-switch-progress');
+    input.removeEventListener('lostpointercapture', cancel);
     try { input.releasePointerCapture(pointer); } catch (_) {}
-    if (!commit || canceledToScroll) return;
-    var next = dragging ? fraction >= 0.5 : !input.checked;
-    var changed = input.checked !== next;
-    input.checked = next;
-    if (changed) {
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
+    var next = commit && !canceledToScroll ? (dragging ? fraction >= 0.5 : !initial) : initial;
+    var from = fraction, to = next ? 1 : 0, started;
+    input._liquidSettling = true;
+    // Suppress the synthetic click even after a long hold; never time out mid-drag.
+    input._liquidSuppressClickTimer = setTimeout(function() { delete input.dataset.liquidSuppressClick; }, 700);
+    function frame(now) {
+      if (started === undefined) started = now;
+      var progress = Math.min(1, (now - started) / 180);
+      paint(from + (to - from) * (1 - Math.pow(1 - progress, 3)), true);
+      if (progress < 1) { requestAnimationFrame(frame); return; }
+      // The glass remains present during landing, at the destination anchor.
+      float.classList.add('landing');
+      paint(to, false);
+      setTimeout(function() {
+        input.checked = next;
+        input.classList.remove('liquid-switch-dragging');
+        input.style.removeProperty('--liquid-switch-x');
+        input.style.removeProperty('--liquid-switch-progress');
+        delete input._liquidSettling;
+        if (float._releaseKyantGlass) float._releaseKyantGlass();
+        float.remove();
+        if (next !== initial) {
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, 120);
     }
+    requestAnimationFrame(frame);
   }
-  function move(moveEvent) {
-    if (moveEvent.pointerId !== pointer) return;
+  function move(e) {
+    if (e.pointerId !== pointer || canceledToScroll) return;
     if (!dragging) {
-      var deltaX = moveEvent.clientX - startX;
-      var deltaY = moveEvent.clientY - startY;
-      if (Math.hypot(deltaX, deltaY) < dragThreshold) return;
-      if (Math.abs(deltaY) > Math.abs(deltaX)) {
-        canceledToScroll = true;
-        return;
-      }
+      var dx = e.clientX - startX, dy = e.clientY - startY;
+      if (Math.hypot(dx, dy) < dragThreshold) return;
+      if (Math.abs(dy) > Math.abs(dx)) { canceledToScroll = true; finish(false); return; }
       dragging = true;
     }
-    moveEvent.preventDefault();
-    update(moveEvent.clientX);
+    e.preventDefault();
+    paint(Math.max(0, Math.min(1, (initial ? 1 : 0) + (e.clientX - startX) / 18)), true);
   }
-  function up(upEvent) {
-    if (upEvent.pointerId === pointer) finish(true);
-  }
-  function cancel(cancelEvent) {
-    if (cancelEvent.pointerId === pointer) finish(false);
-  }
+  function up(e) { if (e.pointerId === pointer) finish(true); }
+  function cancel(e) { if (e.pointerId === pointer) finish(false); }
   input.classList.add('liquid-switch-dragging');
-  input.setPointerCapture(pointer);
+  paint(fraction, true);
+  float.getBoundingClientRect();
+  float.classList.add('visible');
+  try { input.setPointerCapture(pointer); } catch (_) { finish(false); return; }
   input.addEventListener('pointermove', move);
   input.addEventListener('pointerup', up);
   input.addEventListener('pointercancel', cancel);
+  input.addEventListener('lostpointercapture', cancel);
 }, true);
 document.addEventListener('click', function(event) {
   var input = event.target && event.target.closest ? event.target.closest('input[type="checkbox"]') : null;
-  if (!input || input.dataset.liquidSuppressClick !== 'true') return;
-  clearTimeout(input._liquidSuppressClickTimer);
-  delete input.dataset.liquidSuppressClick;
-  delete input._liquidSuppressClickTimer;
+  if (!input || (input.dataset.liquidSuppressClick !== 'true' && !input._liquidSettling)) return;
   event.preventDefault();
   event.stopImmediatePropagation();
 }, true);
@@ -16290,24 +16314,29 @@ document.addEventListener('click', function(event) {
   event.stopImmediatePropagation();
 }, true);
 
+function modelOptionLabelHtml(option) {
+  return esc(option.textContent || option.value) + (option.dataset.responseAnomaly === 'true'
+    ? '<span class="model-response-warning">' + esc(t('model.responseAnomaly')) + '</span>' : '');
+}
+
 window.syncModelSelectSurface = function() {
   var sel = els['model-select'] || document.getElementById('model-select');
   var label = document.getElementById('model-select-label');
   var menu = document.getElementById('model-select-menu');
   if (!sel || !label || !menu) return;
   var selected = sel.options[sel.selectedIndex] || sel.options[0];
-  label.textContent = selected ? selected.textContent : (state.modelLabel || state.model || t('language.auto'));
+  label.innerHTML = selected ? modelOptionLabelHtml(selected) : esc(state.modelLabel || state.model || t('language.auto'));
   var html = '';
   Array.from(sel.children).forEach(function(child) {
     if (child.tagName === 'OPTGROUP') {
       html += '<div class="model-select-menu-group" role="presentation">' + esc(child.label || '') + '</div>';
       Array.from(child.children).forEach(function(option) {
-        html += '<button type="button" class="model-select-menu-option' + (option.value === sel.value ? ' selected' : '') + '" role="option" aria-selected="' + (option.value === sel.value ? 'true' : 'false') + '" data-value="' + escAttr(option.value) + '" onclick="window.selectModelFromMenu(this.getAttribute(\'data-value\'))">' + esc(option.textContent || option.value) + '</button>';
+        html += '<button type="button" class="model-select-menu-option' + (option.value === sel.value ? ' selected' : '') + '" role="option" aria-selected="' + (option.value === sel.value ? 'true' : 'false') + '" data-value="' + escAttr(option.value) + '" onclick="window.selectModelFromMenu(this.getAttribute(\'data-value\'))">' + modelOptionLabelHtml(option) + '</button>';
       });
       return;
     }
     if (child.tagName === 'OPTION') {
-      html += '<button type="button" class="model-select-menu-option' + (child.value === sel.value ? ' selected' : '') + '" role="option" aria-selected="' + (child.value === sel.value ? 'true' : 'false') + '" data-value="' + escAttr(child.value) + '" onclick="window.selectModelFromMenu(this.getAttribute(\'data-value\'))">' + esc(child.textContent || child.value) + '</button>';
+      html += '<button type="button" class="model-select-menu-option' + (child.value === sel.value ? ' selected' : '') + '" role="option" aria-selected="' + (child.value === sel.value ? 'true' : 'false') + '" data-value="' + escAttr(child.value) + '" onclick="window.selectModelFromMenu(this.getAttribute(\'data-value\'))">' + modelOptionLabelHtml(child) + '</button>';
     }
   });
   // Rebuilding the option list must not destroy the carrier block.  A pending
@@ -16598,13 +16627,13 @@ window.refreshModelSelect = function(options) {
       for (var midx = 0; midx < p.models.length; midx++) {
         var modelEntry = p.models[midx];
         var effectiveStatus = effectiveUiModelStatus(modelEntry);
-        if (effectiveStatus !== 'available' && effectiveStatus !== 'unvalidated' && effectiveStatus !== 'verified' && effectiveStatus !== 'degraded') continue;
+        if (modelEntry && modelEntry.enabled === false) continue;
         var modelName = typeof modelEntry === 'string' ? modelEntry : (modelEntry.name || '');
         var modelLabel = typeof modelEntry === 'string' ? modelEntry : (modelEntry.display || modelEntry.name || '');
         var providerId = String(p.id || p.name || '');
         var modelValue = providerId && modelName ? 'deployment:' + encodeURIComponent(providerId) + ':' + encodeURIComponent(modelName) : modelName;
         if (!firstConcreteModel && modelValue) firstConcreteModel = modelValue;
-        providerOpts += '<option value="' + esc(modelValue) + '">' + esc(p.name + ' / ' + modelLabel) + '</option>';
+        providerOpts += '<option data-response-anomaly="' + (modelHasResponseAnomaly(modelEntry) ? 'true' : 'false') + '" value="' + esc(modelValue) + '">' + esc(p.name + ' / ' + modelLabel) + '</option>';
       }
       if (providerOpts) modelOpts += '<optgroup label="' + esc(p.name) + '">' + providerOpts + '</optgroup>';
     }
@@ -17764,6 +17793,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     var completedWorkRequest = captureConversationWorkSnapshotRequest(lockedTarget);
     api.getState(lockedTarget).then(function(s) {
       if (!isCurrentConversationWorkSnapshotRequest(completedWorkRequest)) return;
+      if (s && s.providers) { state.providers = s.providers; window.refreshModelSelect(); }
       if (s && s.runtimeKey) registerRuntimeKey(lockedTarget, s.runtimeKey);
       var stillActiveAfterRefresh = isActiveConversationTarget(lockedTarget) && isViewingRuntimeConversationBranch(lockedTarget);
       if (stillActiveAfterRefresh) applyReturnedGoalState(s);
@@ -19463,8 +19493,18 @@ function formatModelStatus(status) {
   return status || t('model.notChecked');
 }
 
+function modelHasResponseAnomaly(modelEntry) {
+  if (!modelEntry || typeof modelEntry === 'string') return false;
+  var health = modelEntry.response_health || {};
+  if (Object.keys(health).some(function(key) { return health[key].ok === false; })) return true;
+  if (health.text && health.text.ok) return false;
+  return ['unavailable', 'auth_error', 'invalid_config', 'rate_limited', 'failed', 'error'].indexOf(effectiveUiModelStatus(modelEntry)) >= 0;
+}
+
 function effectiveUiModelStatus(modelEntry) {
   if (!modelEntry || typeof modelEntry === 'string') return 'unvalidated';
+  var responseHealth = modelEntry.response_health || {};
+  if (responseHealth.text) return responseHealth.text.ok ? 'available' : 'unavailable';
   var rawValidation = String((modelEntry.validation && modelEntry.validation.status) || '').toLowerCase();
   var rawEvaluation = String((modelEntry.evaluation && modelEntry.evaluation.status) || 'unvalidated').toLowerCase();
   var capabilities = modelEntry.validation && modelEntry.validation.capabilities || {};
@@ -19649,18 +19689,22 @@ function renderModelSettings() {
       if (typeof modelEntry !== 'string') {
         var tierMapCount = modelEntry.thinking_tier_map && typeof modelEntry.thinking_tier_map === 'object' ? Object.keys(modelEntry.thinking_tier_map).length : 0;
         details = '<span class="model-eval-line">ctx ' + esc(modelEntry.max_tokens || '') +
-          ' | ' + esc(t('model.vision')) + ' ' + (modelEntry.vision ? t('common.on') : t('common.off')) +
+          ' | ' + esc(t('model.vision')) + ' ' + ((modelEntry.response_health && modelEntry.response_health.vision ? modelEntry.response_health.vision.ok : modelEntry.vision) ? t('common.on') : t('common.off')) +
           ' | ' + esc(t('model.thinking')) + ' ' + (modelEntry.thinking ? t('common.on') : t('common.off')) +
           (tierMapCount ? ' | ' + esc(t('model.thinkingTierMap')) + ' ' + tierMapCount : '') +
           ' | ' + esc(t('model.cost')) + ' ' + esc(evaluation ? evaluation.cost_rating : '-') +
           ' | ' + esc(t('model.performanceShort')) + ' ' + esc(modelEntry.capability_rating || '-') +
           ' | ' + esc(t('model.speed')) + ' ' + esc(modelEntry.speed_rating || '-') + '</span>';
       }
-      modelsHtml += '<span class="model-chip" title="' + esc(modelName) + '">' + esc(modelLabel) +
-        '<span class="' + statusClass + '"> ' + esc(status) + '</span>' +
-        details +
-        '<span class="remove" onclick="window.editModel(' + i + ',' + j + ')" title="' + escAttr(t('common.edit')) + '">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</span>' +
-        '<span class="remove" onclick="window.removeModel(' + i + ',' + j + ')" title="' + escAttr(t('common.remove')) + '">' + iconSvg('x', t('common.remove'), 'tiny') + '</span></span>';
+      var modelEnabled = typeof modelEntry === 'string' || modelEntry.enabled !== false;
+      var anomaly = modelHasResponseAnomaly(modelEntry);
+      modelsHtml += '<div class="model-chip' + (modelEnabled ? '' : ' is-user-disabled') + '" data-model-name="' + escAttr(modelName) + '">' +
+        '<div class="model-chip-info"><span title="' + escAttr(modelName) + '">' + esc(modelLabel) + '</span>' +
+        (anomaly ? '<span class="model-response-warning">' + esc(t('model.responseAnomaly')) + '</span>' : '<span class="' + statusClass + '"> ' + esc(status) + '</span>') + details + '</div>' +
+        '<div class="model-chip-actions">' +
+        '<input type="checkbox" class="model-enable-switch" role="switch" ' + (modelEnabled ? 'checked ' : '') + 'aria-label="' + escAttr(t('model.enabled') + ': ' + modelLabel) + '" onchange="window.toggleModelEnabled(' + i + ',' + j + ',this)">' +
+        '<button type="button" class="provider-icon-btn" onclick="window.editModel(' + i + ',' + j + ')" aria-label="' + escAttr(t('common.edit')) + '">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</button>' +
+        '<button type="button" class="provider-icon-btn danger" onclick="window.removeModel(' + i + ',' + j + ')" aria-label="' + escAttr(t('common.delete')) + '">' + iconSvg('trash-2', t('common.delete'), 'tiny') + '</button></div></div>';
     }
     var providerEnabled = p.enabled !== false;
     var providerToggleLabel = providerEnabled ? t('model.disableProvider') : t('model.enableProvider');
@@ -20953,6 +20997,26 @@ window.deleteArchive = function(idx, scope) {
   }).catch(function(err) {
     addMsg('assistant', '[Archive] ' + t('archive.deleteFailed') + ': ' + (err.message || String(err)), 'error', '');
   });
+};
+
+window.toggleModelEnabled = async function(provIdx, modelIdx, button) {
+  var provider = state.providers[provIdx];
+  if (!provider || !provider.models || !provider.models[modelIdx]) return;
+  var next = JSON.parse(JSON.stringify(state.providers));
+  var previous = provider.models[modelIdx];
+  next[provIdx].models[modelIdx] = typeof previous === 'string' ? { name: previous, enabled: false }
+    : Object.assign({}, previous, { enabled: previous.enabled === false });
+  if (button) button.disabled = true;
+  try {
+    var result = await api.saveConfig({ providers: next });
+    if (result === false || (result && result.error)) throw new Error(result.error || 'Model update failed');
+    state.providers = next;
+    window.refreshModelSelect();
+    window.openSettings('models');
+  } catch (error) {
+    if (button) { button.disabled = false; button.checked = typeof previous === 'string' || previous.enabled !== false; }
+    showUiNotice(String(error.message || error), 'error', 'model-enabled');
+  }
 };
 
 window.removeModel = function(provIdx, modelIdx) {

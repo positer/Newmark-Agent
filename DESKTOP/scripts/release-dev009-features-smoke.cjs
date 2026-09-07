@@ -132,6 +132,7 @@ async function reconnectCdp(port, current) {
   const target = await waitForTarget(port);
   const next = connectCdp(target);
   await next.ready;
+  await waitForPromotedMainUi(next);
   await next.call('Runtime.enable');
   await next.call('Page.enable');
   await next.call('Page.bringToFront');

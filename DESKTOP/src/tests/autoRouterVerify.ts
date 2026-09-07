@@ -134,12 +134,12 @@ export function verifyAutoRouter(): Check[] {
     defaultRoutePolicy('balanced'), hardFilterCandidates,
     request({ requiredCapabilities: ['text_input', 'text_output', 'image_input'] }),
   );
-  assert(visionDecision.resolvedDeployment?.modelId === 'vision'
-    && visionDecision.excludedCandidates.length === 4,
-  'auto hard filters: standard validation, preview, context and image-input are enforced', checks);
-  assert(visionDecision.excludedCandidates.some(entry => entry.deployment.modelId === 'image-output-only'
-    && entry.reasons.includes('missing_capability:image_input')),
-  'auto capability: image output never satisfies image input', checks);
+  assert(visionDecision.excludedCandidates.length === 2
+    && visionDecision.excludedCandidates.some(entry => entry.deployment.modelId === 'preview')
+    && visionDecision.excludedCandidates.some(entry => entry.deployment.modelId === 'short'),
+  'auto filters: explicit preview and context limits remain, observational capability flags do not exclude', checks);
+  assert(!visionDecision.excludedCandidates.some(entry => ['legacy', 'image-output-only', 'vision'].includes(entry.deployment.modelId)),
+  'auto capability: untested image input remains eligible for a real response', checks);
 
   const regionalPolicy: RoutePolicy = {
     ...defaultRoutePolicy('balanced'),
@@ -308,9 +308,9 @@ export function verifyAutoRouter(): Check[] {
     defaultRoutePolicy('balanced'), [candidate('p', 'broken'), candidate('p', 'healthy')],
     request({ transactionId: 'circuit', affinityKey: 'circuit' }),
   );
-  assert(circuit.resolvedDeployment?.modelId === 'healthy'
-    && circuit.excludedCandidates.some(entry => entry.deployment.modelId === 'broken' && entry.reasons.includes('circuit_open')),
-  'auto health: three transport failures open a 60-second circuit', checks);
+  assert(router.endpointMetrics({ providerId: 'p', modelId: 'broken' }).circuit === 'open'
+    && !circuit.excludedCandidates.some(entry => entry.deployment.modelId === 'broken'),
+  'auto health: failed endpoint remains eligible while its circuit is only diagnostic', checks);
   now += 60_001;
   const halfOpenMetrics = router.endpointMetrics({ providerId: 'p', modelId: 'broken' });
   const halfOpen = router.route(
@@ -325,9 +325,9 @@ export function verifyAutoRouter(): Check[] {
   );
   assert(halfOpenMetrics.circuit === 'half_open'
     && halfOpen.resolvedDeployment?.modelId === 'broken'
-    && !secondHalfOpen.resolvedDeployment
-    && secondHalfOpen.excludedCandidates.some(entry => entry.reasons.includes('circuit_open')),
-  'auto health: metrics reads are pure and cooldown permits exactly one half-open probe until success or failure', checks);
+    && secondHalfOpen.resolvedDeployment?.modelId === 'broken'
+    && !secondHalfOpen.excludedCandidates.some(entry => entry.reasons.includes('circuit_open')),
+  'auto health: metrics reads are pure and half-open diagnostics never disable a subsequent request', checks);
   router.recordEndpointSuccess({ providerId: 'p', modelId: 'broken' }, 800);
 
   const metricsRouter = new AutoRouter({ now: () => now });

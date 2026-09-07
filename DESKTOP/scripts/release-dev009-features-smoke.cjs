@@ -132,10 +132,10 @@ async function reconnectCdp(port, current) {
   const target = await waitForTarget(port);
   const next = connectCdp(target);
   await next.ready;
-  await waitForPromotedMainUi(next);
   await next.call('Runtime.enable');
   await next.call('Page.enable');
   await next.call('Page.bringToFront');
+  await waitForPromotedMainUi(next);
   return next;
 }
 
@@ -718,11 +718,27 @@ async function stopPackagedRun(child, cdp) {
       const keys = Object.keys(event || {});
       const expected = event.type === 'tool_call' ? `Using tool ${event.toolName}.` : `Tool ${event.toolName} completed.`;
       return event.content !== expected
-        || keys.some(key => /^(?:toolCallId|args|arguments|command|result)$/i.test(key))
+        || keys.some(key => /^(?:args|arguments|command|result)$/i.test(key))
         || (event.type === 'tool_result' && keys.includes('toolArgs'));
     })) fail(`Tool work events exposed implementation details: ${JSON.stringify(alphaToolEvents).slice(0, 4000)}`);
     if (!alphaToolEvents.filter(event => event.type === 'tool_call').every(event => typeof event.toolArgs === 'string' && event.toolArgs.length > 0)) {
       fail(`Tool call details were not retained for the Build fold: ${JSON.stringify(alphaToolEvents).slice(0, 4000)}`);
+    }
+    // Correlation IDs belong to the public event contract: same-name tools
+    // must pair within their owning Build without printing IDs as chat text.
+    for (const run of alpha.workRuns) {
+      const events = (run.events || []).filter(event => event.type === 'tool_call' || event.type === 'tool_result');
+      const calls = events.filter(event => event.type === 'tool_call');
+      if (new Set(calls.map(event => event.toolCallId)).size !== calls.length) fail('Tool calls reused a correlation ID within one Build');
+      for (const event of events) {
+        if (!String(event.toolCallId || '').trim() || event.runId !== run.runId
+          || event.conversationId !== targetA.conversationId || event.workspaceId !== targetA.workspaceId
+          || event.runtimeKey !== run.runtimeKey) fail(`Tool event lost its call or run/target identity: ${JSON.stringify(event)}`);
+        const pair = events.filter(item => item.toolCallId === event.toolCallId);
+        if (pair.length !== 2 || pair[0].type !== 'tool_call' || pair[1].type !== 'tool_result'
+          || pair.some(item => item.toolName !== event.toolName)) fail(`Tool call/result identity did not pair exactly once: ${JSON.stringify(pair)}`);
+        if (String(guideAfterAppliedRedraw.body || '').includes(event.toolCallId)) fail('Tool correlation ID was printed into visible conversation text');
+      }
     }
     const completedRun = alpha.workRuns.find(run => run.status === 'completed');
     if (!completedRun || completedRun.expanded !== true) fail(`Completed work run did not retain its visible Build process: ${JSON.stringify(alpha.workRuns)}`);

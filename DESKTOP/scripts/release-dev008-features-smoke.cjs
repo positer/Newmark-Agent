@@ -216,7 +216,7 @@ function startMockProvider() {
     ['SubAgent', { name: 'beta-review', prompt: 'DEV008_BETA_PEER initial work', model: modelName, mode: 'build', input_mode: 'guide' }],
     ['subagent_list', {}],
     ['subagent_read', { id: 'alpha-review' }],
-    ['subagent_send', { id: 'alpha-review', message: 'DEV008_REACTIVATE_ALPHA', kind: 'directive' }],
+    ['subagent_send', { id: 'alpha-review', message: 'DEV008_REACTIVATE_ALPHA', kind: 'directive', wakeup: true }],
   ];
 
   const server = http.createServer((request, response) => {
@@ -447,7 +447,10 @@ async function stopPackagedRun(child, cdp) {
     })`, 120000, 'parallel peers, mailbox reactivation, and results');
     if (!peerState.chat.includes('DEV008_ROOT_RESULT_FEEDBACK_OK')) fail(`Root result feedback was not summarized into the conversation: ${peerState.chat.slice(-2000)}`);
     if (peerState.chat.includes('DEV008_DUPLICATE_ROOT_INBOX_REJECTED')) fail('The same persisted root inbox message was delivered more than once');
-    if (!mock.requests.some(entry => JSON.stringify(entry.parsed || {}).includes('DEV008_REACTIVATE_ALPHA'))) fail('Peer mailbox reactivation did not reach the mock provider');
+    if (!mock.requests.some(entry => {
+      const messages = Array.isArray(entry.parsed?.messages) ? entry.parsed.messages : [];
+      return peerIdentity(messages).name.includes('alpha-review') && latestUserText(messages).includes('DEV008_REACTIVATE_ALPHA');
+    })) fail('Peer mailbox reactivation did not reach the alpha provider request');
     if (!mock.requests.some(entry => {
       const messages = Array.isArray(entry.parsed?.messages) ? entry.parsed.messages : [];
       return messages.some(message => message?.role === 'tool' && String(message.content || '').includes('createdByAgentId'));

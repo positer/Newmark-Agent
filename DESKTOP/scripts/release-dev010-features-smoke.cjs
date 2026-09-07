@@ -1,6 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const vm = require('node:vm');
 const { spawnSync } = require('child_process');
 const asar = require('@electron/asar');
 
@@ -8,9 +9,11 @@ const appRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(appRoot, '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8'));
 const exePath = path.resolve(process.env.NEWMARK_TEST_EXE || path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe'));
+let assertionCount = 0;
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+  assertionCount += 1;
 }
 
 function psQuote(value) {
@@ -126,7 +129,56 @@ function writeRuntimeConfig(root) {
   }, null, 2), 'utf8');
 }
 
-function verifyPackagedSources() {
+async function verifyPackagedQueueGuide(ui) {
+  const start = ui.indexOf('function restoreQueueItemAfterGuideFailure(');
+  const end = ui.indexOf('window.startQueueDrag =', start);
+  assert(start >= 0 && end > start, 'packaged Guide command and recovery functions are missing');
+  const source = ui.slice(start, end);
+  const cases = [
+    ['success', () => Promise.resolve({ ok: true }), false],
+    ['failed receipt', () => Promise.resolve({ ok: false, error: 'fixture rejection' }), true],
+    ['missing receipt', () => Promise.resolve(undefined), true],
+    ['rejected command', () => Promise.reject(new Error('fixture transport failure')), true],
+  ];
+  for (const [name, response, restores] of cases) {
+    const target = { workspaceId: 'owned-workspace', conversationId: 'owned-conversation' };
+    const neighbor = { backendManaged: true, queueItemId: 'neighbor-id', target };
+    const request = { backendManaged: true, queueItemId: 'guide-id', clientMessageId: 'stable-client-id', target };
+    const state = { nextQueue: ['neighbor', 'guide-body'], nextQueueRequests: [neighbor, request], queueHiddenItems: {} };
+    const calls = [];
+    const context = vm.createContext({
+      state,
+      window: { renderInputStack() {}, queueAction(action, input, suppliedTarget) {
+        calls.push({ action, input, target: suppliedTarget });
+        return response();
+      } },
+      currentConversationTarget: () => target,
+      queuedRequestMatchesTarget: (candidate, current) => candidate.target === current,
+      queuedRequestIsBackendManaged: candidate => candidate.backendManaged,
+      queueItemIdForText: (_text, _target, candidate) => candidate.queueItemId,
+      normalizeQueuedConversationTarget: value => value,
+      queueHiddenItemKey: (text, candidate) => candidate.conversationId + '::' + text,
+      refreshNextPromptForTarget() {}, showUiNotice() {}, currentLang: () => 'en',
+    });
+    vm.runInContext(source, context, { timeout: 1000 });
+    const result = await context.window.guideQueueItem(1);
+    assert(calls.length === 1 && calls[0].action === 'queue_guide', `${name}: Guide must issue one unified kernel command`);
+    assert(calls[0].input.id === 'guide-id' && calls[0].target === target, `${name}: Guide command lost queue id or conversation target`);
+    assert(state.nextQueue[0] === 'neighbor' && state.nextQueueRequests[0] === neighbor, `${name}: Guide changed the neighboring queue entry`);
+    if (restores) {
+      assert(result?.ok === false, `${name}: failed Guide command must return failure`);
+      assert(state.nextQueue.length === 2 && state.nextQueue[1] === 'guide-body', `${name}: failed Guide entry was not restored at its original position`);
+      assert(state.nextQueueRequests.length === 2 && state.nextQueueRequests[1] === request && request.clientMessageId === 'stable-client-id', `${name}: recovery changed the request or client message identity`);
+      assert(state.queueHiddenItems['owned-conversation::guide-body'] === undefined, `${name}: restored Guide entry remained hidden`);
+    } else {
+      assert(result?.ok === true, 'successful Guide command must return success');
+      assert(state.nextQueue.length === 1 && state.nextQueueRequests.length === 1, 'successful Guide entry was incorrectly restored');
+    }
+  }
+  console.log('[release-dev010-features-smoke] packaged Guide queue behavior 4/4 passed');
+}
+
+async function verifyPackagedSources() {
   const asarPath = path.join(path.dirname(exePath), 'resources', 'app.asar');
   assert(fs.existsSync(asarPath), `packaged app.asar is missing: ${asarPath}`);
   const packaged = JSON.parse(readAsarText(asarPath, 'package.json'));
@@ -152,8 +204,8 @@ function verifyPackagedSources() {
   assert(ui.includes('20 * transparencyPercent / 100') && ui.includes("--glass-blur-3"), 'packaged glass opacity-to-width inversion is missing');
   assert(ui.includes('queue-guide-btn')
     && ui.includes("'queue.guideAction': '引导'")
-    && ui.includes('restoreQueueItemAfterGuideFailure')
-    && ui.includes('!outcome.guideReceipt'), 'packaged queue lacks visible Guide delivery and failure recovery');
+    && ui.includes('restoreQueueItemAfterGuideFailure'), 'packaged queue lacks visible Guide delivery and failure recovery');
+  await verifyPackagedQueueGuide(ui);
   assert(ui.includes('--control-hover-bg')
     && ui.includes('settings-action-btn')
     && ui.includes('settings-terminal-timeout-input')
@@ -201,9 +253,9 @@ function verifyPackagedCli(root) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-dev010-features-'));
   try {
     writeRuntimeConfig(root);
-    verifyPackagedSources();
+    await verifyPackagedSources();
     verifyPackagedCli(root);
-    console.log(JSON.stringify({ ok: true, version: packageJson.version, assertions: 22, real_api_called: false }));
+    console.log(JSON.stringify({ ok: true, version: packageJson.version, assertions: assertionCount, guide_queue_cases: 4, real_api_called: false }));
   } finally {
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   }

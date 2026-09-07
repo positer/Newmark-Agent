@@ -6,6 +6,12 @@
 
 Android 0.6.1 Release APK 位于 `APK/Newmark-Agent-0.6.1-release.apk`，SHA-256 为 `286479F2E5733885850C5F75F20BCD7CD8D5E55715BD7DD6F0B4340F18F64A6A`。旧 APK、根目录历史 `release-*` 以及 archive 内历史发行安装包和解包目录已清理；非发行归档资料保留。
 
+## dev-0.6.1 供应商限定模型身份修复与全平台发行
+
+PC 的上下文模型、默认供应商和回退池现在统一保留供应商限定的部署身份；Android 回退同步会解析限定部署 ID，并准确绑定供应商与模型，避免不同供应商的同名模型串用。全平台发行工作流已通过，预发布提供 Windows x64 MSI／便携 ZIP、Linux x64 AppImage／deb／便携 ZIP和 Android APK。
+
+完整双语说明、六个资产及最终 SHA-256 见 [GitHub Release dev-0.6.1](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.6.1)。
+
 ## dev-0.6.0 响应观察、模型开关与玻璃开关修复
 
 模型与供应商部署身份在会话快照、再次发送和冷加载中保持一致。未检测或响应异常的模型保持可选、可发送；模型名称后以灰色“（响应异常）”提示，真实成功响应恢复对应能力标识。图片不受历史视觉判断拦截；实际视觉拒绝后进入内置 miniOCR 与同模型文本纠错，保留原始任务与不确定性，后续图片仍尝试原模型。用户关闭模型开关才会在选择器隐藏该模型。
@@ -22,7 +28,7 @@ Android 0.6.1 Release APK 位于 `APK/Newmark-Agent-0.6.1-release.apk`，SHA-256
 
 Newmark Agent 将桌面、命令行与原生 Android 客户端连接到同一套会话和工作区能力，面向需要本地工具执行、多模型协作及跨设备工作连续性的开发者。
 
-当前开发预发布版本为 **dev-0.6.0**，统一 Desktop 0.6.0 与 Android 0.6.0／600，提供 Windows x64 MSI／便携 ZIP、Linux x64 AppImage／deb／便携 ZIP 和 Android APK。完整版本说明与六个资产见 [GitHub Release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.6.0)。CLI／TUI 通过 [npm `newmark-agent`](https://www.npmjs.com/package/newmark-agent) 分发。Windows 包未进行代码签名；Android APK 沿用开发证书，面向开发测试分发。下方旧版本构建、安装与验证记录保留各自历史边界。
+当前开发预发布版本为 **dev-0.6.1**，统一 Desktop 0.6.1 与 Android 0.6.1／601，提供 Windows x64 MSI／便携 ZIP、Linux x64 AppImage／deb／便携 ZIP和 Android APK。完整版本说明、六个资产与最终哈希见 [GitHub Release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.6.1)。CLI／TUI 通过 [npm `newmark-agent`](https://www.npmjs.com/package/newmark-agent) 分发。Windows 包未进行代码签名；Android APK 沿用开发证书，面向开发测试分发。下方旧版本构建、安装与验证记录保留各自历史边界。
 
 ### SubAgent 连续工作与通信缓存（2026-09-07）
 

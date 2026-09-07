@@ -755,12 +755,21 @@ private fun NewmarkAppContent(
     // 模型显示名对齐 PC modelLabel（`provider / model`）；判定用原始模型名单独传。
     // 桌面端回退模型优先显示：回退不是隐藏参数回退，选择区必须同步实际生效模型。
     val selectedModelName = if (useRemote) {
-        linkVm.fallbackModel.ifBlank { linkVm.desktopState?.model ?: "" }
+        val fallback = linkVm.fallbackModel
+        if (fallback.startsWith("deployment:")) fallback.substringAfterLast(':')
+            .let { java.net.URLDecoder.decode(it, Charsets.UTF_8.name()) }
+        else fallback.ifBlank { linkVm.desktopState?.model ?: "" }
     } else vm.apiConfig.model
     val selectedModel = if (useRemote) {
         val fallback = linkVm.fallbackModel
         if (fallback.isNotBlank()) {
-            val option = modelOptions.firstOrNull { it.modelName == fallback }
+            val fallbackProviderId = fallback.removePrefix("deployment:").substringBefore(':')
+                .let { java.net.URLDecoder.decode(it, Charsets.UTF_8.name()) }
+            val fallbackName = if (fallback.startsWith("deployment:"))
+                fallback.substringAfterLast(':').let { java.net.URLDecoder.decode(it, Charsets.UTF_8.name()) }
+            else fallback
+            val option = modelOptions.firstOrNull { it.modelName == fallbackName &&
+                (!fallback.startsWith("deployment:") || it.providerId == fallbackProviderId) }
             if (option != null) {
                 option.providerLabel.takeIf(String::isNotBlank)
                     ?.let { "$it / ${option.label.ifBlank { option.modelName }}" }
@@ -777,7 +786,9 @@ private fun NewmarkAppContent(
         if (providerLabel != null) "$providerLabel / $selectedModelName" else selectedModelName
     }
     val selectedProviderId = if (useRemote) {
-        modelOptions.firstOrNull { it.modelName == selectedModelName }?.providerId.orEmpty()
+        if (linkVm.fallbackModel.startsWith("deployment:")) linkVm.fallbackModel.removePrefix("deployment:")
+            .substringBefore(':').let { java.net.URLDecoder.decode(it, Charsets.UTF_8.name()) }
+        else modelOptions.firstOrNull { it.modelName == selectedModelName }?.providerId.orEmpty()
     } else {
         vm.activeProviderId
     }

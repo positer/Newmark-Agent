@@ -1,5 +1,8 @@
 # Newmark Agent Project Taste
 
+- Windows MSI release work uses synchronized semantic versions, completes the full release gate before packaging, records the MSI SHA-256, and verifies both uninstall-registry and installed executable versions. For elevated silent installation, resolve literal absolute paths and pass one explicitly quoted argument line to `Start-Process`/`msiexec.exe`; keep `/quiet /norestart` and a verbose archive log.
+- Keep only the current deliverable set in `release/` and `APK/`. Historical release binaries and unpacked package trees may be removed from `archive/`, while textual reports, logs, screenshots, test data, conversations, and other non-release evidence remain cold archival material.
+
 - Development releases use tag/title `dev-X.Y.Z` / `Newmark Agent dev-X.Y.Z`, numeric package version X.Y.Z, synchronized Android versionCode, and the established six Windows/Linux/Android assets. Release notes contain complete English then complete Simplified Chinese, version-local changes, measured validation and asset hashes. Never substitute auto-generated notes for the reviewed bilingual body. Preserve the existing Android signing certificate across release updates.
 
 ## 2026-09-07 Observations never disable model communication

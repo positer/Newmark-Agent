@@ -1,5 +1,11 @@
 # Newmark Agent Overview
 
+## 0.6.1 MSI 构建与安装状态
+
+根目录 `VERSION`、`DESKTOP/package.json`、`DESKTOP/package-lock.json` 与 `android/app/build.gradle.kts` 已同步为 0.6.1／601。Windows 交付物位于 `release/Newmark-Agent-0.6.1-x64.msi`，已通过完整 release 门禁并安装到 `C:\Program Files\Newmark Agent\`。`archive/20260907-061-msi-install/` 保存报告与 Windows Installer 详细日志。
+
+Android 当前交付物为 `APK/Newmark-Agent-0.6.1-release.apk`。`release/` 仅保留 0.6.1 MSI 与 Windows ZIP，`APK/` 仅保留 0.6.1 APK；根目录历史 `release-*` 已删除。`archive/` 中历史发行二进制与解包目录已删除，项目报告、日志、测试数据和媒体等冷数据继续保留。
+
 ## dev-0.6.0 全平台发行
 
 `VERSION`、Desktop package/lock 与 Android Gradle 绑定 0.6.0／600。`.github/workflows/release-linux.yml` 构建既有六平台资产，并读取 `DESKTOP/scripts/release-notes-dev-0.6.0.md` 的英文／简体中文发行说明。`archive/20260907-dev-0.6.0-release/` 保存本轮构建、哈希和上传校验记录。

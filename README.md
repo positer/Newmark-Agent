@@ -1,5 +1,11 @@
 # Newmark Agent
 
+## 0.6.1 Windows MSI
+
+最新版 Windows x64 MSI 已完成全量 Desktop release 回归、打包和 UAC 提权后的静默安装。安装版本与主程序文件版本均为 `0.6.1.0`；产物为 `release/Newmark-Agent-0.6.1-x64.msi`，SHA-256 为 `BC491848286DB2C8ED5162CF9C070E66C3358B65C8BB01BB96FBD0AE32D7CBBF`。构建、PowerShell 参数格式和安装证据见 [本轮记录](archive/20260907-061-msi-install/REPORT.md)。
+
+Android 0.6.1 Release APK 位于 `APK/Newmark-Agent-0.6.1-release.apk`，SHA-256 为 `286479F2E5733885850C5F75F20BCD7CD8D5E55715BD7DD6F0B4340F18F64A6A`。旧 APK、根目录历史 `release-*` 以及 archive 内历史发行安装包和解包目录已清理；非发行归档资料保留。
+
 ## dev-0.6.0 响应观察、模型开关与玻璃开关修复
 
 模型与供应商部署身份在会话快照、再次发送和冷加载中保持一致。未检测或响应异常的模型保持可选、可发送；模型名称后以灰色“（响应异常）”提示，真实成功响应恢复对应能力标识。图片不受历史视觉判断拦截；实际视觉拒绝后进入内置 miniOCR 与同模型文本纠错，保留原始任务与不确定性，后续图片仍尝试原模型。用户关闭模型开关才会在选择器隐藏该模型。

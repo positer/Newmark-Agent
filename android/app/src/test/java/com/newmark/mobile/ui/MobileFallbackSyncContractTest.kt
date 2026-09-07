@@ -58,9 +58,11 @@ class MobileFallbackSyncContractTest {
     @Test
     fun newmarkAppPrefersFallbackModelInInputSurface() {
         val app = File("src/main/java/com/newmark/mobile/ui/NewmarkApp.kt").readText()
-        assertTrue(app.contains("linkVm.fallbackModel.ifBlank { linkVm.desktopState?.model ?: \"\" }"))
+        assertTrue(app.contains("fallback.ifBlank { linkVm.desktopState?.model ?: \"\" }"))
         assertTrue(app.contains("val fallback = linkVm.fallbackModel"))
-        assertTrue(app.contains("modelOptions.firstOrNull { it.modelName == fallback }"))
+        assertTrue(app.contains("it.modelName == fallbackName"))
+        assertTrue(app.contains("it.providerId == fallbackProviderId"))
+        assertTrue(app.contains("URLDecoder.decode(it, Charsets.UTF_8.name())"))
     }
 
     @Test

@@ -12,8 +12,8 @@ android {
         applicationId = "com.newmark.mobile"
         minSdk = 24
         targetSdk = 36
-        versionCode = 600
-        versionName = "0.6.0"
+        versionCode = 601
+        versionName = "0.6.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

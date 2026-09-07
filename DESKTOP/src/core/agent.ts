@@ -6467,9 +6467,12 @@ export class Agent {
       const active = this.activeModelConfig();
       if (active) return active;
     }
-    const byName = this.config.findModel(modelName);
+    const parsed = parseDeploymentSelectionValue(modelName);
+    const byName = parsed ? this.config.findDeployment(parsed) : this.config.findModel(modelName);
     if (byName) return byName;
-    return this.config.findModel(this.config.getStr('models', 'default_model'));
+    const configured = this.config.getStr('models', 'default_model');
+    const configuredRef = parseDeploymentSelectionValue(configured);
+    return configuredRef ? this.config.findDeployment(configuredRef) : this.config.findModel(configured);
   }
 
   private contextMaxTokens(modelName = this.model): number {
@@ -7304,7 +7307,9 @@ export class Agent {
     if (provider) return provider.id;
     const active = this.activeModelConfig();
     if (active?.provider_id) return active.provider_id;
-    const fallback = this.config.findModel(this.config.getStr('models', 'default_model'));
+    const defaultSelection = this.config.getStr('models', 'default_model');
+    const defaultRef = parseDeploymentSelectionValue(defaultSelection);
+    const fallback = defaultRef ? this.config.findDeployment(defaultRef) : this.config.findModel(defaultSelection);
     return fallback?.provider_id || this.config.providers()[0]?.id || '';
   }
 
@@ -7662,7 +7667,9 @@ export class Agent {
     // which is exactly the same-name cross-provider leak this guard exists to
     // prevent. When no provider can be established unambiguously, return an
     // empty pool: failing the switch is safe, crossing providers is not.
-    const current = currentModelName === 'auto' ? this.activeModelConfig() : this.config.findModel(currentModelName);
+    const currentRef = parseDeploymentSelectionValue(currentModelName);
+    const current = currentModelName === 'auto' ? this.activeModelConfig()
+      : (currentRef ? this.config.findDeployment(currentRef) : this.config.findModel(currentModelName));
     const providerId = current?.provider_id
       || this.fixedDeployment?.providerId
       || (currentModelName !== 'auto' ? this.activeDeployment()?.providerId : undefined);

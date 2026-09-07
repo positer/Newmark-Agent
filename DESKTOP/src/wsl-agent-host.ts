@@ -66,7 +66,7 @@ function write(value: unknown): void {
 }
 configureWslHostToolWriter(write);
 
-function runtimeIdentity(): { pid: number; pgid: number; sessionId: number } {
+function runtimeIdentity(): { pid: number; pgid: number; sessionId: number; startTimeTicks: string; bootId: string } {
   const pid = process.pid;
   const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
   const commandEnd = stat.lastIndexOf(')');
@@ -75,10 +75,14 @@ function runtimeIdentity(): { pid: number; pgid: number; sessionId: number } {
   const fields = stat.slice(commandEnd + 2).trim().split(/\s+/);
   const pgid = Number(fields[2] || 0);
   const sessionId = Number(fields[3] || 0);
-  if (![pid, pgid, sessionId].every(value => Number.isSafeInteger(value) && value > 1)) {
+  const startTimeTicks = String(fields[19] || '');
+  const bootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim().toLowerCase();
+  if (![pid, pgid, sessionId].every(value => Number.isSafeInteger(value) && value > 1)
+    || !/^\d+$/.test(startTimeTicks)
+    || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(bootId)) {
     throw new Error(`Invalid WSL runtime identity: pid=${pid} pgid=${pgid} session=${sessionId}`);
   }
-  return { pid, pgid, sessionId };
+  return { pid, pgid, sessionId, startTimeTicks, bootId };
 }
 
 function applyWorkspace(workspace: WslAgentWorkspace | null): void {
@@ -129,7 +133,7 @@ async function handle(request: WslAgentRequest): Promise<unknown> {
   if (request.method === 'shutdown') {
     shutdownTerminalTakeoverSessions('wsl-host-shutdown');
     if (!host.goal || host.goal.paused) markRuntimeLifecycleClean(root, 'wsl');
-    setTimeout(() => process.exit(0), 10);
+    if (!request.params?.supervisorTerminates) setTimeout(() => process.exit(0), 10);
     return true;
   }
   if (request.method === 'reset') {
@@ -160,7 +164,7 @@ async function handle(request: WslAgentRequest): Promise<unknown> {
   }
   if (request.method === 'snapshot') {
     const target = requestTarget(request.params);
-    return { ...kernel.snapshot(target), backend: 'wsl', distro };
+    return { ...kernel.snapshot(target, request.params.options), backend: 'wsl', distro };
   }
   if (request.method === 'rewind') {
     return kernel.rewind(requestTarget(request.params), request.params.messageIndex);

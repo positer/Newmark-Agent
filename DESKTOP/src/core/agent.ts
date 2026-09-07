@@ -1,6 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { setTimeout as waitForRetryDelay } from 'node:timers/promises';
+import { createAccounting, beginAccountingRequest, applyAccountingUsage, ratioSummary, type Accounting, type AccountingRequest, type UsageInput } from './providerUsageAccounting';
+import { estimateSubmittedContext, type RequestContextEstimate } from './requestContextEstimate';
 import { cropAndMagnifyImage, decodeInspectionImage } from './imageInspect';
 import {
   archiveConversationImageAttachment,
@@ -15,7 +18,8 @@ import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, tokenizeFuzzyProviderI
 import { ToolExecutor } from '../tools/index';
 import { WorkspaceInfo, WorkspaceManager } from './workspace';
 import { SshConnectionInfo, SshManager, SshValidateResult } from './ssh';
-import { NewmarkSubagentToolResult, SubagentManager, SubagentRootMessage, SubagentState, sharedSubagentManager } from './subagent';
+import { NewmarkSubagentToolResult, SubagentManager, SubagentRootMessage, SubagentSettlementReceipt, SubagentState, SUBAGENT_RECOVERY_PROMPT, sharedSubagentManager } from './subagent';
+import { selectSubagentCommunication } from './subagentCommunication';
 import { NewmarkAgentPreset, NewmarkToolResult, findAgentPreset } from './compat';
 import { SkillsManager } from './skills';
 import { FlowEngine, FlowWorkflow } from './flow';
@@ -171,6 +175,7 @@ export interface FlowSuspensionRecord {
   input: string;
   completedResults: Array<{ componentId: number; result: string }>;
   previousMode: AgentMode;
+  queueWasPaused?: boolean;
   reason: 'question' | 'interrupted';
   message?: string;
   options?: Array<{ question: string; options: Array<{ label: string; description?: string }> }>;
@@ -188,6 +193,39 @@ export interface FlowSuspensionRecord {
   };
   updatedAt: string;
 }
+interface ProviderUsageCounters {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/** Caller-owned, single-Build reuse; never retained on Agent or shared globally. */
+export interface BuildProviderCache {
+  key?: string;
+  provider?: LLMProvider;
+}
+export interface PeerRequestCache {
+  version: 1;
+  identity: string;
+  taskFocus: string;
+  initialTools: string[];
+  provisionedTools: string[];
+}
+interface ConversationProviderUsage {
+  version: 1;
+  totals: ProviderUsageCounters;
+  last: ProviderUsageCounters;
+  accounting?: Accounting;
+  requestContext?: RequestContextEstimate | null;
+}
+export interface ConversationUsageRequest {
+  id: string;
+  conversationId: string;
+  workspace: WorkspaceInfo | null;
+  stateKey: string | null;
+  accounting: AccountingRequest;
+}
 interface StoredConversationState {
   version?: number;
   activeConversationId?: string;
@@ -203,6 +241,8 @@ interface StoredConversationState {
     chatMessages?: ChatMessage[];
     history?: Array<Record<string, unknown>>;
     compressionCache?: CompressionCacheEntry[];
+    /** Actual provider spend for the whole conversation, including its branches. */
+    providerUsage?: ConversationProviderUsage;
     plan?: ConversationPlanState;
     linkedPlan?: LinkedPlanState;
     subagentState?: SubagentState;
@@ -379,6 +419,9 @@ export interface ConversationContinuation {
   images?: Array<{ dataUrl: string; name?: string; type?: string }>;
   attachments?: ConversationImageAttachment[];
   hiddenUserInput?: boolean;
+  visibleUserInput?: string;
+  visibleMode?: string;
+  goalObjective?: string;
   createdAt: string;
 }
 /** task_read 输出的单项文本上限：清单项只作状态索引，不承载长描述。 */
@@ -518,6 +561,8 @@ export class Agent {
   } | null = null;
   public providerUsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   public lastProviderUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  private providerUsageAccounting = createAccounting();
+  private lastRequestContext: RequestContextEstimate | null = null;
   private compressionCache: CompressionCacheEntry[] = [];
   private pendingHistoryRemovals: Array<{ position: number; fingerprint: string }> = [];
   private branchMailbox: BranchMessage[] = [];
@@ -533,7 +578,7 @@ export class Agent {
   private compressionArchiveCountCache: { scopeKey: string; count: number } | null = null;
   private nextCompressionCacheId = 1;
   private readonly compressionHistoryArchive: CompressionHistoryArchive;
-  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; compressionCache?: CompressionCacheEntry[]; branchMailbox?: BranchMessage[]; branchCommunication?: boolean; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; titleRequestMessageId?: string; firstAgentResponseStarted?: boolean; runtimeOwnerId?: string; runtimeOwnerPid?: number; runtimeLifecycleRole?: RuntimeLifecycleRole; updatedAt?: string }>();
+  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; compressionCache?: CompressionCacheEntry[]; providerUsage?: ConversationProviderUsage; branchMailbox?: BranchMessage[]; branchCommunication?: boolean; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; titleRequestMessageId?: string; firstAgentResponseStarted?: boolean; runtimeOwnerId?: string; runtimeOwnerPid?: number; runtimeLifecycleRole?: RuntimeLifecycleRole; updatedAt?: string }>();
   public isSubagentRuntime = false;
   private subagentName = '';
   private subagentPrompt = '';
@@ -562,6 +607,7 @@ export class Agent {
     followUp(message: unknown): unknown;
     abort?(): void;
     drainQueuedMessages?(): Array<{ message: unknown; queueMode: 'steer' | 'followUp' }>;
+    removeQueuedMessages?(predicate: (message: unknown, queueMode: 'steer' | 'followUp') => boolean): number;
   } | null = null;
   private modelSwitchCompressionPromise: Promise<{
     compressed: boolean;
@@ -572,15 +618,25 @@ export class Agent {
     maxTokens: number;
   }> | null = null;
   private activePeerAgents = new Map<string, Agent>();
+  // Bounded caller-owned peer slots retain protocol compatibility learning
+  // between mailbox jobs. They never retain the child Agent or go to disk.
+  private peerProviderCaches = new Map<string, BuildProviderCache>();
   private awaitingAgentKernelRuntime = false;
   private pendingAgentKernelQueue: Array<{ content: string; queueMode: 'steer' | 'followUp'; clientMessageId?: string; runId?: string; images?: Array<{ dataUrl: string; name?: string; type?: string }>; hiddenUserInput?: boolean }> = [];
   private linkedPlanAccess: AgentRuntimeOptions['linkedPlanAccess'];
-  private subagentContextPersist?: (history: Array<Record<string, unknown>>, compression: Agent['lastCompression']) => void;
+  private subagentContextPersist?: (history: Array<Record<string, unknown>>, compression: Agent['lastCompression'], inputCommitted?: boolean) => void;
+  private subagentPersistedHistory: Array<Record<string, unknown>> = [];
+  private subagentPersistedCompression: Agent['lastCompression'] = null;
   private agentKernelUserMessageStartSubscribers: Array<(content: string, clientMessageId?: string) => void> = [];
-  private rootInboxWakeSubscribers: Array<(message: string) => boolean | void> = [];
+  private rootInboxWakeSubscribers: Array<(message: string, options?: { wakeup: boolean }) => boolean | void> = [];
+  private readonly directRootInboxQueuedIds = new Set<string>();
+  private directRootWakePending = false;
+  private rootInboxRetiredSubscribers: Array<(ids: string[]) => void> = [];
   private activeWorkRunId = '';
   private loadedWorkspaceConversationKey = '';
   private managedWorkRunIds = new Set<string>();
+  /** Public deltas since the last completed response, retained only until its boundary. */
+  private pendingPublicWorkText = new Map<string, string[]>();
   private finalizingWorkRunId = '';
   private agentRunService: AgentRunService | null = null;
   private agentRunByWorkRunId = new Map<string, string>();
@@ -616,6 +672,7 @@ export class Agent {
     recentChecks: [],
   };
   private readonly rootInboxListener = (message: SubagentRootMessage) => this.deliverRootInboxMessage(message);
+  private boundSubagentManagerKey = '';
   public readonly agentOnly: boolean;
   public readonly runtimeActorId: string;
   public readonly runtimeLifecycleRole: RuntimeLifecycleRole;
@@ -742,6 +799,13 @@ export class Agent {
     this.systemPromptCache = null;
     this.toolDefinitionCache.clear();
     this.status = 'idle';
+  }
+
+  /** Selecting the composer mode does not start a Goal or reset a running Flow. */
+  selectConversationMode(mode: AgentMode): void {
+    this.mode = ['build', 'plan', 'chat', 'goal', 'flow'].includes(mode) ? mode : 'build';
+    this.invalidateSystemPrompt();
+    this.saveWorkspaceConversationState(true);
   }
 
   private currentConversationFlowSelection(): ConversationFlowSelection | null {
@@ -1350,16 +1414,18 @@ export class Agent {
   }
 
   async waitForPlannedRouteRetry(explicitDelayMs?: number): Promise<void> {
-    if (explicitDelayMs !== undefined) {
-      if (explicitDelayMs <= 0) return;
-      await new Promise<void>(resolve => setTimeout(resolve, explicitDelayMs));
-      return;
-    }
+    // Keep the original Build owner through the entire backoff. Stopping a
+    // healthy request between attempts must not wait out a 60-second timer.
+    const signal = this.activeProcessSignal();
+    throwIfAgentAborted(signal);
     const waitBudgetMs = Math.max(0, Math.min(15_000, this.lastRouteDecision?.retryBudgetMs ?? 5_000));
-    const delay = Math.max(0, Math.min(waitBudgetMs, this.lastRouteRetryDelayMs));
-    this.lastRouteRetryDelayMs = 0;
+    const delay = explicitDelayMs === undefined
+      ? Math.max(0, Math.min(waitBudgetMs, this.lastRouteRetryDelayMs))
+      : Math.max(0, explicitDelayMs);
+    if (explicitDelayMs === undefined) this.lastRouteRetryDelayMs = 0;
     if (!delay) return;
-    await new Promise<void>(resolve => setTimeout(resolve, delay));
+    await waitForRetryDelay(delay, undefined, { signal });
+    throwIfAgentAborted(signal);
   }
 
   recordRouteSuccess(latencyMs?: number, throughput?: number): void {
@@ -1733,7 +1799,7 @@ export class Agent {
       const instruction = useChinese
         ? `请观察图片并生成一个准确、具体的中文短标题，描述图片实际内容。只输出标题，不要加“图片”“示意图”“标题”等前缀，不要使用 Markdown，最多60个汉字。${captionHint ? `调用方提示：${captionHint}` : ''}`
         : `Inspect the image and return one accurate, concrete short title describing its actual visual content. Output only the title, with no "image", "diagram", or "title" prefix, no Markdown, and at most 100 characters.${captionHint ? ` Caller hint: ${captionHint}` : ''}`;
-      descriptionPromise = this.withTimeout(provider.chat(this.activeModelName(), [{ role: 'user', content: [
+      descriptionPromise = this.withTimeout(this.chatWithConversationUsage(provider, this.activeModelName(), [{ role: 'user', content: [
         { type: 'text', text: instruction },
         { type: 'image_url', image_url: { url: hydrated.dataUrl } },
       ] }], useChinese ? '你是视觉图片标题生成器，只返回忠实、简洁的标题。' : 'You generate faithful concise titles for visual images. Return only the title.', 0, 120, signal), 30000)
@@ -1855,9 +1921,16 @@ export class Agent {
             mode: String(event.mode || this.modeName()),
             model: String(event.model || this.model),
             timestamp: String(event.timestamp || this.nowLabel()),
+            toolCallId: isToolEvent && event.toolCallId ? String(event.toolCallId) : undefined,
             toolName,
             toolArgs: type === 'tool_call' && event.toolArgs ? this.visibleToolArgs(event.toolArgs) : undefined,
             queue: isToolEvent ? undefined : event.queue,
+            queueItems: isToolEvent ? undefined : event.queueItems?.map(item => ({
+              id: item.id, text: item.text, queueMode: item.queueMode, requestedMode: item.requestedMode,
+              images: item.images?.map(image => ({ ...image })),
+              goalObjective: item.goalObjective, runId: item.runId, createdAt: item.createdAt,
+            })),
+            queuePaused: isToolEvent ? undefined : event.queuePaused,
             workspaceId: target.workspaceId,
             workspaceKey: event.workspaceKey,
             runtimeKey: String(raw.runtimeKey || conversationRuntimeKey(target)),
@@ -2568,6 +2641,9 @@ export class Agent {
   ): boolean {
     const run = this.workRuns.find(item => item.runId === String(runId || ''));
     if (!run) return false;
+    if (status !== 'completed' && (run.status === 'running' || run.status === status || (run.status === 'interrupted' && status === 'force_interrupted'))) {
+      this.persistInterruptedPublicWorkText(run);
+    }
     this.syncAgentRunTerminal(run.runId, status, endedAt);
     this.flushPendingHistoryRemovals();
     if (run.status !== 'running') {
@@ -2661,11 +2737,22 @@ export class Agent {
     });
   }
 
+  private persistInterruptedPublicWorkText(run: ConversationWorkRun): void {
+    const chunks = this.pendingPublicWorkText.get(run.runId);
+    this.pendingPublicWorkText.delete(run.runId);
+    const content = chunks?.join('');
+    if (!content?.trim()) return;
+    // This is an incomplete public reply, not a successful final answer or a
+    // model-history message. A single durable boundary replaces live deltas.
+    this.emitWorkEvent({ type: 'response', content, runId: run.runId, conversationId: run.target.conversationId });
+  }
+
   emitWorkEvent(input: Omit<AgentWorkEvent, 'id' | 'conversationId' | 'mode' | 'model' | 'timestamp'> & Partial<Pick<AgentWorkEvent, 'conversationId' | 'mode' | 'model' | 'timestamp'>>): AgentWorkEvent {
     if (input.type === 'start' && !this.workRuns.some(run => run.runId === this.activeWorkRunId && run.status === 'running')) {
       this.beginConversationWorkRun(input.runId || crypto.randomUUID(), this.currentConversationTarget(input.conversationId));
     }
     const activeRun = this.workRuns.find(run => run.runId === (input.runId || this.activeWorkRunId));
+    if (activeRun && input.type === 'error') this.persistInterruptedPublicWorkText(activeRun);
     const managedTurnBoundary = input.type === 'done'
       && !!activeRun
       && this.managedWorkRunIds.has(activeRun.runId)
@@ -2689,9 +2776,16 @@ export class Agent {
       mode: input.mode || this.modeName(),
       model: input.model || this.model,
       timestamp: input.timestamp || this.nowLabel(),
+      toolCallId: isToolEvent ? input.toolCallId : undefined,
       toolName,
       toolArgs: publishedType === 'tool_call' && input.toolArgs ? this.visibleToolArgs(input.toolArgs) : undefined,
       queue: isToolEvent ? undefined : input.queue,
+      queueItems: isToolEvent ? undefined : input.queueItems?.map(item => ({
+        id: item.id, text: item.text, queueMode: item.queueMode, requestedMode: item.requestedMode,
+        images: item.images?.map(image => ({ ...image })),
+        goalObjective: item.goalObjective, runId: item.runId, createdAt: item.createdAt,
+      })),
+      queuePaused: isToolEvent ? undefined : input.queuePaused,
       workspaceId: input.workspaceId || activeRun?.target.workspaceId || this.currentConversationTarget(input.conversationId).workspaceId,
       workspaceKey: input.workspaceKey,
       runtimeKey: input.runtimeKey || activeRun?.runtimeKey,
@@ -2704,6 +2798,13 @@ export class Agent {
       fallback: input.fallback,
     };
     if (activeRun && this.isPersistablePublicWorkEvent(event)) {
+      if (event.type === 'text' && activeRun.status === 'running') {
+        const chunks = this.pendingPublicWorkText.get(activeRun.runId) || [];
+        chunks.push(event.content);
+        this.pendingPublicWorkText.set(activeRun.runId, chunks);
+      } else if (event.type === 'response' || event.type === 'final_response' || event.type === 'done' || event.type === 'error') {
+        this.pendingPublicWorkText.delete(activeRun.runId);
+      }
       activeRun.sequence = Number(sequence || activeRun.sequence + 1);
       // Streaming text is delivered live, while the complete sanitized API
       // response is persisted once at message_end. This avoids saving hundreds
@@ -2780,10 +2881,13 @@ export class Agent {
     this.emitWorkEvent({ type: 'status', content: text });
   }
 
-  attachAgentKernelRuntime(runtime: { steer(message: unknown): unknown; followUp(message: unknown): unknown; abort?(): void; drainQueuedMessages?(): Array<{ message: unknown; queueMode: 'steer' | 'followUp' }> } | null): void {
+  attachAgentKernelRuntime(runtime: { steer(message: unknown): unknown; followUp(message: unknown): unknown; abort?(): void; drainQueuedMessages?(): Array<{ message: unknown; queueMode: 'steer' | 'followUp' }>; removeQueuedMessages?(predicate: (message: unknown, queueMode: 'steer' | 'followUp') => boolean): number } | null): void {
     this.activeAgentKernelRuntime = runtime;
     this.awaitingAgentKernelRuntime = false;
-    if (!runtime) return;
+    if (!runtime) {
+      this.directRootInboxQueuedIds.clear();
+      return;
+    }
     // A user stop can arrive while the Native Kernel is still being loaded or
     // assembling its first context. In that handoff window
     // abortActiveKernelRun() can only abort the outer process signal; make a
@@ -2803,11 +2907,45 @@ export class Agent {
     };
   }
 
-  subscribeRootInboxWake(fn: (message: string) => boolean | void): () => void {
+  subscribeRootInboxWake(fn: (message: string, options?: { wakeup: boolean }) => boolean | void, retired?: (ids: string[]) => void): () => void {
     this.rootInboxWakeSubscribers.push(fn);
+    if (retired) this.rootInboxRetiredSubscribers.push(retired);
     return () => {
       this.rootInboxWakeSubscribers = this.rootInboxWakeSubscribers.filter(sub => sub !== fn);
+      if (retired) this.rootInboxRetiredSubscribers = this.rootInboxRetiredSubscribers.filter(sub => sub !== retired);
     };
+  }
+
+  /** Called only after receipt-bearing tool history has been saved, or on cold replay. */
+  acknowledgeSubagentSettlementReceipts(): string[] {
+    if (this.isSubagentRuntime) return [];
+    const receipts = this.history.flatMap(message => {
+      const receipt = message.subagent_settlement_receipt as SubagentSettlementReceipt | undefined;
+      return message.role === 'tool' && ['subagent_result', 'subagent_read'].includes(String(message.name || ''))
+        && receipt && typeof receipt.peerId === 'string' && Number.isSafeInteger(receipt.revision) && receipt.revision > 0
+        ? [receipt] : [];
+    });
+    if (!receipts.length) return [];
+    const ids = this.subagents.acknowledgeSettlementResults(receipts);
+    if (!ids.length) return [];
+    const retired = new Set(ids);
+    const matches = (content: unknown, hidden: boolean, clientMessageId?: unknown) => {
+      if (!hidden || clientMessageId || typeof content !== 'string') return false;
+      const id = content.match(/^\[Root subagent inbox id=([0-9a-f-]{36})\b/i)?.[1];
+      return !!id && retired.has(id);
+    };
+    this.pendingAgentKernelQueue = this.pendingAgentKernelQueue.filter(item => item.queueMode !== 'followUp'
+      || !matches(item.content, item.hiddenUserInput === true, item.clientMessageId));
+    this.activeAgentKernelRuntime?.removeQueuedMessages?.((raw, mode) => {
+      const message = raw as { content?: unknown; hiddenUserInput?: boolean; clientMessageId?: string };
+      return mode === 'followUp' && matches(message.content, message.hiddenUserInput === true, message.clientMessageId);
+    });
+    const before = this.continuations.length;
+    this.continuations = this.continuations.filter(item => item.queueMode !== 'followUp'
+      || !matches(item.content, item.hiddenUserInput === true, item.clientMessageId));
+    if (this.continuations.length !== before) this.saveWorkspaceConversationState(true);
+    for (const subscriber of this.rootInboxRetiredSubscribers) subscriber(ids);
+    return ids;
   }
 
   notifyAgentKernelUserMessageStart(content: string, clientMessageId?: string): void {
@@ -2901,7 +3039,7 @@ export class Agent {
 
   consumeConversationContinuation(match: Pick<ConversationContinuation, 'content' | 'queueMode' | 'clientMessageId'>): boolean {
     const index = this.continuations.findIndex(item => match.clientMessageId
-      ? item.clientMessageId === match.clientMessageId
+      ? item.clientMessageId === match.clientMessageId && item.queueMode === match.queueMode
       : item.queueMode === match.queueMode && item.content === match.content);
     if (index < 0) return false;
     this.continuations.splice(index, 1);
@@ -2945,6 +3083,9 @@ export class Agent {
         attachments: attachments.length ? attachments : undefined,
         hiddenUserInput: raw.hiddenUserInput === true,
         createdAt: String(raw.createdAt || new Date().toISOString()),
+        visibleUserInput: raw.visibleUserInput,
+        visibleMode: raw.visibleMode,
+        goalObjective: raw.goalObjective,
       });
     }
     return Array.from(deduped.values()).slice(-100);
@@ -3036,9 +3177,9 @@ export class Agent {
     this.writeStoredConversationStateNow(pending.state, pending.ws);
   }
 
-  getStoredFlowSuspension(conversationId = this.activeConversationId): FlowSuspensionRecord | null {
-    const stored = this.readStoredConversationState();
-    const stateKey = this.workspaceConversationStateKey(conversationId);
+  getStoredFlowSuspension(conversationId = this.activeConversationId, ws: WorkspaceInfo | null = this.workspace.current): FlowSuspensionRecord | null {
+    const stored = this.readStoredConversationState(ws);
+    const stateKey = this.workspaceConversationStateKeyFor(conversationId, ws);
     if (stateKey && stored.flowSuspensions && stored.flowSuspensions[stateKey]) return stored.flowSuspensions[stateKey];
     const legacy = stored.flowSuspension || null;
     if (!legacy) return null;
@@ -3046,15 +3187,15 @@ export class Agent {
     return legacyTargetsThis ? legacy : null;
   }
 
-  saveStoredFlowSuspension(suspension: FlowSuspensionRecord | null, conversationId = this.activeConversationId): void {
-    const stateKey = this.workspaceConversationStateKey(conversationId);
+  saveStoredFlowSuspension(suspension: FlowSuspensionRecord | null, conversationId = this.activeConversationId, ws: WorkspaceInfo | null = this.workspace.current): void {
+    const stateKey = this.workspaceConversationStateKeyFor(conversationId, ws);
     if (!stateKey) return;
     // Use the lock-aware latest-state mutator directly. Passing a partial
     // flowSuspensions object through writeStoredConversationStateNow() would
     // merge the deleted key back from the latest disk snapshot, making Stop,
     // archive, and new-work handoff appear to clear a suspension in memory
     // while it immediately reappears after reload.
-    this.mutateStoredConversationState(this.workspace.current, latest => {
+    this.mutateStoredConversationState(ws, latest => {
       const flowSuspensions = { ...(latest.flowSuspensions || {}) };
       if (suspension) {
         flowSuspensions[stateKey] = { ...suspension, updatedAt: suspension.updatedAt || new Date().toISOString() };
@@ -3067,8 +3208,8 @@ export class Agent {
     });
   }
 
-  clearStoredFlowSuspension(conversationId = this.activeConversationId): void {
-    this.saveStoredFlowSuspension(null, conversationId);
+  clearStoredFlowSuspension(conversationId = this.activeConversationId, ws: WorkspaceInfo | null = this.workspace.current): void {
+    this.saveStoredFlowSuspension(null, conversationId, ws);
   }
 
   getStoredConversationDraft(conversationId = this.activeConversationId): string | undefined {
@@ -3355,8 +3496,9 @@ export class Agent {
   private bindConversationSubagents(conversationId: string, state?: SubagentState): void {
     if (this.isSubagentRuntime) return;
     const clean = this.safeConversationId(conversationId || 'default');
-    this.subagents.removeRootInboxListener(this.rootInboxListener);
-    this.subagents = sharedSubagentManager(this.subagentManagerKey(clean), {
+    const managerKey = this.subagentManagerKey(clean);
+    if (this.boundSubagentManagerKey !== managerKey) this.subagents.releaseOwnerBinding(this.rootInboxListener);
+    this.subagents = sharedSubagentManager(managerKey, {
       conversationId: clean,
       rootAgentId: state?.rootAgentId || this.runtimeActorId,
       concurrency: this.subagentConcurrencyLimit(),
@@ -3370,6 +3512,24 @@ export class Agent {
         if (this.safeConversationId(this.activeConversationId) === clean) this.saveWorkspaceConversationState();
       },
     });
+    this.boundSubagentManagerKey = managerKey;
+  }
+
+  /** Release an idle facade; shared peer state remains available to its next owner. */
+  releaseConversationRuntimeBindings(): void {
+    if (this.activeProcessSignal() || (this.subagents.ownsExecutionBinding(this.rootInboxListener) && this.subagents.hasPendingWork())) {
+      throw new Error('Cannot release a conversation owner with running or queued work');
+    }
+    this.flushWorkspaceConversationState();
+    this.subagents.releaseOwnerBinding(this.rootInboxListener);
+  }
+
+  private assertPeerOwnerCanSwitch(conversationId: string, workspaceId = this.workspace.current?.id): void {
+    const changesTarget = this.safeConversationId(conversationId || 'default') !== this.activeConversationId
+      || workspaceId !== this.workspace.current?.id;
+    if (changesTarget && this.subagents.ownsExecutionBinding(this.rootInboxListener) && this.subagents.hasPendingWork()) {
+      throw new Error('Cannot switch an execution owner with running or queued subagents');
+    }
   }
 
   private persistSubagentState(conversationId: string, subagentState: SubagentState): void {
@@ -3393,17 +3553,51 @@ export class Agent {
   }
 
   private deliverRootInboxMessage(message: SubagentRootMessage): boolean {
+    if (this.acknowledgeSubagentSettlementReceipts().includes(message.id)) return true;
     const marker = `[Root subagent inbox id=${message.id} ${message.kind} from ${message.fromAgentId}]`;
     const prompt = `${marker}\n${message.body}\n\nReview this persisted peer result and summarize or continue the parent task as needed.`;
+    // Stay in the already active kernel so hosted mailbox delivery shares the
+    // same initialized system/tools instead of creating one Build per message.
+    if (this.directRootInboxQueuedIds.has(message.id)) return true;
+    if (this.queueActiveKernelMessage(prompt, 'followUp', undefined, undefined, undefined, true)) {
+      this.directRootInboxQueuedIds.add(message.id);
+      return true;
+    }
     for (const sub of this.rootInboxWakeSubscribers) {
       try {
-        if (sub(prompt)) return true;
+        if (sub(prompt, { wakeup: message.wakeup !== false })) return true;
       } catch { /* ignore subscriber errors */ }
     }
-    return this.queueActiveKernelMessage(prompt, 'followUp', undefined, undefined, undefined, true);
+    if (message.wakeup !== false && !this.rootInboxWakeSubscribers.length && !this.activeProcessSignal()
+      && !this.subagents.isSchedulingPaused() && this.subagents.ownsExecutionBinding(this.rootInboxListener)
+      && !this.directRootWakePending) {
+      this.directRootWakePending = true;
+      queueMicrotask(() => {
+        this.directRootWakePending = false;
+        if (this.rootInboxWakeSubscribers.length || this.activeProcessSignal() || this.subagents.isSchedulingPaused()
+          || !this.subagents.ownsExecutionBinding(this.rootInboxListener)) return;
+        const next = this.subagents.readRootInbox().find(item => item.wakeup !== false);
+        if (!next) return;
+        const text = `[Root subagent inbox id=${next.id} ${next.kind} from ${next.fromAgentId}]\n${next.body}`;
+        void this.process({ text, hiddenUserInput: true }).catch(error => {
+          this.recordWorkStatus(`Subagent mailbox wake failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      });
+    }
+    return false;
   }
 
-  private deliverPeerSettlement(record: { id: string; createdByAgentId: string; qualifiedName: string; status: string; result: string | null; error?: string }): void {
+  /** A normal activation consumes queued mail without changing its static request prefix. */
+  flushDirectRootInbox(): void {
+    if (this.isSubagentRuntime || this.rootInboxWakeSubscribers.length) return;
+    for (const message of this.subagents.readRootInbox()) {
+      const marker = `[Root subagent inbox id=${message.id} `;
+      if (this.history.some(item => item.role === 'user' && String(item.content || '').startsWith(marker))) continue;
+      this.deliverRootInboxMessage(message);
+    }
+  }
+
+  private deliverPeerSettlement(record: { id: string; createdByAgentId: string; qualifiedName: string; status: string; result: string | null; error?: string; settlementRevision?: number }): void {
     const target = record.createdByAgentId === record.id ? this.subagents.rootAgentId : record.createdByAgentId;
     const body = `${record.qualifiedName} ${record.status}: ${record.result || record.error || '(empty result)'}`;
     const creator = target === this.subagents.rootAgentId ? undefined : this.subagents.get(target);
@@ -3411,7 +3605,7 @@ export class Agent {
       const delivery = this.subagents.sendMessage(record.id, creator.id, body, 'result');
       if (delivery.ok) return;
     }
-    this.subagents.sendRootMessage(record.id, body, 'result');
+    this.subagents.sendRootMessage(record.id, body, 'result', record.settlementRevision);
   }
 
   private recordsForState(state?: SubagentState): Array<NonNullable<ReturnType<SubagentManager['toRecord']>>> {
@@ -3473,7 +3667,8 @@ export class Agent {
     // windows on demand ("load earlier messages").
     const windowSize = Math.max(1, Math.floor(Number(options.window) || 0) || 200);
     const totalMessages = fullChatMessages.length;
-    const before = Math.max(0, Math.floor(Number(options.before) || 0) || totalMessages);
+    const before = options.before == null ? totalMessages
+      : Math.min(totalMessages, Math.max(0, Math.floor(Number(options.before) || 0)));
     const windowStart = Math.max(0, before - windowSize);
     const chatMessages = fullChatMessages.slice(windowStart, before);
     const workRuns = this.normalizeWorkRuns(isActiveConversation && viewingRuntimeNode ? this.workRuns : (viewedNode?.workRuns || persisted?.workRuns || memory?.workRuns));
@@ -3554,7 +3749,7 @@ export class Agent {
     };
   }
 
-  public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {
+  public ensureConversationSnapshot(conversationId = this.activeConversationId, options: { window?: number; before?: number } = {}): ConversationSnapshot {
     const clean = this.safeConversationId(conversationId || 'default');
     const stateKey = this.workspaceConversationStateKey(clean);
     if (stateKey) {
@@ -3583,7 +3778,7 @@ export class Agent {
         this.writeStoredConversationState(stored);
       }
     }
-    return this.getConversationSnapshot(clean);
+    return this.getConversationSnapshot(clean, options);
   }
 
   public rewindConversation(conversationId: string, messageIndex: number): ConversationSnapshot {
@@ -4001,20 +4196,61 @@ export class Agent {
       'No preamble, no explanation, no Markdown, no quotes, no trailing punctuation.',
     ].join('\n');
     const prompt = `First user input:\n${String(firstUserInput || '').slice(0, 4000)}\n\nConversation title (a few words):`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error('conversation rename timed out')), 15000);
     try {
       if (signal?.aborted) return '';
       const { temperature, reasoningEffort } = provider.intelligenceConfig(intelligence);
-      const generated = await provider.chat(modelName, [{ role: 'user', content: prompt }], system, temperature, 64, controller.signal, reasoningEffort);
+      // The title request uses the same transport policy and cancellation owner
+      // as the formal response. A healthy slow model must not be turned into
+      // five failed requests by an unrelated 15-second title deadline.
+      const generated = await this.chatWithConversationUsage(provider, modelName, [{ role: 'user', content: prompt }], system, temperature, 64, signal, reasoningEffort);
+      if (signal?.aborted) return '';
       const title = this.normalizeConversationRenameTitle(generated);
       const source = String(firstUserInput || '').replace(/\s+/g, ' ').trim();
       return title && title !== source ? title : '';
-    } catch {
-      return '';
-    } finally {
-      clearTimeout(timer);
+    } catch (error) {
+      if (signal?.aborted) return '';
+      throw error;
     }
+  }
+
+  private conversationTitleFailureCause(error: unknown, provider: LLMProvider): string {
+    const message = error instanceof Error ? error.message : '';
+    const status = message.match(/^\[LLM Error:\s*([1-5]\d{2})\]/)?.[1];
+    if (status) {
+      // Extract only a short machine code. Never display the provider's raw
+      // message/body, request URL, headers or echoed credentials in this gate.
+      let code = '';
+      try {
+        const json = JSON.parse(message.slice(message.indexOf('{'))) as { error?: { code?: unknown } };
+        const candidate = typeof json.error?.code === 'string' ? json.error.code : '';
+        if (/^[a-z][a-z0-9_.-]{0,63}$/i.test(candidate)
+          && !(provider.apiKey && candidate.includes(provider.apiKey))
+          && !(provider.baseUrl && candidate.includes(provider.baseUrl))) code = candidate;
+      } catch { /* Non-JSON errors still retain their safe HTTP status. */ }
+      const reason = code === 'get_channel_failed' ? 'no provider channel available' : ({
+        '400': 'request rejected', '401': 'authentication failed', '402': 'payment required',
+        '403': 'access denied', '404': 'model or endpoint unavailable', '408': 'request timed out',
+        '429': 'rate limited', '500': 'provider internal error', '502': 'provider gateway error',
+        '503': 'service unavailable', '504': 'provider gateway timed out',
+      } as Record<string, string>)[status] || 'provider request failed';
+      return `HTTP ${status}${code ? ` (${code})` : ''}: ${reason}`;
+    }
+    if (error instanceof Error && error.name === 'TimeoutError') return 'provider request timed out';
+    if (error instanceof SyntaxError) return 'provider returned invalid JSON';
+    return 'provider request failed';
+  }
+
+  private async waitForConversationTitleRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted || delayMs <= 0) return;
+    await new Promise<void>(resolve => {
+      const finish = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, delayMs);
+      signal?.addEventListener('abort', finish, { once: true });
+    });
   }
 
   /** Legacy completion hook retained as a no-op; naming is pre-response only. */
@@ -4039,16 +4275,31 @@ export class Agent {
     const maxAttempts = 5;
     const retryDelaysMs = [0, 1000, 2000, 4000, 8000];
     if (!messageId || !firstUserInput.trim()) return false;
+    // Failure state belongs to this title attempt sequence, not the Agent or
+    // another conversation. A later empty title replaces an earlier HTTP error.
+    let lastFailure = 'provider returned an empty or unusable title';
+    const requestTitle = async (): Promise<string> => {
+      lastFailure = 'provider returned an empty or unusable title';
+      try {
+        return await this.deriveConversationTitleFromProvider(firstUserInput, provider, modelName, intelligence, signal);
+      } catch (error) {
+        lastFailure = this.conversationTitleFailureCause(error, provider);
+        return '';
+      }
+    };
+    const exhaustedFailure = (): Error => new Error(
+      `Conversation title generation failed; ${lastFailure}. The first Agent request was not started. Retry the first input.`,
+    );
     if (!stateKey) {
       // Pure Agent/CLI mode has no workspace conversation file to rename, but
       // still uses the title request as the required first model-availability
       // probe before starting the formal response.
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        if (await this.deriveConversationTitleFromProvider(firstUserInput, provider, modelName, intelligence, signal)) return true;
+        if (await requestTitle()) return true;
         if (signal?.aborted) return false;
-        if (attempt < maxAttempts - 1) await new Promise<void>(resolve => setTimeout(resolve, retryDelaysMs[attempt]));
+        if (attempt < maxAttempts - 1) await this.waitForConversationTitleRetry(retryDelaysMs[attempt], signal);
       }
-      return false;
+      throw exhaustedFailure();
     }
     const stored = this.readStoredConversationState(workspace);
     const entry = stored.conversations?.[stateKey];
@@ -4062,7 +4313,7 @@ export class Agent {
     const memory = memoryKey ? this.workspaceConversations.get(memoryKey) : undefined;
     if (memory) memory.titleRequestMessageId = messageId;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const title = await this.deriveConversationTitleFromProvider(firstUserInput, provider, modelName, intelligence, signal);
+      const title = await requestTitle();
       if (title) {
         const latest = this.readStoredConversationState(workspace);
         const current = latest.conversations?.[stateKey];
@@ -4076,9 +4327,9 @@ export class Agent {
         return true;
       }
       if (signal?.aborted) return false;
-      if (attempt < maxAttempts - 1) await new Promise<void>(resolve => setTimeout(resolve, retryDelaysMs[attempt]));
+      if (attempt < maxAttempts - 1) await this.waitForConversationTitleRetry(retryDelaysMs[attempt], signal);
     }
-    return false;
+    throw exhaustedFailure();
   }
 
   private firstPersistedUserForTitleGate(): { messageId: string; input: string } | null {
@@ -4271,7 +4522,16 @@ export class Agent {
   }
 
   saveWorkspaceConversationState(flush = true): void {
-    if (this.isSubagentRuntime) return;
+    if (this.isSubagentRuntime) {
+      if (this.subagentContextPersist && (this.history.length !== this.subagentPersistedHistory.length
+        || this.lastCompression !== this.subagentPersistedCompression
+        || this.history.some((message, index) => message !== this.subagentPersistedHistory[index]))) {
+        this.subagentContextPersist(this.history, this.lastCompression);
+        this.subagentPersistedHistory = this.history.slice();
+        this.subagentPersistedCompression = this.lastCompression;
+      }
+      return;
+    }
     const key = this.workspaceConversationKey();
     if (!key) return;
     const updatedAt = new Date().toISOString();
@@ -4279,6 +4539,7 @@ export class Agent {
     this.workspaceConversations.set(key, {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
+      providerUsage: this.conversationProviderUsage(),
       compressionCache: [...this.compressionCache],
       branchMailbox: [...this.branchMailbox],
       branchCommunication: this.branchCommunicationEnabled,
@@ -4313,6 +4574,7 @@ export class Agent {
       title,
       chatMessages: [...this.chatMessages],
       history: [...this.history],
+      providerUsage: this.conversationProviderUsage(),
       compressionCache: [...this.compressionCache],
       branchMailbox: [...this.branchMailbox],
       branchCommunication: this.branchCommunicationEnabled,
@@ -4344,6 +4606,8 @@ export class Agent {
 
   private loadWorkspaceConversationState(): void {
     this.managedWorkRunIds.clear();
+    this.pendingPublicWorkText.clear();
+    this.restoreProviderUsage();
     const key = this.workspaceConversationKey();
     this.loadedWorkspaceConversationKey = key || '';
     if (!key) {
@@ -4368,6 +4632,7 @@ export class Agent {
     }
     const saved = this.workspaceConversations.get(key);
     if (saved) {
+      this.restoreProviderUsage(saved.providerUsage);
       this.history = [...saved.history];
       this.compressionCache = saved.compressionCache ? saved.compressionCache.map(entry => ({ ...entry, messages: [...entry.messages] })) : [];
       this.nextCompressionCacheId = Math.max(1, ...this.compressionCache.map(entry => Number(entry.id.replace(/^ctx-cache-/, '')) || 0)) + 1;
@@ -4395,6 +4660,7 @@ export class Agent {
     const stored = this.readStoredConversationState();
     const stateKey = this.workspaceConversationStateKey();
     const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : null;
+    this.restoreProviderUsage(persisted?.providerUsage);
     const repairedHistory = this.repairDanglingToolCalls(persisted?.history ? [...persisted.history] : []);
     this.history = repairedHistory.messages;
     this.compressionCache = persisted?.compressionCache ? persisted.compressionCache.map(entry => ({ ...entry, messages: [...entry.messages] })) : [];
@@ -4445,6 +4711,7 @@ export class Agent {
     this.workspaceConversations.set(key, {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
+      providerUsage: this.conversationProviderUsage(),
       compressionCache: [...this.compressionCache],
       branchMailbox: [...this.branchMailbox],
       branchCommunication: this.branchCommunicationEnabled,
@@ -4496,11 +4763,13 @@ export class Agent {
   }
 
   selectWorkspace(id: string): WorkspaceInfo | null {
+    this.assertPeerOwnerCanSwitch(this.activeConversationId, id);
     this.saveWorkspaceConversationState();
     return this.applyWorkspaceContext(this.workspace.select(id));
   }
 
   selectWorkspaceFromStorage(id: string): WorkspaceInfo | null {
+    this.assertPeerOwnerCanSwitch(this.activeConversationId, id);
     const selected = this.workspace.select(id);
     if (selected) this.config.loadWorkspaceConfig(selected.path);
     else this.config.clearWorkspaceOverrides();
@@ -4534,6 +4803,7 @@ export class Agent {
 
   setConversation(id: string): string {
     const clean = this.safeConversationId(id || 'default');
+    this.assertPeerOwnerCanSwitch(clean);
     // Conversation runners may bind a target workspace directly before their
     // first setConversation(). Do not save state loaded for another workspace
     // under the new workspace key during that hand-off.
@@ -4547,6 +4817,7 @@ export class Agent {
   }
 
   setConversationFromStorage(id: string): string {
+    this.assertPeerOwnerCanSwitch(id);
     this.activeConversationId = this.safeConversationId(id || 'default');
     const key = this.workspaceConversationKey();
     if (key) this.workspaceConversations.delete(key);
@@ -4556,6 +4827,7 @@ export class Agent {
 
   persistActiveConversationSelection(id: string, ws: WorkspaceInfo | null = this.workspace.current): string {
     const clean = this.safeConversationId(id || 'default');
+    if (ws && this.workspace.current && path.resolve(ws.path) === path.resolve(this.workspace.current.path)) this.assertPeerOwnerCanSwitch(clean);
     this.mutateStoredConversationState(ws, latest => ({
       version: 3,
       activeConversationId: clean,
@@ -4583,6 +4855,9 @@ export class Agent {
 
   abortActiveKernelRun(reason = 'unspecified'): boolean {
     let aborted = false;
+    if (!this.isSubagentRuntime && (reason === 'user_stop' || reason === 'force_stop')) {
+      this.subagents.broadcastStop(this.runtimeActorId, this.currentWorkRunId() || this.routeTransactionId || 'inactive', reason === 'force_stop');
+    }
     this.subagents.pauseScheduling();
     if (this.activeProcessAbortController && !this.activeProcessAbortController.signal.aborted) {
       const abortError = new Error('Agent run aborted');
@@ -4603,6 +4878,8 @@ export class Agent {
     this.pendingAgentKernelQueue = [];
     return aborted;
   }
+
+  hasRunningSubagents(): boolean { return this.activePeerAgents.size > 0; }
 
   activeProcessSignal(): AbortSignal | undefined {
     return this.activeProcessAbortController?.signal;
@@ -4837,7 +5114,7 @@ export class Agent {
       const maxTokens = Math.max(1024, Math.min(8192, Math.ceil(content.length / 4)) + 512);
       const { temperature } = provider.intelligenceConfig('low');
       const generated = await this.withTimeout(
-        provider.chat(modelName, [{ role: 'user', content: prompt }], system, temperature, maxTokens, signal),
+        this.chatWithConversationUsage(provider, modelName, [{ role: 'user', content: prompt }], system, temperature, maxTokens, signal),
         120000,
       );
       const summary = String(generated || '').trim();
@@ -5620,7 +5897,7 @@ export class Agent {
     ].join('\n');
   }
 
-  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'> & Partial<Pick<Agent, 'linkedPlan' | 'subagents' | 'workRuns' | 'continuations' | 'getConversationTitleGateState'>> & { modelSelection?: ConversationModelSelection; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; titleGateState?: { titleRequestMessageId?: string; firstAgentResponseStarted?: boolean } }): void {
+  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'> & Partial<Pick<Agent, 'linkedPlan' | 'subagents' | 'workRuns' | 'continuations' | 'getConversationTitleGateState' | 'providerUsageTotals' | 'lastProviderUsage' | 'conversationProviderUsage'>> & { modelSelection?: ConversationModelSelection; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; titleGateState?: { titleRequestMessageId?: string; firstAgentResponseStarted?: boolean } }): void {
     const clean = this.safeConversationId(id || 'default');
     const ws = this.workspace.current;
     if (!ws) return;
@@ -5636,6 +5913,11 @@ export class Agent {
     const stored = this.readStoredConversationState(ws);
     stored.conversations = stored.conversations || {};
     const previous = stateKey ? stored.conversations[stateKey] : undefined;
+    const providerUsage = source.conversationProviderUsage ? source.conversationProviderUsage() : source.providerUsageTotals ? {
+      version: 1 as const,
+      totals: this.normalizeProviderUsageCounters(source.providerUsageTotals),
+      last: this.normalizeProviderUsageCounters(source.lastProviderUsage),
+    } : previous?.providerUsage;
     const sourceTitleGate = source.getConversationTitleGateState?.() || source.titleGateState;
     const titleRequestMessageId = sourceTitleGate?.titleRequestMessageId === undefined
       ? String(previous?.titleRequestMessageId || '')
@@ -5647,6 +5929,7 @@ export class Agent {
       this.workspaceConversations.set(key, {
         chatMessages: normalizedChatMessages,
         history: [...source.history],
+        providerUsage,
         plan,
         linkedPlan,
         subagentState,
@@ -5671,6 +5954,7 @@ export class Agent {
       title,
       chatMessages: normalizedChatMessages,
       history: [...source.history],
+      providerUsage,
       plan,
       linkedPlan,
       subagentState,
@@ -5693,6 +5977,7 @@ export class Agent {
     if (this.safeConversationId(this.activeConversationId || 'default') === clean) {
       this.chatMessages = normalizedChatMessages;
       this.history = [...source.history];
+      this.restoreProviderUsage(providerUsage);
       this.conversationPlan = plan;
       this.linkedPlan = linkedPlan;
       if (source.subagents) this.subagents = source.subagents;
@@ -5948,19 +6233,135 @@ export class Agent {
     };
   }
 
-  recordProviderUsage(input: { input: number; output: number; cacheRead: number; cacheWrite: number }): void {
-    const bounded = (value: number): number => Math.max(0, Math.floor(Number(value) || 0));
-    const usage = {
-      input: bounded(input.input),
-      output: bounded(input.output),
-      cacheRead: bounded(input.cacheRead),
-      cacheWrite: bounded(input.cacheWrite),
+  private normalizeProviderUsageCounters(input?: Partial<ProviderUsageCounters>): ProviderUsageCounters {
+    const bounded = (value: unknown): number => typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(0, Math.floor(value)) : 0;
+    return { input: bounded(input?.input), output: bounded(input?.output), cacheRead: bounded(input?.cacheRead), cacheWrite: bounded(input?.cacheWrite) };
+  }
+
+  conversationProviderUsage(): ConversationProviderUsage {
+    return {
+      version: 1, totals: { ...this.providerUsageTotals }, last: { ...this.lastProviderUsage },
+      accounting: { ...this.providerUsageAccounting },
+      requestContext: this.lastRequestContext ? { ...this.lastRequestContext } : null,
     };
-    this.lastProviderUsage = usage;
-    this.providerUsageTotals.input += usage.input;
-    this.providerUsageTotals.output += usage.output;
-    this.providerUsageTotals.cacheRead += usage.cacheRead;
-    this.providerUsageTotals.cacheWrite += usage.cacheWrite;
+  }
+
+  private normalizedConversationUsage(saved?: ConversationProviderUsage): ConversationProviderUsage & { accounting: Accounting } {
+    const totals = this.normalizeProviderUsageCounters(saved?.version === 1 ? saved.totals : undefined);
+    const accounting = createAccounting(saved?.version === 1 ? totals : undefined);
+    if (saved?.version === 1 && saved.accounting) {
+      for (const key of ['requests', 'inputReportedRequests', 'outputReportedRequests', 'cacheReportedRequests', 'cacheEligibleInputTokens', 'cacheReadTokens'] as const) {
+        const value = saved.accounting[key];
+        accounting[key] = typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+      }
+      accounting.hasLegacyTotals = saved.accounting.hasLegacyTotals === true;
+      accounting.lastInputTokens = typeof saved.accounting.lastInputTokens === 'number' && Number.isFinite(saved.accounting.lastInputTokens)
+        ? Math.max(0, Math.floor(saved.accounting.lastInputTokens)) : null;
+    }
+    let requestContext: RequestContextEstimate | null = null;
+    const context = saved?.version === 1 ? saved.requestContext : null;
+    if (context && typeof context.requestId === 'string' && typeof context.runId === 'string' && typeof context.at === 'string') {
+      requestContext = { requestId: context.requestId, runId: context.runId, model: String(context.model || ''), at: context.at,
+        estimatedTokens: 0, longHistoryTokens: 0, buildBlockTokens: 0, systemPromptTokens: 0, toolSchemaTokens: 0, messageCount: 0, hasImages: context.hasImages === true };
+      for (const key of ['estimatedTokens', 'longHistoryTokens', 'buildBlockTokens', 'systemPromptTokens', 'toolSchemaTokens', 'messageCount', 'inputTokens', 'cacheReadTokens'] as const) {
+        const value = context[key];
+        if (typeof value === 'number' && Number.isFinite(value)) requestContext[key] = Math.max(0, Math.floor(value));
+      }
+    }
+    return { version: 1, totals, last: this.normalizeProviderUsageCounters(saved?.version === 1 ? saved.last : undefined), accounting, requestContext };
+  }
+
+  private restoreProviderUsage(saved?: ConversationProviderUsage): void {
+    // Legacy counters remain spend evidence, but cannot prove reporting coverage.
+    const usage = this.normalizedConversationUsage(saved);
+    this.providerUsageTotals = usage.totals;
+    this.lastProviderUsage = usage.last;
+    this.providerUsageAccounting = usage.accounting;
+    this.lastRequestContext = usage.requestContext || null;
+  }
+
+  private mutateRequestUsage(request: ConversationUsageRequest, mutate: (usage: ConversationProviderUsage & { accounting: Accounting }) => void): void {
+    const activeKey = this.workspaceConversationStateKey();
+    if (request.stateKey === activeKey && request.conversationId === this.activeConversationId) {
+      const usage = { version: 1 as const, totals: this.providerUsageTotals, last: this.lastProviderUsage,
+        accounting: this.providerUsageAccounting, requestContext: this.lastRequestContext };
+      mutate(usage);
+      this.lastProviderUsage = usage.last;
+      this.lastRequestContext = usage.requestContext || null;
+      this.saveWorkspaceConversationState(false);
+      return;
+    }
+    // A late auxiliary response belongs to the captured target, not whichever
+    // conversation the user selected while it was running. Do not revive deletion.
+    if (!request.workspace || !request.stateKey) return;
+    this.mutateStoredConversationState(request.workspace, stored => {
+      const entry = stored.conversations?.[request.stateKey!];
+      if (!entry) return stored;
+      const usage = this.normalizedConversationUsage(entry.providerUsage);
+      mutate(usage);
+      entry.providerUsage = usage;
+      entry.updatedAt = new Date(Math.max(Date.now(), (Date.parse(entry.updatedAt || '') || 0) + 1)).toISOString();
+      // A different active conversation can already have a debounced snapshot
+      // of this same store. Update only this entry's usage in that snapshot so
+      // its later flush cannot roll back the late measurement or discard B.
+      const storePath = this.workspaceConversationStorePath(request.workspace);
+      const dirtyEntry = storePath ? this.conversationStateDirty.get(storePath)?.state.conversations?.[request.stateKey!] : undefined;
+      if (dirtyEntry) dirtyEntry.providerUsage = structuredClone(usage);
+      const memoryKey = `${request.workspace!.isInternal ? 'internal' : 'external'}:${path.resolve(request.workspace!.path)}::conversation:${request.conversationId}`;
+      const memory = this.workspaceConversations.get(memoryKey);
+      if (memory) { memory.providerUsage = structuredClone(usage); memory.updatedAt = entry.updatedAt; }
+      return stored;
+    });
+  }
+
+  beginProviderUsageRequest(): ConversationUsageRequest {
+    const request: ConversationUsageRequest = {
+      id: crypto.randomUUID(), conversationId: this.activeConversationId,
+      workspace: this.workspace.current ? { ...this.workspace.current } : null,
+      stateKey: this.workspaceConversationStateKey(),
+      accounting: beginAccountingRequest(createAccounting()),
+    };
+    this.mutateRequestUsage(request, usage => { request.accounting = beginAccountingRequest(usage.accounting); });
+    return request;
+  }
+
+  recordRequestContext(request: ConversationUsageRequest, messages: Array<Record<string, unknown>>, system: string, tools: unknown[], model: string): void {
+    const context: RequestContextEstimate = {
+      ...estimateSubmittedContext(messages, system, tools, this.compressionBuildBlockStart(messages)),
+      requestId: request.id, runId: this.currentWorkRunId(), model, at: new Date().toISOString(),
+    };
+    this.mutateRequestUsage(request, usage => { usage.requestContext = context; });
+  }
+
+  recordProviderUsage(input: UsageInput, request = this.beginProviderUsageRequest()): void {
+    this.mutateRequestUsage(request, usage => {
+      applyAccountingUsage(usage.accounting, usage.totals, request.accounting, input);
+      usage.last = { ...request.accounting.usage };
+      if (usage.requestContext?.requestId === request.id) {
+        if (request.accounting.reported.input) usage.requestContext.inputTokens = request.accounting.usage.input;
+        if (request.accounting.reported.cacheRead) usage.requestContext.cacheReadTokens = request.accounting.usage.cacheRead;
+      }
+    });
+  }
+
+  private async chatWithConversationUsage(provider: LLMProvider, ...args: Parameters<LLMProvider['chat']>): Promise<string> {
+    // Bind before awaiting. The callback runs for successful responses even if
+    // usage is absent; failed HTTP/model-probe requests are not invented spend.
+    const workspace = this.workspace.current ? { ...this.workspace.current } : null;
+    const conversationId = this.activeConversationId;
+    const stateKey = this.workspaceConversationStateKey();
+    let request: ConversationUsageRequest | undefined;
+    const callback = args[7];
+    args[7] = input => {
+      if (!request) {
+        request = { id: crypto.randomUUID(), workspace, conversationId, stateKey, accounting: beginAccountingRequest(createAccounting()) };
+        this.mutateRequestUsage(request, usage => { request!.accounting = beginAccountingRequest(usage.accounting); });
+      }
+      this.recordProviderUsage(input, request);
+      callback?.(input);
+    };
+    return provider.chat(...args);
   }
 
   contextWindow(modelName = this.model): {
@@ -5984,9 +6385,26 @@ export class Agent {
     providerOutputTokens?: number;
     providerCacheReadTokens?: number;
     providerCacheWriteTokens?: number;
-    providerCacheReadRatio?: number;
+    providerCacheReadRatio?: number | null;
+    providerKnownCacheReadRatio?: number | null;
+    providerCacheEligibleInputTokens?: number;
+    providerUsageRequests?: number;
+    providerUsageInputReportedRequests?: number;
+    providerUsageOutputReportedRequests?: number;
+    providerUsageCacheReportedRequests?: number;
+    providerUsageHasLegacyTotals?: boolean;
+    providerLastInputTokens?: number | null;
+    requestContext?: RequestContextEstimate | null;
+    contextEstimateSource?: 'active_request' | 'history';
+    contextEstimateHasImages?: boolean;
+    systemPromptTokens?: number;
+    toolSchemaTokens?: number;
   } {
-    const estimatedTokens = this.estimateContextTokens();
+    const activeRequest = this.activeAgentKernelRuntime && this.lastRequestContext?.runId === this.currentWorkRunId()
+      ? this.lastRequestContext : null;
+    const historyEstimate = activeRequest ? null
+      : estimateSubmittedContext(this.history, '', [], this.compressionBuildBlockStart(this.history));
+    const estimatedTokens = activeRequest?.estimatedTokens ?? historyEstimate!.estimatedTokens;
     // Display and compression must share one window resolution. Both resolve
     // the auto branch through the active (routed) deployment so the UI ring and
     // the compaction trigger stay on the same maxTokens even after an Auto
@@ -5996,14 +6414,15 @@ export class Agent {
     const maxTokens = Math.max(1, Number(model?.max_tokens || 0) || 128000);
     const ratio = estimatedTokens / maxTokens;
     const budget = this.compressionBudget(this.history, modelName);
+    const cache = ratioSummary(this.providerUsageAccounting);
     return {
       estimatedTokens,
       maxTokens,
       ratio,
       warning: ratio >= 1 ? 'over_limit' : ratio >= 0.85 ? 'near_limit' : 'ok',
       model: modelName,
-      buildBlockTokens: budget.buildBlockTokens,
-      longHistoryTokens: budget.longHistoryTokens,
+      buildBlockTokens: activeRequest?.buildBlockTokens ?? historyEstimate!.buildBlockTokens,
+      longHistoryTokens: activeRequest?.longHistoryTokens ?? historyEstimate!.longHistoryTokens,
       buildBlockTriggerTokens: budget.buildBlockTriggerTokens,
       longHistoryTriggerTokens: budget.longHistoryTriggerTokens,
       buildBlockRetentionTokens: budget.buildBlockRetentionTokens,
@@ -6018,9 +6437,20 @@ export class Agent {
       providerOutputTokens: this.providerUsageTotals.output,
       providerCacheReadTokens: this.providerUsageTotals.cacheRead,
       providerCacheWriteTokens: this.providerUsageTotals.cacheWrite,
-      providerCacheReadRatio: this.providerUsageTotals.input > 0
-        ? Math.min(1, this.providerUsageTotals.cacheRead / this.providerUsageTotals.input)
-        : 0,
+      providerCacheReadRatio: cache.totalRatio,
+      providerKnownCacheReadRatio: cache.knownRatio,
+      providerCacheEligibleInputTokens: cache.denominator,
+      providerUsageRequests: this.providerUsageAccounting.requests,
+      providerUsageInputReportedRequests: this.providerUsageAccounting.inputReportedRequests,
+      providerUsageOutputReportedRequests: this.providerUsageAccounting.outputReportedRequests,
+      providerUsageCacheReportedRequests: this.providerUsageAccounting.cacheReportedRequests,
+      providerUsageHasLegacyTotals: this.providerUsageAccounting.hasLegacyTotals,
+      providerLastInputTokens: this.providerUsageAccounting.lastInputTokens,
+      requestContext: this.lastRequestContext ? { ...this.lastRequestContext } : null,
+      contextEstimateSource: activeRequest ? 'active_request' : 'history',
+      contextEstimateHasImages: activeRequest?.hasImages ?? historyEstimate!.hasImages,
+      systemPromptTokens: activeRequest?.systemPromptTokens ?? 0,
+      toolSchemaTokens: activeRequest?.toolSchemaTokens ?? 0,
     };
   }
 
@@ -6084,15 +6514,15 @@ export class Agent {
 
   private compressionBuildBlockStart(messages: Array<Record<string, unknown>>): number {
     const activeRunId = this.currentWorkRunId();
+    // No active Build means every retained message is historical, including
+    // legacy assistant/tool tails whose old persistence omitted run metadata.
+    if (!activeRunId) return messages.length;
     if (activeRunId) {
       const index = messages.findIndex(message => String(message.run_id || message.runId || '') === activeRunId);
       if (index >= 0) return index;
     }
-    // dev-0.5.6: 空闲对话（无活动 run）时不得把全部历史算进当前 Build Block，
-    // 否则上下文显示窗口的长期历史恒为 0。回退语义：
-    // - 存在带 run_id 的消息：boundary 取最后一个 run 的起点之后（该 run 及其
-    //   之前的历史属于长期历史，其后无归属的消息属于当前未命名区块）；
-    // - 完全没有 run_id：全部历史都是长期历史（不存在当前 Build Block）。
+    // Legacy active transcripts may lack the current run tag. Retain the
+    // historical tagged prefix; ordinary new inputs now carry their run_id.
     let lastRunBoundary = -1;
     for (let index = 0; index < messages.length; index += 1) {
       if (String(messages[index]?.run_id || messages[index]?.runId || '')) lastRunBoundary = index + 1;
@@ -6475,6 +6905,7 @@ export class Agent {
       title: this.titleFromMessages(messages, clean),
       chatMessages: messages,
       history: sourceHistory,
+      providerUsage: memory?.providerUsage,
       plan: memory?.plan,
       linkedPlan: memory?.linkedPlan,
       subagentState: memory?.subagentState,
@@ -6578,6 +7009,7 @@ export class Agent {
       title: this.titleFromMessages(messages, clean),
       chatMessages: messages,
       history: sourceHistory,
+      providerUsage: memory?.providerUsage,
       plan: memory?.plan,
       linkedPlan: memory?.linkedPlan,
       subagentState: memory?.subagentState,
@@ -7469,7 +7901,7 @@ export class Agent {
     let corrected = '';
     try {
       const provider = this.engineModel();
-      if (provider) corrected = String(await provider.chat(this.activeModelName(), [{ role: 'user', content: prompt }], 'You are a text-only OCR correction assistant. Be conservative and explicit about uncertainty.', 0.05, 3000, signal) || '').trim();
+      if (provider) corrected = String(await this.chatWithConversationUsage(provider, this.activeModelName(), [{ role: 'user', content: prompt }], 'You are a text-only OCR correction assistant. Be conservative and explicit about uncertainty.', 0.05, 3000, signal) || '').trim();
     } catch {}
     return JSON.stringify({
       ok: !!(corrected || ocr.length),
@@ -7482,15 +7914,51 @@ export class Agent {
     }, null, 2);
   }
 
-  engineModel(): LLMProvider | null {
+  engineModel(cache?: BuildProviderCache): LLMProvider | null {
     if (this.forcedProvider) {
       const active = this.activeDeployment();
       if (!this.forcedProviderDeployment
-        || (active && deploymentIdentity(active) === this.forcedProviderDeployment)) return this.forcedProvider;
+        || (active && deploymentIdentity(active) === this.forcedProviderDeployment)) {
+        if (cache) { delete cache.key; delete cache.provider; }
+        return this.forcedProvider;
+      }
     }
     const m = this.activeModelConfig();
-    if (!m) return null;
-    return new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(m), this.providerProxyConfig());
+    if (!m) {
+      if (cache) { delete cache.key; delete cache.provider; }
+      return null;
+    }
+    return this.modelProvider(m, cache);
+  }
+
+  private modelProvider(m: NonNullable<ReturnType<Agent['activeModelConfig']>>, cache?: BuildProviderCache): LLMProvider {
+    const apiMode = this.config.openAIApiMode();
+    const adapters = this.config.contextFlag('provider_adapters_v2');
+    const thinkingMaps = this.modelThinkingTierMaps(m);
+    const proxy = this.providerProxyConfig();
+    const create = () => new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, apiMode, adapters, undefined, thinkingMaps, proxy);
+    if (!cache) return create();
+
+    // Match the provider's configured-proxy/environment precedence. A changed
+    // effective proxy must not reuse a dispatcher created for its predecessor.
+    const effectiveProxyUrl = proxy.enabled === false ? '' : (proxy.url.trim()
+      || process.env.HTTPS_PROXY || process.env.HTTP_PROXY
+      || process.env.https_proxy || process.env.http_proxy || '');
+    const orderedMaps = Object.keys(thinkingMaps || {}).sort().map(model => [
+      model,
+      Object.keys(thinkingMaps![model]).sort().map(tier => [tier, thinkingMaps![model][tier]]),
+    ]);
+    const key = crypto.createHash('sha256').update(JSON.stringify([
+      m.provider_id, m.name, m.logical_model_group_id || '',
+      m.provider, m.provider_url, m.api_key, m.provider_protocol,
+      apiMode, adapters, orderedMaps,
+      proxy.enabled, proxy.url, proxy.auth, effectiveProxyUrl,
+    ])).digest('hex');
+    if (cache.key === key && cache.provider) return cache.provider;
+    const provider = create();
+    cache.key = key;
+    cache.provider = provider;
+    return provider;
   }
 
   /**
@@ -7828,6 +8296,7 @@ export class Agent {
       const explicitFixedModel = this.model !== '' && this.model !== 'auto';
       if (!explicitFixedModel) this.ensureUsableModelSelection();
       let clientMessageId = String(inputEnvelope?.clientMessageId || '').trim();
+      const userMessageId = String(inputEnvelope?.userMessageId || '').trim();
       const inputRunId = String(inputEnvelope?.runId || this.activeWorkRunId || '').trim();
       let rawImages = typeof input === 'string' ? [] : (Array.isArray(input.images) ? input.images : []);
       // dev-0.4.3 Guide 批量续接：同一 Build block 内连续到达的多个 Guide
@@ -7930,7 +8399,7 @@ export class Agent {
       const historyContent = images.length
         ? [{ type: 'text', text }, ...images.map(image => ({ type: 'image_url', image_url: { url: image.dataUrl } }))]
         : text;
-      if (clientMessageId) {
+      if (clientMessageId && !userMessageId) {
         this.persistGuideMessage(clientMessageId, displayText, inputRunId, historyContent, attachments, String(inputEnvelope?.guideId || ''));
         if (inputRunId) {
           this.recordGuideReceipt({
@@ -7946,19 +8415,26 @@ export class Agent {
           });
         }
       } else if (!hiddenUserInput) {
-        const messageId = crypto.randomUUID();
-        this.chatMessages.push({
+        const messageId = userMessageId || crypto.randomUUID();
+        const persistedUser = userMessageId ? this.chatMessages.find(message => message.role === 'user' && message.messageId === userMessageId) : undefined;
+        const userMessage: ChatMessage = {
           messageId,
           branchNodeId: this.currentBranchNodeId(),
           role: 'user',
           content: displayText,
           mode: String(inputEnvelope?.visibleMode || this.modeName()),
           model: this.model,
-          timestamp: now,
+          timestamp: persistedUser?.timestamp || now,
           attachments: attachments.length ? attachments : undefined,
           runId: this.currentWorkRunId() || undefined,
-        });
-        this.history.push({ role: 'user', content: historyContent });
+        };
+        if (persistedUser) Object.assign(persistedUser, userMessage);
+        else this.chatMessages.push(userMessage);
+        const persistedHistory = userMessageId ? this.history.find(message => message.role === 'user' && message.user_message_id === userMessageId) : undefined;
+        if (persistedHistory) {
+          persistedHistory.content = historyContent;
+          persistedHistory.run_id = this.currentWorkRunId() || undefined;
+        } else this.history.push({ role: 'user', content: historyContent, run_id: this.currentWorkRunId() || undefined, ...(userMessageId ? { user_message_id: userMessageId } : {}) });
       } else {
         this.history.push({
           role: 'user',
@@ -7969,10 +8445,16 @@ export class Agent {
         });
       }
       if (!hiddenUserInput) this.recordWorkRunPrimaryPrompt(displayText);
+      const submittedHistoryMessage = userMessageId
+        ? this.history.find(message => message.role === 'user' && message.user_message_id === userMessageId)
+        : this.history.at(-1);
+      const submittedChatMessage = userMessageId
+        ? this.chatMessages.find(message => message.role === 'user' && message.messageId === userMessageId)
+        : [...this.chatMessages].reverse().find(message => message.role === 'user');
       this.saveWorkspaceConversationState(true);
       let firstResponseGateMessageId = '';
       let firstResponseTitleInput: { messageId: string; input: string } | null = null;
-      if (!hiddenUserInput && !clientMessageId && !this.firstAgentResponseStarted) {
+      if (!hiddenUserInput && (!clientMessageId || !!userMessageId) && !this.firstAgentResponseStarted) {
         const firstInput = this.firstPersistedUserForTitleGate();
         if (!firstInput) throw new Error('Conversation title generation failed; the first persisted user input is unavailable.');
         if (this.model === 'auto' && !autoRouteEvaluated) {
@@ -8027,6 +8509,12 @@ export class Agent {
       // Agent provider request.
       this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);
       this.emitWorkEvent({ type: 'start', content: 'Preparing request.' });
+      // Standalone Agent runs acquire their run ID at start, after the title
+      // gate. Bind the captured input now, without moving or bypassing that gate.
+      const startedRunId = this.currentWorkRunId();
+      if (startedRunId && submittedHistoryMessage?.role === 'user') submittedHistoryMessage.run_id = startedRunId;
+      if (startedRunId && !hiddenUserInput && submittedChatMessage) submittedChatMessage.runId = startedRunId;
+      this.saveWorkspaceConversationState(false);
 
       // Use external opencode CLI engine
       if (this.engine === 'opencode') {
@@ -8242,6 +8730,7 @@ export class Agent {
   async handleSubagentContinue(args: string): Promise<string> {
     const accepted = await this.handleSubagentContinueEnvelope(args);
     if (!accepted.ok || !accepted.data?.id) return accepted.output;
+    if (!['queued', 'working'].includes(accepted.data.status)) return accepted.output;
     const settled = await this.waitForSubagentSettlement(accepted.data.id);
     return `${accepted.output}\n${settled?.result || settled?.error || ''}`.trim();
   }
@@ -8253,18 +8742,32 @@ export class Agent {
   async handleSubagentContinueEnvelope(args: string): Promise<NewmarkSubagentToolResult> {
     try {
       const params = JSON.parse(args);
-      const name = params.name || params.id || '';
-      const prompt = params.message || params.prompt || '';
+      if (!params || typeof params !== 'object' || Array.isArray(params)) throw new Error('Arguments must be an object.');
+      if (params.wakeup !== undefined && typeof params.wakeup !== 'boolean') throw new Error('wakeup must be a boolean.');
+      if (params.kind !== undefined && !['directive', 'question', 'result', 'handoff'].includes(params.kind)) throw new Error('Invalid message kind.');
+      const name = String(params.id || params.name || '').trim();
+      const selected = selectSubagentCommunication(this.history, params);
+      const wakeup = params.wakeup === true;
+      if (name === 'root' || name === this.subagents.rootAgentId) {
+        const delivery = this.subagents.sendRootMessage(this.runtimeActorId, selected.body, params.kind || 'result', undefined, wakeup);
+        return { ok: delivery.ok, output: delivery.ok
+          ? `[Root mailbox message persisted] ${delivery.message?.id} wakeup=${wakeup}`
+          : `[Subagent] ${delivery.error}`, error: delivery.error,
+          metadata: { kind: 'subagent-send', wakeup, selection: selected.selection } };
+      }
       const sa = this.subagents.get(name);
       if (!sa) return { ok: false, output: `[Subagent] Not found: ${name}`, error: `Not found: ${name}` };
-      if (!prompt) return this.subagents.toToolResult(sa.id, '[Subagent] Prompt required.', false);
-       sa.messages.push({ role: 'user', content: String(prompt), hidden_user_input: true });
-      const delivery = this.subagents.sendMessage(this.runtimeActorId, sa.id, String(prompt), params.kind || 'directive', {
+      const delivery = this.subagents.sendMessage(this.runtimeActorId, sa.id, selected.body, params.kind || 'directive', {
         correlationId: params.correlation_id,
         replyTo: params.reply_to,
-      });
-      return this.subagents.toToolResult(sa.id, delivery.ok ? `[Subagent message persisted] ${delivery.message?.id}` : `[Subagent] ${delivery.error}`, delivery.ok);
-    } catch { return { ok: false, output: '[Subagent] Invalid continue arguments.', error: 'Invalid continue arguments.' }; }
+      }, wakeup);
+      const result = this.subagents.toToolResult(sa.id, delivery.ok ? `[Subagent message persisted] ${delivery.message?.id} wakeup=${wakeup}` : `[Subagent] ${delivery.error}`, delivery.ok);
+      result.metadata = { ...result.metadata, wakeup, selection: selected.selection };
+      return result;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Invalid continue arguments.';
+      return { ok: false, output: `[Subagent] ${detail}`, error: detail };
+    }
   }
 
   handleSubagentResult(args: string): string {
@@ -8282,11 +8785,14 @@ export class Agent {
       // assistant/user 消息即足以让主 Agent 判断上下文，完整历史按需走
       // subagent_read 的 max_chars 分页读取。
       const transcript = this.subagents.boundedResultTranscript(sa.id);
-      return this.subagents.toToolResult(
+      const result = this.subagents.toToolResult(
         sa.id,
         `get.subagent("${sa.name}", id="${sa.id}")\nStatus: ${sa.status}\nModel: ${sa.model}\nMode: ${sa.agentMode}\n\nResult:\n${sa.result || ''}\n\nRecent Conversation (bounded):\n${transcript}`,
         true
       );
+      const receipt = this.subagentSettlementReceipt(sa.id);
+      if (receipt) result.metadata = { ...result.metadata, settlementReceipt: receipt };
+      return result;
     } catch { return { ok: false, output: '[Subagent] Invalid result arguments.', error: 'Invalid result arguments.' }; }
   }
 
@@ -8297,7 +8803,9 @@ export class Agent {
       if (!target) return { ok: false, output: '[Subagent] id or name required.', error: 'id or name required.' };
       const read = this.subagents.read(this.runtimeActorId, target, Number(params.max_chars || 16000));
       if (!read.ok) return { ok: false, output: `[Subagent] ${read.error}`, error: read.error, metadata: { kind: 'subagent-read' } };
-      return { ok: true, output: JSON.stringify(read.snapshot, null, 2), data: read.snapshot, metadata: { kind: 'subagent-read' } };
+      const peer = this.subagents.get(target);
+      const receipt = peer && read.snapshot?.peer.result === peer.result ? this.subagentSettlementReceipt(peer.id) : undefined;
+      return { ok: true, output: JSON.stringify(read.snapshot, null, 2), data: read.snapshot, metadata: { kind: 'subagent-read', ...(receipt ? { settlementReceipt: receipt } : {}) } };
     } catch {
       return { ok: false, output: '[Subagent] Invalid read arguments.', error: 'Invalid read arguments.' };
     }
@@ -8306,7 +8814,7 @@ export class Agent {
   handleSubagentListEnvelope(args: string): NewmarkToolResult {
     let status = '';
     try { status = String((JSON.parse(args || '{}') as Record<string, unknown>).status || ''); } catch {}
-    const subagents = this.subagents.listAll().filter(record => !status || record.status === status).map(record => this.subagents.toRecord(record.id));
+    const subagents = this.subagents.listSummaries(status);
     return { ok: true, output: JSON.stringify({ conversationId: this.activeConversationId, subagents }, null, 2), metadata: { kind: 'subagent-list' } };
   }
 
@@ -8323,6 +8831,7 @@ export class Agent {
       const actorId = this.isSubagentRuntime ? this.runtimeActorId : this.subagents.rootAgentId;
       if (actorId === this.subagents.rootAgentId) this.activePeerAgents.get(sa.id)?.abortActiveKernelRun();
       const closed = this.subagents.close(sa.id, actorId);
+      if (closed) this.peerProviderCaches.delete(sa.id);
       return this.subagents.toToolResult(sa.id, closed ? `[Subagent '${sa.name}' closed]` : '[Subagent] Close denied.', closed);
     } catch { return { ok: false, output: '[Subagent] Invalid close arguments.', error: 'Invalid close arguments.' }; }
   }
@@ -8629,7 +9138,7 @@ export class Agent {
     try {
       const cfg = provider.intelligenceConfig(this.intelligence);
       const response = await this.withTimeout(
-        provider.chat(this.activeModelName(), [{ role: 'user', content: prompt }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 3000), signal),
+        this.chatWithConversationUsage(provider, this.activeModelName(), [{ role: 'user', content: prompt }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 3000), signal),
         120000
       );
       const parsed = this.extractMemoryLabJson(response);
@@ -8676,7 +9185,7 @@ export class Agent {
     try {
       const cfg = provider.intelligenceConfig(this.intelligence);
       await this.withTimeout(
-        provider.chat(this.activeModelName(), [{ role: 'user', content: JSON.stringify({ index: read.index }, null, 2) }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 1200), signal),
+        this.chatWithConversationUsage(provider, this.activeModelName(), [{ role: 'user', content: JSON.stringify({ index: read.index }, null, 2) }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 1200), signal),
         120000
       );
     } catch { throwIfAgentAborted(signal); /* deterministic reindex still runs */ }
@@ -8779,10 +9288,16 @@ export class Agent {
     }
     const model = assignedModel?.name || (requestedModel === 'auto' ? this.activeModelName() : requestedModel);
     const activeModel = this.activeModelConfig();
-    const activeProvider = this.engineModel();
-    const assignedProvider = assignedModel && assignedModel.provider_id !== activeModel?.provider_id
-      ? new LLMProvider(assignedModel.provider, assignedModel.provider_url, assignedModel.api_key, assignedModel.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(assignedModel), this.providerProxyConfig())
-      : activeProvider;
+    const peerProviderCache = this.peerProviderCaches.get(id) || {};
+    this.peerProviderCaches.delete(id);
+    this.peerProviderCaches.set(id, peerProviderCache);
+    for (const retainedId of this.peerProviderCaches.keys()) {
+      if (this.peerProviderCaches.size <= 32) break;
+      if (!this.activePeerAgents.has(retainedId) && retainedId !== id) this.peerProviderCaches.delete(retainedId);
+    }
+    const assignedProvider = assignedModel && (assignedModel.provider_id !== activeModel?.provider_id || assignedModel.name !== activeModel?.name)
+      ? this.modelProvider(assignedModel, peerProviderCache)
+      : this.engineModel(peerProviderCache);
     if (!assignedProvider || !model) {
       throw new Error('No LLM configured. Add provider in Settings > Models.');
     }
@@ -8826,7 +9341,7 @@ export class Agent {
       child.config.set('models', 'auto_switch', false);
       child.config.set('skills', 'auto_download', 'disabled');
       child.subagents = this.subagents;
-      child.subagentContextPersist = (history, compression) => this.subagents.replaceContext(sa.id, history, compression);
+      child.subagentContextPersist = (history, compression, inputCommitted) => this.subagents.replaceContext(sa.id, history, compression, inputCommitted);
       const requestedFlowName = String(flowName || sa.flowName || '').trim();
       if (sa.agentMode === 'flow' && requestedFlowName) {
         const flowDir = path.join(this.rootPath, 'Flow');
@@ -8841,6 +9356,7 @@ export class Agent {
           && message.content.startsWith("Peer agent '")));
       const latestPersisted = persistedMessages.at(-1);
       if (latestPersisted?.role === 'user'
+        && !(reason === 'resume' && prompt === SUBAGENT_RECOVERY_PROMPT)
         && (reason === 'spawn' || reason === 'resume' || prompt.includes(latestPersisted.content))) {
         persistedMessages.pop();
       }
@@ -8860,6 +9376,18 @@ export class Agent {
         if (message.vision_image_path) entry.vision_image_path = message.vision_image_path;
         return entry;
       });
+      const compression = sa.metadata?.contextCompression as Partial<NonNullable<Agent['lastCompression']>> | undefined;
+      if (compression && typeof compression.at === 'string' && typeof compression.summary === 'string') {
+        child.lastCompression = {
+          at: compression.at, summary: compression.summary,
+          originalMessages: Number(compression.originalMessages) || 0,
+          compressedMessages: Number(compression.compressedMessages) || 0,
+          originalChars: Number(compression.originalChars) || 0,
+          compressedChars: Number(compression.compressedChars) || compression.summary.length,
+          compressedTokens: Number(compression.compressedTokens) || 0,
+          model: String(compression.model || model), fallback: !!compression.fallback,
+        };
+      }
       child.subscribeAgentKernelUserMessageStart(content => {
         const match = String(content || '').match(/^\[Peer mailbox id=([0-9a-f-]{36})\b/i);
         if (match) this.subagents.acknowledgeMailbox(sa.id, match[1]);
@@ -8906,6 +9434,7 @@ export class Agent {
     } finally {
       if (unrelayPeerEvents) unrelayPeerEvents();
       this.activePeerAgents.delete(sa.id);
+      if (this.subagents.get(sa.id)?.status === 'closed') this.peerProviderCaches.delete(sa.id);
     }
   }
 
@@ -9357,7 +9886,7 @@ export class Agent {
       const modelName = String(compressionModel || this.activeModelName()).trim();
       if (!modelName) return { summary: fallbackSummary, model: 'local-fallback', fallback: true };
       const generated = await this.withTimeout(
-        provider.chat(modelName, [...prefixMessages, { role: 'user', content: prompt }], system, temperature, budget.summaryTokens, signal),
+        this.chatWithConversationUsage(provider, modelName, [...prefixMessages, { role: 'user', content: prompt }], system, temperature, budget.summaryTokens, signal),
         120000
       );
       const generatedText = String(generated || '').trim();
@@ -9674,13 +10203,20 @@ export class Agent {
     }
 
     if (this.intelligence === 'ultra') {
-      parts.push([
+      parts.push(this.isSubagentRuntime ? [
+        '[Ultra Intelligence – Specialist Role]',
+        'Own the delegated task and complete its implementation or investigation yourself. Preserve the assigned file and responsibility boundaries. You may delegate a concrete independent subtask only when it saves time while you continue useful work; never pass your whole assignment to another peer or create a chain of coordinators.',
+        'Reuse an existing peer for follow-up work. Send concise, addressed mailbox messages only for new evidence, dependencies, blockers, handoffs or actionable corrections; avoid repeated status checks and unchanged progress messages. Include exact references and verification evidence in your result.',
+      ].join('\n') : [
         '[Ultra Intelligence – Orchestrator Role]',
-        'You are the lead orchestrator. Actively decompose complex tasks into parallel sub-tasks. Use the `SubAgent` tool to create specialized SubAgents for each distinct sub-task. Use `task_create` only for the conversation checklist; it never creates a SubAgent. Coordinate the SubAgent team: assign clear responsibilities, merge results, resolve conflicts, and produce a unified final output. SubAgents are your team; delegate aggressively and manage them as a manager, not just a tool caller.',
-        'Do not attempt to do all the work yourself. Use SubAgents for parallel investigation, verification, implementation, and review.',
+        'You are the lead orchestrator. Decompose complex work into concrete independent sub-tasks and create specialized peers with `SubAgent`. Give each peer a clear objective, file or responsibility boundary, dependencies, deliverable and acceptance check. Retain useful work locally while peers investigate, implement or review; sequence dependent work and prevent overlapping edits. Merge evidence, resolve conflicts and own the final verification.',
+        'Use task_create only for the conversation checklist; it never creates a SubAgent. Use the available shared concurrency when independent work exists, but do not create peers merely to fill slots. Reuse existing peers for follow-up work. Prefer concise addressed mailbox updates for new evidence, dependencies, blockers and corrections; avoid redundant broadcasts, repeated status checks and unchanged progress messages.',
       ].join('\n'));
     }
 
+    if (this.shouldExposeToolInterface()) parts.push(
+      'Peer communication: subagent_send defaults to wakeup=false and the last visible text-history entry. An active receiver processes either wakeup value normally; use wakeup=true when an inactive peer or root must resume work. Choose concise sender-written summaries or explicit ranges of text/tool history, and forward only evidence relevant to the recipient. Use id="root" for the main agent. Do not retransmit unchanged history or rewrite earlier context to deliver a message.'
+    );
     parts.push(this.buildModePrompt());
     const value = this.contextV2.orchestrator.assemble({
       // Keep the complete base prompt in one stable section. The linked_plan
@@ -9738,6 +10274,47 @@ export class Agent {
       currentToolResults: '',
       currentUserInput: '',
     });
+  }
+
+  private subagentSettlementReceipt(id: string): SubagentSettlementReceipt | undefined {
+    const peer = this.subagents.get(id);
+    return !this.isSubagentRuntime && peer && typeof peer.result === 'string'
+      && Number.isSafeInteger(peer.settlementRevision) && Number(peer.settlementRevision) > 0
+      ? { peerId: peer.id, revision: peer.settlementRevision! } : undefined;
+  }
+
+  /** Peer jobs share a durable request prefix; credentials only enter its hash. */
+  peerRequestCacheIdentity(systemPrompt: string, catalog: unknown[]): string | undefined {
+    if (!this.isSubagentRuntime) return undefined;
+    return crypto.createHash('sha256').update(JSON.stringify({
+      systemPrompt, catalog, model: this.activeModelConfig(),
+      apiMode: this.config.openAIApiMode(), adapters: this.config.contextFlag('provider_adapters_v2'),
+      proxy: this.providerProxyConfig(), intelligence: this.intelligence,
+      compression: this.lastCompression?.at || '',
+    })).digest('hex');
+  }
+
+  readPeerRequestCache(identity: string | undefined): PeerRequestCache | undefined {
+    if (!identity) return undefined;
+    const saved = this.subagents.get(this.runtimeActorId)?.metadata?.requestCache as PeerRequestCache | undefined;
+    if (saved?.version !== 1 || saved.identity !== identity || typeof saved.taskFocus !== 'string'
+      || !Array.isArray(saved.initialTools) || !saved.initialTools.every(name => typeof name === 'string')
+      || !Array.isArray(saved.provisionedTools) || !saved.provisionedTools.every(name => typeof name === 'string')) return undefined;
+    return { ...saved, initialTools: saved.initialTools.slice(), provisionedTools: saved.provisionedTools.slice() };
+  }
+
+  persistPeerRequestCache(cache: PeerRequestCache): void {
+    if (!this.isSubagentRuntime) return;
+    const previous = this.subagents.get(this.runtimeActorId)?.metadata?.requestCache;
+    if (JSON.stringify(previous) !== JSON.stringify(cache)) {
+      this.subagents.patchMetadata(this.runtimeActorId, { requestCache: cache });
+    }
+  }
+
+  checkpointPeerInput(): void {
+    // Called at the first real provider boundary, after the input has entered
+    // working history. Commit context and job progress in one durable write.
+    if (this.isSubagentRuntime) this.subagentContextPersist?.(this.history, this.lastCompression, true);
   }
 
   cachedToolDefinitions(): unknown[] {

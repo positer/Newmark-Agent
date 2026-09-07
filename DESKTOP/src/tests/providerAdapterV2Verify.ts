@@ -5,6 +5,9 @@
 import * as assert from 'assert';
 import * as http from 'http';
 import * as net from 'net';
+import { verifyProviderStreamLifecycle } from './providerStreamLifecycleVerify';
+import { verifyProviderTransportDeadline } from './providerTransportDeadlineVerify';
+import { verifyProviderJsonLifecycle } from './providerJsonLifecycleVerify';
 import {
   ChatCompletionsAdapter,
   ResponsesAdapter,
@@ -108,6 +111,23 @@ async function main(): Promise<void> {
   check(!!chatUsage && chatUsage.inputTokens === 10 && chatUsage.outputTokens === 5, 'chat usage normalized');
   const responsesUsage = normalizeProviderUsage({ input_tokens: 20, output_tokens: 7, cached_tokens: 3, total_tokens: 27 });
   check(!!responsesUsage && responsesUsage.inputTokens === 20 && responsesUsage.cacheReadTokens === 3, 'responses usage normalized with cache read');
+  const cachedResponsesUsage = normalizeProviderUsage({ response: { usage: {
+    input_tokens: 2000, output_tokens: 20, input_tokens_details: { cached_tokens: 1536, cache_write_tokens: 128 },
+  } } });
+  check(cachedResponsesUsage?.cacheReadTokens === 1536 && cachedResponsesUsage.cacheWriteTokens === 128,
+    'Responses completed usage retains actual cached and cache-write input details');
+  const explicitCacheUsage = normalizeProviderUsage({ input_tokens: 2000, output_tokens: 20,
+    cache_read_input_tokens: 1000, cache_creation_input_tokens: 200 });
+  check(explicitCacheUsage?.cacheReadTokens === 1000 && explicitCacheUsage.cacheWriteTokens === 200,
+    'compatible explicit cache reads and writes remain distinct');
+  const cachedChatUsage = normalizeProviderUsage({ usage: { prompt_tokens: 2000, completion_tokens: 20,
+    prompt_tokens_details: { cached_tokens: 1536 } } });
+  check(cachedChatUsage?.cacheReadTokens === 1536 && cachedChatUsage.cacheWriteTokens === 0,
+    'Chat cached input detail does not manufacture cache writes');
+  check(normalizeProviderUsage({ cached_tokens: 0, input_tokens_details: { cached_tokens: 1536 } })?.cacheReadTokens === 0,
+    'explicit zero cache usage is preserved when compatible detail fields coexist');
+  check(normalizeProviderUsage({ input_tokens_details: [], prompt_tokens_details: { cached_tokens: 128 } })?.cacheReadTokens === 128,
+    'malformed detail containers cannot hide a valid compatible cache count');
   check(normalizeProviderUsage(null) === null, 'null usage normalizes to null');
   check(assembleCompatibleToolArguments(['{\"json\":\"', 'value', '\"}']) === '{\"json\":\"value\"}',
     'tool arguments preserve standard incremental fragments');
@@ -151,7 +171,7 @@ async function main(): Promise<void> {
     res.write('data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n');
     res.write('data: {"choices":[{"delta":{"content":"lo"}}]}\n\n');
     res.write('data: {"choices":[{"delta":{"tool_calls":[{"id":"call-x","function":{"name":"bash","arguments":"{\\"cmd\\":\\"pwd\\"}"}}]}}]}\n\n');
-    res.write('data: {"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n\n');
+    res.write('data: {"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7,"prompt_tokens_details":{"cached_tokens":3}}}\n\n');
     res.write('data: [DONE]\n\n');
     res.end();
   });
@@ -161,14 +181,17 @@ async function main(): Promise<void> {
     const serialized = await chatAdapter.serializeRequest(request);
     const events: string[] = [];
     const textChunks: string[] = [];
+    let cacheReadTokens = 0;
     for await (const event of chatAdapter.execute(serialized, new AbortController().signal)) {
       events.push(event.type);
       if (event.type === 'text.delta') textChunks.push(event.delta);
+      if (event.type === 'usage.updated') cacheReadTokens += event.usage.cacheReadTokens;
     }
     check(events.includes('response.started'), 'chat stream starts with response.started');
     check(textChunks.join('') === 'Hello', 'chat stream text deltas assemble to "Hello"');
     check(events.includes('tool_call.completed'), 'chat stream emits tool_call.completed');
     check(events.includes('usage.updated'), 'chat stream emits usage.updated');
+    check(cacheReadTokens === 3, 'real Chat SSE delivers the reported cache hit exactly once');
     check(events.includes('response.completed'), 'chat stream completes');
   } finally {
     await chatServer.stop();
@@ -275,7 +298,7 @@ async function main(): Promise<void> {
     res.write('event: response.output_item.added\ndata: {"item":{"id":"fc-1","type":"function_call","name":"bash","arguments":""}}\n\n');
     res.write('event: response.function_call_arguments.delta\ndata: {"item_id":"fc-1","delta":"{\\"cmd\\":\\"ls\\"}"}\n\n');
     res.write('event: response.output_item.done\ndata: {"item":{"id":"fc-1","type":"function_call","call_id":"fc-1","name":"bash","arguments":"{\\"cmd\\":\\"ls\\"}"}}\n\n');
-    res.write('event: response.completed\ndata: {"response":{"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}}\n\n');
+    res.write('event: response.completed\ndata: {"response":{"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11,"input_tokens_details":{"cached_tokens":5,"cache_write_tokens":2}}}}\n\n');
     res.end();
   });
   try {
@@ -285,14 +308,22 @@ async function main(): Promise<void> {
     const events: string[] = [];
     const textChunks: string[] = [];
     let toolCall: { id: string; name: string; arguments: string } | null = null;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
     for await (const event of responsesAdapter.execute(serialized, new AbortController().signal)) {
       events.push(event.type);
       if (event.type === 'text.delta') textChunks.push(event.delta);
       if (event.type === 'tool_call.completed') toolCall = { id: event.id, name: event.name, arguments: event.arguments };
+      if (event.type === 'usage.updated') {
+        cacheReadTokens += event.usage.cacheReadTokens;
+        cacheWriteTokens += event.usage.cacheWriteTokens;
+      }
     }
     check(textChunks.join('') === 'World', 'responses stream text deltas assemble to "World"');
     check(!!toolCall && toolCall.id === 'fc-1' && toolCall.name === 'bash' && toolCall.arguments.includes('ls'), 'responses stream assembles the function call');
     check(events.includes('usage.updated'), 'responses stream emits usage.updated');
+    check(cacheReadTokens === 5 && cacheWriteTokens === 2,
+      'real Responses terminal SSE delivers cache reads and writes exactly once');
     check(events.includes('response.completed'), 'responses stream completes');
   } finally {
     await responsesServer.stop();
@@ -372,6 +403,9 @@ async function main(): Promise<void> {
   const rateLimited = retry.decide(0, { status: 429, retryAfterSeconds: 2 });
   check(rateLimited.retry === true, '429 with retry-after is retryable');
 
+  await verifyProviderStreamLifecycle();
+  await verifyProviderTransportDeadline();
+  await verifyProviderJsonLifecycle();
   console.log('providerAdapterV2Verify: all assertions passed');
 }
 

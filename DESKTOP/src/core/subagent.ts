@@ -4,6 +4,7 @@ import type { AgentMode } from './types';
 
 export type SubagentStatus = 'idle' | 'queued' | 'working' | 'completed' | 'closed' | 'error';
 export type SubagentMessageKind = 'directive' | 'question' | 'result' | 'handoff';
+export const SUBAGENT_RECOVERY_PROMPT = '[Peer runtime recovery] Continue the unfinished work from the persisted working history. Preserve completed tool results and follow the latest instruction; do not repeat completed work.';
 
 export interface SubagentMessage {
   id: string;
@@ -13,6 +14,11 @@ export interface SubagentMessage {
   toAgentId: string;
   kind: SubagentMessageKind;
   body: string;
+  wakeup: boolean;
+  /** A message accepted by an existing job must survive that job settling. */
+  acceptedWhileActive: boolean;
+  /** Runtime-consumed control messages never become model continuation input. */
+  control?: { action: 'stop'; runId: string; force: boolean };
   correlationId?: string;
   replyTo?: string;
   createdAt: string;
@@ -27,8 +33,17 @@ export interface SubagentRootMessage {
   toAgentId: string;
   kind: SubagentMessageKind;
   body: string;
+  wakeup: boolean;
   createdAt: string;
   readAt?: string;
+  /** Only runtime-generated completion notices carry this provenance. */
+  source?: 'automatic-settlement';
+  settlementRevision?: number;
+}
+
+export interface SubagentSettlementReceipt {
+  peerId: string;
+  revision: number;
 }
 
 export interface SubagentMessageRecord {
@@ -68,6 +83,8 @@ export interface SubagentInstance {
   queueSequence?: number;
   messages: Array<SubagentMessageRecord>;
   result: string | null;
+  /** Monotonic per-peer result version, independent of timestamps/content. */
+  settlementRevision?: number;
   error?: string;
   createdAt: string;
   startedAt?: string;
@@ -95,6 +112,8 @@ export interface SubagentState {
   nextSequence: number;
   /** Cooperative root-run stop gate. Pending peers stay durable but cannot start until the next root run resumes scheduling. */
   schedulingPaused?: boolean;
+  /** Exact queued/in-flight inputs survive a restart between mailbox dispatch and child transcript persistence. */
+  jobs?: PendingJob[];
   records: SubagentInstance[];
   mailbox: SubagentMessage[];
   rootInbox: SubagentRootMessage[];
@@ -139,7 +158,7 @@ export interface SubagentReadSnapshot {
     inbound: number;
     outbound: number;
     unread: number;
-    latest: Array<Pick<SubagentMessage, 'id' | 'sequence' | 'fromAgentId' | 'toAgentId' | 'kind' | 'body' | 'createdAt' | 'readAt'>>;
+    latest: Array<Pick<SubagentMessage, 'id' | 'sequence' | 'fromAgentId' | 'toAgentId' | 'kind' | 'body' | 'wakeup' | 'acceptedWhileActive' | 'createdAt' | 'readAt'>>;
   };
   truncated: boolean;
 }
@@ -174,9 +193,14 @@ interface PendingJob {
   flowName: string;
   sequence: number;
   reason: SubagentExecutionJob['reason'];
+  inputCommitted?: boolean;
 }
 
 function now(): string { return new Date().toISOString(); }
+
+function cloneMailboxMessage(message: SubagentMessage): SubagentMessage {
+  return { ...message, ...(message.control ? { control: { ...message.control } } : {}) };
+}
 
 function natureSlug(value: string): string {
   const normalized = String(value || 'subagent')
@@ -189,7 +213,14 @@ function natureSlug(value: string): string {
 }
 
 function cloneRecord(record: SubagentInstance): SubagentInstance {
-  return { ...record, messages: record.messages.map(message => ({ ...message })), metadata: record.metadata ? { ...record.metadata } : undefined };
+  return {
+    ...record,
+    messages: record.messages.map(message => ({
+      ...message,
+      tool_calls: message.tool_calls?.map(call => ({ ...call, function: { ...call.function } })),
+    })),
+    metadata: record.metadata ? structuredClone(record.metadata) : undefined,
+  };
 }
 
 function truncateText(value: string, maxChars: number): string {
@@ -209,6 +240,7 @@ export class SubagentManager {
   private rootInbox: SubagentRootMessage[] = [];
   private pending: PendingJob[] = [];
   private running = new Set<string>();
+  private activeJobs = new Map<string, PendingJob>();
   private schedulingPaused = false;
   private nextSequence = 1;
   private concurrency: number;
@@ -217,6 +249,8 @@ export class SubagentManager {
   private persist?: (state: SubagentState) => void;
   private onMailboxMessage?: (message: SubagentMessage) => boolean;
   private rootInboxListeners = new Set<(message: SubagentRootMessage) => boolean>();
+  private bindingOwner?: (message: SubagentRootMessage) => boolean;
+  private ownerBindings = new Map<(message: SubagentRootMessage) => boolean, Pick<SubagentManagerOptions, 'executor' | 'onChange' | 'persist' | 'onMailboxMessage' | 'onSettled'>>();
   private onSettled?: (record: SubagentInstance) => void;
   private changedQueued = false;
   private settledWaiters = new Map<string, Array<(record: SubagentInstance | undefined) => void>>();
@@ -225,12 +259,18 @@ export class SubagentManager {
 
   hasRecords(): boolean { return this.subs.size > 0 || this.mailbox.length > 0 || this.rootInbox.length > 0; }
 
+  hasPendingWork(): boolean {
+    return this.running.size > 0 || this.pending.length > 0
+      || Array.from(this.subs.values()).some(record => record.status === 'queued' || record.status === 'working');
+  }
+
   reset(): void {
     this.subs.clear();
     this.mailbox = [];
     this.rootInbox = [];
     this.pending = [];
     this.running.clear();
+    this.activeJobs.clear();
     this.settledWaiters.clear();
     this.nextSequence = 1;
     this.schedulingPaused = false;
@@ -243,12 +283,17 @@ export class SubagentManager {
     this.onChange = options.onChange;
     this.persist = options.persist;
     this.onMailboxMessage = options.onMailboxMessage;
-    if (options.onRootInboxMessage) this.rootInboxListeners.add(options.onRootInboxMessage);
+    if (options.onRootInboxMessage) {
+      this.rootInboxListeners.add(options.onRootInboxMessage);
+      this.bindingOwner = options.onRootInboxMessage;
+    }
     this.onSettled = options.onSettled;
+    this.rememberOwnerBinding();
     const state = options.state;
     this.rootAgentId = String(state?.rootAgentId || options.rootAgentId || randomUUID());
     this.nextSequence = Math.max(1, Number(state?.nextSequence || 1));
     this.schedulingPaused = state?.schedulingPaused === true;
+    const savedJobs = new Map((state?.jobs || []).map(job => [job.id, job]));
     for (const raw of state?.records || []) {
       const record = cloneRecord(raw);
       record.messages = record.messages.map(message => message.role === 'user'
@@ -257,13 +302,24 @@ export class SubagentManager {
       if (record.status === 'working') record.status = 'queued';
       this.subs.set(record.id, record);
       if (record.status === 'queued') {
-        const sequence = Number(record.queueSequence || this.nextSequence++);
+        const savedJob = savedJobs.get(record.id);
+        const sequence = Number(savedJob?.sequence || record.queueSequence || this.nextSequence++);
+        this.nextSequence = Math.max(this.nextSequence, sequence + 1);
         record.queueSequence = sequence;
-        this.pending.push({ id: record.id, prompt: record.messages.filter(message => message.role === 'user').at(-1)?.content || record.prompt, flowName: record.flowName || '', sequence, reason: 'resume' });
+        this.pending.push(savedJob
+          ? { ...savedJob, sequence }
+          : { id: record.id, prompt: record.messages.filter(message => message.role === 'user').at(-1)?.content || record.prompt, flowName: record.flowName || '', sequence, reason: 'resume' });
       }
     }
-    this.mailbox = (state?.mailbox || []).map(message => ({ ...message }));
-    this.rootInbox = (state?.rootInbox || []).map(message => ({ ...message }));
+    // Historical messages always woke their recipient. Migrate only an absent
+    // field; an explicitly stored false must remain passive after a restart.
+    this.mailbox = (state?.mailbox || []).map(message => ({ ...cloneMailboxMessage(message),
+      wakeup: message.wakeup === undefined ? true : message.wakeup === true,
+      acceptedWhileActive: message.acceptedWhileActive === true,
+    }));
+    this.rootInbox = (state?.rootInbox || []).map(message => ({ ...message,
+      wakeup: message.wakeup === undefined ? true : message.wakeup === true,
+    }));
     for (const record of this.subs.values()) this.queuePersistedUnread(record);
     this.pending.sort((a, b) => a.sequence - b.sequence);
     queueMicrotask(() => this.pump());
@@ -271,22 +327,72 @@ export class SubagentManager {
 
   bind(options: Pick<SubagentManagerOptions, 'concurrency' | 'executor' | 'onChange' | 'persist' | 'onMailboxMessage' | 'onRootInboxMessage' | 'onSettled'>): void {
     if (options.concurrency !== undefined) this.setConcurrencyLimit(options.concurrency);
-    if (options.executor) this.executor = options.executor;
-    if (options.onChange) this.onChange = options.onChange;
-    if (options.persist) this.persist = options.persist;
-    if (options.onMailboxMessage) this.onMailboxMessage = options.onMailboxMessage;
     if (options.onRootInboxMessage) {
       const listener = options.onRootInboxMessage;
+      const previous = this.ownerBindings.get(listener);
+      const binding = {
+        executor: options.executor || previous?.executor,
+        onChange: options.onChange || previous?.onChange,
+        persist: options.persist || previous?.persist,
+        onMailboxMessage: options.onMailboxMessage || previous?.onMailboxMessage,
+        onSettled: options.onSettled || previous?.onSettled,
+      };
+      this.ownerBindings.delete(listener);
+      this.ownerBindings.set(listener, binding);
+      // A snapshot/foreground facade must not steal jobs or their settlement
+      // callbacks from the owner that is currently executing the queue.
+      if (!this.bindingOwner || this.bindingOwner === listener || !this.hasPendingWork()) {
+        this.bindingOwner = listener;
+        Object.assign(this, binding);
+      }
       const added = !this.rootInboxListeners.has(listener);
       this.rootInboxListeners.add(listener);
       if (added) queueMicrotask(() => this.replayRootInbox(listener));
+    } else {
+      if (options.executor) this.executor = options.executor;
+      if (options.onChange) this.onChange = options.onChange;
+      if (options.persist) this.persist = options.persist;
+      if (options.onMailboxMessage) this.onMailboxMessage = options.onMailboxMessage;
+      if (options.onSettled) this.onSettled = options.onSettled;
+      this.rememberOwnerBinding();
     }
-    if (options.onSettled) this.onSettled = options.onSettled;
     this.pump();
+  }
+
+  ownsExecutionBinding(listener: (message: SubagentRootMessage) => boolean): boolean {
+    return this.bindingOwner === listener;
+  }
+
+  private rememberOwnerBinding(): void {
+    if (!this.bindingOwner) return;
+    this.ownerBindings.delete(this.bindingOwner);
+    this.ownerBindings.set(this.bindingOwner, {
+      executor: this.executor, onChange: this.onChange, persist: this.persist,
+      onMailboxMessage: this.onMailboxMessage, onSettled: this.onSettled,
+    });
   }
 
   removeRootInboxListener(listener: (message: SubagentRootMessage) => boolean): void {
     this.rootInboxListeners.delete(listener);
+  }
+
+  /** Detach one facade without clearing a newer owner's callbacks or live jobs. */
+  releaseOwnerBinding(listener: (message: SubagentRootMessage) => boolean): boolean {
+    if (this.bindingOwner === listener && this.hasPendingWork()) return false;
+    this.rootInboxListeners.delete(listener);
+    this.ownerBindings.delete(listener);
+    if (this.bindingOwner !== listener) return true;
+    // A temporary facade may have rebound this shared manager while another
+    // idle facade remained usable. Restore that owner instead of stranding
+    // its next peer in the durable queue with no executor.
+    const previous = Array.from(this.ownerBindings.entries()).at(-1);
+    this.bindingOwner = previous?.[0];
+    this.executor = previous?.[1].executor;
+    this.onChange = previous?.[1].onChange;
+    this.persist = previous?.[1].persist;
+    this.onMailboxMessage = previous?.[1].onMailboxMessage;
+    this.onSettled = previous?.[1].onSettled;
+    return true;
   }
 
   create(name: string, prompt: string, model?: string, inputMode?: string, agentMode: AgentMode = 'build', createdByAgentId = this.rootAgentId, flowName = '', goalObjective = '', flowPc = 0, buildRunId = '', intelligenceTier = ''): string {
@@ -341,22 +447,47 @@ export class SubagentManager {
     return [...this.subs.values()].find(item => item.name === id || item.displayName === id || item.shortId === id || item.natureSlug === natureSlug(id));
   }
 
-  send(id: string, prompt: string): boolean {
-    const target = this.get(id);
-    if (!target || target.status === 'closed') return false;
-    target.messages.push({ role: 'user', content: prompt, hidden_user_input: true });
-    target.error = undefined;
-    target.completedAt = undefined;
-    target.updatedAt = now();
-    this.enqueue(target, prompt, target.flowName || '', 'mailbox');
-    return true;
+  send(id: string, prompt: string, wakeup = false): boolean {
+    // The compatibility entry point shares the durable mailbox and its
+    // single-executor guarantee; a direct enqueue could overlap this peer.
+    return this.sendMessage(this.rootAgentId, id, prompt, 'directive', {}, wakeup).ok;
   }
 
-  sendMessage(fromAgentId: string, toAgentId: string, body: string, kind: SubagentMessageKind = 'directive', details: { correlationId?: string; replyTo?: string } = {}): { ok: boolean; message?: SubagentMessage; error?: string } {
+  broadcastStop(fromAgentId: string, runId: string, force = false): { count: number; ids: string[]; peerIds: string[] } {
+    // Set the gate before publishing any control receipt, and commit the gate
+    // plus the entire batch once. No per-message callback can dispatch work.
+    const wasPaused = this.schedulingPaused;
+    this.schedulingPaused = true;
+    const ids: string[] = [];
+    const peerIds: string[] = [];
+    const stamp = now();
+    const stopRunId = String(runId || '');
+    const alreadySent = new Set(this.mailbox.filter(message => message.control?.action === 'stop'
+      && message.control.runId === stopRunId && message.control.force === (force === true)).map(message => message.toAgentId));
+    for (const record of this.subs.values()) {
+      if (record.status === 'closed' || alreadySent.has(record.id)) continue;
+      const message: SubagentMessage = {
+        id: randomUUID(), conversationId: this.conversationId, sequence: this.nextSequence++,
+        fromAgentId, toAgentId: record.id, kind: 'directive',
+        body: force ? '[Runtime control] Force stop this conversation work.' : '[Runtime control] Stop this conversation work.',
+        wakeup: false, acceptedWhileActive: false,
+        control: { action: 'stop', runId: stopRunId, force: force === true },
+        createdAt: stamp, readAt: stamp,
+      };
+      this.mailbox.push(message);
+      ids.push(message.id);
+      peerIds.push(record.id);
+    }
+    if (!wasPaused || ids.length) { this.persistNow(); this.changed(); }
+    return { count: ids.length, ids, peerIds };
+  }
+
+  sendMessage(fromAgentId: string, toAgentId: string, body: string, kind: SubagentMessageKind = 'directive', details: { correlationId?: string; replyTo?: string } = {}, wakeup = false): { ok: boolean; message?: SubagentMessage; error?: string } {
     if (!body.trim()) return { ok: false, error: 'Message body is required.' };
     if (fromAgentId === toAgentId) return { ok: false, error: 'Peer agents cannot message themselves.' };
     const target = this.get(toAgentId);
     if (!target) return { ok: false, error: `Peer agent not found: ${toAgentId}` };
+    if (fromAgentId === target.id) return { ok: false, error: 'Peer agents cannot message themselves.' };
     if (target.status === 'closed') return { ok: false, error: `Peer agent is closed: ${target.qualifiedName}` };
     const message: SubagentMessage = {
       id: randomUUID(),
@@ -366,6 +497,8 @@ export class SubagentManager {
       toAgentId: target.id,
       kind,
       body: truncateText(body, 32000),
+      wakeup: wakeup === true,
+      acceptedWhileActive: target.status === 'working' || target.status === 'queued',
       correlationId: details.correlationId,
       replyTo: details.replyTo,
       createdAt: now(),
@@ -381,7 +514,7 @@ export class SubagentManager {
     return { ok: true, message: { ...message } };
   }
 
-  sendRootMessage(fromAgentId: string, body: string, kind: SubagentMessageKind = 'result'): { ok: boolean; message?: SubagentRootMessage; error?: string } {
+  sendRootMessage(fromAgentId: string, body: string, kind: SubagentMessageKind = 'result', settlementRevision?: number, wakeup = false): { ok: boolean; message?: SubagentRootMessage; error?: string } {
     if (!body.trim()) return { ok: false, error: 'Message body is required.' };
     if (fromAgentId === this.rootAgentId) return { ok: false, error: 'Root agent cannot message itself.' };
     const message: SubagentRootMessage = {
@@ -392,7 +525,11 @@ export class SubagentManager {
       toAgentId: this.rootAgentId,
       kind,
       body: truncateText(body, 32000),
+      wakeup: wakeup === true,
       createdAt: now(),
+      ...(kind === 'result' && Number.isSafeInteger(settlementRevision) && Number(settlementRevision) > 0
+        ? { source: 'automatic-settlement' as const, settlementRevision }
+        : {}),
     };
     this.rootInbox.push(message);
     this.persistNow();
@@ -408,6 +545,25 @@ export class SubagentManager {
       .map(message => ({ ...message }));
   }
 
+  acknowledgeSettlementResults(receipts: SubagentSettlementReceipt[]): string[] {
+    const observed = new Set(receipts.filter(receipt => typeof receipt.peerId === 'string'
+      && Number.isSafeInteger(receipt.revision) && receipt.revision > 0)
+      .map(receipt => `${receipt.peerId}:${receipt.revision}`));
+    const ids: string[] = [];
+    const stamp = now();
+    let changed = false;
+    for (const message of this.rootInbox) {
+      if (message.source !== 'automatic-settlement' || message.kind !== 'result'
+        || !observed.has(`${message.fromAgentId}:${message.settlementRevision}`)) continue;
+      // Include previously acknowledged IDs so cold-restored continuation
+      // copies can be retired without changing already-consumed history.
+      ids.push(message.id);
+      if (!message.readAt) { message.readAt = stamp; changed = true; }
+    }
+    if (changed) { this.persistNow(); this.changed(); }
+    return ids;
+  }
+
   acknowledgeRootInbox(messageId: string): boolean {
     const message = this.rootInbox.find(item => item.id === messageId && !item.readAt);
     if (!message) return false;
@@ -420,7 +576,7 @@ export class SubagentManager {
   consumeMailbox(agentId: string): SubagentMessage[] {
     const messages = this.mailbox.filter(message => message.toAgentId === agentId && !message.readAt);
     if (messages.length) this.markMailboxRead(messages);
-    return messages.map(message => ({ ...message }));
+    return messages.map(cloneMailboxMessage);
   }
 
   acknowledgeMailbox(agentId: string, messageId: string): boolean {
@@ -469,6 +625,8 @@ export class SubagentManager {
       toAgentId: message.toAgentId,
       kind: message.kind,
       body: truncateText(message.body, 2000),
+      wakeup: message.wakeup,
+      acceptedWhileActive: message.acceptedWhileActive,
       createdAt: message.createdAt,
       readAt: message.readAt,
     }));
@@ -531,7 +689,7 @@ export class SubagentManager {
     if (record) record.messages.push({ role: 'assistant', content });
   }
 
-  replaceContext(id: string, history: Array<Record<string, unknown>>, compression: SubagentCompressionState | null): void {
+  replaceContext(id: string, history: Array<Record<string, unknown>>, compression: SubagentCompressionState | null, inputCommitted = false): void {
     const record = this.get(id);
     if (!record) return;
     record.messages = history.map(message => {
@@ -544,7 +702,7 @@ export class SubagentManager {
       // context instead of replaying from a bare prompt or summary.
       if (message.tool_call_id) stored.tool_call_id = String(message.tool_call_id);
       if (message.name) stored.name = String(message.name);
-      if (Array.isArray(message.tool_calls)) stored.tool_calls = message.tool_calls as SubagentMessageRecord['tool_calls'];
+      if (Array.isArray(message.tool_calls)) stored.tool_calls = structuredClone(message.tool_calls) as SubagentMessageRecord['tool_calls'];
       if (message.hidden_user_input) stored.hidden_user_input = true;
       if (message.goal_continuation) stored.goal_continuation = true;
       if (message.client_message_id) stored.client_message_id = String(message.client_message_id);
@@ -557,6 +715,18 @@ export class SubagentManager {
       contextCompression: compression ? { ...compression } : null,
     };
     record.updatedAt = now();
+    const activeJob = this.activeJobs.get(record.id);
+    if (activeJob && inputCommitted) activeJob.inputCommitted = true;
+    this.persistNow();
+    this.changed();
+  }
+
+  patchMetadata(id: string, patch: Record<string, unknown>): void {
+    const record = this.get(id);
+    if (!record) return;
+    record.metadata = { ...(record.metadata || {}), ...structuredClone(patch) };
+    record.updatedAt = now();
+    this.persistNow();
     this.changed();
   }
 
@@ -565,6 +735,7 @@ export class SubagentManager {
     if (!record || record.status === 'closed') return;
     this.pending = this.pending.filter(job => job.id !== record.id);
     record.result = result;
+    record.settlementRevision = Math.max(0, Math.floor(Number(record.settlementRevision) || 0)) + 1;
     record.status = 'completed';
     record.error = undefined;
     record.completedAt = now();
@@ -581,6 +752,7 @@ export class SubagentManager {
     if (!record || record.status === 'closed') return;
     this.pending = this.pending.filter(job => job.id !== record.id);
     record.result = `[Subagent Error] ${error}`;
+    record.settlementRevision = Math.max(0, Math.floor(Number(record.settlementRevision) || 0)) + 1;
     record.status = 'error';
     record.error = error;
     record.completedAt = now();
@@ -661,6 +833,33 @@ export class SubagentManager {
   listActive(): SubagentInstance[] { return this.listAll().filter(item => item.status !== 'closed'); }
   listAll(): SubagentInstance[] { return [...this.subs.values()].map(cloneRecord); }
 
+  /** Model-facing list: detailed transcripts and request cache remain private. */
+  listSummaries(status = '') {
+    const counts = new Map<string, { total: number; unread: number }>();
+    for (const message of this.mailbox) {
+      const count = counts.get(message.toAgentId) || { total: 0, unread: 0 };
+      count.total++;
+      if (!message.readAt) count.unread++;
+      counts.set(message.toAgentId, count);
+    }
+    return [...this.subs.values()].filter(record => !status || record.status === status).map(record => ({
+      id: record.id, shortId: record.shortId, natureSlug: record.natureSlug,
+      displayName: record.displayName, qualifiedName: record.qualifiedName, name: record.name,
+      conversationId: record.conversationId, createdByAgentId: record.createdByAgentId,
+      buildRunId: record.buildRunId, intelligenceTier: record.intelligenceTier,
+      prompt: truncateText(record.prompt, 1200), model: record.model, inputMode: record.inputMode,
+      agentMode: record.agentMode, mode: record.agentMode, status: record.status, active: record.status !== 'closed',
+      goalObjective: record.goalObjective ? truncateText(record.goalObjective, 800) : undefined,
+      flowName: record.flowName, flowPc: record.flowPc, queueSequence: record.queueSequence,
+      resultAvailable: record.result !== null, resultChars: record.result?.length || 0,
+      settlementRevision: record.settlementRevision, messageCount: record.messages.length,
+      error: record.error ? truncateText(record.error, 512) : undefined,
+      createdAt: record.createdAt, startedAt: record.startedAt, updatedAt: record.updatedAt,
+      completedAt: record.completedAt, closedAt: record.closedAt,
+      mailbox: counts.get(record.id) || { total: 0, unread: 0 },
+    }));
+  }
+
   activeCountForBuild(buildRunId: string): number {
     const target = String(buildRunId || '').trim();
     if (!target) return 0;
@@ -709,8 +908,17 @@ export class SubagentManager {
       rootAgentId: this.rootAgentId,
       nextSequence: this.nextSequence,
       schedulingPaused: this.schedulingPaused,
+      jobs: [
+        ...Array.from(this.activeJobs.values(), job => ({
+          ...job, reason: 'resume' as const, inputCommitted: false,
+          prompt: job.inputCommitted
+            ? SUBAGENT_RECOVERY_PROMPT
+            : job.prompt,
+        })),
+        ...this.pending.map(job => ({ ...job })),
+      ].sort((a, b) => a.sequence - b.sequence),
       records: this.listAll().map(record => record.status === 'working' ? { ...record, status: 'queued' as const } : record),
-      mailbox: this.mailbox.map(message => ({ ...message })),
+      mailbox: this.mailbox.map(cloneMailboxMessage),
       rootInbox: this.rootInbox.map(message => ({ ...message })),
     };
   }
@@ -721,6 +929,7 @@ export class SubagentManager {
       if (prompt && !existing.prompt.includes(prompt)) existing.prompt = `${existing.prompt}\n\n${prompt}`;
       record.status = 'queued';
       record.updatedAt = now();
+      this.persistNow();
       this.changed();
       this.pump();
       return;
@@ -731,6 +940,7 @@ export class SubagentManager {
     record.updatedAt = now();
     this.pending.push({ id: record.id, prompt, flowName, sequence, reason });
     this.pending.sort((a, b) => a.sequence - b.sequence);
+    this.persistNow();
     this.changed();
     this.pump();
   }
@@ -744,7 +954,8 @@ export class SubagentManager {
   private queuePersistedUnread(record: SubagentInstance): void {
     if (record.status === 'closed') return;
     const unread = this.unreadMailbox(record.id);
-    if (!unread.length) return;
+    const activating = unread.find(message => message.wakeup || message.acceptedWhileActive);
+    if (!activating) return;
     if (record.status === 'queued') {
       const existing = this.pending.find(job => job.id === record.id);
       // The queued job consumes every unread mailbox item in pump(). Keeping
@@ -754,16 +965,18 @@ export class SubagentManager {
       return;
     }
     record.status = 'queued';
-    const sequence = Number(record.queueSequence || unread[0].sequence || this.nextSequence++);
+    const sequence = Number(record.queueSequence || activating.sequence || this.nextSequence++);
     record.queueSequence = sequence;
-    this.pending.push({ id: record.id, prompt: this.mailboxPrompt(unread), flowName: record.flowName || '', sequence, reason: 'mailbox' });
+    this.pending.push({ id: record.id, prompt: '', flowName: record.flowName || '', sequence, reason: 'mailbox' });
   }
 
   private enqueueUnreadMailbox(record: SubagentInstance): void {
     if (record.status === 'closed' || record.status === 'queued' || this.running.has(record.id)) return;
     const unread = this.unreadMailbox(record.id);
-    if (!unread.length) return;
-    this.enqueue(record, this.mailboxPrompt(unread), record.flowName || '', 'mailbox');
+    if (!unread.some(message => message.wakeup || message.acceptedWhileActive)) return;
+    // Store the mailbox once. pump() builds the current batch at dispatch so
+    // later arrivals coalesce without duplicating the initial wake message.
+    this.enqueue(record, '', record.flowName || '', 'mailbox');
   }
 
   private markMailboxRead(messages: SubagentMessage[]): void {
@@ -807,24 +1020,40 @@ export class SubagentManager {
       const job = this.pending.shift()!;
       const record = this.subs.get(job.id);
       if (!record || record.status === 'closed') continue;
-      const unread = this.consumeMailbox(record.id);
-      const prompt = unread.length ? `${job.prompt}\n\n${this.mailboxPrompt(unread)}` : job.prompt;
+      const unread = this.unreadMailbox(record.id);
+      const prompt = [job.prompt, unread.length ? this.mailboxPrompt(unread) : ''].filter(Boolean).join('\n\n');
       record.status = 'working';
       record.queueSequence = undefined;
       record.startedAt = record.startedAt || now();
       record.updatedAt = now();
       this.running.add(record.id);
+      const activeJob = { ...job, prompt };
+      this.activeJobs.set(record.id, activeJob);
+      // A read receipt must never reach disk without the precise dispatched
+      // input. Cold restore can now recover a job even before child startup.
+      if (unread.length) this.markMailboxRead(unread);
+      else this.persistNow();
       this.changed();
-      void this.executor({ record: cloneRecord(record), prompt, flowName: job.flowName, reason: job.reason })
+      let execution: Promise<string>;
+      try {
+        execution = Promise.resolve(this.executor({ record: cloneRecord(record), prompt, flowName: job.flowName, reason: job.reason }));
+      } catch (error) {
+        execution = Promise.reject(error);
+      }
+      void execution
         .then(result => {
+          if (this.activeJobs.get(record.id) !== activeJob) return;
           this.complete(record.id, result || '[Subagent] Completed with empty response.');
           this.running.delete(record.id);
+          this.activeJobs.delete(record.id);
           this.enqueueUnreadMailbox(record);
           this.pump();
         })
         .catch(error => {
+          if (this.activeJobs.get(record.id) !== activeJob) return;
           this.fail(record.id, error instanceof Error ? error.message : String(error));
           this.running.delete(record.id);
+          this.activeJobs.delete(record.id);
           this.enqueueUnreadMailbox(record);
           this.pump();
         });

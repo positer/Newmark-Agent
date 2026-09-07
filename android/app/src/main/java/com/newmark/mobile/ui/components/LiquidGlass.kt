@@ -3,6 +3,7 @@ package com.newmark.mobile.ui.components
 import android.os.Build
 import android.view.WindowManager
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,26 +15,41 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.GraphicsLayerScope
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
@@ -41,17 +57,22 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.addOutline
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.DialogWindowProvider
 import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.InverseLayerScope
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.drawBackdrop
@@ -81,9 +102,19 @@ import kotlin.math.sqrt
  * highlight blur, shadow and the 1.065 press expansion.  The inner control
  * keeps its nominal size, semantics and hit target.
  */
-val GlassButtonCanvasOutset = 8.dp
+// Optical envelope: a visibly thick, even 12dp overlap around the nominal
+// color block. The parent layout/hit target remains unchanged.
+val GlassButtonCanvasOutset = 12.dp
 
-private class CenteredInsetShape(
+/** Render-only envelope; the nominal control center and hit box never move. */
+internal fun expandedLiquidBounds(size: Size, outset: Float, progress: Float): Rect {
+    val edge = outset.coerceAtLeast(0f) * progress.coerceIn(0f, 1f)
+    return Rect(-edge, -edge, size.width + edge, size.height + edge)
+}
+
+/** For the non-sampling button edge canvas only. Lens shaders require an
+ * actual CornerBasedShape and must expand their visible geometry directly. */
+internal class CenteredInsetShape(
     private val shape: Shape,
     private val inset: Dp,
 ) : Shape {
@@ -120,28 +151,32 @@ fun GlassButtonCanvas(
     modifier: Modifier = Modifier,
     visualModifier: Modifier = Modifier,
     interactionSource: MutableInteractionSource? = null,
+    onLiftedChange: (Boolean) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     val opticalShape = remember(shape) { CenteredInsetShape(shape, GlassButtonCanvasOutset) }
-    val clickModifier = if (interactionSource == null) {
-        Modifier.clickable(onClick = onClick)
-    } else {
-        Modifier.clickable(
-            interactionSource = interactionSource,
-            indication = null,
-            onClick = onClick,
-        )
-    }
+    val resolvedInteraction = interactionSource ?: remember { MutableInteractionSource() }
+    val pressed by resolvedInteraction.collectIsPressedAsState()
+    var animationActive by remember { mutableStateOf(false) }
+    val clickModifier = Modifier.clickable(
+        interactionSource = resolvedInteraction,
+        indication = null,
+        onClick = onClick,
+    )
     Box(
         modifier = modifier
             .size(visualSize)
-            .then(clickModifier),
+            .then(clickModifier)
+            .zIndex(if (pressed || animationActive) 8f else 0f),
         contentAlignment = Alignment.Center,
     ) {
         Box(
             modifier = Modifier
                 .requiredSize(visualSize + GlassButtonCanvasOutset * 2)
-                .glassButtonSurface(opticalShape, surfaceColor, alpha, restingBorderColor),
+                .glassButtonSurface(opticalShape, surfaceColor, alpha, restingBorderColor) { active ->
+                    animationActive = active
+                    onLiftedChange(active)
+                },
         )
         Box(
             modifier = visualModifier
@@ -172,10 +207,13 @@ fun GlassButtonCanvas(
     modifier: Modifier = Modifier,
     visualModifier: Modifier = Modifier,
     interactionSource: MutableInteractionSource? = null,
+    onLiftedChange: (Boolean) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     val opticalShape = remember(shape) { CenteredInsetShape(shape, GlassButtonCanvasOutset) }
     val resolvedInteraction = interactionSource ?: remember { MutableInteractionSource() }
+    val pressed by resolvedInteraction.collectIsPressedAsState()
+    var animationActive by remember { mutableStateOf(false) }
     Box(
         modifier = modifier
             .size(visualWidth, visualHeight)
@@ -184,7 +222,10 @@ fun GlassButtonCanvas(
                 interactionSource = resolvedInteraction,
                 indication = null,
                 onClick = onClick,
-            ),
+            )
+            // A pressed capsule rises above adjacent siblings so its glass
+            // and constrained glow are never painted underneath neighboring items.
+            .zIndex(if (pressed || animationActive) 8f else 0f),
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -193,7 +234,10 @@ fun GlassButtonCanvas(
                     visualWidth + GlassButtonCanvasOutset * 2,
                     visualHeight + GlassButtonCanvasOutset * 2,
                 )
-                .glassButtonSurface(opticalShape, surfaceColor, alpha, restingBorderColor),
+                .glassButtonSurface(opticalShape, surfaceColor, alpha, restingBorderColor) { active ->
+                    animationActive = active
+                    onLiftedChange(active)
+                },
         )
         Box(
             modifier = visualModifier.size(visualWidth, visualHeight),
@@ -211,7 +255,6 @@ internal val ExistingLiquidFloatInventory = setOf(
     "sidebar_utility_selectors",
     "right_sidebar_tabs",
     "memory_lab_pager",
-    "composer_selection_menus",
     "provider_settings_capsule_rails",
 )
 
@@ -312,9 +355,44 @@ fun Modifier.liquidGlassModifier(
     surfaceColor: Color = NewmarkBgSecondary,
     shape: Shape? = null,
     ambientHighlight: Boolean = false,
+    edgeHighlight: Boolean = true,
+    layerBlock: (GraphicsLayerScope.() -> Unit)? = null,
+    onDrawFront: (DrawScope.() -> Unit)? = null,
+    surfaceOverlay: (DrawScope.() -> Unit)? = null,
+    pointerGlow: Boolean = true,
+    transformContent: Boolean = false,
 ): Modifier {
     val resolvedBackdrop = if (sampleBackdrop) backdrop ?: LocalLiquidBackdrop.current else null
     val resolvedShape = shape ?: RoundedCornerShape(cornerRadius)
+    var glowPoint by remember { mutableStateOf<Offset?>(null) }
+    var glowPressed by remember { mutableStateOf(false) }
+    val drawSurfaceOverlay: (DrawScope.() -> Unit)? = if (surfaceOverlay != null || pointerGlow) {
+        {
+            surfaceOverlay?.invoke(this)
+            if (pointerGlow) {
+                glowPoint?.let { point ->
+                    // Keep the light source larger than a fingertip so the
+                    // press remains visible around the contact point.
+                    // Increase the contact halo by 50% so it remains visible
+                    // around a fingertip while staying clipped to the glass.
+                    val radius = 66.dp.toPx()
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = if (glowPressed) 0.24f else 0.11f),
+                                Color.Transparent,
+                            ),
+                            center = point,
+                            radius = radius,
+                        ),
+                        radius = radius,
+                        center = point,
+                        blendMode = BlendMode.Screen,
+                    )
+                }
+            }
+        }
+    } else null
     val glassModifier = remember(
         resolvedBackdrop,
         resolvedShape,
@@ -325,6 +403,13 @@ fun Modifier.liquidGlassModifier(
         saturation,
         surfaceColor,
         ambientHighlight,
+        edgeHighlight,
+        layerBlock,
+        onDrawFront,
+        surfaceOverlay,
+        pointerGlow,
+        glowPoint,
+        glowPressed,
     ) {
         val shapeBlock: () -> Shape = { resolvedShape }
         if (resolvedBackdrop == null) {
@@ -337,12 +422,14 @@ fun Modifier.liquidGlassModifier(
                 effects = {
                     colorControls(saturation = saturation)
                 },
-                highlight = { thickGlassHighlight(ambientHighlight) },
+                highlight = { if (edgeHighlight) thickGlassHighlight(ambientHighlight) else null },
                 shadow = { Shadow.Default },
                 innerShadow = { InnerShadow(radius = 2.dp, offset = DpOffset(0.dp, 1.dp)) },
                 onDrawSurface = {
                     drawRect(surfaceColor.copy(alpha = alpha))
+                    drawSurfaceOverlay?.invoke(this)
                 },
+                onDrawFront = onDrawFront,
             )
         } else {
             Modifier.drawBackdrop(
@@ -358,16 +445,42 @@ fun Modifier.liquidGlassModifier(
                         chromaticAberration = true,
                     )
                 },
-                highlight = { thickGlassHighlight(ambientHighlight) },
+                highlight = { if (edgeHighlight) thickGlassHighlight(ambientHighlight) else null },
                 shadow = { Shadow.Default },
                 innerShadow = { InnerShadow(radius = 2.dp, offset = DpOffset(0.dp, 1.dp)) },
                 onDrawSurface = {
                     drawRect(surfaceColor.copy(alpha = alpha))
+                    drawSurfaceOverlay?.invoke(this)
                 },
+                onDrawFront = onDrawFront,
             )
         }
     }
-    return this.then(glassModifier)
+    val pointerModifier = if (pointerGlow) {
+        Modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                glowPressed = true
+                glowPoint = down.position
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    glowPoint = change.position
+                    if (!change.pressed) break
+                }
+                glowPressed = false
+                glowPoint = null
+            }
+        }
+    } else Modifier
+    val isolatedOptics = if (layerBlock != null && transformContent) {
+        // Popup content, optics, hit coordinates and nested contact mapping
+        // must share the same real Compose layer transform.
+        Modifier.graphicsLayer(layerBlock).then(glassModifier)
+    } else if (layerBlock != null) {
+        Modifier.transformGlassOptics(glassModifier, layerBlock)
+    } else glassModifier
+    return this.then(isolatedOptics).then(pointerModifier)
 }
 
 /** Every mobile glass float adds 1dp to its visible highlight envelope. */
@@ -379,6 +492,328 @@ private fun thickGlassHighlight(ambient: Boolean): Highlight = Highlight(
 )
 
 /**
+ * Popup shell material: the same Kyant liquid glass plus a transparent
+ * pointer-held light source and a restrained drag squeeze. The shell keeps
+ * its exact measured bounds; only the render layer deforms during input.
+ */
+@Composable
+fun Modifier.liquidPopupShell(
+    backdrop: Backdrop? = null,
+    shape: Shape,
+    alpha: Float = 0.78f,
+    blurRadius: Dp = 12.dp,
+    refractionHeight: Dp = MobileInteractionGlassEdge,
+    refractionAmount: Dp = 18.dp,
+    surfaceColor: Color = NewmarkBgSecondary,
+    // Non-null values make the popup's carrier glass consume the caller's
+    // constrained gesture state. This is intentionally nullable so generic
+    // popup shells can still use their local pointer interaction path.
+    externalDragOffset: Offset? = null,
+    externalPressed: Boolean? = null,
+    dragEnabled: Boolean = true,
+): Modifier {
+    var pressed by remember { mutableStateOf(false) }
+    var lightPoint by remember { mutableStateOf<Offset?>(null) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    val density = LocalDensity.current
+    val effectivePressed = externalPressed ?: pressed
+    val effectiveDragOffset = externalDragOffset ?: dragOffset
+    val pressScale by animateFloatAsState(
+        targetValue = if (effectivePressed) 1.018f else 1f,
+        animationSpec = tween(durationMillis = 90),
+        label = "liquidPopupPressScale",
+    )
+
+    LaunchedEffect(effectivePressed) {
+        if (!effectivePressed) {
+            delay(160)
+            if (!effectivePressed) lightPoint = null
+        }
+    }
+
+    val pull = (effectiveDragOffset.getDistance() / with(density) { 120.dp.toPx() })
+        .coerceIn(0f, 1f)
+    val horizontal = abs(effectiveDragOffset.x) >= abs(effectiveDragOffset.y)
+    val popupScaleX = pressScale * (1f + pull * if (horizontal) 0.0176f else -0.008f)
+    val popupScaleY = pressScale * (1f + pull * if (horizontal) -0.008f else 0.0176f)
+    val popupTranslation = effectiveDragOffset * 0.096f
+    // One actual layer carries the popup and every child. The pointer observer
+    // sits outside it, so its own feedback never changes the drag input frame.
+    val glassLayerBlock: GraphicsLayerScope.() -> Unit = remember(popupScaleX, popupScaleY, popupTranslation) {
+        val block: GraphicsLayerScope.() -> Unit = {
+            scaleX = popupScaleX
+            scaleY = popupScaleY
+            translationX = popupTranslation.x
+            translationY = popupTranslation.y
+        }
+        block
+    }
+
+    val popupPointerModifier = Modifier.pointerInput(shape, dragEnabled) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            pressed = true
+            lightPoint = down.position
+            dragOffset = Offset.Zero
+            try {
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    lightPoint = change.position
+                    // A graph popup can keep pan/zoom ownership while still
+                    // sharing the shell's press feedback with all its content.
+                    dragOffset = if (dragEnabled) change.position - down.position else Offset.Zero
+                    if (!change.pressed) break
+                }
+            } finally {
+                pressed = false
+                dragOffset = Offset.Zero
+            }
+        }
+    }
+
+    return this
+        .then(popupPointerModifier)
+        .liquidGlassModifier(
+            backdrop = backdrop,
+            shape = shape,
+            alpha = alpha,
+            blurRadius = blurRadius,
+            refractionHeight = refractionHeight,
+            refractionAmount = refractionAmount,
+            surfaceColor = surfaceColor,
+            ambientHighlight = true,
+            layerBlock = glassLayerBlock,
+            surfaceOverlay = {
+                lightPoint?.let { point ->
+                    val localPoint = liquidContactBeforeTransform(
+                        point, size, popupScaleX, popupScaleY, popupTranslation,
+                    )
+                    drawLiquidContactGlow(localPoint, if (effectivePressed) 0.22f else 0.10f)
+                }
+            },
+            pointerGlow = false,
+            transformContent = true,
+        )
+}
+
+/**
+ * Shared liquid popup exit: keep the Dialog/popup mounted while its glass
+ * surface shrinks toward the trigger origin, then notify the owner to remove
+ * it. This prevents the flash-out path that used to clear the popup in one
+ * frame.
+ */
+class LiquidPopupExitController internal constructor(
+    internal val scale: Animatable<Float, AnimationVector1D>,
+    private val scope: kotlinx.coroutines.CoroutineScope,
+    private val onDismiss: () -> Unit,
+) {
+    private var closing = false
+
+    fun requestClose() {
+        if (closing) return
+        closing = true
+        scope.launch {
+            scale.animateTo(0.62f, tween(durationMillis = 210))
+            onDismiss()
+        }
+    }
+}
+
+@Composable
+fun rememberLiquidPopupExit(onDismiss: () -> Unit): LiquidPopupExitController {
+    val currentOnDismiss by rememberUpdatedState(onDismiss)
+    val scale = remember { Animatable(1f) }
+    val scope = rememberCoroutineScope()
+    return remember(scale, scope) {
+        LiquidPopupExitController(scale, scope) { currentOnDismiss() }
+    }
+}
+
+fun Modifier.liquidPopupExit(
+    controller: LiquidPopupExitController,
+    transformOrigin: TransformOrigin = TransformOrigin.Center,
+): Modifier = graphicsLayer {
+    scaleX = controller.scale.value
+    scaleY = controller.scale.value
+    this.transformOrigin = transformOrigin
+}
+
+@Composable
+private fun Modifier.liquidPopupInteraction(shape: Shape): Modifier {
+    var pressed by remember { mutableStateOf(false) }
+    var lightPoint by remember { mutableStateOf<Offset?>(null) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    val density = LocalDensity.current
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 1.018f else 1f,
+        animationSpec = tween(durationMillis = 90),
+        label = "liquidPopupPressScale",
+    )
+
+    androidx.compose.runtime.LaunchedEffect(pressed) {
+        if (!pressed) {
+            delay(160)
+            if (!pressed) lightPoint = null
+        }
+    }
+
+    return this
+        .liquidGlassModifier(
+            backdrop = LocalLiquidBackdrop.current,
+            sampleBackdrop = true,
+            shape = shape,
+            alpha = 0f,
+            surfaceColor = Color.Transparent,
+            layerBlock = {
+                // The optical pass owns deformation; option content is drawn
+                // afterwards in its original coordinates.
+                val pull = (dragOffset.getDistance() / with(density) { 120.dp.toPx() }).coerceIn(0f, 1f)
+                val horizontal = kotlin.math.abs(dragOffset.x) >= kotlin.math.abs(dragOffset.y)
+                scaleX = pressScale * (1f + pull * if (horizontal) 0.0176f else -0.008f)
+                scaleY = pressScale * (1f + pull * if (horizontal) -0.008f else 0.0176f)
+                translationX = dragOffset.x * 0.096f
+                translationY = dragOffset.y * 0.096f
+            },
+            surfaceOverlay = {
+                lightPoint?.let { point ->
+                    val radius = minOf(size.width, size.height).coerceAtLeast(1f) * 0.58f
+                    drawRect(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = if (pressed) 0.22f else 0.10f),
+                                Color.Transparent,
+                            ),
+                            center = point,
+                            radius = radius,
+                        ),
+                        blendMode = BlendMode.Screen,
+                    )
+                }
+            },
+            pointerGlow = false,
+        )
+        .pointerInput(shape) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                pressed = true
+                lightPoint = down.position
+                dragOffset = Offset.Zero
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    lightPoint = change.position
+                    dragOffset = change.position - down.position
+                    if (!change.pressed) break
+                }
+                pressed = false
+                dragOffset = Offset.Zero
+            }
+        }
+}
+
+/**
+ * Direct color-block option interaction: the option itself moves with the
+ * pointer inside the popup and never spawns a separate glass float. A small
+ * press/drag deforms the block while its measured size stays unchanged.
+ */
+@Composable
+fun Modifier.directOptionInteraction(
+    shape: Shape,
+    enabled: Boolean = true,
+    allowHoldDrag: Boolean = false,
+    onClick: () -> Unit,
+): Modifier {
+    var rowSize by remember { mutableStateOf(Size.Zero) }
+    var pressed by remember { mutableStateOf(false) }
+    var dragging by remember { mutableStateOf(false) }
+    var pressPoint by remember { mutableStateOf(Offset(0.5f, 0.5f)) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    var pullOffset by remember { mutableStateOf(Offset.Zero) }
+    val currentOnClick by rememberUpdatedState(onClick)
+    val density = LocalDensity.current
+    val gestureScope = rememberCoroutineScope()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 1.035f else 1f,
+        animationSpec = tween(durationMillis = 110),
+        label = "directOptionClickElastic",
+    )
+    return this
+        .onSizeChanged { rowSize = Size(it.width.toFloat(), it.height.toFloat()) }
+        .semantics {
+            role = Role.Button
+            if (enabled) {
+                onClick { currentOnClick(); true }
+            }
+        }
+        .graphicsLayer {
+            val pull = (pullOffset.getDistance() / with(density) { 72.dp.toPx() })
+                .coerceIn(0f, 1f)
+            val horizontal = kotlin.math.abs(pullOffset.x) >= kotlin.math.abs(pullOffset.y)
+            transformOrigin = TransformOrigin(
+                pressPoint.x.coerceIn(0f, 1f),
+                pressPoint.y.coerceIn(0f, 1f),
+            )
+            scaleX = pressScale * (1f + pull * if (horizontal) 0.0208f else -0.0096f)
+            scaleY = pressScale * (1f + pull * if (horizontal) -0.0096f else 0.0208f)
+            translationX = if (dragging) dragOffset.x else pullOffset.x
+            translationY = if (dragging) dragOffset.y else pullOffset.y
+        }
+        .pointerInput(shape, enabled, allowHoldDrag, currentOnClick) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                if (!enabled) return@awaitEachGesture
+                pressed = true
+                pressPoint = if (rowSize.width > 0f && rowSize.height > 0f) {
+                    Offset(
+                        down.position.x / rowSize.width,
+                        down.position.y / rowSize.height,
+                    )
+                } else {
+                    Offset(0.5f, 0.5f)
+                }
+                dragOffset = Offset.Zero
+                pullOffset = Offset.Zero
+                var moved = false
+                var draggingLocal = false
+                val hold = gestureScope.launch {
+                    delay(300)
+                    if (!moved && allowHoldDrag) {
+                        draggingLocal = true
+                        dragging = true
+                        pullOffset = Offset.Zero
+                    }
+                }
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    val delta = change.position - down.position
+                    if (delta.getDistance() > viewConfiguration.touchSlop) {
+                        moved = true
+                        if (draggingLocal) {
+                            dragOffset = delta
+                        } else {
+                            val distance = delta.getDistance()
+                            val resisted = (
+                                kotlin.math.sqrt(distance - viewConfiguration.touchSlop) * 0.25f
+                                ).coerceAtMost(with(density) { 5.dp.toPx() })
+                            pullOffset = delta / distance * resisted
+                        }
+                    }
+                    if (!change.pressed) break
+                }
+                hold.cancel()
+                val apply = !moved || draggingLocal
+                pressed = false
+                dragging = false
+                dragOffset = Offset.Zero
+                pullOffset = Offset.Zero
+                if (apply) currentOnClick()
+            }
+        }
+}
+
+/**
  * A reversible selection material transition. At [glassProgress] == 0 the
  * single animated layer is the exact selected fill; at 1 it is transparent
  * refractive glass. Keeping both appearances on the same layer makes the
@@ -387,7 +822,7 @@ private fun thickGlassHighlight(ambient: Boolean): Highlight = Highlight(
 @Composable
 fun Modifier.liquidSelectionMorph(
     backdrop: Backdrop? = null,
-    shape: Shape,
+    shape: CornerBasedShape,
     fillColor: Color,
     glassProgress: Float,
     glassAlpha: Float = 0.08f,
@@ -395,10 +830,24 @@ fun Modifier.liquidSelectionMorph(
     refractionHeight: Dp = MobileInteractionGlassEdge,
     refractionAmount: Dp = 20.dp,
     saturation: Float = 1.2f,
+    contact: LiquidContactState? = null,
+    contactGeometry: () -> Unit = {},
 ): Modifier {
     val progress = glassProgress.coerceIn(0f, 1f)
-    val fill = this.background(fillColor.copy(alpha = fillColor.alpha * (1f - progress)), shape)
+    var contactCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    // Keep the semantic color block visible throughout the flight.  Previously
+    // its alpha reached zero as soon as the glass progress hit 1, leaving only
+    // the very subtle transparent glass surface; on some devices that made
+    // click/hold movement appear to lose the selection entirely.  The raised
+    // envelope now carries the original block as a stable tinted base while
+    // the glass/refraction layer is composited above it.
+    val fillAlpha = fillColor.alpha * (1f - progress * 0.22f)
+    val fill = this.onGloballyPositioned { contactCoordinates = it }
+        .background(fillColor.copy(alpha = fillAlpha), shape)
     if (progress <= 0.001f) return fill
+    DisposableEffect(contact) {
+        onDispose { contact?.clearReleased() }
+    }
     return fill.liquidGlassModifier(
             backdrop = backdrop,
             shape = shape,
@@ -409,7 +858,32 @@ fun Modifier.liquidSelectionMorph(
             saturation = 1f + (saturation - 1f) * progress,
             surfaceColor = Color.Transparent,
             ambientHighlight = true,
+            // The original gesture owner records window coordinates before
+            // this float exists. Read its actual animated geometry in the draw
+            // phase, including layer-only motion while the finger is still.
+            surfaceOverlay = {
+                contactGeometry()
+                contact?.localPosition(contactCoordinates)?.let { point ->
+                    drawLiquidContactGlow(point, 0.24f * progress)
+                }
+            },
+            pointerGlow = false,
         )
+}
+
+/** Called only from drawBackdrop's shape-clipped surface drawing layer. */
+private fun DrawScope.drawLiquidContactGlow(point: Offset, alpha: Float) {
+    val radius = 66.dp.toPx()
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(Color.White.copy(alpha = alpha), Color.Transparent),
+            center = point,
+            radius = radius,
+        ),
+        radius = radius,
+        center = point,
+        blendMode = BlendMode.Screen,
+    )
 }
 
 internal data class LiquidMotionScale(val x: Float, val y: Float)
@@ -475,6 +949,7 @@ fun Modifier.glassButtonSurface(
     surfaceColor: Color? = null,
     alpha: Float = 0.12f,
     restingBorderColor: Color? = null,
+    onAnimationActiveChanged: (Boolean) -> Unit = {},
 ): Modifier {
     val materialAlpha = alpha
     val p = LocalNewmarkColors.current
@@ -482,14 +957,23 @@ fun Modifier.glassButtonSurface(
     val pressProgress = remember { androidx.compose.animation.core.Animatable(0f) }
     val pressCycles = remember { Channel<CompletableDeferred<Unit>>(Channel.UNLIMITED) }
     var boundaryPull by remember { mutableStateOf(Offset.Zero) }
+    var lightPoint by remember { mutableStateOf<Offset?>(null) }
+    var lightPressed by remember { mutableStateOf(false) }
+    val reportAnimationActive by rememberUpdatedState(onAnimationActiveChanged)
     androidx.compose.runtime.LaunchedEffect(pressCycles) {
         for (release in pressCycles) {
             // Every tap owns a complete cycle. Travel or the click action may
             // proceed concurrently, but the glass must reach full lift before
             // it is allowed to contract back into the control.
-            pressProgress.animateTo(1f, tween(durationMillis = 105))
-            release.await()
-            pressProgress.animateTo(0f, tween(durationMillis = 165))
+            reportAnimationActive(true)
+            try {
+                pressProgress.animateTo(1f, tween(durationMillis = 105))
+                release.await()
+                pressProgress.animateTo(0f, tween(durationMillis = 165))
+            } finally {
+                if (!lightPressed) lightPoint = null
+                reportAnimationActive(false)
+            }
         }
     }
     val pressScale = 1f + 0.065f * pressProgress.value
@@ -499,49 +983,108 @@ fun Modifier.glassButtonSurface(
     val boundaryAmount = (boundaryDistance / with(LocalDensity.current) { 4.dp.toPx() }).coerceIn(0f, 1f)
     val horizontalShare = if (boundaryDistance > 0.001f) abs(boundaryPull.x) / boundaryDistance else 0f
     val verticalShare = if (boundaryDistance > 0.001f) abs(boundaryPull.y) / boundaryDistance else 0f
+    val buttonScaleX = pressScale * (1f + boundaryAmount * (horizontalShare * 0.032f - verticalShare * 0.015f))
+    val buttonScaleY = pressScale * (1f + boundaryAmount * (verticalShare * 0.032f - horizontalShare * 0.015f))
+    val optics = Modifier.kyantGlassEdge(
+        shape = shape,
+        edgeColor = edgeColor,
+        restingBorderColor = restingBorderColor,
+        emphasis = (edgeEmphasis + materialAlpha * 0.22f).coerceAtMost(1f),
+        enabled = pressProgress.value > 0.001f,
+        surfaceOverlay = {
+            lightPoint?.let { point ->
+                // The physical light radius remains visible around a finger.
+                val localPoint = liquidContactBeforeTransform(
+                    point, size, buttonScaleX, buttonScaleY,
+                    Offset(boundaryPull.x, pressLift.toPx() + boundaryPull.y),
+                )
+                drawLiquidContactGlow(localPoint, 0.24f * pressProgress.value)
+            }
+        },
+    )
     return this
-        .graphicsLayer {
+        .transformGlassOptics(optics) {
             clip = false
             translationX = boundaryPull.x
             translationY = pressLift.toPx() + boundaryPull.y
-            scaleX = 1f + boundaryAmount * (horizontalShare * 0.032f - verticalShare * 0.015f)
-            scaleY = 1f + boundaryAmount * (verticalShare * 0.032f - horizontalShare * 0.015f)
+            scaleX = buttonScaleX
+            scaleY = buttonScaleY
             this.alpha = 0.985f + edgeEmphasis * 0.015f
         }
-        .kyantGlassEdge(
-            shape = shape,
-            edgeColor = edgeColor,
-            restingBorderColor = restingBorderColor,
-            emphasis = (edgeEmphasis + materialAlpha * 0.22f).coerceAtMost(1f),
-            scale = pressScale,
-            enabled = pressProgress.value > 0.001f,
-        )
         .pointerInput(Unit) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 val release = CompletableDeferred<Unit>()
                 pressCycles.trySend(release)
+                lightPressed = true
+                lightPoint = down.position
                 var current = down.position
-                while (true) {
-                    val event = awaitPointerEvent()
-                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                    current = change.position
-                    val raw = current - down.position
-                    val maxPull = 4.dp.toPx()
-                    val distance = raw.getDistance()
-                    boundaryPull = if (distance <= viewConfiguration.touchSlop) {
-                        Offset.Zero
-                    } else {
-                        val resisted = (sqrt(distance - viewConfiguration.touchSlop) * 0.25f)
-                            .coerceAtMost(maxPull)
-                        raw / distance * resisted
+                try {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        current = change.position
+                        lightPoint = current
+                        val raw = current - down.position
+                        val maxPull = 4.dp.toPx()
+                        val distance = raw.getDistance()
+                        boundaryPull = if (distance <= viewConfiguration.touchSlop) {
+                            Offset.Zero
+                        } else {
+                            val resisted = (sqrt(distance - viewConfiguration.touchSlop) * 0.25f)
+                                .coerceAtMost(maxPull)
+                            raw / distance * resisted
+                        }
+                        if (!change.pressed) break
                     }
-                    if (!change.pressed) break
+                } finally {
+                    boundaryPull = Offset.Zero
+                    lightPressed = false
+                    release.complete(Unit)
                 }
-                boundaryPull = Offset.Zero
-                release.complete(Unit)
             }
         }
+}
+
+/** Two sibling render layers isolate optical deformation from real content.
+ * Unlike Modifier.graphicsLayer this leaves layout and semantic bounds intact. */
+@Composable
+private fun Modifier.transformGlassOptics(
+    optics: Modifier,
+    transform: GraphicsLayerScope.() -> Unit,
+): Modifier {
+    val opticsLayer = rememberGraphicsLayer()
+    val contentLayer = rememberGraphicsLayer()
+    // Reuse the library's resettable GraphicsLayerScope rather than creating
+    // another partial implementation of Compose's evolving scope interface.
+    val transformScope = remember { InverseLayerScope() }
+    return this.drawWithContent {
+        opticsLayer.record { this@drawWithContent.drawContent() }
+        transformScope.reset()
+        transformScope.size = size
+        transformScope.density = density
+        transformScope.fontScale = fontScale
+        transformScope.transform()
+        opticsLayer.apply {
+            clip = transformScope.clip
+            scaleX = transformScope.scaleX
+            scaleY = transformScope.scaleY
+            translationX = transformScope.translationX
+            translationY = transformScope.translationY
+            alpha = transformScope.alpha
+            rotationX = transformScope.rotationX
+            rotationY = transformScope.rotationY
+            rotationZ = transformScope.rotationZ
+            pivotOffset = Offset(
+                size.width * transformScope.transformOrigin.pivotFractionX,
+                size.height * transformScope.transformOrigin.pivotFractionY,
+            )
+        }
+        drawLayer(opticsLayer)
+        drawLayer(contentLayer)
+    }.then(optics).drawWithContent {
+        contentLayer.record { this@drawWithContent.drawContent() }
+    }
 }
 
 /** Kyant-standard edge-only glass for controls that cannot safely sample a recorder. */
@@ -551,16 +1094,29 @@ fun Modifier.kyantGlassEdge(
     edgeColor: Color,
     restingBorderColor: Color? = null,
     emphasis: Float = 0f,
-    scale: Float = 1f,
     enabled: Boolean = true,
+    surfaceOverlay: (DrawScope.() -> Unit)? = null,
 ): Modifier {
     if (!enabled) {
+        val restingSurface = drawBackdrop(
+            backdrop = EmptyBackdrop,
+            shape = { shape },
+            effects = {},
+            // Surface overlays (including pointer glow) must stay inside the
+            // actual glass silhouette. The render canvas may still be larger,
+            // but its optical content is clipped to this shape.
+            clipToShape = true,
+            highlight = { null },
+            shadow = { null },
+            innerShadow = { null },
+            onDrawSurface = surfaceOverlay,
+        )
         return if (restingBorderColor != null) {
-            this.border(1.dp, restingBorderColor, shape)
+            this.then(restingSurface).border(1.dp, restingBorderColor, shape)
         } else {
-            this
+            this.then(restingSurface)
                 .border(2.dp, Color.Black.copy(alpha = 0.12f), shape)
-                .border(1.5.dp, Color.White.copy(alpha = 0.28f), shape)
+                .border(2.5.dp, Color.White.copy(alpha = 0.34f), shape)
         }
     }
     val refractedShade = lerp(Color.Black, edgeColor, 0.18f)
@@ -568,7 +1124,7 @@ fun Modifier.kyantGlassEdge(
         backdrop = EmptyBackdrop,
         shape = { shape },
         effects = {},
-        clipToShape = false,
+        clipToShape = true,
         highlight = {
             Highlight(
                 width = 1.5.dp + 0.15.dp * emphasis,
@@ -595,11 +1151,7 @@ fun Modifier.kyantGlassEdge(
                 alpha = 0.72f + 0.18f * emphasis,
             )
         },
-        layerBlock = {
-            scaleX = scale
-            scaleY = scale
-        },
-        onDrawSurface = null,
+        onDrawSurface = surfaceOverlay,
     )
 }
 
@@ -648,6 +1200,8 @@ fun LiquidGlassSwitch(
     enabled: Boolean = true,
 ) {
     val p = LocalNewmarkColors.current
+    val contact = rememberLiquidContactState()
+    var thumbCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var pressed by remember { mutableStateOf(false) }
     var draggedFraction by remember { mutableStateOf<Float?>(null) }
     // Boundary overscroll is visual only: the switch's committed value never
@@ -697,6 +1251,7 @@ fun LiquidGlassSwitch(
                     enabled
                 }
             }
+            .trackLiquidContact(if (enabled) contact else null)
             .pointerInput(enabled, checked, density) {
                 if (!enabled) return@pointerInput
                 awaitEachGesture {
@@ -761,6 +1316,13 @@ fun LiquidGlassSwitch(
                 refractionAmount = 16.dp,
                 surfaceColor = p.bgQuaternary,
                 ambientHighlight = true,
+                surfaceOverlay = {
+                    // Observe geometry as well as input: the thumb may still
+                    // be catching up while the physical contact stays still.
+                    thumbOffset.value; thumbScale; boundaryOverscroll
+                    contact.localPosition(thumbCoordinates)?.let { drawLiquidContactGlow(it, 0.24f) }
+                },
+                pointerGlow = false,
             )
         } else {
             Modifier
@@ -777,6 +1339,7 @@ fun LiquidGlassSwitch(
                     translationX = thumbOffset.toPx()
                     translationY = if (pressed) 0f else 2.dp.toPx()
                 }
+                .onGloballyPositioned { thumbCoordinates = it }
                 .then(thumbModifier),
         )
     }

@@ -1,4 +1,6 @@
 import { createHash } from 'crypto';
+import { normalizeProviderUsage, type UsageNormalizationOptions } from '../providers/provider-events';
+import type { StreamToken } from './types';
 
 export type AgentKernelDiagnosticEvent =
   | {
@@ -33,6 +35,10 @@ export function setAgentKernelDiagnosticSink(sink: ((event: AgentKernelDiagnosti
 
 export function agentKernelDiagnosticsEnabled(): boolean {
   return process.env.NEWMARK_KERNEL_DIAGNOSTICS === '1';
+}
+
+export function agentKernelDiagnosticsRequested(): boolean {
+  return diagnosticSink !== null || agentKernelDiagnosticsEnabled();
 }
 
 export function emitRequestContextDiagnostic(input: {
@@ -88,16 +94,14 @@ export function emitProviderUsageDiagnostic(input: {
   return event;
 }
 
-export function extractProviderUsage(payload: unknown): { input: number; output: number; cacheRead: number; cacheWrite: number } {
-  const root = payload && typeof payload === 'object' ? payload as Record<string, any> : {};
-  const usage = root.usage && typeof root.usage === 'object' ? root.usage as Record<string, any> : root;
-  const inputDetails = usage.input_tokens_details || usage.prompt_tokens_details || {};
-  const cacheCreation = usage.cache_creation_input_tokens ?? usage.cache_write_input_tokens ?? inputDetails.cache_write_tokens;
+export function extractProviderUsage(payload: unknown, options: UsageNormalizationOptions = {}): NonNullable<StreamToken['usage']> {
+  const usage = normalizeProviderUsage(payload, options);
   return {
-    input: boundedCount(usage.input_tokens ?? usage.prompt_tokens ?? usage.input),
-    output: boundedCount(usage.output_tokens ?? usage.completion_tokens ?? usage.output),
-    cacheRead: boundedCount(usage.cache_read_input_tokens ?? usage.cached_input_tokens ?? inputDetails.cached_tokens ?? inputDetails.cache_read_tokens),
-    cacheWrite: boundedCount(cacheCreation),
+    input: usage?.inputTokens ?? 0,
+    output: usage?.outputTokens ?? 0,
+    cacheRead: usage?.cacheReadTokens ?? 0,
+    cacheWrite: usage?.cacheWriteTokens ?? 0,
+    reported: usage?.reported ?? { input: false, output: false, cacheRead: false, cacheWrite: false },
   };
 }
 

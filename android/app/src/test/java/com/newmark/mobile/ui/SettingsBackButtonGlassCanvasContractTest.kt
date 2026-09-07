@@ -23,7 +23,7 @@ class SettingsBackButtonGlassCanvasContractTest {
         assertTrue(backButton.contains("when (page)"))
         assertFalse(backButton.contains(".glassButtonSurface("))
 
-        assertTrue(liquid.contains("val GlassButtonCanvasOutset = 8.dp"))
+        assertTrue(liquid.contains("val GlassButtonCanvasOutset = 12.dp"))
         assertTrue(liquid.contains(".requiredSize(visualSize + GlassButtonCanvasOutset * 2)"))
         assertTrue(liquid.contains("CenteredInsetShape(shape, GlassButtonCanvasOutset)"))
     }

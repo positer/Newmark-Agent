@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -27,11 +28,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -234,8 +235,14 @@ fun AnchorMenu(
             Box(
                 modifier = modifier
                     .then(scrollModifier)
-                    .border(1.dp, Color.Black.copy(alpha = 0.12f), shape)
-                    .border(0.5.dp, Color.White.copy(alpha = 0.28f), shape),
+                    .liquidPopupShell(
+                        shape = shape,
+                        alpha = 0.72f,
+                        blurRadius = 12.dp,
+                        refractionHeight = MobileInteractionGlassEdge,
+                        refractionAmount = 18.dp,
+                        surfaceColor = p.bgTertiary,
+                    ),
             ) {
                 Column(
                     modifier = Modifier
@@ -280,9 +287,9 @@ fun AnchorMenu(
                 animationSpec = tween(180),
             ),
             exit = fadeOut(tween(150)) + scaleOut(
-                targetScale = 0.82f,
+                targetScale = 0.62f,
                 transformOrigin = transformOrigin,
-                animationSpec = tween(170),
+                animationSpec = tween(190),
             ),
         ) { menu() }
     }
@@ -304,36 +311,16 @@ fun MenuRow(
         animationSpec = tween(durationMillis = 110),
         label = "menuSelectionCondense",
     )
-    val movement by animateFloatAsState(
-        targetValue = if (pressed) 1f else 0f,
-        animationSpec = tween(durationMillis = 90),
-        label = "menuSelectionGlassMove",
-    )
     Row(
         modifier = Modifier
+            .fillMaxWidth()
             .widthIn(min = 140.dp)
-            .then(
-                if (movement > 0.001f) {
-                    Modifier.graphicsLayer {
-                        translationY = -2.dp.toPx() * movement
-                    }
-                } else Modifier
-            )
             .background(selectedSurface, NewmarkShapeSmall)
-            .then(
-                if (pressed) {
-                    Modifier.kyantGlassEdge(
-                        shape = NewmarkShapeSmall,
-                        edgeColor = if (selected) p.accent else p.border2,
-                        emphasis = 1f,
-                    )
-                } else {
-                    Modifier
-                        .border(1.dp, Color.Black.copy(alpha = 0.12f), NewmarkShapeSmall)
-                        .border(0.5.dp, Color.White.copy(alpha = 0.28f), NewmarkShapeSmall)
-                }
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
             )
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

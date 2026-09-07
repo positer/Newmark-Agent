@@ -6,7 +6,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -52,6 +51,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -77,6 +77,7 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -93,7 +94,7 @@ import com.newmark.mobile.data.MemoryLabUpdateInput
 import com.newmark.mobile.ui.components.MarqueeBorder
 import com.newmark.mobile.ui.components.MobilePopupShape
 import com.newmark.mobile.ui.components.MobileInteractionGlassEdge
-import com.newmark.mobile.ui.components.liquidMotionDeformation
+import com.newmark.mobile.ui.components.liquidMotionDeformationDeferred
 import com.newmark.mobile.ui.components.liquidSelectionMorph
 import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
 import com.newmark.mobile.ui.components.resistedLiquidBoundaryPosition
@@ -101,7 +102,11 @@ import com.newmark.mobile.ui.components.DialogBackdropBlur
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.components.GlassButtonCanvas
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
-import com.newmark.mobile.ui.components.liquidGlassModifier
+import com.newmark.mobile.ui.components.rememberLiquidContactState
+import com.newmark.mobile.ui.components.rememberLiquidDragFollower
+import com.newmark.mobile.ui.components.liquidPopupShell
+import com.newmark.mobile.ui.components.rememberLiquidPopupExit
+import com.newmark.mobile.ui.components.liquidPopupExit
 import com.newmark.mobile.ui.components.liquidHoldDragGesture
 import com.newmark.mobile.ui.components.LocalSidebarGestureLock
 import com.kyant.backdrop.backdrops.layerBackdrop
@@ -334,14 +339,14 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
             index = index,
             initialContent = editingSlug?.let { store.componentContent(it) }.orEmpty(),
             onDismiss = { editorOpen = false },
-            onSave = { input ->
+            onSave = { input, close ->
                 scope.launch {
                     val result = withContext(Dispatchers.IO) { store.update(input) }
                     index = result.index
                     selectedComponent = result.slug
                     componentContent = input.content
-                    editorOpen = false
                     view = "detail"
+                    close()
                 }
             },
         )
@@ -349,7 +354,7 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
 }
 
 @Composable
-private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
+internal fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
     val p = LocalNewmarkColors.current
     val options = listOf("overview" to "总览", "detail" to "详细")
     val selectedIndex = options.indexOfFirst { it.first == view }.coerceAtLeast(0)
@@ -359,18 +364,26 @@ private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
     val floatHeight = 46.dp
     val density = LocalDensity.current
     val pagerBackdrop = rememberLiquidBackdrop()
+    val glassContact = rememberLiquidContactState()
+    val dragFollower = rememberLiquidDragFollower()
     val glassX = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     val setSidebarGestureLock = LocalSidebarGestureLock.current
     var activeIndex by remember { mutableIntStateOf(selectedIndex) }
     var moving by remember { mutableStateOf(false) }
-    var lifting by remember { mutableStateOf(false) }
-    var landing by remember { mutableStateOf(false) }
+    val glassLift = remember { Animatable(0f) }
     var draggingGlass by remember { mutableStateOf(false) }
     var draggedGlassX by remember { mutableFloatStateOf(0f) }
-    var draggedGlassVelocityX by remember { mutableFloatStateOf(0f) }
     var flightJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    val glassProgress by animateFloatAsState(if (landing || lifting) 0f else if (moving) 1f else 0f, tween(if (landing) 240 else 100), label = "memoryPagerGlassMaterial")
+    val glassProgress = glassLift.value
+    DisposableEffect(Unit) {
+        onDispose {
+            flightJob?.cancel()
+            dragFollower.cancel()
+            setSidebarGestureLock("memory-lab-view-pager", false)
+            setSidebarGestureLock("memory-pager-candidate", false)
+        }
+    }
     LaunchedEffect(selectedIndex) {
         if (!moving) {
             activeIndex = selectedIndex
@@ -385,23 +398,21 @@ private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
         flightJob?.cancel()
         activeIndex = index
         setSidebarGestureLock("memory-lab-view-pager", true)
-        if (!redirecting) lifting = true
         moving = true
         flightJob = scope.launch {
+            if (draggingGlass) glassX.snapTo(dragFollower.stopAndRead())
             draggingGlass = false
-            draggedGlassVelocityX = 0f
             if (!redirecting) {
                 glassX.snapTo(with(density) { selectedIndex * slotWidth.toPx() - 6.dp.toPx() })
             }
             val targetX = with(density) { index * slotWidth.toPx() - 6.dp.toPx() }
             val staysInPlace = kotlin.math.abs(glassX.value - targetX) < 0.5f
             runOverlappedLiquidFlight(
-                lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) },
+                lift = { glassLift.animateTo(1f, tween(100)) },
                 move = { if (!staysInPlace) glassX.animateTo(targetX, tween(380)) },
-                onLandingStarted = { landing = true },
-                land = { delay(240) },
+                onLandingStarted = {},
+                land = { glassLift.animateTo(0f, tween(240)) },
             )
-            landing = false
             moving = false
             setSidebarGestureLock("memory-lab-view-pager", false)
             if (commit) onSelect(options[index].first)
@@ -412,17 +423,16 @@ private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
         flightJob?.cancel()
         activeIndex = index
         setSidebarGestureLock("memory-lab-view-pager", true)
-        if (!redirecting) lifting = true
         moving = true
         flightJob = scope.launch {
+            if (draggingGlass) glassX.snapTo(dragFollower.stopAndRead())
             draggingGlass = false
-            draggedGlassVelocityX = 0f
             if (!redirecting) {
                 glassX.snapTo(with(density) { selectedIndex * slotWidth.toPx() - 6.dp.toPx() })
             }
             runOverlappedLiquidFlight(
                 holdKeepsLifted = true,
-                lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) },
+                lift = { glassLift.animateTo(1f, tween(100)) },
                 move = { glassX.animateTo(with(density) { index * slotWidth.toPx() - 6.dp.toPx() }, tween(380)) },
                 onLandingStarted = {}, land = {},
             )
@@ -432,56 +442,64 @@ private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
         Modifier
             .width(slotWidth * options.size)
             .height(trackHeight)
+            .testTag("memory-view-rail")
             .background(p.bgQuaternary, RoundedCornerShape(50))
             .liquidHoldDragGesture(
                 options.size,
                 selectedIndex,
+                contact = glassContact,
                 onCandidateStart = { setSidebarGestureLock("memory-pager-candidate", true) },
                 onCandidateEnd = { setSidebarGestureLock("memory-pager-candidate", false) },
                 onTap = { flyTo(indexAt(it.x), commit = true) },
                 onHoldStart = { holdAt(indexAt(it.x)) },
-                onDrag = { position, delta ->
-                    flightJob?.cancel()
+                onDrag = { position, _ ->
+                    if (!draggingGlass) {
+                        flightJob?.cancel()
+                        dragFollower.startFrom(glassX.value)
+                        flightJob = scope.launch { glassLift.animateTo(1f, tween(100)) }
+                    }
                     moving = true
-                    lifting = false
                     draggingGlass = true
                     activeIndex = indexAt(position.x)
                     draggedGlassX = with(density) {
                         resistedLiquidBoundaryPosition(
                             raw = position.x - floatWidth.toPx() / 2f,
-                            minimum = -6.dp.toPx(),
-                            maximum = options.size * slotWidth.toPx() - floatWidth.toPx() + 6.dp.toPx(),
-                            maxDisplacement = 4.dp.toPx(),
+                             minimum = 0f,
+                             maximum = (options.size * slotWidth.toPx() - floatWidth.toPx()).coerceAtLeast(0f),
+                            maxDisplacement = 0f,
                         )
                     }
-                    draggedGlassVelocityX = delta.x * 60f
+                    dragFollower.updateTarget(draggedGlassX)
                 },
                  onHoldEnd = { _, _ ->
                      val commit = activeIndex
+                     val interruptedFlight = flightJob
+                     interruptedFlight?.cancel()
                      flightJob = scope.launch {
-                         lifting = false
-                         glassX.snapTo(draggedGlassX)
+                         interruptedFlight?.join()
+                         // Transfer the visible damped position to landing.
+                         // A hold without a drag retains its current flight
+                         // frame instead of snapping to the raw pointer target.
+                         if (draggingGlass) glassX.snapTo(dragFollower.stopAndRead())
                          draggingGlass = false
                          runOverlappedLiquidFlight(
-                             lift = {},
+                             lift = { glassLift.animateTo(1f, tween(100)) },
                              move = { glassX.animateTo(with(density) { commit * slotWidth.toPx() - 6.dp.toPx() }, tween(120)) },
-                             onLandingStarted = { landing = true },
-                             land = { delay(240) },
+                             onLandingStarted = {},
+                             land = { glassLift.animateTo(0f, tween(240)) },
                          )
-                        landing = false
                         moving = false
                         draggingGlass = false
-                        draggedGlassVelocityX = 0f
                         setSidebarGestureLock("memory-lab-view-pager", false)
                         onSelect(options[commit].first)
                     }
                 },
                 onCancel = {
+                    dragFollower.cancel()
+                    flightJob?.cancel()
+                    flightJob = scope.launch { glassLift.snapTo(0f) }
                     moving = false
-                    lifting = false
-                    landing = false
                     draggingGlass = false
-                    draggedGlassVelocityX = 0f
                     setSidebarGestureLock("memory-lab-view-pager", false)
                 },
             ),
@@ -512,16 +530,17 @@ private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
                     .width(slotWidth + edgeExpansion)
                     .height(34.dp + edgeExpansion)
                      .graphicsLayer {
-                         translationX = (if (draggingGlass) draggedGlassX else glassX.value) +
+                         translationX = (if (draggingGlass) dragFollower.value else glassX.value) +
                              with(density) { landingInset.toPx() }
                          translationY = with(density) { landingInset.toPx() }
                     }
-                    .liquidMotionDeformation(
-                        velocityX = if (draggingGlass) draggedGlassVelocityX else glassX.velocity,
-                        velocityY = 0f,
+                    .liquidMotionDeformationDeferred(
+                        velocityX = { if (draggingGlass) dragFollower.velocity else glassX.velocity },
+                        velocityY = { 0f },
                         density = density.density,
                     )
                     .zIndex(4f)
+                    .testTag("memory-view-glass")
                     .liquidSelectionMorph(
                         backdrop = pagerBackdrop,
                         shape = RoundedCornerShape(50),
@@ -531,6 +550,13 @@ private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
                         blurRadius = 2.dp,
                         refractionHeight = MobileInteractionGlassEdge,
                         refractionAmount = 20.dp,
+                        contact = glassContact,
+                        contactGeometry = {
+                            // Includes parent-popup and local motion changes when
+                            // the shared morph resolves the window-space contact.
+                            glassX.value; glassX.velocity; glassLift.value
+                            draggingGlass; dragFollower.value; dragFollower.velocity
+                        },
                     ),
             )
         }
@@ -542,11 +568,12 @@ private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
 fun MemoryLabDialog(onDismiss: () -> Unit) {
     val p = LocalNewmarkColors.current
     val glass = LocalGlassMode.current
+    val exit = rememberLiquidPopupExit(onDismiss)
     // Dialog is its own window: capture the dialog background with a local
     // backdrop so the surface can refract what is behind it (Kyant glass).
     val backdrop = rememberLiquidBackdrop()
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = exit::requestClose,
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false,
@@ -561,14 +588,18 @@ fun MemoryLabDialog(onDismiss: () -> Unit) {
                     .fillMaxHeight(.88f)
                     .widthIn(max = 960.dp)
                     .heightIn(max = 720.dp)
-                    .liquidGlassModifier(
+                    .liquidPopupExit(exit)
+                    .liquidPopupShell(
                         backdrop = backdrop,
                         shape = MobilePopupShape,
-                        alpha = 0f,
-                        blurRadius = 8.dp,
-                        refractionHeight = 5.dp,
-                        refractionAmount = 8.dp,
-                        surfaceColor = Color.Transparent,
+                        alpha = 0.18f,
+                        blurRadius = 12.dp,
+                        refractionHeight = MobileInteractionGlassEdge,
+                        refractionAmount = 22.dp,
+                        surfaceColor = p.bgSecondary,
+                        // Observe press feedback without pulling this window:
+                        // the graph retains its own pan and pinch gestures.
+                        dragEnabled = false,
                     )
                     .clip(MobilePopupShape),
             ) {
@@ -759,7 +790,9 @@ private fun Overview(
                         edge in related.parents -> Color(0xFFF6C96B).copy(alpha = .78f)
                         edge in related.children -> Color(0xFF74DFB0).copy(alpha = .72f)
                         hot -> Color(0xFF7EDCFF).copy(alpha = .78f)
-                        else -> Color(0xFF96A8D2).copy(alpha = .08f)
+                        else -> (if (p == com.newmark.mobile.ui.theme.NewmarkLightThemeColors) {
+                            Color(0xFF96A8D2)
+                        } else p.textTertiary).copy(alpha = .08f)
                     }
                     val start = screen(a); val end = screen(b)
                     drawLine(edgeColor, start, end, if (hot) 1.45f else 1.05f)
@@ -1054,17 +1087,35 @@ private fun MemoryLabEditorDialog(
     index: MemoryLabIndex,
     initialContent: String,
     onDismiss: () -> Unit,
-    onSave: (MemoryLabUpdateInput) -> Unit,
+    onSave: (MemoryLabUpdateInput, () -> Unit) -> Unit,
 ) {
     val p = LocalNewmarkColors.current
+    val exit = rememberLiquidPopupExit(onDismiss)
+    val backdrop = rememberLiquidBackdrop()
     val existing = existingSlug?.let(index.components::get)
     var name by remember(existingSlug) { mutableStateOf(existing?.name.orEmpty()) }
     var description by remember(existingSlug) { mutableStateOf(existing?.description.orEmpty()) }
     var tags by remember(existingSlug) { mutableStateOf(existing?.tags?.joinToString(", ").orEmpty()) }
     var paths by remember(existingSlug) { mutableStateOf(existing?.tagPaths?.joinToString("\n") { it.joinToString(" → ") }.orEmpty()) }
     var content by remember(existingSlug) { mutableStateOf(initialContent) }
-    Dialog(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().clip(MobilePopupShape).background(p.bgSecondary).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+    Dialog(onDismissRequest = exit::requestClose) {
+        DialogBackdropBlur(42.dp)
+        Box(Modifier.fillMaxSize().layerBackdrop(backdrop))
+        Column(
+            Modifier.fillMaxWidth()
+                .liquidPopupExit(exit)
+                .liquidPopupShell(
+                    backdrop = backdrop,
+                    shape = MobilePopupShape,
+                    alpha = 0.18f,
+                    blurRadius = 12.dp,
+                    refractionHeight = MobileInteractionGlassEdge,
+                    refractionAmount = 22.dp,
+                    surfaceColor = p.bgSecondary,
+                )
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
             Text(if (existing == null) "新增记忆组件" else "编辑 / 重构记忆组件", color = p.textPrimary, fontWeight = FontWeight.SemiBold)
             MemoryEditorField("名称", name) { name = it }
             MemoryEditorField("描述", description) { description = it }
@@ -1072,11 +1123,13 @@ private fun MemoryLabEditorDialog(
             MemoryEditorField("标签路径（每行一条，使用 → 分隔）", paths) { paths = it }
             MemoryEditorField("核心 Markdown", content, singleLine = false) { content = it }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Text("取消", color = p.textSecondary, modifier = Modifier.clickable(onClick = onDismiss).padding(10.dp))
+                Text("取消", color = p.textSecondary, modifier = Modifier.clickable(onClick = exit::requestClose).padding(10.dp))
                 Text("保存", color = p.accent, modifier = Modifier.clickable {
                     val tagList = tags.split(Regex("[,，]")).map(String::trim).filter(String::isNotBlank)
                     val pathList = paths.lines().map { line -> line.split(Regex("\\s*(?:→|>|/)\\s*")).map(String::trim).filter(String::isNotBlank) }.filter(List<String>::isNotEmpty)
-                    onSave(MemoryLabUpdateInput(name, description, tagList, pathList, content, existing?.kind ?: "file", existing?.updatedAt.orEmpty(), "Mobile Memory Lab UI edit", "mobile_memory_lab_ui"))
+                    onSave(MemoryLabUpdateInput(name, description, tagList, pathList, content, existing?.kind ?: "file", existing?.updatedAt.orEmpty(), "Mobile Memory Lab UI edit", "mobile_memory_lab_ui")) {
+                        exit.requestClose()
+                    }
                 }.padding(10.dp))
             }
         }

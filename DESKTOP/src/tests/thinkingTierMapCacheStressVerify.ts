@@ -240,11 +240,6 @@ async function main(): Promise<void> {
       }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write(usageBody(inputTokensPerCall, cacheReadPerCall, outputTokensPerCall));
-      try {
-        const body = JSON.parse(rawBody) as { messages?: Array<{ role: string; content: string }> };
-        const systemText = (body.messages || []).filter(message => message.role === 'system').map(message => message.content).join('');
-        if (systemText.includes('## Build Context Bootstrap')) buildToolCounter = 0;
-      } catch { /* keep current counter */ }
       if (buildToolCounter < toolRoundsPerBuild) {
         buildToolCounter += 1;
         res.write(TOOL_CALL_BODY);
@@ -266,12 +261,14 @@ async function main(): Promise<void> {
       runner.workspace.current = null;
       // C1：默认档位 medium → 精确命中 balanced
       for (let build = 0; build < 2; build += 1) {
+        buildToolCounter = 0;
         const tokens = await runner.process(`stress-build-medium-${build}`);
         check(tokens.map(token => token.text || '').join('').includes('CACHE_MAP_DONE'), `build ${build} (medium): completes`);
       }
       // C2：切换 ultra → 归一 max 后降级 deep
       runner.setIntelligence('ultra', true);
       for (let build = 2; build < builds; build += 1) {
+        buildToolCounter = 0;
         const tokens = await runner.process(`stress-build-ultra-${build}`);
         check(tokens.map(token => token.text || '').join('').includes('CACHE_MAP_DONE'), `build ${build} (ultra): completes`);
       }
@@ -299,7 +296,7 @@ async function main(): Promise<void> {
         });
         check(systems[0].includes('## Build Context Bootstrap'), `build ${build}: first request injects Build bootstrap`);
         const stableTail = systems.slice(1);
-        check(new Set(stableTail).size === 1, `build ${build}: ${toolRoundsPerBuild} tool sub-turns share one byte-stable system prefix`);
+        check(new Set(systems).size === 1, `build ${build}: first request and all ${toolRoundsPerBuild} tool sub-turns share one byte-stable system prefix`);
         check(!stableTail[0].includes('reasoning_effort') && !stableTail[0].includes('balanced') && !stableTail[0].includes('deep'),
           `build ${build}: mapped effort stays out of the cache prefix`);
       }
@@ -314,10 +311,13 @@ async function main(): Promise<void> {
         && window.providerTotalTokens === expectedInput + expectedOutput,
         'context window: whole-conversation token totals match simulated usage');
       check(window.providerCacheReadTokens === expectedCacheRead
-        && Number(window.providerCacheReadRatio) === cacheReadPerCall / inputTokensPerCall,
-        'context window: cache-read tokens and cache-hit ratio match simulated usage');
-      check(Number(window.providerCacheReadRatio) >= 0.9,
-        'cache-hit pressure: ratio stays near-total under mapped native effort tiers');
+        && window.providerCacheReadRatio === null
+        && Number(window.providerKnownCacheReadRatio) === cacheReadPerCall / inputTokensPerCall,
+        'context window: unreported title usage leaves whole-conversation rate unknown while reported rate matches');
+      check(Number(window.providerKnownCacheReadRatio) >= 0.9
+        && window.providerUsageRequests === totalCalls + titleProbeCount
+        && window.providerUsageCacheReportedRequests === totalCalls,
+        'cache-hit pressure: reported native-effort requests retain high weighted hit rate with explicit coverage');
     } finally {
       await agentServer.stop();
     }

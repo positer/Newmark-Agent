@@ -65,7 +65,7 @@ export type WslAgentRequest =
   | { id: string; method: 'prompt'; params: WslAgentPromptRequest }
   | { id: string; method: 'abort'; params: { conversationId?: string; target?: ConversationRuntimeTarget } }
   | { id: string; method: 'stop'; params: { conversationId?: string; target?: ConversationRuntimeTarget; runId?: string } }
-  | { id: string; method: 'snapshot'; params: { conversationId?: string; target?: ConversationRuntimeTarget; workspace?: WslAgentWorkspace | null } }
+  | { id: string; method: 'snapshot'; params: { conversationId?: string; target?: ConversationRuntimeTarget; workspace?: WslAgentWorkspace | null; options?: { window?: number; before?: number } } }
   | { id: string; method: 'rewind'; params: { target: ConversationRuntimeTarget; messageIndex: number } }
   | { id: string; method: 'guide'; params: { target: ConversationRuntimeTarget; envelope: ConversationInputEnvelope } }
   | { id: string; method: 'queue_action'; params: { target: ConversationRuntimeTarget; action: ConversationQueueAction; input?: ConversationQueueActionInput } }
@@ -86,7 +86,7 @@ export type WslAgentRequest =
   | { id: string; method: 'terminal_detach'; params: WslTerminalRequestBase & { sessionId: string } }
   | { id: string; method: 'host_tool_result'; params: WslHostToolResult }
   | { id: string; method: 'reset' }
-  | { id: string; method: 'shutdown' };
+  | { id: string; method: 'shutdown'; params?: { supervisorTerminates?: boolean } };
 
 export type WslAgentResponse =
   | { id: string; ok: true; result: unknown }

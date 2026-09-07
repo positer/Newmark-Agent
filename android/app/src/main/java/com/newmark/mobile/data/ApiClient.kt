@@ -1,8 +1,6 @@
 package com.newmark.mobile.data
 
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -300,11 +298,12 @@ class ApiClient(
         maxOutputTokens: Int? = null,
         onThoughtDelta: suspend (String) -> Unit = {},
         onTextDelta: suspend (String) -> Unit = {},
-    ): Result<ChatResponse> = withContext(Dispatchers.IO) {
+    ): Result<ChatResponse> = withCancellableHttpExchange { exchange ->
         runCatching {
             val base = config.baseUrl.trim().trimEnd('/')
             if (normalizeMobileProviderProtocol(config.protocol) == PROVIDER_PROTOCOL_OPENAI_RESPONSES) {
                 return@runCatching executeResponses(
+                    exchange = exchange,
                     config = config,
                     base = base,
                     messages = messages,
@@ -376,11 +375,12 @@ class ApiClient(
                 }
             }
 
-            executeProviderRequest(url, config.apiKey, body).use { resp ->
+            executeProviderRequest(exchange, url, config.apiKey, body).use { resp ->
                 if (!resp.isSuccessful) {
                     val text = resp.body?.string() ?: ""
                     if (shouldRetryWithResponses(resp.code, text)) {
                         return@runCatching executeResponses(
+                            exchange = exchange,
                             config = config,
                             base = base,
                             messages = messages,
@@ -416,7 +416,7 @@ class ApiClient(
                     if (payload.isBlank()) continue
                     if (payload == "[DONE]") {
                         sawDone = true
-                        continue
+                        break
                     }
                     // Providers are allowed to emit a complete `message` in
                     // an SSE frame (especially gateways that buffer a turn)
@@ -450,6 +450,9 @@ class ApiClient(
                             }
                         }
                     }
+                    // A completed choice is sufficient even if the gateway
+                    // leaves its HTTP body open after this final data frame.
+                    if (finishReason.isNotBlank()) break
                 }
                 if (fallbackJson.isNotBlank() && content.isEmpty() && reasoning.isEmpty()) {
                     val choice = JSONObject(fallbackJson.toString())
@@ -503,6 +506,7 @@ class ApiClient(
     }
 
     private suspend fun executeResponses(
+        exchange: CancellableHttpExchange,
         config: ApiConfig,
         base: String,
         messages: List<ChatMessage>,
@@ -541,7 +545,7 @@ class ApiClient(
                 put("parallel_tool_calls", true)
             }
         }
-        executeProviderRequest(url, config.apiKey, body, acceptEventStream = true).use { resp ->
+        executeProviderRequest(exchange, url, config.apiKey, body, acceptEventStream = true).use { resp ->
             if (!resp.isSuccessful) {
                 val text = resp.body?.string().orEmpty()
                 error("HTTP ${resp.code}: ${text.take(200)}")
@@ -562,7 +566,8 @@ class ApiClient(
                     line.startsWith("event:") -> pendingEvent = line.removePrefix("event:").trim()
                     line.startsWith("data:") -> {
                         val payload = line.removePrefix("data:").trim()
-                        if (payload.isBlank() || payload == "[DONE]") continue
+                        if (payload.isBlank()) continue
+                        if (payload == "[DONE]") break
                         val eventName = pendingEvent
                         val parsed = parseResponsesStreamDelta(payload, eventName)
                         pendingEvent = ""
@@ -608,6 +613,9 @@ class ApiClient(
                     }
                     line.isNotBlank() -> fallbackLines += line.trim()
                 }
+                // Keep explicit response.status validation, but do not wait
+                // for a second transport-level completion after a terminal event.
+                if (completed || streamError.isNotBlank()) break
             }
             if (streamError.isNotBlank()) error(streamError)
             if (fallbackLines.isNotEmpty() && content.isEmpty() && reasoning.isEmpty() && calls.isEmpty()) {
@@ -641,6 +649,7 @@ class ApiClient(
     }
 
     private fun executeProviderRequest(
+        exchange: CancellableHttpExchange,
         url: String,
         apiKey: String,
         originalBody: JSONObject,
@@ -660,14 +669,14 @@ class ApiClient(
             if (acceptEventStream) builder.addHeader("Accept", "text/event-stream")
             val request = builder.post(body.toString().toRequestBody(jsonMedia)).build()
             return try {
-                client.newCall(request).execute()
+                exchange.execute(client.newCall(request))
             } catch (error: IOException) {
                 if (!isFreshConnectionRetryable(error)) throw error
                 // A package/desktop update can leave the first provider call
                 // bound to an aborted keep-alive route. No HTTP response was
                 // obtained, so evict that route and retry exactly once.
                 client.connectionPool.evictAll()
-                client.newCall(request).execute()
+                exchange.execute(client.newCall(request))
             }
         }
 

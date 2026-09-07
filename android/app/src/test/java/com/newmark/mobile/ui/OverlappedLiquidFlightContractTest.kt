@@ -24,6 +24,7 @@ class OverlappedLiquidFlightContractTest {
         assertTrue(sources.getValue("RightSidebar.kt").contains("runOverlappedLiquidFlight("))
         assertTrue(sources.getValue("MemoryLabScreen.kt").contains("runOverlappedLiquidFlight("))
         assertTrue(sources.getValue("ChatScreen.kt").contains("runOverlappedLiquidFlight("))
+        assertFalse(sources.getValue("ChatScreen.kt").contains("directOptionInteraction("))
     }
 
     @Test
@@ -34,7 +35,7 @@ class OverlappedLiquidFlightContractTest {
         assertTrue(inventory.contains("sidebar_utility_selectors"))
         assertTrue(inventory.contains("right_sidebar_tabs"))
         assertTrue(inventory.contains("memory_lab_pager"))
-        assertTrue(inventory.contains("composer_selection_menus"))
+        assertFalse(inventory.contains("composer_selection_menus"))
         assertFalse(inventory.contains("ordinary_surface_as_float"))
     }
 }

@@ -173,6 +173,13 @@ async function main(): Promise<void> {
     LLMProvider.powershellTransport = originalPowerShellTransport;
   }
 
+  // Exercise the actual Agent title gate after restoring transport test doubles.
+  // This real 16-second response catches a title-only deadline that otherwise
+  // cancels a healthy provider before the first formal request may start.
+  const { verifyConversationTitleLifecycle } = require('../../scripts/test-conversation-title-lifecycle.cjs') as {
+    verifyConversationTitleLifecycle(): Promise<unknown>;
+  };
+  await verifyConversationTitleLifecycle();
   console.log(JSON.stringify({ ok: true, nodeFallbacks, powershellFallbacks }));
 }
 

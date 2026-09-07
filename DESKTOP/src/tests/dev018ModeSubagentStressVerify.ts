@@ -29,6 +29,8 @@ async function restoredMailboxStress(): Promise<void> {
     );
     const delivery = seed.sendMessage(seed.rootAgentId, id, `RESTORE_TOKEN_${index}`);
     assert.strictEqual(delivery.ok, true);
+    assert.strictEqual(delivery.message?.wakeup, false, 'existing queued jobs accept passive mail without an extra wake request');
+    assert.strictEqual(delivery.message?.acceptedWhileActive, true);
     return id;
   });
   const saved = seed.serialize();
@@ -129,6 +131,7 @@ function rootInboxStress(): void {
   for (let index = 0; index < 256; index++) {
     const delivery = manager.sendRootMessage(`peer-${index}`, `root-result-${index}`, index % 2 ? 'handoff' : 'result');
     assert.strictEqual(delivery.ok, true);
+    assert.strictEqual(delivery.message?.wakeup, false);
     ids.push(delivery.message!.id);
   }
   const inbox = manager.readRootInbox();
@@ -141,6 +144,7 @@ function rootInboxStress(): void {
   const saved: SubagentState = manager.serialize();
   const restored = new SubagentManager({ conversationId: 'dev018-root-inbox', state: saved });
   assert.strictEqual(restored.readRootInbox().length, 128);
+  assert.ok(restored.readRootInbox().every(message => message.wakeup === false), 'explicit false is preserved by root inbox restore');
   assert.ok(restored.readRootInbox().every(message => Number(message.body.replace('root-result-', '')) % 2 === 1));
 }
 

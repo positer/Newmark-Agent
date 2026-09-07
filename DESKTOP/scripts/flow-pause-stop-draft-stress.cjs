@@ -228,4 +228,6 @@ async function main() {
     try { fs.rmSync(root, { recursive: true, force: true }); } catch {}
   }
 }
-main().catch(error => { console.error(error); process.exit(1); });
+main()
+  .then(() => require('./test-flow-resume-lifecycle.cjs').run())
+  .catch(error => { console.error(error); process.exit(1); });

@@ -22,16 +22,16 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// 对齐 PC GUI 的深蓝毛玻璃 token。主界面也使用 --app-bg，而不是旧版灰黑色。
-val NewmarkBgPrimary = Color(0xFF0A0A1A)       // --app-bg
-val NewmarkBgSecondary = Color(0xD611112A)     // 加强可读性的 --glass-bg-2
-val NewmarkBgTertiary = Color(0xE01A1A38)      // 加强可读性的 --glass-bg-3
-val NewmarkBgQuaternary = Color(0xD61E1E42)
-val NewmarkBgOverlay = Color(0xCC22224A)
+// 与 PC 共用中性灰黑层次；强调色只用于功能状态，玻璃保留原透明度。
+val NewmarkBgPrimary = Color(0xFF101010)       // --app-bg
+val NewmarkBgSecondary = Color(0xD6181818)     // 加强可读性的 --glass-bg-2
+val NewmarkBgTertiary = Color(0xE0222222)      // 加强可读性的 --glass-bg-3
+val NewmarkBgQuaternary = Color(0xD6292929)
+val NewmarkBgOverlay = Color(0xCC303030)
 
-val NewmarkTextPrimary = Color(0xFFE4ECFF)
-val NewmarkTextSecondary = Color(0xFFC8D0E8)
-val NewmarkTextTertiary = Color(0xFF7880A0)
+val NewmarkTextPrimary = Color(0xFFF2F2F2)
+val NewmarkTextSecondary = Color(0xFFCECECE)
+val NewmarkTextTertiary = Color(0xFF949494)
 
 val NewmarkAccent = Color(0xFF5B78FF)
 val NewmarkAccentSoft = Color(0x1F5B78FF)
@@ -216,6 +216,26 @@ private val NewmarkDarkColors = darkColorScheme(
     onSurface = NewmarkTextPrimary,
     surfaceVariant = NewmarkBgTertiary,
     onSurfaceVariant = NewmarkTextSecondary,
+    // Material components must use the same neutral surfaces instead of the
+    // default purple containers and primary-colored tonal elevation.
+    surfaceTint = Color.Transparent,
+    surfaceDim = Color(0xFF101010),
+    surfaceBright = Color(0xFF383838),
+    surfaceContainerLowest = Color(0xFF0C0C0C),
+    surfaceContainerLow = Color(0xFF181818),
+    surfaceContainer = Color(0xFF222222),
+    surfaceContainerHigh = Color(0xFF292929),
+    surfaceContainerHighest = Color(0xFF303030),
+    secondary = NewmarkTextSecondary,
+    onSecondary = NewmarkBgPrimary,
+    secondaryContainer = Color(0xFF292929),
+    onSecondaryContainer = NewmarkTextPrimary,
+    tertiary = NewmarkTextSecondary,
+    onTertiary = NewmarkBgPrimary,
+    tertiaryContainer = Color(0xFF303030),
+    onTertiaryContainer = NewmarkTextPrimary,
+    inverseSurface = NewmarkTextPrimary,
+    inverseOnSurface = NewmarkBgPrimary,
     outline = NewmarkBorder2,
     outlineVariant = NewmarkBorder,
     error = NewmarkRed,

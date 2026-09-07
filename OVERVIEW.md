@@ -1,6 +1,283 @@
 # Newmark Agent Overview
 
-## dev-0.5.14 当前源码状态
+## dev-0.5.15 发布构造（2026-09-07）
+
+`VERSION`、`DESKTOP/package.json`／lock 与 `android/app/build.gradle.kts` 绑定 0.5.15／515。`.github/workflows/release-linux.yml` 提供 Windows／Linux／Android 原生 runner 构建；手工 dispatch 只构建，dev 标签触发预发布；`publish.yml` 同标签触发 npm。`DESKTOP/scripts/dist-portable.cjs` 与 `dist-linux.cjs` 生成桌面资产；`verify-github-release-assets.cjs` 重新下载六资产并校验。当前发布计划与检查表位于 `tasks/`，每项执行日志、候选和最终身份在 `archive/20260907-113605-dev-0.5.15-release/`。
+
+## SubAgent 连续工作、mailbox 与缓存（2026-09-07）
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/core/subagent.ts` | 同一 peer 单执行器、4／16 槽 FIFO、精确 mailbox 批次、可选 v2 jobs 持久化、输入提交检查点及深拷贝快照；`patchMetadata` 保存 peer 请求状态。 |
+| `DESKTOP/src/core/agent.ts` | 工作历史按实际变化保存；恢复压缩状态和 peer 请求缓存；32 个独立、按配置失效的 provider 槽；Ultra 主协调者与执行者责任区分。 |
+| `DESKTOP/src/core/agentKernelRunner.ts` | 活跃 mailbox 先保存后确认、首请求输入检查点、跨 peer 续作复用请求元数据及工具供给顺序，保留实时工具权限判定。 |
+| `DESKTOP/src/core/subagentCommunication.ts` | 发送者自行选择摘要、文本和完整工具调用／结果对；验证每类范围、默认最后一条可见文本、严格预算与源数据保真。 |
+| `DESKTOP/src/core/conversationKernel.ts`、`DESKTOP/src/core/agentKernel/agent.ts` | 主代理静默邮件／显式唤醒、已读自动通知的精确队列撤回，以及单对话停止的运行身份边界。 |
+| `DESKTOP/src/core/wslAgentClient.ts`、`wslAgentProtocol.ts`、`DESKTOP/src/wsl-agent-host.ts` | WSL 会话工作进程握手携带启动身份；停止期间保留所属进程树的身份锚点，失败保留错误及隔离状态。 |
+| `DESKTOP/src/core/wslAgentRuntimePool.ts` | 以会话身份管理停止和回收；定时空闲回收捕获失败并保留原 entry，避免未处理拒绝影响共享宿主。 |
+| `DESKTOP/src/core/wslRuntimeProcessTree.ts` | Python 3 标准库 pidfd 终止助手；校验 boot／进程出生信息，捕获所属子孙进程（包括新进程组），限定清理期限，拒绝退回裸 PID／PGID 信号。 |
+| `DESKTOP/src/tests/subagentMailboxConcurrencyVerify.ts` | 连续唤醒、突发通信、停止／重启／降档、崩溃窗口、同步异常和快照隔离的确定性压力矩阵。 |
+| `DESKTOP/src/tests/subagentUltraDelegationVerify.ts` | 真实 Agent/kernel/file tool 的 16 路并发、部署和任务归属、Plan 拒绝写入、provider 复用／失效／关闭／容量验证；供应商回复使用夹具。 |
+| `DESKTOP/scripts/test-subagent-cache-continuity.cjs` | 隔离编译生产源码，对比实际供应商序列化输入，覆盖活跃 mailbox、冷恢复、执行中检查点、工具供给及配置失效；支持原始源码覆盖以复现失败。 |
+| `DESKTOP/scripts/test-subagent-settlement-receipts.cjs` | 实际 Agent/native kernel 的已读结果去重、手工消息保留、持久化失败、主代理静默投递／唤醒和多对话停止隔离压力测试。 |
+| `DESKTOP/scripts/test-subagent-real-provider-stress.cjs` | 有界真实 APInebula 验收：16 初始任务、16 mailbox、4 冷恢复及独立主模型自主分工模式；仅合成文件，凭据不进入证据。 |
+| `DESKTOP/scripts/subagent-streaming-relay-stress.cjs` | 子代理实时事件身份、并发转发与取消订阅验证，使用显式注册的夹具部署。 |
+| `DESKTOP/scripts/test-wsl-runtime-process-tree.cjs` | 两个真实 WSL client 与生产 asyncProcess 分离子孙进程，验证目标树停止、其他对话存活、过期身份拒绝、取消和失败隔离。 |
+| `DESKTOP/package.json` | `test:subagent-continuity[:built]` 可重复专项门禁并纳入完整 Desktop 回归；`test:wsl-stop-isolation[:built]` 覆盖真实 WSL 停止，并随 `test:runtime-isolation` 执行。 |
+| `DESKTOP/src/tools/index.ts` | `subagent_send` 的 `wakeup`、主代理目标、内容类型与范围参数；动态内容只进入消息尾部，不嵌入静态工具定义。 |
+| `archive/20260907-003824-subagent-mailbox-cache-stress/` | 本轮计划、修改前快照、原始失败、测试日志、真实模型 usage、独立审阅与最终 `REPORT.md`。 |
+| `archive/20260907-subagent-mailbox-scheduler/` | 调度器独立红绿测试、隔离 bundle、原始失败和场景报告。 |
+
+## Build 连续性与协议兼容（2026-09-06）
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/core/agentKernelRunner.ts` | 当前请求的输出边界、连续无有效答复预算、同部署暂断恢复与已有工具结果续接；保留完整系统/schema前缀。 |
+| `DESKTOP/src/core/agent.ts` | 重试等待绑定原 Build 取消信号；公开/持久化工具事件保留调用身份；中断与错误收口时保存已经公开的回复片段。 |
+| `DESKTOP/src/core/autoRouter.ts` | 503 等服务端错误及超时保留真实 Retry-After，沿用既有自动重试预算。 |
+| `DESKTOP/src/providers/chat-completions.adapter.ts`、`responses.adapter.ts`、`provider-events.ts`、`DESKTOP/src/llm/provider.ts` | 校验协议终止、错误、工具完整参数和调用身份；GitHub/Anthropic及辅助请求沿用真实完成语义。 |
+| `DESKTOP/src/providers/provider-request-compat.ts` | 统一匹配流式/JSON的请求头，规范已知接口后缀并保留自定义网关前缀和查询参数。 |
+| `DESKTOP/src/providers/provider-headers.ts` | 兼容各供应商响应头的请求ID、限流/重试时间，保持凭据过滤及HTTP缓存与token缓存的边界。 |
+| `DESKTOP/src/core/workEventCoalescer.ts`、`types.ts`、`DESKTOP/src/ui/index.html` | 批次保留原始delta边界；GUI按事件身份展开去重，并拒绝过期停止/状态回包。 |
+| `DESKTOP/src/tests/providerCompletionIntegrityVerify.ts`、`workEventCoalescerVerify.ts` | 真实本地HTTP协议终止与工具完整性、批次聚合/原始事件转发回归。 |
+| `DESKTOP/scripts/test-build-recovery-continuity.cjs`、`test-build-retry-cancellation.cjs`、`test-build-continuity-http.cjs`、`test-build-continuity-ui.cjs` | 实际Agent恢复矩阵、取消等待、完整HTTP Build和真实renderer快照/停止竞态。 |
+| `DESKTOP/scripts/test-provider-request-compat.cjs`、`test-provider-header-metadata.cjs` | 实际HTTP头/接口地址与响应限流头的兼容检查。 |
+| `archive/20260906-223658-build-response-continuity/` | 本轮计划、原始失败、独立审阅、源码/编译与实际GUI证据；`REPORT.md`为入口。 |
+
+## GUI 上下文计量（2026-09-06）
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/core/providerUsageAccounting.ts` | 请求句柄保存累计 usage 的已上报字段，按差值更新会话用量和缓存覆盖率；未知与明确零值分开。 |
+| `DESKTOP/src/core/requestContextEstimate.ts` | 从实际提交的消息、系统和 schema 估算上下文组成；保留请求/Build/模型/时间身份，视觉 token 明确未估算。 |
+| `DESKTOP/src/core/agent.ts` | 持久化 usage 覆盖信息及最近请求快照、绑定晚到回包的原目标、合并同库待写状态；维护普通输入的 Build 归属和辅助调用计量。 |
+| `DESKTOP/src/core/agentKernelRunner.ts` | 每个正式请求创建计量句柄，提交前采集实际上下文；收到累计或部分 usage 时合并，持久化正文和工具结果的 run_id。 |
+| `DESKTOP/src/providers/provider-events.ts`、`DESKTOP/src/core/agentKernelDiagnostics.ts`、`DESKTOP/src/llm/provider.ts` | 统一服务端 usage 字段与上报标记，按明确协议规范化输入口径；辅助文本请求通过可选回调交付实际 usage。 |
+| `DESKTOP/src/ui/index.html` | 上下文计量口径、缺失数据提示、目标/代次/刷新序号保护及面板可用高度约束；其余玻璃交互保持既有规则。 |
+| `DESKTOP/src/tests/providerUsageAccountingVerify.ts`、`providerUsageReportingVerify.ts` | 计量 reducer 与真实本地 HTTP 协议/回调回归。 |
+| `DESKTOP/scripts/test-context-usage-ownership.cjs`、`test-context-request-accounting.cjs`、`test-context-inspector-accounting.cjs` | 会话归属和延迟保存竞态、实际 Build 请求链路、前端显示与过期快照验证。 |
+| `archive/20260906-214235-context-inspector-accounting/` | 原始失败、修复前后源码、独立审阅、完整 Build/真实 Electron 测试及最终文件身份；`REPORT.md` 为本轮入口。 |
+
+## Build 内缓存性能（2026-09-06）
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/core/agent.ts` | `engineModel` 可接收调用方持有的 `BuildProviderCache`；按完整模型和连接配置摘要复用实例，配置失效及 forced provider 保留原优先级。Agent 不存全局或跨 Build 的 provider 缓存。 |
+| `DESKTOP/src/core/agentKernelRunner.ts` | 每个 Build 建立一个局部 provider 槽供主请求及压缩检查复用；同 deployment 重试保留原 system；只在有订阅者时准备完整请求诊断。 |
+| `DESKTOP/src/core/agentKernelDiagnostics.ts` | 提供 sink/日志开关的联合判定；显式诊断输出和 usage 计量契约保持。 |
+| `DESKTOP/src/tests/buildCacheDiagnosticsVerify.ts` | 实际 Build 中切换 sink/日志，检查不开诊断就不遍历请求，同时保留前缀和包括零值的 usage。 |
+| `DESKTOP/src/tests/buildCacheRetryVerify.ts` | Guide、同 deployment 重试、失败耗尽及真实能力 fallback 的前缀和权限回归。 |
+| `DESKTOP/src/tests/buildProviderReuseVerify.ts` | 缓存配置失效、跨 Build 隔离、真实 Chat/Responses 温度兼容重试及停滞取消恢复。 |
+| `archive/20260906-211514-build-cache-performance/` | 红绿回归、诊断成本基准、编译及真实 Agent/本地 HTTP 证据；`REPORT.md` 为验收入口。 |
+
+## 长对话持久化与实时状态（2026-09-06）
+
+最终 `95F391A6…` unpack 的 PC/HTTP 450 条历史窗口、真实回包延迟隔离、上下文计量和正常重启验收为 21/21；证据入口为 `archive/20260906-124619-user-flow-stability/remote-flow-queue/long-conversation/PACKAGED-HISTORY-REPORT.md`。此报告明确区分本地计量夹具与真实 APInebula Build 缓存观测。
+
+`DESKTOP/src/core/agentKernelRunner.ts` 在单次 Build 内保存请求专用任务快照，系统提示从首轮起保持完整；`ToolProvisionSession` 追加已获准的原生工具 schema，避免重排已有序列。`contextCacheHitStressVerify.ts` 验证完整首轮前缀与历史追加，供应商真实命中另由归档中的实际 Build 调用记录证明，不能以 fixture usage 代替。
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/core/agent.ts` | 会话条目的可选 `providerUsage` 版本化快照保存实际累计和末次计量；加载、切换、所有者镜像与归档沿用会话归属，不用本地 token 估计补造历史计费。 |
+| `DESKTOP/src/providers/provider-events.ts` | 统一解析 Responses/Chat 及兼容 usage 的缓存读写字段，区分标准输入明细、兼容别名与明确零值。 |
+| `DESKTOP/src/ui/index.html` | 历史分页、目标状态与上下文窗口刷新使用目标和加载代次校验，过期回包不能写入当前会话。 |
+| `DESKTOP/scripts/test-provider-usage-persistence.cjs` | 真实 Agent 的冷加载、同名跨工作区、分支/回退、镜像和归档计量回归。 |
+| `DESKTOP/scripts/test-long-conversation-ui-ordering.cjs` | 真实界面函数与受控晚回包的顺序、目标和缓存隔离回归。 |
+| `DESKTOP/scripts/test-conversation-history-window.cjs` | 实际 Agent/Kernel、运行池、client/host、IPC 与认证 HTTP 的窗口传递、游标、实时消息和停止缓存保护回归。 |
+| `DESKTOP/scripts/test-flow-start-cancellation.cjs` | 实际 main 命令与 utility pool 停止保护，复现并验证 Flow 预启动时停止/继续队列的交接竞态。 |
+| `archive/20260906-124619-user-flow-stability/remote-flow-queue/long-conversation/` | 首轮失败、源码回归、真实 APInebula usage 与专项验收计划；测试数据和用户生产状态隔离。 |
+
+## PC 弹窗 4px 与 80ms 参数边界（2026-09-06）
+
+当前三类 list 菜单使用 `--liquid-list-popup-radius: 25px` 统一外框和 clip 圆角。`pc-list-radius/` 保存 CSS 专项差异及暗亮主题的实际 computed style 比对，动画 JavaScript 不因圆角调整变化。
+
+`pc-direction-radius-final-checks/` 保存最终 95F391A6 unpack 的菜单锚定/圆角、可信鼠标受限外拉、受控有向材质与 80ms 时序证据。材料像素夹具会隔离颜色以测量轮廓，不能当作普通用户界面截图；完整菜单截图单独保留。`FINAL-CONTEXT-RADIUS-REPORT.md` 汇总新包身份、已验收范围和仍未解决的缓存/旧无响应问题。
+
+最新方向反馈由 `setLiquidPopupOutset` 将原始 dx/dy 映射为四侧系数，既有 `--liquid-popup-outset` 单一长度继续负责限幅和回弹。原生 popover backdrop 与普通弹窗材料层沿用同一侧向尺寸/椭圆角公式；根容器与文字不参与扩大。`pc-directional-pull/` 保存旧对称扩展失败、新方向通过和受限源码差异。
+
+历史窗口由 `main.ts` 选择当前会话的实际 owner，`conversationKernel.ts`、Electron/WSL runtime pool、client、protocol 和 host 逐层传递可选 `{window,before}` 至 `Agent.getConversationSnapshot`。返回绝对游标，main 不再次切片；历史页不替换运行池的最新状态缓存。`server.ts` 的认证移动端历史读取复用相同 owner，独立 server 保留原本直接 Agent 路径。
+
+`DESKTOP/src/ui/index.html` 中 `LIQUID_POPUP_MAX_EDGE_JITTER_PX` 是 PC 弹窗统一的边缘形变预算，当前为 4 CSS px。按压沿用该预算的 0.4 比例，外拉通过原有材料扩展层使用完整预算。原有 PC 长按拖动入口统一改为 80ms 激活；色块轨道、选择提交、移动动画时长、CSS 与布局不变。`DESKTOP/src/tests/pcGlassMigrationVerify.ts` 执行真实弹窗函数，检查不同尺寸、方向、按压与清理后的边界；`archive/20260906-124619-user-flow-stability/remote-flow-queue/pc-popup-4px/` 保存旧值失败、新值通过、源码差异和打包验证。实际 Electron 采样继续保存在相邻 `pc-popup-anchor/` 目录。此前 8px、4px/300ms 文档与包作为历史证据保留。
+
+## 共同会话命令与双端队列（2026-09-06，验收进行中）
+
+PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进入同一个会话命令入口。可执行队列、Flow、持久化历史由同一目标的运行所有者协调；两端队列面板消费权威快照，不能创建第二份会自行执行的队列。相同文字依靠不同 ID 区分，已接受请求不会因错误被自动重放，接受前失败则保留条目并暂停。
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/core/conversationCommandState.ts` | 按工作区与会话持久化可见模式、输入模式和队列暂停策略，暂存后替换，写入失败保留旧状态。 |
+| `DESKTOP/src/core/conversationKernel.ts` | 管理目标运行、稳定 ID 队列、实际接受边界、Flow 外部运行租用和归档生命周期。 |
+| `DESKTOP/src/core/conversationListEvent.ts` | 构造工作区范围的会话目录通知；事件不强制接收端切换当前会话。 |
+| `DESKTOP/src/main.ts` / `server.ts` / `preload.ts` | 将 IPC 与 HTTP 的发送、模式、队列及历史操作接入共同命令；发布会话状态和工作区目录变化。 |
+| `DESKTOP/src/core/agent.ts` / `types.ts` | 区分普通消息和 Guide 身份，保留队列元数据与持久化历史，并携带完整跨端事件。 |
+| `DESKTOP/src/core/electronUtilityRuntimePool.ts` / `wslAgentRuntimePool.ts` | 对已有或尚未运行的目标提供相同队列管理入口，与主进程持有的 Flow 运行协调。 |
+| `DESKTOP/src/ui/index.html` | 显示权威队列，按目标与条目 ID 处理按钮、编辑和拖动；后台更新不改变用户当前选择。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` | 队列显示、完整 ID 重排、按会话保留编辑草稿和实际接受后清理输入。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` | 连接本地与远程界面回调，保持模式、附件和编辑目标归属。 |
+| `android/app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt` / `data/MobileApiClient.kt` | 冻结提交参数，传输图文消息，按目标代次消费 HTTP/SSE，等待真实接受结果；不自动重放结果不明的修改请求。 |
+| `archive/20260906-124619-user-flow-stability/remote-flow-queue/` | 保存旧版本失败、修复回归、构建身份、实际配对操作和未完成的无响应调查；历史候选包不等同最终交付。 |
+
+完整架构边界见[共同命令说明](archive/20260906-124619-user-flow-stability/remote-flow-queue/architecture-doc-fragment.md)。本节的最终包与设备验收尚在执行，不能沿用下一节此前阶段的通过结论。
+
+## 双端响应生命周期与桌面增量渲染（2026-09-06，实包校准）
+
+本轮修复集中于已复现的模型读取、停止和列表更新问题。PC 用增量 SSE 解码器保持跨字节块的换行与 UTF-8 状态；模型 POST 独立解除 Undici 的隐式 300 秒响应头/正文期限，流式与 JSON 请求均保留既有连接、代理及显式预算。JSON 取消控制覆盖完整正文，协议终止、用户取消和提前退出都清理底层响应体。Android 用一个结构化 HTTP 交换连接协程与整个 OkHttp 调用生命周期，显式流终止不再依赖 EOF。双方标题仍先成功持久化再开始正式响应，移除独立 15 秒期限并绑定父运行取消。
+
+桌面渲染以内容变化决定 DOM 更新，缓存完整文本、语言和运行/终态上下文；等长思考文本、终态 Markdown、Guide 与图片节点得到正确更新或复用。隔离源码 Electron 的 500 条静态会话、30 次刷新对照记录了 45,000 → 0 次无谓 DOM 写入，单次均值约 11.13 → 2.95 ms；这不是最终包性能数据，也不代表所有场景都获得相同比例提速。主题、玻璃、轨道、8px 光学预算和鼠标无泛光保持原状。
+
+最终 PC 完整发布测试退出 0；本轮 unpack 通过九项实际 GUI 流程，以及指定 `APInebula / gpt-5.6-sol` 的两轮 CLI、两轮 GUI 真实对话。最终 Android APK 通过 315 项 JVM、56 项设备测试和九项安装包导航，模拟器两轮真实 Sol 对话及进程重启恢复通过。供应商 503 后重启、恢复通道并重发也已实测，首输入没有重复提交。包身份、渲染与启动性能、失败记录和未覆盖环境统一见[本轮验收报告](archive/20260906-124619-user-flow-stability/report.md)；本轮未生成或安装 MSI。
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/providers/provider-events.ts` | 共享 `ProviderSseDecoder`、可取消读取与模型 POST 专用 dispatcher；保留已选择的直接连接/代理委托，仅覆盖其响应头与正文隐式期限。 |
+| `DESKTOP/src/providers/chat-completions.adapter.ts` / `responses.adapter.ts` | 消费完整 SSE 事件、识别协议终态，并在正常结束、取消或消费者提前返回时清理 reader。 |
+| `DESKTOP/src/llm/provider.ts` | 模型请求 facade、GitHub Models 流及 JSON 生命周期；正文读取完成后才释放父取消监听和显式请求计时器。 |
+| `DESKTOP/src/core/agent.ts` | 首标题直接绑定父 signal、可取消退避等待；保留冻结部署、五次尝试、持久化首消息及正式响应硬门禁。 |
+| `DESKTOP/src/ui/index.html` | 会话行按内容更新、工作事件精确渲染状态缓存、终态 Markdown 恢复及未变 Guide/图片节点复用。 |
+| `DESKTOP/src/tests/providerStreamLifecycleVerify.ts` | 分包边界、Unicode、多行 SSE、明确终止、提前退出及取消的生产 adapter/本地 socket 回归。 |
+| `DESKTOP/src/tests/providerTransportDeadlineVerify.ts` / `providerJsonLifecycleVerify.ts` | 模型 POST 的底层期限与完整 JSON 生命周期回归，覆盖其他 fetch、代理及显式预算边界；由既有 `providerAdapterV2Verify.ts` 接入发布测试。 |
+| `DESKTOP/scripts/test-conversation-title-lifecycle.cjs` | 实际 Agent/LLMProvider 的健康 16 秒标题、在途停止、可取消退避、五次失败及首消息持久化检查；`providerTimeoutRecoveryVerify.ts` 调用构建后的入口，源码探测可在内存转译而不改 `dist`。 |
+| `DESKTOP/scripts/dev-renderer-stability.cjs` | 隔离 Electron 的 500 行更新、长历史流式内容、Guide/图片复用和弹窗清理检查；支持 `--exe` 指定真实 unpack，源码预览路径与包验证互斥。 |
+| `android/app/src/main/java/com/newmark/mobile/data/CancellableHttpExchange.kt` | 新增结构化 IO 交换，取消覆盖响应头、正文和后续调用注册间隙，关闭所属 OkHttp call。 |
+| `android/app/src/main/java/com/newmark/mobile/data/ApiClient.kt` | 复用交换生命周期，明确结束 Chat/Responses 流，保留 Responses 完成状态校验及既有网络配置。 |
+| `android/app/src/main/java/com/newmark/mobile/vm/FirstInputTitleRequest.kt` / `ChatViewModel.kt` | 标题作为服务运行的 suspend 子任务，使用普通 provider 策略；供应商失败只显示安全状态/错误码/固定原因，本地保存失败单独报告。完整快照保存成功后才发布标题并允许后续正式响应。 |
+| `android/app/src/main/java/com/newmark/mobile/data/ConversationStore.kt` | 本地活跃会话与归档读取；活跃会话保存返回显式 Result，同目录暂存、同步并替换快照，失败保留原文件，串行化同一 store 的写入。 |
+| `android/app/src/test/java/com/newmark/mobile/data/ConversationSnapshotWriteTest.kt` / `android/app/src/androidTest/java/com/newmark/mobile/data/ConversationSnapshotWriteDeviceTest.kt` | 受控真实文件写入、部分写入失败、不可用目录和取消回归；设备另验证 Android 替换已有快照与实际 ConversationStore 返回结果。 |
+| `android/app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt` | 桌面 SSE 连接使用相同可取消交换，保留重连间隔、连接代次、事件批处理和目标约束。 |
+| `android/app/src/test/java/com/newmark/mobile/data/ApiClientStreamLifecycleTest.kt` / `android/app/src/test/java/com/newmark/mobile/vm/FirstInputTitleRequestTest.kt` | 本地 socket 生命周期与标题行为 JVM 回归；标题用临时文件验证持久化先于模拟正式续行。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/data/ApiClientStreamLifecycleDeviceTest.kt` / `android/app/src/androidTest/java/com/newmark/mobile/vm/FirstInputTitleRequestDeviceTest.kt` | 在设备网络栈重复生产交换/标题辅助函数场景，不把辅助函数测试冒充完整 ViewModel 或真实供应商验收。 |
+| `archive/20260906-124619-user-flow-stability/desktop-network/` | 原始分包/终止失败、真实长静默期限及 JSON 探测、隔离编译、Node/Electron 局部回归与源码身份。 |
+| `archive/20260906-124619-user-flow-stability/desktop-render/` | 静态列表/内容复现及源码测量、10 项渲染场景、标题前后证据与 `TITLE-GATE-REPORT.md`；后续包测试不得沿用源码数字充当结果。 |
+| `archive/20260906-124619-user-flow-stability/android-network/` | 旧生产 API 的 socket/标题期限复现、修复范围与源码冻结身份；最终构建和设备结果由根任务归档。 |
+| `archive/20260906-124619-user-flow-stability/` | 本轮统一操作记录、修改前资料、完整构建日志、模拟器诊断和 unpack 实测证据；中间状态不能替代最终验收。 |
+| `DESKTOP/scripts/release-real-provider-stress.cjs` / `test-real-provider-stress-harness.cjs` | 隔离凭据与运行根的真实供应商 CLI/GUI 压测；按本次目标、新 runId 判断终止失败，保留错误类别与启动清理；受控夹具核验旧运行不干扰、错误即时退出与原成功标记。 |
+
+## 灰黑暗色主题与右栏渲染（2026-09-06）
+
+双端共享中性灰黑层次，覆盖普通文字、画布、编辑器、玻璃及独立启动/预览窗口；功能色、浅色主题、现有轨道和动画参数保留。Android 宽屏根层提供不透明主题底色，手动暗色时系统图标前景也跟随应用主题。右侧分页分离静态色块、共享移动玻璃和固定图标层，实体触控只由轨道手势拥有，辅助功能点击调用相同切换入口。
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/ui/index.html` | 灰黑语义色、玻璃 RGB、原生选择器、编辑器及功能面板底色。 |
+| `DESKTOP/src/ui/startup.html` / `DESKTOP/src/main.ts` | 独立启动页、原生窗口底色和独立预览文档的中性色。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/theme/NewmarkTheme.kt` | 中性主题 token 与 Material 容器，避免默认紫色表面染色。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/Sidebar.kt` / `ChatScreen.kt` / `MemoryLabScreen.kt` | 独立侧栏/聊天配色、执行栏与编辑器底色、普通图关系连线。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` | 宽屏透明预留槽下的主题画布、系统栏图标对手动主题的响应。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/RightSidebar.kt` | 静止分页色块、共享浮起玻璃、独立图标前景；折射仅采样载体底色，保留 alpha 与统一触控入口。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/RightSidebarRenderingTest.kt` | 真正硬件像素验证右栏载体、静止/长按/落地、图标和图标中心短按。 |
+| `archive/20260906-115315-neutral-dark-theme/` | 本轮源码快照、调色清单、原始失败、构建日志与双端画面对照；交付状态见 `report.md`。 |
+
+## 移动端触点、阻尼与对话浮块（2026-09-06）
+
+浮块的轨道位置与手指光源位置分离：在原手势处记录窗口坐标，在实际移动的玻璃内重新投影绘制，保留 66dp 泛光半径和形状裁剪。55ms 阻尼仅影响显示位置，原轨道、选项与重排目标继续由真实输入决定。释放时将显示位置交接给原有移动后落地动画。弹窗的玻璃与内容共享实际图层变换。
+
+本地与远程对话浮块显式从左上角测量超宽布局，消除 requiredWidth 的隐式居中偏移；28dp 横向扩展朝右呈现，2dp 抬起右移量落地归零。拖动位移使用同一事件坐标系内的前后点，并累计小步位移，避免行跟随手指后在松手时反向复位或误判为静止长按。287 项单元测试、25 项设备测试及九项最终 APK 导航检查通过，已复制 APK 并核验模拟器实际安装字节。交付状态见[本轮记录](archive/20260906-mobile-pointer-glow/report.md)。PC 源文件哈希与本轮开始时一致。
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidContact.kt` | 非消费式原始触点观察、窗口坐标状态、图层变换逆映射和释放后触点生命周期。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidDragFollower.kt` | 单协程拥有的短时阻尼、逐帧位置与速度、停止读回和取消清理。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidHoldGesture.kt` | 保留 300ms 阈值，统一接入触点；移动节点使用当前事件的 previousPosition 计算真实增量。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidGlass.kt` | 形状内触点泛光、浮块窗口坐标映射、按钮光学逆变换，以及弹窗内容和材质的共同弹性图层。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/ProviderSettingsCapsules.kt` | 横纵模型/供应商轨道接入触点和显示阻尼；保持既有扩边、选择与落地行为。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/Sidebar.kt` | 本地/远程对话与两组底部按钮的触点和阻尼；对话玻璃向右展开，点击与重排起终点不偏移。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/RightSidebar.kt`、`MemoryLabScreen.kt` | 分页浮块同样接入触点、阻尼和释放交接；图谱保留平移/缩放，同时参与弹窗按压反馈。 |
+| `android/app/src/test/java/com/newmark/mobile/ui/components/LiquidContactAndDampingTest.kt` | 真实点逆映射、触点生命周期、不同刷新率阻尼、无越界与方向变化的数值回归。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/PointerGlowRenderingTest.kt` | 横纵离轨手指、静止手指与移动浮块、快速拖动的实际光峰像素比较。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/ConversationLiftRenderingTest.kt` | 开启真实硬件绘制；验证已渲染基准、右侧包边像素、点击逐帧端点及连续小步重排；结束恢复测试绘制状态。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/ProviderGlassRenderingTest.kt`、`UtilityGlassRenderingTest.kt` | 等厚扩边、固定文字、弹窗内容共同变换、早释放、泛光裁剪及底部按钮导航时序回归。 |
+| `android/scripts/verify-utility-apk.py` | 对最终发行 APK 执行九项真实导航、进程连续性、页面内容及截图检查，仅作用于指定模拟器。 |
+| `android/isolated-release-mobile-pointer-20260906/` | 本轮独立 Release 构建输出，保留原发行目录。 |
+| `APK/Newmark-Agent-0.5.15-mobile-pointer-20260906.apk` | 当前移动端交付包，66,784,518 字节，版本 0.5.15 / 515；已复制到剪贴板。 |
+| `archive/20260906-mobile-pointer-glow/` | 原始快照、失败及被拒绝的截图证据、最终硬件绘制截图、源码/包身份、构建、测试和交付记录。 |
+
+## PC 8px 方向反馈与透明度调整（2026-09-06，已打包并安装）
+
+最新请求将 PC 光学弹性限定为 8px：按下立即内缩，原有 300ms 长按阈值触发色块移动时开始弹性恢复，之后受限外拉使单层真实磨砂面均匀向外扩展；拖动松手直接恢复。原内容和文字不缩放，色块轨道、目标和落地流程保留。弹窗独立 alpha 为共享偏好 alpha 的 0.82 倍，默认 0.5576；同时修复浅色通用样式误关闭命令弹窗磨砂的问题。
+
+最终完整发布测试返回 0，暗亮四组按压时序、六组方向材质、15 项手势和八次滚动像素对照通过；最终源与包内 UI 字节一致。MSI 已完成一次提升与原生安装，294 个载荷、20,982 个既有用户文件、产品身份及重启队列核验通过，隔离资料 GUI 和实际开始菜单激活分别通过。当前产品 `{BFEDA7BF-0B0E-4578-A8FA-31B57ACBE932}`、包 `{737E20AA-55E0-4190-86F5-4085DDED49F0}`，安装 ASAR 为 `F6E9E0D2AC3A79828D1BDEC288B6CE074F72ACAAC9B2506637A65125C29BE637`。已核验 MSI/ZIP 同步标准 `release/`，完整证据见[本轮记录](archive/20260905-232550-pc-8px-press-phases/report.md)。10px 中间安装、未安装的初版 8px 包及下方各次 MSI 身份均为历史构建。
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/ui/index.html` | 弹窗透明度与 8px 光学预算；原生菜单 backdrop 或同父级装饰面承担单层外扩磨砂，原文字、滚动和选项布局固定；负责释放、关闭及失焦时的光学清理。 |
+| `DESKTOP/src/tests/pcGlassMigrationVerify.ts` | 桌面光学预算、方向、单层磨砂及释放渲染契约。 |
+| `DESKTOP/scripts/dev-popup-direction-regression.cjs` | 暗亮三种弹窗真实外扩和内缩像素、外圈磨砂、滚动、重复拉动及取消清理验证。 |
+| `DESKTOP/scripts/dev-popup-press-timing.cjs` | 按下、长按拾起回弹、轨道内移动、边界外拉及快速再按压的可信输入、逐帧和真实轮廓检查；隔离测试窗口以排除桌面外来鼠标事件。 |
+| `DESKTOP/scripts/cdp-test-window-isolation.js` | 共享 Node 调试连接工具，验证自有测试进程身份后移动测试窗口；页面连接仍等待主界面就绪，保留真实渲染与生产事件处理，避免鼠标污染像素对照。 |
+| `DESKTOP/scripts/dev-liquid-gesture-regression.cjs` | 实际 Electron 点击、长按、端点和宽浮块位置测量，并记录 UI 字节身份。 |
+| `DESKTOP/scripts/dev-uniform-popup-visuals.cjs` | 等待设置真实内容就绪，再比较暗亮 14 阶段、文字几何和选项移动。 |
+| `DESKTOP/scripts/dev-popup-scroll-regression.cjs` | 独立目录输出、实际材质透明度对照及滚动像素稳定性检查。 |
+| `archive/20260905-232550-pc-8px-press-phases/` | 方向复现、材质原型、最终像素/交互证据、源码与 Android 范围核对、发布日志和安装后 GUI/开始菜单交付证据。 |
+| `archive/20260905-232550-pc-8px-press-phases-install/` | 本轮独立安装事务、完整载荷及用户文件、产品身份和重启队列核验。 |
+| `release-0.5.15-8px-press-phases-20260905/` | 本轮新建 MSI、ZIP 与对应 unpacked 载荷的输出目录。 |
+| `release/` | 已核验并完成安装的当前 MSI 与配套 ZIP；替换前的标准产物保存在本轮归档的 `previous-standard-assets/`。 |
+| `archive/20260905-214203-pc-10px-transparency*/` | 已被本次要求取代的 10px 构建与安装证据，保留其并发用户启动导致原始用户状态校验失败的完整记录。 |
+
+## PC 安装器与重启队列修复历史（2026-09-05，已完成，上方为最新构建）
+
+该次构建位于 `release-0.5.15-frosted-safe-20260905/`，曾同步标准 `release/`，包含均匀磨砂弹窗、全程色块移动及固定滚动视口绘制。该 MSI 曾实际安装至 Program Files：ProductCode `{9AA8281A-1835-4674-AA60-FE1D4034874A}`、PackageCode `{039EC3F2-B615-443F-951D-0B072EC4AB0D}`、版本 `0.5.15.0`，294 个载荷与包一致，20,965 个既有用户文件未被安装改写。该次清除 3 组 Newmark 重启任务并原样保留其他 15 组；普通用户 GUI 和无测试参数的真实开始菜单启动通过。以上为历史身份，当前交付以上方章节为准。
+
+首个中间 MSI 在后续审计中被发现仍受旧重启任务影响，已标记为被取代；最终提升曾被 Windows 取消，用户明确要求继续后，最终 worker 一次 MSI 事务完成并通过全路径核验。详细原因、原始失败与最终证据保存在[交付记录](archive/20260905-203600-msi-reboot-safe/report.md)。
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/scripts/install-windows-msi.ps1` | 共享已授权提升协调器、原生安装事务、真实进程退出确认、目标重启队列归属/清理/回读、载荷与用户状态核验。 |
+| `DESKTOP/scripts/patch-msi-project.cjs` | 为生产 MSI 目录表和两个检查返回值的安装动作补全声明；使用编码脚本，卸旧前停止相关产品进程，写入前清理目标队列。 |
+| `DESKTOP/scripts/test-install-pending-operations.ps1` | NT/历史路径前缀、严格目录边界、其他应用原始 pairs、并发变化及回读失败回归。 |
+| `DESKTOP/scripts/test-install-process-stop.ps1` | 真实隔离进程及错误场景，确认同目录进程退出、其他目录进程保留、残存时失败。 |
+| `DESKTOP/scripts/test-msi-authoring.cjs` | 生产形态模板编译、实际 MSI 表与原生格式化、缺失目录声明、新建/特殊字符路径及编码脚本执行检查。 |
+| `DESKTOP/scripts/test-install-windows-msi.ps1` / `test-install-update-msi.cjs` | 原有发布验证入口，已接入新增 pending、进程及原生作者回归。 |
+| `archive/20260905-195145-pc-frosted-msi/` | 完整应用发布检查、首个中间构建及 GUI 记录；该 MSI 因后续队列审计被取代。 |
+| `archive/20260905-203600-msi-reboot-safe/` | 最终重封装日志、仅一项载荷差异证明、包身份、最终 GUI/开始菜单检查、被拒绝中间包归档及交付记录。 |
+| `archive/20260905-203600-msi-reboot-safe-install/` | 根因诊断、回归、实际发行 MSI 表/旧安装根检查、最终安装及队列/文件/用户数据证据。 |
+| `release-0.5.15-frosted-safe-20260905/` | 最终 MSI、ZIP 及对应 unpacked 载荷，应用 ASAR 与完整发布检查通过的构建一致。 |
+
+## Android APK 再次交付（2026-09-05 19:49）
+
+`archive/20260905-194552-apk-package/` 保存本轮 `assembleRelease`/`lintVitalRelease` 日志、203 个输入文件哈希、签名/对齐/二进制 Manifest 检查、735 个 ZIP 条目校验及复制回执。`verify-content.py` 核对 DEX 修复标记和已知路径/令牌形态；`copy-apk.ps1` 核对源/副本哈希并写入、回读文件剪贴板。交付继续使用 `APK/Newmark-Agent-0.5.15-recovery-20260905.apk`，SHA-256 `A81F58BCC44814DD9B0DEE4EB6278B9056C97A9636BE62AFE9B2665740E32B63`。移动端源码和包内容未变，因此复用相同字节包的九项既有模拟器导航证据；本轮无新设备运行。
+
+## PC 材质与滚动装饰层（2026-09-05 后续源码变更）
+
+本轮只改 PC CSS 渲染，HTML 内容树和全部内联 JavaScript 与本轮前一致。弹窗使用主题中性半透明底色、可调磨砂和窄边；菜单活动色块不再切换玻璃。列表弹窗的边缘及触控光使用滚动视口自身绘制，绝对定位 Canvas/伪边框不再参与可见合成。这些界面字节已纳入顶部所列最终 MSI，安装状态以上方交付记录为准。
+
+| 路径 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/ui/index.html` | 共享材质 tokens、活动色块样式、滚动菜单背景/边缘绘制；DOM 和交互实现保持不变。 |
+| `DESKTOP/scripts/dev-uniform-popup-visuals.cjs` | 隔离 Electron 真实设置、命令及模型菜单的暗亮 14 阶段截图、几何/内容/手势代码对照。 |
+| `DESKTOP/scripts/dev-popup-scroll-regression.cjs` | 30 项滚动菜单，可信滚轮事件、逐像素固定外壳验证、均匀底色/背景透射/可见触控光检查。 |
+| `DESKTOP/scripts/dev-liquid-renderer-performance-smoke.cjs` | 独立控件 WebGL 合成和资源预算检查；保留原生 pointer capture，固定可见的 CDP 测量视口。 |
+| `DESKTOP/src/tests/pcGlassMigrationVerify.ts` | 新磨砂/色块材质契约及既有轨道、裁剪、5px 边缘约束。 |
+| `archive/20260905-182712-pc-uniform-frosted/` | 原始 CSS、文档快照、滚动复现与修复记录、构建及测试日志。 |
+| `archive/20260905-182710-uniform-popup-visuals/` | 实际 Electron 暗亮主题前后 PNG 和几何、材质、时序采样 JSON。 |
+
+验证结论及范围以[绘制修复记录](archive/20260905-182712-pc-uniform-frosted/report.md)为准。
+
+## 当前修复状态与文件职责（2026-09-05）
+
+项目目标是让桌面、CLI/TUI 和原生 Android 共享可持续的会话与工作区体验。本轮保留既有并行工作，集中修复液态玻璃的形状、位置、裁剪、手势生命周期及同版本 Windows 安装。最终状态与产物身份以[本轮记录](archive/20260905-171101-glass-recovery/recovery-report.md)为准；下方旧版本完成勾选只代表历史记录。
+
+当前验收已完成：Android 281 单测、14 设备绘制及九项最终 APK 导航通过；PC 15 项实际 Electron 交互及适用发布检查通过（WSL 环境不可用，记录跳过）。MSI 一次管理员事务安装成功，292 文件/产品身份/20,956 用户状态文件/CLI 与普通用户 GUI 均核验通过，实际开始菜单启动正确程序。最终安装记录见 `archive/20260905-windows-recovery-install/VERIFIED-INSTALL.md`。
+
+| 路径 | 本轮构造与作用 |
+| --- | --- |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidGlass.kt` | 共享光学层、66dp 内部触控光源、独立内容绘制、按压生命周期与取消分支；采样浮块限定 CornerBasedShape。 |
+| `android/app/src/main/java/com/kyant/backdrop/DrawBackdropModifier.kt` | 底层 backdrop/surface/front 轮廓裁剪及绘制失效，修复 surface pass 越界。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/ProviderSettingsCapsules.kt` | 横纵轨道实际等厚 12dp 外扩、轴互斥及到达后落地。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/Sidebar.kt` | 左栏三按钮及本地/远程会话浮块、静态同级 backdrop 记录、移动完成后导航。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/RightSidebar.kt` / `MemoryLabScreen.kt` | 分页选项移动、提前松手/取消的任务所有权；右栏按实际按钮边界约束拖动。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/UtilityGlassRenderingTest.kt` / `ProviderGlassRenderingTest.kt` | 设备上的动画帧、实际位置、内容像素、光效裁剪、导航次数与取消验证。 |
+| `android/app/src/test/java/com/newmark/mobile/ui/components/LiquidGlassMotionRegressionTest.kt` | 等厚外扩几何和实际协程动画衔接回归。 |
+| `android/scripts/verify-utility-apk.py` | 在最终 Release APK 上安装并以实际输入检查三按钮、方向/主题、进程存活和目标页面，保存截图/XML/日志。 |
+| `DESKTOP/src/ui/index.html` | 轨道/弹窗事件归属、选中色块连续移动、实际像素变形上限及鼠标/触控光源分流。 |
+| `DESKTOP/scripts/dev-liquid-gesture-regression.cjs` | 真实 Electron 输入与逐帧矩形/像素回归；800px 宽浮块仍受 5px 边缘上限约束。 |
+| `DESKTOP/scripts/install-windows-msi.ps1` | 准备 MSI 身份/管理映像、一次提升后的原生 API 事务、状态监控及安装逐文件验证。 |
+| `DESKTOP/scripts/install-current-msi.ps1` / `DESKTOP/src/core/installUpdate.ts` | 手动、GUI、CLI 共用安装入口；旧根目录安装脚本转发至此。 |
+| `DESKTOP/scripts/test-install-windows-msi.ps1` / `test-install-update-msi.cjs` | 路径转义、错误分类/重试、事务证据及内置安装调用回归。 |
+| `archive/20260905-171101-glass-recovery/` | 原包崩溃、需求矩阵、移动设备/构建结果及文档旧版归档。 |
+| `archive/20260905-172834-desktop-gesture-audit/` / `archive/20260905-installer-helper-preparation/` | PC 真实交互前后证据与安装器诊断/旧入口归档。 |
+| `release-0.5.15-recovery-20260905/` / `APK/` | 本轮隔离发布结果与已核验的 Android 交付副本；以修复记录中的最终哈希确认当前包。 |
+
+## dev-0.5.14 上一发行版状态
 
 当前统一版本为 Desktop/root `0.5.14`、Android `versionName=0.5.14` / `versionCode=514`。本轮修改覆盖：`DESKTOP/src/main.ts` 的退出生命周期和桌面队列 IPC，`DESKTOP/scripts/patch-msi-project.cjs` 的安装目录进程/待删除保护，`DESKTOP/src/core/agent.ts` 与 `DESKTOP/src/ui/index.html` 的首标题、Guide 和 PC 队列时间线，`DESKTOP/src/tools/` 的 provision-only `web_catch`，以及 Android `LocalTool*`、`NewmarkApp.kt` 的本地工具与跨端投影；`ChatScreen.kt` 既有的中点阈值避让/落点实现由全量契约继续覆盖。`DESKTOP/src/llm/provider.ts`、`providers/provider-events.ts`、`tools/index.ts` 新增统一的 `undici.ProxyAgent` 模型/网页代理链路；Android `LocalAgentForegroundService.kt` 接受 `TRANSPORT_VPN`、不依赖 VALIDATED 回调快照，并使用 API 29+ 低延迟 Wi-Fi 锁。`archive/` 保存每轮诊断、验证和发行证据；历史 `dev-0.5.13` 交付物保持原样，不冒充 0.5.14 候选。
 
@@ -3657,3 +3934,29 @@ r3 门禁为 Android 68 suites / 264 tests / 0 failures/errors/skips，`lintVita
 Windows MSI 经过打包后的 CLI smoke、context-compress CLI stress 和 console wrapper boundary stress；首次非提升 `/qn` 因无凭据提升返回 1603，UAC 提升安装返回 0。安装后 `C:\Program Files\Newmark Agent` 内的 `app.asar`、`Newmark.exe`、`Newmark Console Runtime.exe`、`Newmark.bat` 与本次 `win-unpacked` 哈希一致，注册表 `Newmark Agent 0.5.13.0` 的 ProductCode 为 `{B0B20387-74F3-413E-8550-4FDA74735E0B}`。
 
 API 35 `emulator-5554` 冷启动恢复在线后完成 `adb install -r`。显式启动后 2 秒和 7 秒均为 `MainActivity` topResumed，PID 3173 不变，目标进程 FATAL/ANR 为 0。模拟器证据不外推到故障真机后台、真实 provider、配对 PC bridge、长时运行或逐帧视觉反馈。本轮没有打包 MSI。
+
+### 20260905-141515 移动端长按释放动画修复
+
+修复移动端玻璃浮块在长按拖动松手后先在原地收缩、再让静态色块闪现的问题。Provider 横向协议轨道现在先把释放帧同步到 Animatable、清除 dragging 渲染优先级，再移动到释放浮块中心对应的选项，完成移动后才进入 landing 收缩；Memory Lab 分页和右侧栏分页只有在确实发生拖动时才同步拖动坐标，普通长按释放继续使用当前动画帧。玻璃光学画布保持内部裁剪与均匀外扩。
+
+验证：Android :app:testDebugUnitTest 通过（275/275）；:app:assembleRelease 通过。APK：
+elease-0.5.15/Newmark-Agent-0.5.15-android.apk，66,768,134 bytes，SHA-256 ECED37CDC80E1DAB5541F3744225A43A250572E30DEA2F197FF8E3A1408D0A09。
+
+### 20260905-143414 PC GUI 液态玻璃绘制稳定性与视觉复核
+
+本轮全面复核 PC 液态玻璃链路：CSS 弹窗承载玻璃、WebGL2 SDF 折射浮块、独立 2D 展示画布、弹窗交互光源与 pointermove 调度。修复浮块展示画布在 WebGL 折射后使用整幅 fillRect 绘制泛光导致透明画布外出现方形光晕的风险：现在折射与泛光统一使用圆角路径裁剪。修复弹窗光源在高频 pointermove 中同步写 CSS 的抖动风险：位置与透明度先进入待处理状态，每帧合并一次，再更新 CSS 与 2D 光学画布。
+
+Electron 实测：localhost:47890 GUI 可启动，模型菜单可打开，弹窗折射边缘/高光/阴影/色块层级正常。验证：
+pm run typecheck、
+pm run build、
+ode dist/tests/pcGlassMigrationVerify.js、
+pm run test:liquid-renderer-calls、
+pm run test:liquid-renderer-electron 全部通过。渲染器测量保持单 WebGL context、2 次 shader 编译、1 次 program link、200 次 draws；Electron 冒烟 p95 pointer-up 到命令完成约 510ms，未发现绘制错误。
+
+### 20260905-144650 PC 长按选项飞行与文字稳定性修复
+
+`DESKTOP/src/ui/index.html` 的 `wireDirectLiquidMenuInteractionsV2` 现按 selected source → 长按目标飞行 → 目标处持续轨道拖动 → 最终选项飞行 → 提交收缩的顺序执行。长按飞行完成后拖动基准保持落点，避免首个 pointermove 跳回原选中行。carrier block 在飞行/拖动期间启用厚边缘、折射、高光、阴影和内部圆角裁剪泛光，静止时恢复纯色块。direct option 节点同时锁定 `transform:none`、`scale:1`、`filter:none`，文字和图标不再变形。契约测试同步覆盖上述状态与样式。
+
+### 20260905-145603 移动端暗色竖屏左边栏亮边修复
+
+定位确认亮边来自 `CompactMainLayout` 的 `ModalDrawerSheet`：全高矩形抽屉把默认 Kyant 外沿高光绘制在整块左栏边界，暗色背景下形成异常亮框。`liquidGlassModifier` 新增 `edgeHighlight` 开关，竖屏抽屉传入 `false`，关闭整面 carrier 的外沿高光，同时保留磨砂、折射以及内部按钮/浮块的独立玻璃边缘和点击泛光。Android `:app:testDebugUnitTest` 全量通过。

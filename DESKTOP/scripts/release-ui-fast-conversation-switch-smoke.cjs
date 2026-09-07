@@ -239,6 +239,17 @@ function startMockServer() {
       }
 
       if (messagesText.includes(markerErrorPrompt)) {
+        // A new conversation must persist its independent title before its
+        // formal request can exercise the intended 401 rendering/recovery path.
+        // Injecting 401 into the title itself tests a different hard gate.
+        const titleRequest = !parsed.stream && (parsed.messages || []).some(message =>
+          message.role === 'system' && String(message.content || '').includes('You are a conversation title generator.'));
+        if (titleRequest) {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ choices: [{ message: { content: 'Authentication error visibility' } }] }));
+          log('immediate-error fixture title accepted; formal request still returns 401');
+          return;
+        }
         res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ error: { code: '', message: markerErrorReply, type: 'new_api_error' } }));
         return;
@@ -511,9 +522,17 @@ async function runUiCheck(root) {
     })()`, 30000);
     await waitFor(cdp, `(() => {
       const body = document.querySelector('#chat-area')?.innerText || '';
-      return String(activeConversationId() || '') === ${jsString(convError)}
+      const ok = String(activeConversationId() || '') === ${jsString(convError)}
         && body.includes(${jsString(markerErrorPrompt)})
         && body.includes(${jsString(markerErrorReply)});
+      if (!ok) window.__fastSwitchDebug = {
+        label: 'immediate new conversation 401 remains visible',
+        activeId: activeConversationId(), expectedId: ${jsString(convError)},
+        hasPrompt: body.includes(${jsString(markerErrorPrompt)}),
+        hasError: body.includes(${jsString(markerErrorReply)}),
+        chatTail: body.slice(-1800), sendInFlight: !!window.state?._sendInFlight
+      };
+      return ok;
     })()`, 45000, 'immediate new conversation 401 remains visible');
     await assertErroredConversationPersisted(smokeWorkspace.path, convError, markerErrorPrompt, markerErrorReply, 'immediate new conversation 401');
     const activeAfterError = JSON.parse(fs.readFileSync(path.join(smokeWorkspace.path, 'conversations', 'state.json'), 'utf8')).activeConversationId;

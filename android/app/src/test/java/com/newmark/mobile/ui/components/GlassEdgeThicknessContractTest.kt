@@ -22,8 +22,15 @@ class GlassEdgeThicknessContractTest {
         assertTrue(liquid.contains("width = 1.5.dp"))
         assertTrue(liquid.contains("refractionHeight = 9.dp"))
         assertTrue(liquid.contains("chromaticAberration = true"))
+        val providerRail = File(root, "components/ProviderSettingsCapsules.kt").readText()
+        assertTrue(providerRail.contains("ProviderRailInteractionGlassEdge"))
+        assertTrue(providerRail.contains("ProviderRailInteractionGlassEdge = MobileInteractionGlassEdge + 2.dp"))
+        assertTrue(providerRail.split("refractionHeight = ProviderRailInteractionGlassEdge").size - 1 == 2)
         explicitConsumers.forEach { source ->
-            assertTrue(source.contains("refractionHeight = 5.dp"))
+            assertTrue(
+                source.contains("refractionHeight = MobileInteractionGlassEdge") ||
+                    source.contains("refractionHeight = 5.dp"),
+            )
             assertFalse(source.contains("refractionHeight = 4.dp"))
         }
     }

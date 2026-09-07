@@ -16,6 +16,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -94,12 +95,15 @@ import com.newmark.mobile.data.normalizeMobileProviderProtocol
 import com.newmark.mobile.ui.components.NewmarkShapeLarge
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
-import com.newmark.mobile.ui.components.liquidGlassModifier
+import com.newmark.mobile.ui.components.rememberLiquidPopupExit
+import com.newmark.mobile.ui.components.liquidPopupExit
+import com.newmark.mobile.ui.components.liquidPopupShell
 import com.newmark.mobile.ui.components.glassButtonSurface
 import com.newmark.mobile.ui.components.GlassButtonCanvas
 import com.newmark.mobile.ui.components.LiquidGlassSwitch
 import com.newmark.mobile.ui.components.DialogBackdropBlur
 import com.newmark.mobile.ui.components.MobilePopupShape
+import com.newmark.mobile.ui.components.MobileInteractionGlassEdge
 import com.newmark.mobile.ui.components.ProviderCapsuleField
 import com.newmark.mobile.ui.components.ProviderCapsuleAction
 import com.newmark.mobile.ui.components.ProviderCapsuleRow
@@ -363,27 +367,73 @@ private fun CapabilitySettingsPage() {
             .onFailure { runCatching { backgroundNetworkSettingsLauncher.launch(appDetails) } }
     }
     if (confirmHighPrivilege) {
-        AlertDialog(
-            onDismissRequest = { confirmHighPrivilege = false },
-            title = { Text("开启高权限模式") },
-            text = { Text("你需要知道自己在做什么。高权限指令可能修改或删除设备数据，后果自负。") },
-            confirmButton = {
-                TextButton(modifier = Modifier.glassButtonSurface(RoundedCornerShape(50), p.bgQuaternary), onClick = {
-                    confirmHighPrivilege = false
-                    rootAvailable = PrivilegedToolBridge.isRootAvailable()
-                    shizukuRunning = PrivilegedToolBridge.isShizukuRunning()
-                    shizukuGranted = PrivilegedToolBridge.isShizukuAvailable()
-                    if (!rootAvailable && !shizukuRunning) {
-                        android.widget.Toast.makeText(context, "请先启动 Shizuku，或授予设备 Root", android.widget.Toast.LENGTH_SHORT).show()
-                    } else {
-                        store.highPrivilegeEnabled = true
-                        high = true
-                        if (shizukuRunning && !shizukuGranted) PrivilegedToolBridge.requestShizukuPermission(504)
+        val confirmBackdrop = rememberLiquidBackdrop()
+        val confirmExit = rememberLiquidPopupExit { confirmHighPrivilege = false }
+        Dialog(onDismissRequest = confirmExit::requestClose) {
+            DialogBackdropBlur(42.dp)
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxSize().layerBackdrop(confirmBackdrop))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth(.88f)
+                        .liquidPopupExit(confirmExit)
+                        .liquidPopupShell(
+                            backdrop = confirmBackdrop,
+                            shape = MobilePopupShape,
+                            alpha = 0.18f,
+                            blurRadius = 12.dp,
+                            refractionHeight = MobileInteractionGlassEdge,
+                            refractionAmount = 22.dp,
+                            surfaceColor = p.bgSecondary,
+                        )
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("开启高权限模式", color = p.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "你需要知道自己在做什么。高权限指令可能修改或删除设备数据，后果自负。",
+                        color = p.textSecondary,
+                        fontSize = 12.sp,
+                    )
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(
+                            Modifier.weight(1f).height(40.dp)
+                                .background(p.bgQuaternary, RoundedCornerShape(50))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = confirmExit::requestClose,
+                                )
+                                .padding(horizontal = 12.dp),
+                            contentAlignment = Alignment.Center,
+                        ) { Text("退出", color = p.textSecondary, fontSize = 12.sp) }
+                        Box(
+                            Modifier.weight(1f).height(40.dp)
+                                .background(p.accentSoft, RoundedCornerShape(50))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = {
+                                        confirmExit.requestClose()
+                                        rootAvailable = PrivilegedToolBridge.isRootAvailable()
+                                        shizukuRunning = PrivilegedToolBridge.isShizukuRunning()
+                                        shizukuGranted = PrivilegedToolBridge.isShizukuAvailable()
+                                        if (!rootAvailable && !shizukuRunning) {
+                                            android.widget.Toast.makeText(context, "请先启动 Shizuku，或授予设备 Root", android.widget.Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            store.highPrivilegeEnabled = true
+                                            high = true
+                                            if (shizukuRunning && !shizukuGranted) PrivilegedToolBridge.requestShizukuPermission(504)
+                                        }
+                                    },
+                                )
+                                .padding(horizontal = 12.dp),
+                            contentAlignment = Alignment.Center,
+                        ) { Text("继续", color = p.accent, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
                     }
-                }) { Text("继续") }
-            },
-            dismissButton = { TextButton(modifier = Modifier.glassButtonSurface(RoundedCornerShape(50), p.bgQuaternary), onClick = { confirmHighPrivilege = false }) { Text("退出") } },
-        )
+                }
+            }
+        }
     }
     DisposableEffect(store) {
         val permissionListener = rikka.shizuku.Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
@@ -839,8 +889,9 @@ private fun ProvidersPage(
     }
     if (showDevicePicker) {
         val backdrop = rememberLiquidBackdrop()
+        val deviceExit = rememberLiquidPopupExit { showDevicePicker = false }
         Dialog(
-            onDismissRequest = { if (pullingHost.isBlank()) showDevicePicker = false },
+            onDismissRequest = { if (pullingHost.isBlank()) deviceExit.requestClose() },
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
             DialogBackdropBlur(42.dp)
@@ -848,14 +899,15 @@ private fun ProvidersPage(
                 Box(Modifier.fillMaxSize().layerBackdrop(backdrop))
                 Column(
                     Modifier.fillMaxWidth(.88f)
-                    .liquidGlassModifier(
+                    .liquidPopupExit(deviceExit)
+                    .liquidPopupShell(
                         backdrop = backdrop,
                         shape = MobilePopupShape,
-                        alpha = 0f,
-                        blurRadius = 8.dp,
-                        refractionHeight = 5.dp,
-                        refractionAmount = 8.dp,
-                        surfaceColor = Color.Transparent,
+                        alpha = 0.18f,
+                        blurRadius = 12.dp,
+                        refractionHeight = MobileInteractionGlassEdge,
+                        refractionAmount = 22.dp,
+                        surfaceColor = p.bgSecondary,
                     )
                     .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -874,7 +926,7 @@ private fun ProvidersPage(
                                 linkVm.providerCatalog(device).onSuccess { catalog ->
                                     val (providersAdded, modelsAdded) = vm.mergeProviderCatalog(catalog)
                                     pullStatus = "已从 ${device.displayName} 合并 API 配置：新增 $providersAdded 个供应商、$modelsAdded 个模型"
-                                    showDevicePicker = false
+                                    deviceExit.requestClose()
                                 }.onFailure {
                                     pullStatus = "拉取失败：${it.message ?: "未知错误"}"
                                 }

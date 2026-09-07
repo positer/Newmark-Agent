@@ -138,9 +138,7 @@ class GuideInsertionProbe extends Agent {
       batchCount: batchGuides.length,
       batchInputs: batchGuides.map(guide => guide.text),
     });
-    if (typeof input !== 'string' && input.clientMessageId) {
-      this.notifyAgentKernelUserMessageStart(text, input.clientMessageId);
-    }
+    this.notifyAgentKernelUserMessageStart(text, typeof input === 'string' ? undefined : input.clientMessageId || input.userMessageId);
     for (const guide of batchGuides) {
       this.recordGuideReceipt({
         clientMessageId: guide.clientMessageId,

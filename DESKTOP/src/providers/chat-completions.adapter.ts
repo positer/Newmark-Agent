@@ -9,8 +9,9 @@ import {
   SerializedProviderRequest,
   TokenEstimate,
 } from './provider-adapter';
-import { assembleCompatibleToolArguments, estimateRequestTokens, normalizeProviderUsage, defaultProviderTransport, providerErrorText, isContentPolicyBlocked, readProviderStreamChunk } from './provider-events';
+import { assembleCompatibleToolArguments, estimateRequestTokens, normalizeProviderUsage, defaultProviderTransport, providerErrorText, providerSemanticErrorText, isContentPolicyBlocked, readProviderStreamChunk, ProviderSseDecoder } from './provider-events';
 import { normalizeProviderHeaders } from './provider-headers';
+import { providerEndpoint, providerRequestHeaders } from './provider-request-compat';
 import { openAIToolName, openAIChatMessages } from './chat-messages';
 
 const CHAT_SYSTEM_ROLE = 'system';
@@ -70,13 +71,9 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
     // body，否则省略，避免严格 API 拒绝未知字段。
     if (request.sessionId) body.session_id = request.sessionId;
 
-    const base = request.baseUrl.replace(/\/+$/, '');
     return {
-      url: `${base}/chat/completions`,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${request.apiKey}`,
-      },
+      url: providerEndpoint(request.baseUrl, '/chat/completions'),
+      headers: providerRequestHeaders('openai', request.apiKey),
       body,
     };
   }
@@ -110,7 +107,7 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
     const contentType = response.headers.get('content-type') || '';
     if (!/text\/event-stream/i.test(contentType)) {
       const json = await response.json() as Record<string, unknown>;
-      yield* this.emitNonStreaming(json);
+      yield* this.emitNonStreaming(json, response.headers);
       return;
     }
 
@@ -121,9 +118,10 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
     }
 
     const decoder = new TextDecoder();
-    let buffer = '';
+    const sse = new ProviderSseDecoder();
     const toolCalls = new Map<number, { id: string; name: string; argumentParts: string[] }>();
     const toolCallOrder: number[] = [];
+    const toolIndexById = new Map<string, number>();
     let syntheticToolIndex = 0;
     let lastToolIndex = 0;
     let contentPolicyBlocked = false;
@@ -131,20 +129,16 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
     let emittedTool = false;
     let emittedReasoning = false;
     let explicitCompletion = false;
+    let finishReason = '';
+    let streamError = '';
     try {
-      while (true) {
+      stream: while (true) {
         const { done, value } = await readProviderStreamChunk(reader, signal);
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data: ')) continue;
-          const data = trimmed.slice(6);
+        for (const { data } of sse.push(decoder.decode(value, { stream: true }))) {
           if (data === '[DONE]') {
             explicitCompletion = true;
-            continue;
+            break stream;
           }
           let json: Record<string, unknown>;
           try { json = JSON.parse(data) as Record<string, unknown>; } catch { continue; }
@@ -152,10 +146,17 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
             const usage = this.normalizeUsage(json.usage);
             if (usage) yield { type: 'usage.updated', usage };
           }
+          if (json.error) {
+            streamError = this.responseError(json, response.headers);
+            break stream;
+          }
           if (isContentPolicyBlocked(json)) contentPolicyBlocked = true;
           const choices = Array.isArray(json.choices) ? json.choices : [];
           const choice = choices[0] as Record<string, unknown> | undefined;
-          if (choice?.finish_reason !== undefined && choice.finish_reason !== null) explicitCompletion = true;
+          if (typeof choice?.finish_reason === 'string' && choice.finish_reason.trim()) {
+            explicitCompletion = true;
+            finishReason = choice.finish_reason.trim();
+          }
           const delta = choice?.delta as Record<string, unknown> | undefined;
           if (!delta) continue;
           if (delta.reasoning_content) {
@@ -175,20 +176,29 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
             const tc = raw as Record<string, unknown>;
             const fn = tc.function && typeof tc.function === 'object' ? tc.function as Record<string, unknown> : {};
             const rawIndex = Number(tc.index);
-            const index = Number.isInteger(rawIndex) && rawIndex >= 0
-              ? rawIndex
-              : (tc.id ? syntheticToolIndex++ : lastToolIndex);
+            const id = String(tc.id || '');
+            while (toolCalls.has(syntheticToolIndex)) syntheticToolIndex++;
+            const index = toolIndexById.get(id) ?? (tc.index !== undefined && tc.index !== null && Number.isInteger(rawIndex) && rawIndex >= 0
+              ? rawIndex : (id ? syntheticToolIndex++ : lastToolIndex));
             lastToolIndex = index;
             let currentToolCall = toolCalls.get(index);
-            if (!currentToolCall && tc.id) {
+            if (!currentToolCall) {
               currentToolCall = {
-                id: String(tc.id || ''),
+                id,
                 name: openAIToolName(String(fn.name || '')),
                 argumentParts: [],
               };
               toolCalls.set(index, currentToolCall);
               toolCallOrder.push(index);
               yield { type: 'tool_call.started', id: currentToolCall.id, name: currentToolCall.name };
+            }
+            if (id) {
+              if (currentToolCall.id && currentToolCall.id !== id) {
+                streamError = '[LLM Error] Provider changed a streamed tool call identity.';
+                break stream;
+              }
+              currentToolCall.id = id;
+              toolIndexById.set(id, index);
             }
             if (currentToolCall && fn.name && !currentToolCall.name) currentToolCall.name = openAIToolName(String(fn.name));
             if (currentToolCall && fn.arguments !== undefined && fn.arguments !== null) {
@@ -201,35 +211,46 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
           }
         }
       }
+      if (streamError || !explicitCompletion || finishReason === 'length' || finishReason === 'content_filter') {
+        yield { type: 'response.failed', error: streamError || (finishReason === 'length'
+          ? '[LLM Error] Chat response was truncated by the output token limit.'
+          : finishReason === 'content_filter' ? '[Error] Content policy refusal (content_filter).'
+          : '[LLM Error] Chat stream ended before an explicit completion.') };
+        return;
+      }
       if (toolCallOrder.length) {
-        for (const index of toolCallOrder) {
-          const currentToolCall = toolCalls.get(index);
-          if (!currentToolCall) continue;
+        const completeCalls = toolCallOrder.map(index => toolCalls.get(index)!).map(call => ({ ...call, arguments: assembleCompatibleToolArguments(call.argumentParts, true) }));
+        if (completeCalls.some(call => !call.id || !call.name || !this.validToolArguments(call.arguments))) {
+          yield { type: 'response.failed', error: '[LLM Error] Provider returned incomplete or invalid tool-call arguments.' };
+          return;
+        }
+        for (const currentToolCall of completeCalls) {
           emittedTool = true;
           yield {
             type: 'tool_call.completed',
             id: currentToolCall.id,
             name: currentToolCall.name,
-            arguments: assembleCompatibleToolArguments(currentToolCall.argumentParts),
+            arguments: currentToolCall.arguments,
           };
         }
       } else if (!emittedContent && !emittedTool && contentPolicyBlocked) {
         yield { type: 'response.failed', error: '[Error] Content policy refusal (content_filter).' };
         return;
       }
-      if (!explicitCompletion && !emittedContent && !emittedTool && !emittedReasoning) {
-        yield { type: 'response.failed', error: '[LLM Error] Chat stream ended before an explicit completion.' };
-        return;
-      }
       yield { type: 'response.completed' };
     } finally {
+      try { await reader.cancel(); } catch {}
       reader.releaseLock();
     }
   }
 
-  private async *emitNonStreaming(json: Record<string, unknown>): AsyncIterable<NormalizedProviderEvent> {
+  private async *emitNonStreaming(json: Record<string, unknown>, headers?: Pick<Headers, 'get'>): AsyncIterable<NormalizedProviderEvent> {
     const usage = this.normalizeUsage(json.usage);
     if (usage) yield { type: 'usage.updated', usage };
+    if (json.error) {
+      yield { type: 'response.failed', error: this.responseError(json, headers) };
+      return;
+    }
     const choices = Array.isArray(json.choices) ? json.choices : [];
     const choice = choices[0] as Record<string, unknown> | undefined;
     const message = choice?.message && typeof choice.message === 'object' ? choice.message as Record<string, unknown> : {};
@@ -237,14 +258,27 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
     if (reasoning) yield { type: 'reasoning.summary.delta', delta: reasoning };
     const text = this.extractText(message.content) || this.extractText(choice?.text);
     if (text) yield { type: 'text.delta', delta: text };
+    if (choice?.finish_reason === 'length' || choice?.finish_reason === 'content_filter') {
+      yield { type: 'response.failed', error: choice.finish_reason === 'length'
+        ? '[LLM Error] Chat response was truncated by the output token limit.'
+        : '[Error] Content policy refusal (content_filter).' };
+      return;
+    }
     const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-    for (const raw of toolCalls) {
+    const completeCalls = toolCalls.map(raw => {
       const tc = raw as Record<string, unknown>;
       const fn = tc.function && typeof tc.function === 'object' ? tc.function as Record<string, unknown> : {};
       const id = String(tc.id || '');
       const name = openAIToolName(String(fn.name || ''));
+      const args = fn.arguments === undefined || fn.arguments === null ? '' : String(fn.arguments);
+      return { id, name, args };
+    });
+    if (completeCalls.some(call => !call.id || !call.name || !this.validToolArguments(call.args))) {
+      yield { type: 'response.failed', error: '[LLM Error] Provider returned incomplete or invalid tool-call arguments.' };
+      return;
+    }
+    for (const { id, name, args } of completeCalls) {
       yield { type: 'tool_call.started', id, name };
-      const args = String(fn.arguments || '{}');
       if (args && args !== '{}') yield { type: 'tool_call.arguments.delta', id, delta: args };
       yield { type: 'tool_call.completed', id, name, arguments: args };
     }
@@ -259,6 +293,16 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
     const normalized = normalizeProviderUsage(value);
     if (!normalized) return null;
     return normalized;
+  }
+
+  private validToolArguments(value: string): boolean {
+    try { const parsed = JSON.parse(value); return !!parsed && typeof parsed === 'object' && !Array.isArray(parsed); }
+    catch { return false; }
+  }
+
+  private responseError(json: Record<string, unknown>, headers?: Pick<Headers, 'get'>): string {
+    const error = json.error && typeof json.error === 'object' ? json.error as Record<string, unknown> : {};
+    return providerSemanticErrorText(error, this.extractText(error.message || error.type || json.error) || 'Provider returned an error response.', headers);
   }
 
   normalizeHeaders(headers: Headers | Record<string, string>): ProviderResponseMetadata {

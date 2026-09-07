@@ -1086,10 +1086,12 @@ function verifyExactlyOnceAndV3Persistence(): void {
       'hidden reasoning event types and marked content never enter state.json');
     assert.match(raw, /PRIVATE_COMMAND_BODY/, 'sanitized command arguments persist for the owning Build activity expansion');
     assert.match(raw, /PRIVATE_PATH/, 'sanitized path arguments persist for the owning Build activity expansion');
-    assert.doesNotMatch(raw, /PRIVATE_TOOL_RESULT_BODY|private-call-id/,
-      'legacy and current work runs never retain raw result bodies or private call IDs');
+    assert.doesNotMatch(raw, /PRIVATE_TOOL_RESULT_BODY/,
+      'legacy and current work runs never retain raw tool result bodies');
     assert.match(raw, /example_tool/, 'the public work run still records which tool was used');
     const runs = Object.values(stored.conversations).flatMap(item => item.workRuns || []);
+    assertPairedPublicToolIdentity(runs[0].events as AgentWorkEvent[], 'example_tool', 'private-call-id',
+      'persisted legacy work events retain exact call/result identity without exposing raw output');
     assert.equal(runs.length, 3);
     assert.equal(runs[0].status, 'completed');
     assert.equal(runs[0].expanded, true);
@@ -1110,6 +1112,8 @@ function verifyExactlyOnceAndV3Persistence(): void {
     restarted.setConversation('default');
     const snapshot = restarted.getConversationSnapshot('default');
     assert.equal(snapshot.workRuns.length, 3);
+    assertPairedPublicToolIdentity(snapshot.workRuns[0].events, 'example_tool', 'private-call-id',
+      'cold-loaded work events retain the same exact tool call/result pair');
     assert.equal(snapshot.workRuns[0].expanded, true, 'manual completed-fold preference survives reload');
     const sequences = snapshot.workRuns[0].events.map(event => Number(event.sequence || 0));
     assert.deepEqual(sequences, sequences.slice().sort((a, b) => a - b), 'persisted public events retain strict sequence order');
@@ -1196,6 +1200,14 @@ async function verifyStaleRuntimeCannotDowngradeAnotherRuntimeCompletion(): Prom
   }
 }
 
+function assertPairedPublicToolIdentity(events: AgentWorkEvent[], toolName: string, toolCallId: string, label: string): void {
+  const paired = events.filter(event => (event.type === 'tool_call' || event.type === 'tool_result') && event.toolCallId === toolCallId);
+  assert.deepEqual(paired.map(event => ({ type: event.type, toolName: event.toolName, toolCallId: event.toolCallId })), [
+    { type: 'tool_call', toolName, toolCallId },
+    { type: 'tool_result', toolName, toolCallId },
+  ], label);
+}
+
 function verifyStatefulHiddenReasoningAndLiveToolArgsSanitization(): void {
   const root = path.join(process.cwd(), 'test-tmp-hidden-stream-filter');
   fs.rmSync(root, { recursive: true, force: true });
@@ -1245,10 +1257,10 @@ function verifyStatefulHiddenReasoningAndLiveToolArgsSanitization(): void {
     assert.ok(liveToolEvents.every(event => event.toolName === 'example'), 'live work events expose the tool name');
     assert.equal(liveToolEvents[0].toolArgs, '{"command":"LIVE_PRIVATE_COMMAND","path":"LIVE_PRIVATE_PATH"}',
       'live tool calls retain sanitized expandable arguments inside their owning Build event');
-    assert.ok(liveToolEvents.every(event => event.toolCallId === undefined),
-      'live public work events still drop private call identifiers at the publication boundary');
-    assert.doesNotMatch(JSON.stringify(liveToolEvents), /LIVE_PRIVATE_RESULT|live-private-call-id/,
-      'live work events never publish raw tool results or private call IDs');
+    assertPairedPublicToolIdentity(liveToolEvents, 'example', 'live-private-call-id',
+      'live public work events preserve the exact identity pairing of tool call and result');
+    assert.doesNotMatch(JSON.stringify(liveToolEvents), /LIVE_PRIVATE_RESULT/,
+      'live work events never publish raw tool results');
     const liveSnapshot = agent.getConversationSnapshot('default');
     const snapshotToolEvents = liveSnapshot.workRuns.flatMap(run => run.events)
       .filter(event => event.type === 'tool_call' || event.type === 'tool_result');
@@ -1256,8 +1268,10 @@ function verifyStatefulHiddenReasoningAndLiveToolArgsSanitization(): void {
       'active conversation snapshots read the live work-run state instead of a stale persisted start event');
     assert.match(JSON.stringify(snapshotToolEvents), /LIVE_PRIVATE_COMMAND/,
       'active snapshots retain the sanitized tool detail used by the inline Build expansion');
-    assert.doesNotMatch(JSON.stringify(snapshotToolEvents), /LIVE_PRIVATE_RESULT|live-private-call-id/,
-      'active snapshots still exclude raw results and private call IDs');
+    assertPairedPublicToolIdentity(snapshotToolEvents, 'example', 'live-private-call-id',
+      'active snapshots preserve the same call/result identity as live events');
+    assert.doesNotMatch(JSON.stringify(snapshotToolEvents), /LIVE_PRIVATE_RESULT/,
+      'active snapshots still exclude raw results');
     const visibleArgs = agent.visibleToolArgs(JSON.stringify({
       api_key: 'secret-key',
       reasoning_content: 'TOP_SECRET_REASONING',
@@ -1274,13 +1288,17 @@ function verifyStatefulHiddenReasoningAndLiveToolArgsSanitization(): void {
     );
     assert.equal(agent.sanitizeAssistantOutput('<think>unfinished final secret'), '', 'unfinished hidden blocks stay hidden at completion');
     const serializedLive = JSON.stringify(live);
-    assert.doesNotMatch(serializedLive, /never expose|unfinished hidden|split reasoning secret|split thinking secret|reasoning_content|LIVE_PRIVATE_RESULT|live-private-call-id/i,
-      'stateful hidden reasoning, raw results, and private call IDs never cross the live public-work boundary');
+    assert.doesNotMatch(serializedLive, /never expose|unfinished hidden|split reasoning secret|split thinking secret|reasoning_content|LIVE_PRIVATE_RESULT/i,
+      'stateful hidden reasoning and raw results never cross the live public-work boundary');
     assert.match(serializedLive, /visible answer/);
     assert.match(serializedLive, /visible tail/);
     agent.finishConversationWorkRun('hidden-stream-run', 'interrupted');
     const stored = fs.readFileSync(path.join(workspace!.path, 'conversations', 'state.json'), 'utf8');
-    assert.doesNotMatch(stored, /never expose|unfinished hidden|split reasoning secret|split thinking secret|reasoning_content|LIVE_PRIVATE_RESULT|live-private-call-id/i);
+    assert.doesNotMatch(stored, /never expose|unfinished hidden|split reasoning secret|split thinking secret|reasoning_content|LIVE_PRIVATE_RESULT/i);
+    const storedState = JSON.parse(stored) as { conversations: Record<string, { workRuns?: Array<{ events?: AgentWorkEvent[] }> }> };
+    const storedEvents = Object.values(storedState.conversations).flatMap(conversation => conversation.workRuns || []).flatMap(run => run.events || []);
+    assertPairedPublicToolIdentity(storedEvents, 'example', 'live-private-call-id',
+      'interrupted work-run persistence keeps the sanitized call/result identity pair');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

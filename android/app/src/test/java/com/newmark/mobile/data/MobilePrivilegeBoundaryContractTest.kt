@@ -33,7 +33,8 @@ class MobilePrivilegeBoundaryContractTest {
         val settings = File("src/main/java/com/newmark/mobile/ui/SettingsScreen.kt").readText()
         assertTrue(settings.contains("你需要知道自己在做什么"))
         assertTrue(settings.contains("后果自负"))
-        assertTrue(settings.contains("Text(\"继续\")"))
-        assertTrue(settings.contains("Text(\"退出\")"))
+        assertTrue(settings.contains("Text(\"继续\""))
+        assertTrue(settings.contains("Text(\"退出\""))
+        assertTrue(settings.contains("liquidPopupShell("))
     }
 }

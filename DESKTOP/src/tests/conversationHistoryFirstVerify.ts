@@ -102,7 +102,7 @@ function main(): void {
   assert.match(newConversation, /state\.pendingConversationActivations\[activationKey\] = activationReady/,
     'new conversations expose a target-bound activation barrier without blocking immediate UI entry');
   const sendMessage = assignedFunctionSource(source, 'sendMessage');
-  assert.match(sendMessage, /pendingConversationActivation\(lockedTarget\)[\s\S]*await activationBeforeSend[\s\S]*api\.sendMessage\(requestMessage, lockedTarget\)/,
+  assert.match(sendMessage, /pendingConversationActivation\(lockedTarget\)[\s\S]*await activationBeforeSend[\s\S]*api\.sendMessage\(requestMessage, lockedTarget, \{[\s\S]*requestedMode: requestedMode, inputMode: effectiveInputMode/,
     'the locked send waits only for its own new-conversation activation before backend submission');
   const normalizeRun = functionSource(source, 'normalizedWorkRun');
   const applyWorkEvent = functionSource(source, 'applyAgentWorkEventToRun');

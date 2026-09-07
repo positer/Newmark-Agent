@@ -39,12 +39,20 @@ export interface GuideReceipt {
   attachments?: ConversationImageAttachment[];
 }
 
+/** Presence is separate from value: a reported zero is not missing usage. */
+export interface ProviderUsageReported {
+  input: boolean;
+  output: boolean;
+  cacheRead: boolean;
+  cacheWrite: boolean;
+}
+
 export interface StreamToken {
   type: 'text' | 'tool_call' | 'status' | 'usage';
   text: string;
   toolCall?: { id: string; name: string; arguments: string };
   reasoningContent?: string;
-  usage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; reported?: ProviderUsageReported };
 }
 
 export interface ConversationImageAttachment {
@@ -96,7 +104,7 @@ export interface ChatMessage {
 export interface AgentWorkEvent {
   id: string;
   conversationId: string;
-  type: 'start' | 'text' | 'response' | 'final_response' | 'tool_call' | 'tool_result' | 'thought' | 'thought_delta' | 'thought_result' | 'status' | 'done' | 'error' | 'queue_update' | 'guide' | 'conversation_title';
+  type: 'start' | 'text' | 'response' | 'final_response' | 'tool_call' | 'tool_result' | 'thought' | 'thought_delta' | 'thought_result' | 'status' | 'done' | 'error' | 'queue_update' | 'guide' | 'conversation_title' | 'conversation_list';
   content: string;
   mode: string;
   model: string;
@@ -106,8 +114,11 @@ export interface AgentWorkEvent {
   toolArgs?: string;
   queue?: { steering: string[]; followUp: string[] };
   /** Structured queue rows with stable kernel ids (mobile/PC queue unification export). */
-  queueItems?: Array<{ id: string; text: string; queueMode: string; requestedMode?: string; goalObjective?: string; runId?: string; createdAt: string }>;
+  queueItems?: Array<{ id: string; text: string; queueMode: string; requestedMode?: string; goalObjective?: string; runId?: string; createdAt: string; images?: Array<{ dataUrl: string; name?: string; type?: string }> }>;
   queuePaused?: boolean;
+  /** Authoritative metadata events bypass turn identity without changing selection. */
+  stateScope?: 'conversation' | 'workspace';
+  conversations?: Array<{ id: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned?: boolean; order?: number }>;
   workspaceId?: string;
   workspaceKey?: string;
   runtimeKey?: string;
@@ -117,6 +128,8 @@ export interface AgentWorkEvent {
   actorId?: string;
   generation?: number;
   sequence?: number;
+  /** Original delta identities retained across IPC batching for snapshot reconciliation. */
+  coalescedDeltas?: Array<{ id: string; sequence?: number; content: string; timestamp: string }>;
   status?: GuideReceiptStatus | ConversationWorkRunStatus | 'stopping' | 'force_restarting';
   guide?: GuideReceipt;
   displayImage?: DisplayImageAttachment;

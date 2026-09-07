@@ -6,6 +6,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { extractProviderUsage } from '../core/agentKernelDiagnostics';
+import { providerEndpoint, providerRequestHeaders } from '../providers/provider-request-compat';
+import { normalizeProviderHeaders } from '../providers/provider-headers';
 import {
   openAIToolName as normalizeOpenAIToolName,
   stringifyContent as serializeContentValue,
@@ -23,11 +25,10 @@ import {
   ProviderTransport,
   SerializedProviderRequest,
   TransportResponse,
-  assembleCompatibleToolArguments,
-  readProviderStreamChunk,
+  providerStreamingDispatcher,
   setDefaultProviderDispatcher,
 } from '../providers';
-import { ProxyAgent } from 'undici';
+import { Dispatcher, ProxyAgent } from 'undici';
 
 export interface IntelligenceConfig {
   temperature: number;
@@ -213,15 +214,17 @@ export class LLMProvider {
     return this.nodeProxyAgent;
   }
 
-  private async providerFetch(input: string | URL | Request, init: RequestInit = {}): Promise<Response> {
-    const dispatcher = this.resolveProxyDispatcher();
+  private async providerFetch(input: string | URL | Request, init: RequestInit = {}, streaming = false): Promise<Response> {
+    const proxyDispatcher = this.resolveProxyDispatcher();
     const url = typeof input === 'string'
       ? input
       : input instanceof URL
         ? input.toString()
         : String(input.url || '');
-    if (!dispatcher || this.isPlainHttpLoopback(url)) return fetch(input, init);
-    return fetch(input, { ...init, dispatcher } as RequestInit & { dispatcher: ProxyAgent });
+    const selectedDispatcher = this.isPlainHttpLoopback(url) ? null : proxyDispatcher;
+    const dispatcher = streaming ? providerStreamingDispatcher(selectedDispatcher) : selectedDispatcher;
+    if (!dispatcher) return fetch(input, init);
+    return fetch(input, { ...init, dispatcher } as RequestInit & { dispatcher: Dispatcher });
   }
 
   private effectiveRequestTimeout(timeoutMs: number): number {
@@ -321,39 +324,26 @@ export class LLMProvider {
   }
 
   private cleanBaseUrl(): string {
-    return this.baseUrl.replace(/\/+$/, '');
+    return this.baseUrl.trim();
   }
 
   private githubModelsBaseUrl(): string {
     const base = this.cleanBaseUrl();
     if (!base) return 'https://models.github.ai';
-    if (/\/inference$/i.test(base)) return base.replace(/\/inference$/i, '');
     return base;
   }
 
   private githubModelsUrl(pathname: string): string {
-    const base = this.githubModelsBaseUrl();
-    const path = pathname.startsWith('/') ? pathname : `/${pathname}`;
-    return `${base}${path}`;
+    return providerEndpoint(this.githubModelsBaseUrl(), pathname);
   }
 
-  private openAIHeaders(): Record<string, string> {
-    if (this.protocol() === 'github_models') return this.githubModelsHeaders();
-    return {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.apiKey}`,
-    };
+  private openAIHeaders(stream = false): Record<string, string> {
+    return providerRequestHeaders(this.protocol() === 'github_models' ? 'github_models' : 'openai', this.apiKey, stream);
   }
 
   private llmErrorText(response: Pick<ProviderHttpResponse, 'status' | 'headers'>, body: string): string {
-    const rawRetryAfter = response.headers?.get('retry-after')?.trim() || '';
-    let retryAfter = '';
-    if (/^\d+(?:\.\d+)?$/.test(rawRetryAfter)) {
-      retryAfter = ` Retry-After: ${rawRetryAfter}s`;
-    } else if (rawRetryAfter) {
-      const retryAt = Date.parse(rawRetryAfter);
-      if (Number.isFinite(retryAt)) retryAfter = ` Retry-After: ${Math.max(0, Math.ceil((retryAt - Date.now()) / 1_000))}s`;
-    }
+    const seconds = response.headers ? normalizeProviderHeaders(response.headers).retryAfterSeconds : undefined;
+    const retryAfter = seconds === undefined ? '' : ` Retry-After: ${seconds}s`;
     return `[LLM Error: ${response.status}]${retryAfter} ${body}`;
   }
 
@@ -384,12 +374,8 @@ export class LLMProvider {
     console.error(`[NewmarkProvider] ${stage}${detail ? ` ${detail}` : ''}`);
   }
 
-  private githubModelsHeaders(): Record<string, string> {
-    return {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.apiKey}`,
-      'X-GitHub-Api-Version': '2022-11-28',
-    };
+  private githubModelsHeaders(stream = false): Record<string, string> {
+    return providerRequestHeaders('github_models', this.apiKey, stream);
   }
 
   private temperatureCapabilityKey(url: string, body: Record<string, unknown>): string {
@@ -479,8 +465,17 @@ export class LLMProvider {
         headers,
         body: JSON.stringify(body),
         signal: abort.signal,
-      });
-      return response;
+      }, true);
+      // Keep the caller's cancellation and explicit deadline attached through
+      // the JSON body, not just until response headers arrive.
+      const responseText = await response.text();
+      return {
+        ok: response.ok,
+        status: response.status,
+        headers: response.headers,
+        text: async () => responseText,
+        json: async () => JSON.parse(responseText || '{}'),
+      };
     } catch (e) {
       if (signal?.aborted) throw abortFailure(signal);
       if (abort.signal.aborted) throw abortFailure(abort.signal);
@@ -725,12 +720,8 @@ export class LLMProvider {
     return out.replace(/sk-[A-Za-z0-9_\-.]{8,}/g, 'sk-***REDACTED***');
   }
 
-  private anthropicHeaders(): Record<string, string> {
-    return {
-      'Content-Type': 'application/json',
-      'x-api-key': this.apiKey,
-      'anthropic-version': '2023-06-01',
-    };
+  private anthropicHeaders(stream = false): Record<string, string> {
+    return providerRequestHeaders('anthropic', this.apiKey, stream);
   }
 
   private stringifyContent(value: unknown): string {
@@ -962,9 +953,10 @@ export class LLMProvider {
     maxTokens: number,
     signal?: AbortSignal,
     reasoningTier?: string,
+    onUsage?: (usage: NonNullable<StreamToken['usage']>) => void,
   ): Promise<string> {
     const response = await this.postJsonWithFetchFallback(
-      `${this.cleanBaseUrl()}/responses`,
+      providerEndpoint(this.cleanBaseUrl(), '/responses'),
       this.openAIHeaders(),
       this.responsesBody(model, messages, systemPrompt, temperature, maxTokens, [], reasoningTier),
       120000,
@@ -973,7 +965,11 @@ export class LLMProvider {
     if (!response.ok) {
       return this.llmErrorText(response, await response.text());
     }
-    return this.extractResponsesText(this.normalizeResponsesPayload(await response.json()));
+    const json = this.normalizeResponsesPayload(await response.json());
+    onUsage?.(extractProviderUsage(json));
+    const failure = this.nativeJsonCompletionError(json, 'responses');
+    if (failure) return failure;
+    return this.extractResponsesText(json);
   }
 
   private anthropicTools(tools: unknown[]): Array<Record<string, unknown>> {
@@ -1093,6 +1089,7 @@ export class LLMProvider {
     };
     const serialized = await adapter.serializeRequest(request);
     serialized.body.stream = mode === 'chat' ? false : true;
+    serialized.headers = this.openAIHeaders(serialized.body.stream === true);
 
     const execSignal = signal ?? new AbortController().signal;
     const transport = this.buildProviderAdapterTransport();
@@ -1163,7 +1160,7 @@ export class LLMProvider {
     };
     const serialized = await adapter.serializeRequest(request);
     serialized.body.stream = true;
-    serialized.headers['Accept'] = 'text/event-stream';
+    serialized.headers = this.openAIHeaders(true);
 
     const execSignal = signal ?? new AbortController().signal;
     const transport = this.buildProviderAdapterTransport();
@@ -1208,6 +1205,7 @@ export class LLMProvider {
       output: usage.outputTokens,
       cacheRead: usage.cacheReadTokens,
       cacheWrite: usage.cacheWriteTokens,
+      reported: usage.reported,
     };
   }
 
@@ -1244,9 +1242,10 @@ export class LLMProvider {
               headers: request.headers,
               body: JSON.stringify(request.body),
               signal: abort.signal,
-            });
+            }, true);
             if (request.body.temperature !== undefined && response.status === 400) {
-              const errorText = await response.clone().text();
+              const buffered = await this.bufferTransportResponse(response);
+              const errorText = await buffered.text();
               if (this.unsupportedTemperatureError(response.status, errorText)) {
                 this.temperatureUnsupported.add(this.temperatureCapabilityKey(request.url, request.body));
                 const retryBody = { ...request.body };
@@ -1256,8 +1255,16 @@ export class LLMProvider {
                   headers: request.headers,
                   body: JSON.stringify(retryBody),
                   signal: abort.signal,
-                });
+                }, true);
+              } else {
+                return buffered;
               }
+            }
+            // Compatible providers can answer a stream request with JSON or
+            // an error body. Read those once while cancellation still owns
+            // the socket; only SSE readers take ownership after this returns.
+            if (!response.ok || !/text\/event-stream/i.test(response.headers.get('content-type') || '')) {
+              return await this.bufferTransportResponse(response);
             }
             return response;
           } catch (error) {
@@ -1265,7 +1272,7 @@ export class LLMProvider {
             if (abort.signal.aborted) throw abortFailure(abort.signal);
             if (!this.shouldUseNodeHttpFallback(error)) throw error;
             const fallbackHeaders = { ...request.headers };
-            delete fallbackHeaders['Accept'];
+            fallbackHeaders.Accept = providerRequestHeaders(this.protocol(), this.apiKey).Accept;
             const fallback = await this.postJsonWithFetchFallback(
               request.url,
               fallbackHeaders,
@@ -1282,6 +1289,18 @@ export class LLMProvider {
       }
       const response = await this.postJsonWithFetchFallback(request.url, request.headers, request.body, 120000, signal);
       return this.toTransportResponse(response);
+    };
+  }
+
+  private async bufferTransportResponse(response: Response): Promise<TransportResponse> {
+    const body = await response.text();
+    return {
+      ok: response.ok,
+      status: response.status,
+      headers: response.headers,
+      body: null,
+      text: async () => body,
+      json: async () => JSON.parse(body),
     };
   }
 
@@ -1374,10 +1393,8 @@ export class LLMProvider {
   }
 
   /**
-   * GitHub Models streaming path. Preserved as a dedicated implementation
-   * because the provider adapters (V2) do not serialize the GitHub Models
-   * inference URL or its X-GitHub-Api-Version headers. OpenAI protocol
-   * providers route exclusively through chatStreamWithToolsV2.
+   * GitHub Models keeps its dedicated URL, headers and request serialization.
+   * Response parsing shares the Chat adapter's completion validation.
    */
   private async *githubModelsChatStreamWithTools(
     model: string,
@@ -1402,189 +1419,27 @@ export class LLMProvider {
       stream: true,
     };
 
-    const abort = new AbortController();
-    const forwardAbort = () => abort.abort(signal?.reason);
-    if (signal?.aborted) forwardAbort();
-    else signal?.addEventListener('abort', forwardAbort, { once: true });
-    // Streaming provider responses are intentionally unbounded. Do not turn
-    // silence into an empty-response failure.
-    const effectiveTimeout = 0;
-    const timeout = effectiveTimeout > 0
-      ? setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout)
-      : undefined;
-    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-
-    try {
-      let response: Response;
-      try {
-        response = await this.providerFetch(url, {
-          method: 'POST',
-          headers: this.openAIHeaders(),
-          body: JSON.stringify(body),
-          signal: abort.signal,
-        });
-      } catch (e) {
-        if (signal?.aborted) throw abortFailure(signal);
-        if (abort.signal.aborted) throw abortFailure(abort.signal);
-        if (!this.shouldUseNodeHttpFallback(e)) throw e;
-        clearTimeout(timeout);
-        yield* this.githubModelsChatNonStreaming(url, body, signal);
+    // Keep GitHub's endpoint, headers and payload, while sharing the validated
+    // Chat Completions parser and fetch-to-node transport fallback.
+    const adapter = createProviderAdapter(this.name, 'chat_completions');
+    const request = { url, headers: this.openAIHeaders(true), body };
+    let currentReasoningContent = '';
+    for await (const event of adapter.execute(request, signal || new AbortController().signal, this.buildProviderAdapterTransport())) {
+      if (event.type === 'reasoning.summary.delta') {
+        currentReasoningContent += event.delta;
+        yield { type: 'status', text: '', reasoningContent: currentReasoningContent };
+      } else if (event.type === 'text.delta') {
+        yield { type: 'text', text: event.delta, reasoningContent: currentReasoningContent || undefined };
+      } else if (event.type === 'tool_call.completed') {
+        yield { type: 'tool_call', text: '', toolCall: { id: event.id, name: event.name, arguments: event.arguments }, reasoningContent: currentReasoningContent || undefined };
+      } else if (event.type === 'usage.updated') {
+        yield { type: 'usage', text: '', usage: this.toStreamUsage(event.usage) };
+      } else if (event.type === 'response.failed') {
+        yield { type: 'text', text: event.error };
         return;
       }
-
-      if (!response.ok) {
-        const err = await response.text();
-        yield { type: 'text', text: this.llmErrorText(response, err) };
-        return;
-      }
-
-      reader = response.body?.getReader() ?? null;
-      if (!reader) {
-        yield { type: 'text', text: '[Error] No response body' };
-        return;
-      }
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-      const toolCalls = new Map<number, { id: string; name: string; argumentParts: string[] }>();
-      const toolCallOrder: number[] = [];
-      let syntheticToolIndex = 0;
-      let lastToolIndex = 0;
-      let currentReasoningContent = '';
-      let contentPolicyBlocked = false;
-      let emittedContent = false;
-      let explicitCompletion = false;
-      const streamSignal = signal || new AbortController().signal;
-
-      while (true) {
-        const { done, value } = await readProviderStreamChunk(reader, streamSignal);
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data: ')) continue;
-          const data = trimmed.slice(6);
-          if (data === '[DONE]') {
-            explicitCompletion = true;
-            continue;
-          }
-
-          try {
-            const json = JSON.parse(data);
-            if (json.usage) yield { type: 'usage', text: '', usage: extractProviderUsage(json) };
-            if (this.contentPolicyBlocked(json)) contentPolicyBlocked = true;
-            const delta = json.choices?.[0]?.delta;
-            if (!delta) continue;
-
-            if (delta.reasoning_content) {
-              currentReasoningContent += delta.reasoning_content;
-              yield { type: 'status', text: '', reasoningContent: currentReasoningContent };
-            }
-
-            const deltaText = this.extractTextValue(delta.content);
-            if (deltaText) {
-              emittedContent = true;
-              yield { type: 'text', text: deltaText, reasoningContent: currentReasoningContent || undefined };
-            }
-
-            if (delta.tool_calls) {
-              for (const tc of delta.tool_calls) {
-                const rawIndex = Number(tc.index);
-                const index = Number.isInteger(rawIndex) && rawIndex >= 0
-                  ? rawIndex
-                  : (tc.id ? syntheticToolIndex++ : lastToolIndex);
-                lastToolIndex = index;
-                let call = toolCalls.get(index);
-                if (!call && (tc.id || tc.function?.name)) {
-                  call = { id: tc.id || '', name: tc.function?.name || '', argumentParts: [] };
-                  toolCalls.set(index, call);
-                  toolCallOrder.push(index);
-                }
-                if (!call) continue;
-                if (tc.id && !call.id) call.id = tc.id;
-                if (tc.function?.name && !call.name) call.name = tc.function.name;
-                if (tc.function?.arguments) call.argumentParts.push(tc.function.arguments);
-              }
-            }
-          } catch { /* skip malformed JSON */ }
-        }
-      }
-
-      if (toolCallOrder.length) {
-        for (const index of toolCallOrder) {
-          const call = toolCalls.get(index);
-          if (!call) continue;
-          yield {
-            type: 'tool_call',
-            text: '',
-            toolCall: {
-              id: call.id,
-              name: call.name,
-              arguments: assembleCompatibleToolArguments(call.argumentParts),
-            },
-            reasoningContent: currentReasoningContent || undefined,
-          };
-        }
-      } else if (!emittedContent && contentPolicyBlocked) {
-        yield { type: 'text', text: '[Error] Content policy refusal (content_filter).' };
-      } else if (!explicitCompletion && !emittedContent && !currentReasoningContent) {
-        yield { type: 'text', text: '[LLM Error] GitHub Models stream ended before an explicit completion.' };
-      }
-    } finally {
-      reader?.releaseLock();
-      clearTimeout(timeout);
-      signal?.removeEventListener('abort', forwardAbort);
     }
   }
-
-  /**
-   * GitHub Models non-streaming fallback used when the streaming fetch fails
-   * and the node-http transport is available. Mirrors the legacy chat-tools
-   * node fallback; the responses downgrade is intentionally not applied for
-   * GitHub Models (its inference endpoint is chat-completions only).
-   */
-  private async *githubModelsChatNonStreaming(
-    url: string,
-    streamingBody: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): AsyncGenerator<StreamToken> {
-    const body: Record<string, unknown> = { ...streamingBody, stream: false };
-    const response = await this.postJsonWithFetchFallback(url, this.openAIHeaders(), body, 120000, signal);
-    if (!response.ok) {
-      const err = await response.text();
-      yield { type: 'text', text: this.llmErrorText(response, err) };
-      return;
-    }
-    const json = await response.json();
-    yield { type: 'usage', text: '', usage: extractProviderUsage(json) };
-    const choice = json?.choices?.[0];
-    const message = choice?.message || {};
-    if (message.reasoning_content) {
-      yield { type: 'status', text: '', reasoningContent: String(message.reasoning_content) };
-    }
-    const messageText = this.extractTextValue(message.content) || this.extractTextValue(choice?.text);
-    if (messageText) {
-      yield { type: 'text', text: messageText, reasoningContent: message.reasoning_content ? String(message.reasoning_content) : undefined };
-    }
-    for (const tc of message.tool_calls || []) {
-      yield {
-        type: 'tool_call',
-        text: '',
-        toolCall: {
-          id: String(tc.id || ''),
-          name: String(tc.function?.name || ''),
-          arguments: String(tc.function?.arguments || '{}'),
-        },
-      };
-    }
-    if (!messageText && !(message.tool_calls || []).length && this.contentPolicyBlocked(json)) {
-      yield { type: 'text', text: '[Error] Content policy refusal (content_filter).' };
-    }
-  }
-
   private async *anthropicChatWithTools(
     model: string,
     messages: Array<Record<string, unknown>>,
@@ -1605,12 +1460,12 @@ export class LLMProvider {
     const convertedTools = this.anthropicTools(tools);
     if (convertedTools.length) body.tools = convertedTools;
 
-    const response = await this.providerFetch(`${this.cleanBaseUrl()}/messages`, {
-      method: 'POST',
-      headers: this.anthropicHeaders(),
-      body: JSON.stringify(body),
-      signal,
-    });
+    // A Build reuses its cancellation signal across many tool turns. Keep the
+    // native JSON exchange request-local so completed fetches cannot accumulate
+    // their abort followers on that long-lived signal until a later GC.
+    const response = await this.postJsonOnce(
+      providerEndpoint(this.cleanBaseUrl(), '/messages'), this.anthropicHeaders(), body, 0, signal,
+    );
 
     if (!response.ok) {
       const err = await response.text();
@@ -1618,27 +1473,46 @@ export class LLMProvider {
       return;
     }
 
-    const json = await response.json() as { content?: Array<Record<string, unknown>>; usage?: Record<string, unknown> };
-    yield { type: 'usage', text: '', usage: extractProviderUsage(json) };
-    for (const block of json.content || []) {
+    const json = await response.json() as Record<string, unknown>;
+    yield { type: 'usage', text: '', usage: extractProviderUsage(json, { protocol: 'anthropic' }) };
+    const blocks = Array.isArray(json.content) ? json.content as Array<Record<string, unknown>> : [];
+    const completeCalls = blocks.filter(block => block.type === 'tool_use');
+    const failure = this.nativeJsonCompletionError(json, 'anthropic');
+    for (const block of blocks) {
       const type = String(block.type || '');
       if (type === 'text' && block.text) {
         const text = this.extractTextValue(block.text);
         if (text) yield { type: 'text', text };
       } else if (type === 'thinking' && block.thinking) {
         yield { type: 'status', text: '', reasoningContent: String(block.thinking) };
-      } else if (type === 'tool_use') {
-        yield {
-          type: 'tool_call',
-          text: '',
-          toolCall: {
-            id: String(block.id || ''),
-            name: String(block.name || ''),
-            arguments: JSON.stringify(block.input || {}),
-          },
-        };
       }
     }
+    if (failure) { yield { type: 'text', text: failure }; return; }
+    if (completeCalls.some(block => !block.id || !block.name || !block.input || typeof block.input !== 'object' || Array.isArray(block.input))) {
+      yield { type: 'text', text: '[LLM Error] Provider returned incomplete or invalid tool-call arguments.' };
+      return;
+    }
+    for (const block of completeCalls) {
+      yield { type: 'tool_call', text: '', toolCall: {
+        id: String(block.id), name: String(block.name), arguments: JSON.stringify(block.input),
+      } };
+    }
+  }
+
+  private nativeJsonCompletionError(json: Record<string, unknown>, protocol: 'anthropic' | 'chat' | 'responses'): string {
+    if (json.error || json.type === 'error') {
+      const error = json.error && typeof json.error === 'object' ? json.error as Record<string, unknown> : {};
+      return '[LLM Error] ' + (this.extractTextValue(error.message || error.type || json.error) || 'Provider returned an error response.');
+    }
+    const choice = Array.isArray(json.choices) ? json.choices[0] as Record<string, unknown> | undefined : undefined;
+    const reason = protocol === 'anthropic' ? json.stop_reason : choice?.finish_reason;
+    if (reason === 'max_tokens' || reason === 'length') return '[LLM Error] Provider response was truncated by the output token limit.';
+    if (reason === 'content_filter') return '[Error] Content policy refusal (content_filter).';
+    if (protocol === 'responses' && json.status && json.status !== 'completed') {
+      const details = json.incomplete_details && typeof json.incomplete_details === 'object' ? json.incomplete_details as Record<string, unknown> : {};
+      return `[LLM Error] Responses response was ${json.status}${details.reason ? ': ' + details.reason : ''}.`;
+    }
+    return '';
   }
 
   /**
@@ -1668,7 +1542,7 @@ export class LLMProvider {
         },
       };
       if (system) body.system = system;
-      const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/messages`, this.anthropicHeaders(), body, 120000, signal);
+      const response = await this.postJsonWithFetchFallback(providerEndpoint(this.cleanBaseUrl(), '/messages'), this.anthropicHeaders(), body, 120000, signal);
       if (!response.ok) throw new Error(this.llmErrorText(response, await response.text()));
       const json = await response.json() as { content?: Array<Record<string, unknown>> };
       return (json.content || [])
@@ -1682,7 +1556,7 @@ export class LLMProvider {
       body.text = {
         format: { type: 'json_schema', name: schemaName, strict: true, schema },
       };
-      const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/responses`, this.openAIHeaders(), body, 120000, signal);
+      const response = await this.postJsonWithFetchFallback(providerEndpoint(this.cleanBaseUrl(), '/responses'), this.openAIHeaders(), body, 120000, signal);
       if (!response.ok) throw new Error(this.llmErrorText(response, await response.text()));
       return this.extractResponsesText(this.normalizeResponsesPayload(await response.json()));
     }
@@ -1690,7 +1564,7 @@ export class LLMProvider {
     const isGitHubModels = this.protocol() === 'github_models';
     const url = isGitHubModels
       ? this.githubModelsUrl('/inference/chat/completions')
-      : `${this.cleanBaseUrl()}/chat/completions`;
+      : providerEndpoint(this.cleanBaseUrl(), '/chat/completions');
     const body: Record<string, unknown> = {
       model,
       messages: [
@@ -1739,8 +1613,8 @@ export class LLMProvider {
       let family: 'openai_chat' | 'openai_responses' | 'anthropic';
       if (this.protocol() === 'anthropic') {
         const prepared = this.anthropicMessages(messages, systemPrompt);
-        url = `${this.cleanBaseUrl()}/messages`;
-        headers = this.anthropicHeaders();
+        url = providerEndpoint(this.cleanBaseUrl(), '/messages');
+        headers = this.anthropicHeaders(true);
         body = {
           model,
           messages: prepared.messages,
@@ -1751,16 +1625,16 @@ export class LLMProvider {
         if (prepared.system) body.system = prepared.system;
         family = 'anthropic';
       } else if (this.protocol() !== 'github_models' && this.openAITransportMode() === 'responses') {
-        url = `${this.cleanBaseUrl()}/responses`;
-        headers = this.openAIHeaders();
+        url = providerEndpoint(this.cleanBaseUrl(), '/responses');
+        headers = this.openAIHeaders(true);
         body = { ...this.responsesBody(model, messages, systemPrompt, temperature, maxTokens), stream: true };
         family = 'openai_responses';
       } else {
         const isGitHubModels = this.protocol() === 'github_models';
         url = isGitHubModels
           ? this.githubModelsUrl('/inference/chat/completions')
-          : `${this.cleanBaseUrl()}/chat/completions`;
-        headers = isGitHubModels ? this.githubModelsHeaders() : this.openAIHeaders();
+          : providerEndpoint(this.cleanBaseUrl(), '/chat/completions');
+        headers = isGitHubModels ? this.githubModelsHeaders(true) : this.openAIHeaders(true);
         body = {
           model,
           messages: [
@@ -1824,6 +1698,7 @@ export class LLMProvider {
     maxTokens: number,
     signal?: AbortSignal,
     reasoningTier?: string,
+    onUsage?: (usage: NonNullable<StreamToken['usage']>) => void,
   ): Promise<string> {
     if (this.protocol() === 'anthropic') {
       const { system, messages: anthropicMessages } = this.anthropicMessages(messages, systemPrompt);
@@ -1835,13 +1710,16 @@ export class LLMProvider {
       };
       if (system) body.system = system;
 
-      const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/messages`, this.anthropicHeaders(), body, 120000, signal);
+      const response = await this.postJsonWithFetchFallback(providerEndpoint(this.cleanBaseUrl(), '/messages'), this.anthropicHeaders(), body, 120000, signal);
 
       if (!response.ok) {
         throw new Error(this.llmErrorText(response, await response.text()));
       }
 
       const json = await response.json() as { content?: Array<Record<string, unknown>> };
+      onUsage?.(extractProviderUsage(json, { protocol: 'anthropic' }));
+      const failure = this.nativeJsonCompletionError(json, 'anthropic');
+      if (failure) throw new Error(failure);
       return (json.content || [])
         .filter(block => block.type === 'text' && block.text)
         .map(block => this.extractTextValue(block.text))
@@ -1851,7 +1729,7 @@ export class LLMProvider {
     const isGitHubModels = this.protocol() === 'github_models';
     const url = isGitHubModels
       ? this.githubModelsUrl('/inference/chat/completions')
-      : `${this.cleanBaseUrl()}/chat/completions`;
+      : providerEndpoint(this.cleanBaseUrl(), '/chat/completions');
     const body: Record<string, unknown> = {
       model,
       messages: [
@@ -1864,7 +1742,7 @@ export class LLMProvider {
     if (!isGitHubModels) this.applyChatReasoningEffort(body, model, reasoningTier);
 
     if (!isGitHubModels && this.openAITransportMode() === 'responses') {
-      return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens, signal, reasoningTier);
+      return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens, signal, reasoningTier, onUsage);
     }
 
     const response = await this.postJsonWithFetchFallback(url, this.openAIHeaders(), body, 120000, signal);
@@ -1872,12 +1750,15 @@ export class LLMProvider {
     if (!response.ok) {
       const err = await response.text();
       if (!isGitHubModels && this.shouldUseResponsesFallback(response.status, err)) {
-        return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens, signal, reasoningTier);
+        return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens, signal, reasoningTier, onUsage);
       }
       throw new Error(this.llmErrorText(response, err));
     }
 
     const json = await response.json() as Record<string, unknown>;
+    onUsage?.(extractProviderUsage(json));
+    const failure = this.nativeJsonCompletionError(json, 'chat');
+    if (failure) throw new Error(failure);
     return this.extractChatCompletionText(json);
   }
 
@@ -1902,8 +1783,8 @@ export class LLMProvider {
       })).filter((entry, index, all) => !!entry.id && all.findIndex(candidate => candidate.id === entry.id) === index);
     }
     const response = await this.getJsonWithFetchFallback(
-      `${this.cleanBaseUrl()}/models`,
-      this.protocol() === 'anthropic' ? this.anthropicHeaders() : { 'Authorization': `Bearer ${this.apiKey}` },
+      providerEndpoint(this.cleanBaseUrl(), '/models'),
+      this.protocol() === 'anthropic' ? this.anthropicHeaders() : this.openAIHeaders(),
     );
 
     if (!response.ok) {
@@ -1955,7 +1836,7 @@ export class LLMProvider {
     if (this.protocol() !== 'openai') return { ok: false, latency: 0 };
     const start = Date.now();
     try {
-      const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/images/generations`, this.openAIHeaders(), {
+      const response = await this.postJsonWithFetchFallback(providerEndpoint(this.cleanBaseUrl(), '/images/generations'), this.openAIHeaders(), {
         model,
         prompt: 'A single solid blue square on a white background.',
         size: '256x256',
@@ -1974,7 +1855,7 @@ export class LLMProvider {
 
   async generateImage(model: string, prompt: string, size = '1024x1024', signal?: AbortSignal): Promise<{ dataUrl?: string; url?: string }> {
     if (this.protocol() !== 'openai') throw new Error('Image generation requires an OpenAI-compatible provider.');
-    const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/images/generations`, this.openAIHeaders(), {
+    const response = await this.postJsonWithFetchFallback(providerEndpoint(this.cleanBaseUrl(), '/images/generations'), this.openAIHeaders(), {
       model,
       prompt,
       size,

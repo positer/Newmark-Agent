@@ -67,6 +67,7 @@ class ModelSwitchProbe extends Agent {
   override async process(input: string | AgentPromptMessage): Promise<StreamToken[]> {
     this.processModels.push(this.model);
     const text = typeof input === 'string' ? input : input.text;
+    this.notifyAgentKernelUserMessageStart(text, typeof input === 'string' ? undefined : input.clientMessageId || input.userMessageId);
     await new Promise(resolve => setTimeout(resolve, this.delayMs));
     return [{ type: 'text', text: `done:${text}` }];
   }

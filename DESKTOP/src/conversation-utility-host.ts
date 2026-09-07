@@ -75,7 +75,7 @@ async function handle(request: UtilityAgentRequest): Promise<unknown> {
     const result = await kernel.prompt(request.params.message, target, request.params.options, request.params.queueMode);
     return { ...result, backend: 'utility', pid: process.pid };
   }
-  if (request.method === 'snapshot') return kernel.snapshot(checkedTarget(request.params.target));
+  if (request.method === 'snapshot') return kernel.snapshot(checkedTarget(request.params.target), request.params.options);
   if (request.method === 'rewind') {
     return kernel.rewind(checkedTarget(request.params.target), request.params.messageIndex);
   }

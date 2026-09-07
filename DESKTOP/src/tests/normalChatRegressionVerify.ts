@@ -113,7 +113,7 @@ async function main(): Promise<void> {
       && successCalls[0]?.system.includes('Injection reason: this is the first provider request of a new Build.')
       && successCalls[0]?.system.includes('Historical Build Blocks (newest to oldest; #1 is the previous/last task):')
       && successCalls[0]?.system.includes('## Tool Awareness Bootstrap')
-      && successCalls[0]?.system.includes('Necessary full schemas supplied natively for this provider turn:'),
+      && successCalls[0]?.system.includes('Initial full schemas supplied natively for this Build:'),
     'a new Build receives one request-only context, recent-Build, and tool-awareness bootstrap');
     assert.ok(!JSON.stringify(agent.history).includes('Build Context Bootstrap')
       && !JSON.stringify(agent.chatMessages).includes('Tool Awareness Bootstrap'),

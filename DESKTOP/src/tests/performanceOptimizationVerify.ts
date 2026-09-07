@@ -53,11 +53,11 @@ function main(): void {
     assert.ok(!serializedDiagnostics.includes('private system prompt') && !serializedDiagnostics.includes('private user task') && !serializedDiagnostics.includes('private_tool') && !serializedDiagnostics.includes('secret'), 'diagnostics contain fingerprints and counts without request content');
     assert.ok(firstDiagnostic.messageCount === 1 && firstDiagnostic.toolCount === 1 && firstDiagnostic.estimatedMessageTokens > 0 && firstDiagnostic.estimatedToolTokens > 0, 'diagnostics expose bounded request and tool-surface measurements');
     assert.deepEqual(extractProviderUsage({ usage: { prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 75 } } }),
-      { input: 100, output: 20, cacheRead: 75, cacheWrite: 0 }, 'OpenAI Chat usage normalizes cached prompt tokens');
+      { input: 100, output: 20, cacheRead: 75, cacheWrite: 0, reported: { input: true, output: true, cacheRead: true, cacheWrite: false } }, 'OpenAI Chat usage preserves missing cache-write reporting');
     assert.deepEqual(extractProviderUsage({ usage: { input_tokens: 120, output_tokens: 30, input_tokens_details: { cached_tokens: 90 } } }),
-      { input: 120, output: 30, cacheRead: 90, cacheWrite: 0 }, 'OpenAI Responses usage normalizes cached input tokens');
-    assert.deepEqual(extractProviderUsage({ usage: { input_tokens: 80, output_tokens: 15, cache_read_input_tokens: 50, cache_creation_input_tokens: 10 } }),
-      { input: 80, output: 15, cacheRead: 50, cacheWrite: 10 }, 'Anthropic usage normalizes cache read and creation tokens');
+      { input: 120, output: 30, cacheRead: 90, cacheWrite: 0, reported: { input: true, output: true, cacheRead: true, cacheWrite: false } }, 'OpenAI Responses usage preserves missing cache-write reporting');
+    assert.deepEqual(extractProviderUsage({ usage: { input_tokens: 80, output_tokens: 15, cache_read_input_tokens: 50, cache_creation_input_tokens: 10 } }, { protocol: 'anthropic' }),
+      { input: 140, output: 15, cacheRead: 50, cacheWrite: 10, reported: { input: true, output: true, cacheRead: true, cacheWrite: true } }, 'Native Anthropic input includes uncached, read and creation tokens');
     const usageDiagnostic = emitProviderUsageDiagnostic({ conversationId: 'diagnostic-test', inputTokens: 100, outputTokens: 20, cacheReadTokens: 75, cacheWriteTokens: 5 });
     assert.ok(usageDiagnostic.type === 'provider_usage' && usageDiagnostic.cacheReadRatio === 0.75, 'provider usage diagnostics expose a bounded cache-read ratio');
     const agentSource = fs.readFileSync(path.join(process.cwd(), 'src/core/agent.ts'), 'utf8');
@@ -67,7 +67,6 @@ function main(): void {
         && kernelRunnerSource.includes('let compressed = await agent.maybeCompress')
         && agentSource.includes('Inline Task Management (Mandatory)')
         && !agentSource.includes('[Linked Plan revision=')
-        && kernelRunnerSource.includes('includeBootstrap || compressionCompleted')
         && !kernelRunnerSource.includes('JSON.stringify(newmarkMessages) === beforeCompression'),
       'context compression and prompt assembly keep stable base content without repeatedly serializing or injecting dynamic context',
     );

@@ -32,6 +32,9 @@ const config: Configuration = {
     { from: '../LICENSE', to: 'LICENSE' },
     { from: '../THIRD_PARTY_NOTICES.md', to: 'THIRD_PARTY_NOTICES.md' },
   ],
+  extraResources: [
+    { from: 'scripts/install-windows-msi.ps1', to: 'installer/install-windows-msi.ps1' },
+  ],
   win: {
     icon: 'assets/icon.ico',
     sign: false,

@@ -95,6 +95,7 @@ function verifyUnpackedOutput() {
     [consoleRuntimeExe, 'console Electron runtime'],
     [portableLauncher, 'portable CLI/TUI batch launcher'],
     [appAsar, 'app.asar'],
+    [path.join(unpackedDir, 'resources', 'installer', 'install-windows-msi.ps1'), 'verified MSI installation helper'],
     [path.join(unpackedRuntimeDist, 'windows-process-tree-helper.dll'), 'precompiled Windows process-tree helper'],
     [path.join(unpackedRuntimeDist, 'typebox-compile.bundle.cjs'), 'Electron Node 20 TypeBox compiler bundle'],
     [path.join(unpackedRuntimeDist, 'wsl-agent-host.bundle.cjs'), 'WSL Agent host bundle'],

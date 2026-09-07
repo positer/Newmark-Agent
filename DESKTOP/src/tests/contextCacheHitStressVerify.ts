@@ -3,7 +3,7 @@
  *
  * 通过 fake provider 在每个 Build 内返回多次 tool_call（pwd），让同一次
  * Agent.process 产生多个 provider 子轮。验证：
- *   1. 每个 Build 首请求注入 bootstrap，后续 tool 子轮 system 前缀完全稳定；
+ *   1. 每个 Build 从首请求开始完整保留 system 与先前 messages、工具 schema；
  *   2. provider usage 累积后 contextWindow() 暴露的全对话 token 与
  *      缓存命中率统计正确；
  *   3. 多 Build 重复压力下统计不漂移、无越界。
@@ -68,7 +68,7 @@ async function main(): Promise<void> {
   try {
     runner.setConversation('cache-hit-stress');
     runner.workspace.current = null;
-    const providerCalls: Array<{ system: string; messages: Array<Record<string, unknown>> }> = [];
+    const providerCalls: Array<{ system: string; messages: Array<Record<string, unknown>>; tools: unknown[] }> = [];
     const inputTokensPerCall = 1000;
     const outputTokensPerCall = 40;
     const cacheReadPerCall = 950;
@@ -77,10 +77,9 @@ async function main(): Promise<void> {
     let buildToolCounter = 0;
     const fakeProvider = {
       intelligenceConfig: () => ({ temperature: 0, maxTokens: 32 }),
-      async *chatStreamWithTools(_model: string, messages: Array<Record<string, unknown>>, system: string): AsyncGenerator<StreamToken> {
-        providerCalls.push({ system, messages: messages.map(message => ({ ...message })) });
+      async *chatStreamWithTools(_model: string, messages: Array<Record<string, unknown>>, system: string, _temperature: number, _maxTokens: number, tools: unknown[]): AsyncGenerator<StreamToken> {
+        providerCalls.push({ system, messages: JSON.parse(JSON.stringify(messages)), tools: JSON.parse(JSON.stringify(tools)) });
         yield { type: 'usage', text: '', usage: { input: inputTokensPerCall, output: outputTokensPerCall, cacheRead: cacheReadPerCall, cacheWrite: 0 } };
-        if (system.includes('## Build Context Bootstrap')) buildToolCounter = 0;
         if (buildToolCounter < toolRoundsPerBuild) {
           buildToolCounter += 1;
           yield { type: 'tool_call', text: '', toolCall: { id: `cache-hit-pwd-${buildToolCounter}`, name: 'pwd', arguments: '{}' } };
@@ -93,6 +92,7 @@ async function main(): Promise<void> {
     (runner as unknown as { forcedProvider: typeof fakeProvider }).forcedProvider = fakeProvider;
 
     for (let build = 0; build < builds; build += 1) {
+      buildToolCounter = 0;
       const tokens = await runner.process(`stress-build-${build}`);
       const text = tokens.map(token => token.text || '').join('');
       check(text.includes('CACHE_HIT_DONE'), `build ${build}: multi-tool provider run completes`);
@@ -113,18 +113,25 @@ async function main(): Promise<void> {
     check(window.providerCacheReadTokens === expectedCacheRead
       && Number(window.providerCacheReadRatio) === cacheReadPerCall / inputTokensPerCall,
     'context window: cache-read tokens and cache-hit ratio match simulated usage');
-    check(Number(window.providerCacheReadRatio) >= 0.9,
-      'Build block pressure: cache-hit ratio stays near-total under simulated cached prefixes');
+    // These supplied counts validate accounting only; actual cache service
+    // hits must be measured independently from provider usage.
 
     for (let build = 0; build < builds; build += 1) {
       const start = build * requestsPerBuild;
-      const systems = providerCalls.slice(start, start + requestsPerBuild).map(call => call.system);
+      const calls = providerCalls.slice(start, start + requestsPerBuild);
+      const systems = calls.map(call => call.system);
       check(systems[0].includes('## Build Context Bootstrap'), `build ${build}: first provider request injects Build bootstrap`);
       check(systems[0].includes('## Request-Scoped Task Focus'), `build ${build}: first provider request injects request-scoped task focus`);
-      const stableTail = systems.slice(1);
-      check(new Set(stableTail).size === 1, `build ${build}: subsequent tool sub-turns share one byte-stable system prefix`);
-      check(!stableTail[0].includes('## Request-Scoped Task Focus'), `build ${build}: tool sub-turns do not re-inject request-scoped bootstrap`);
+      check(new Set(systems).size === 1, `build ${build}: every request keeps the complete first system prefix`);
+      check(new Set(calls.map(call => JSON.stringify(call.tools))).size === 1,
+        `build ${build}: unchanged tool availability retains the exact schema sequence`);
+      check(calls.slice(1).every((call, index) => JSON.stringify(call.messages.slice(0, calls[index].messages.length)) === JSON.stringify(calls[index].messages)),
+        `build ${build}: each request retains all prior ordered messages and only appends`);
+      check(build === 0 || systems[0] !== providerCalls[start - requestsPerBuild].system,
+        `build ${build}: a new Build initializes a fresh task-ledger snapshot`);
     }
+    check(!JSON.stringify(runner.history).includes('Build Context Bootstrap'),
+      'Build metadata remains request-only after all tool rounds and Builds');
 
     console.log(`\ncontextCacheHitStressVerify: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exitCode = 1;

@@ -128,6 +128,16 @@ async function main(): Promise<void> {
     }
 
     const searchSession = new Session(catalog, []);
+    const orderedSession = new Session(catalog, []);
+    for (const name of names.filter(name => !basicNames.includes(name)).slice(-2).reverse()) {
+      const previousSchemas = JSON.stringify(orderedSession.currentDefinitions());
+      const previousLength = orderedSession.currentDefinitions().length;
+      assert.equal(orderedSession.provision({ names: [name] }).ok, true);
+      assert.equal(JSON.stringify(orderedSession.currentDefinitions().slice(0, previousLength)), previousSchemas,
+        'incremental provisioning preserves all prior schemas, including the broker, in exact order');
+      assert.equal(toolName(orderedSession.currentDefinitions().at(-1)), name,
+        'newly provisioned schemas append in request order even against catalog order');
+    }
     const searched = searchSession.provision({ query: 'browser click' });
     assert.ok(searched.ok && searched.matches.some(name => name.startsWith('browser_')), 'query returns compact catalog matches');
     assert.deepEqual((searchSession.currentDefinitions() as ToolDefinition[]).map(toolName), initialCoreOnly,
@@ -287,10 +297,10 @@ async function main(): Promise<void> {
       && providerSystems[0].includes('Advanced capabilities—including SubAgent, task tools, Git/GitHub, browser, Computer Use, skills, MCP, automations, Flow, and Memory Lab—are not initially callable')
       && providerSystems[0].includes('first call tool_provision with its exact tool name as the only tool call')
       && providerSystems[0].includes('git_status:')
-      && providerSystems[0].includes(`Necessary full schemas supplied natively for this provider turn: ${firstTurnSurface.filter(name => name !== agentKernelRunnerInternals.TOOL_PROVISION_NAME).join(', ')}`),
+      && providerSystems[0].includes(`Initial full schemas supplied natively for this Build: ${firstTurnSurface.filter(name => name !== agentKernelRunnerInternals.TOOL_PROVISION_NAME).join(', ')}`),
     'the first Build request receives the full brief catalog and identifies schemas supplied through the native tools field');
-    assert.ok(providerSystems.slice(1).every(system => !system.includes('## Build Context Bootstrap') && !system.includes('## Tool Awareness Bootstrap')),
-      'broker and real-tool subturns do not repeat the Build bootstrap');
+    assert.ok(providerSystems.every(system => system === providerSystems[0]),
+      'broker and real-tool subturns retain the complete initial Build system snapshot');
     assert.ok(output.includes('BROKER_EXECUTION_OK'), 'newly provisioned original tool executes and the run completes');
     assert.ok(!output.includes('INTERNAL_PROVISION_PREFACE'), 'short broker-only prefaces never enter public output');
     assert.ok(publicToolEvents.includes('git_status') && !publicToolEvents.includes('tool_provision'),
@@ -432,8 +442,8 @@ async function main(): Promise<void> {
         && compressionSystems[0].includes('## Tool Awareness Bootstrap')
         && !compressionSystems[0].includes('PUBLIC_COMPRESSION_SUMMARY'),
       'the first provider request after compression rehydrates a byte-stable bootstrap (cache-friendly) with the summary carried in messages, not the system prompt');
-      assert.ok(compressionSystems.slice(1).every(system => !system.includes('## Build Context Bootstrap')),
-        'post-compression tool subturns do not repeat the bootstrap');
+      assert.ok(compressionSystems.every(system => system === compressionSystems[0]),
+        'post-compression tool subturns retain the complete initialized system snapshot');
       assert.ok(compressionSystems.every(system => !system.includes('0:' + 'x'.repeat(500))),
         'the mixed bootstrap uses the compression summary and never restores the removed original transcript');
       assert.ok(!JSON.stringify(compressionAgent.history).includes('Build Context Bootstrap')

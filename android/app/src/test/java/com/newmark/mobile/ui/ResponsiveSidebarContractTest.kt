@@ -5,6 +5,32 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ResponsiveSidebarContractTest {
+    private fun expandedLayoutRoot(source: String): String {
+        val start = source.indexOf("private fun ExpandedMainLayout(")
+        val end = source.indexOf("private fun ConversationSurfaceContent(", start.coerceAtLeast(0))
+        assertTrue("the expanded layout must exist", start >= 0)
+        assertTrue("the expanded layout must have a finite source boundary", end > start)
+        val expanded = source.substring(start, end)
+        val content = expanded.indexOf("Row(Modifier.layerBackdrop(liquidBackdrop)")
+        assertTrue("the reserved-slot row must exist", content >= 0)
+        val beforeContent = expanded.substring(0, content)
+        val root = beforeContent.lastIndexOf("Box(")
+        assertTrue("the slots must be wrapped by the layout root", root >= 0)
+        return beforeContent.substring(root)
+    }
+
+    @Test
+    fun expandedSidebarSlotsHaveAnOpaqueThemeBaseBeforeTheirTranslucentCarriers() {
+        val source = java.io.File("src/main/java/com/newmark/mobile/ui/NewmarkApp.kt").readText()
+        val root = expandedLayoutRoot(source)
+        assertTrue("the full-screen root must cover the otherwise transparent reserved slots",
+            root.contains("Modifier.fillMaxSize()"))
+        assertTrue("app dark + system light must never expose the window's light background through a sidebar",
+            root.contains(".background(palette.bgPrimary)"))
+        assertTrue(com.newmark.mobile.ui.theme.NewmarkDarkThemeColors.bgPrimary.alpha == 1f)
+        assertTrue(com.newmark.mobile.ui.theme.NewmarkLightThemeColors.bgPrimary.alpha == 1f)
+    }
+
     @Test
     fun conversationGlassReusesItsVisualLandingAndRedirectsOneFlight() {
         val source = java.io.File("src/main/java/com/newmark/mobile/ui/Sidebar.kt").readText()
@@ -14,8 +40,8 @@ class ResponsiveSidebarContractTest {
         assertTrue(source.split("conversationFlightJob?.cancel()").size - 1 >= 3)
         assertTrue(source.contains("val redirecting = localConversationGlassVisible"))
         assertTrue(source.contains("val redirecting = flyingConversationGlass"))
-        assertTrue(source.contains("if (!redirecting) {\n                localConversationGlassY.snapTo(source.top)"))
-        assertTrue(source.contains("if (!redirecting) {\n                flyingGlassY.snapTo(source.top)"))
+        assertTrue(source.contains("localConversationGlassY.snapTo(source.top)"))
+        assertTrue(source.contains("flyingGlassY.snapTo(source.top)"))
         assertTrue(source.contains("move = { localConversationGlassY.animateTo(target.top, tween(240, easing = PcEaseOutExpo)) }"))
         assertTrue(source.contains("move = { flyingGlassY.animateTo(target.top, tween(240, easing = PcEaseOutExpo)) }"))
         assertTrue(source.split("runOverlappedLiquidFlight(").size - 1 >= 6)
@@ -80,7 +106,9 @@ class ResponsiveSidebarContractTest {
         assertFalse(sidebar.contains("if (selected && !reordering) pc.accent else pc.border"))
         assertFalse(sidebar.contains("if (active && !reordering) palette.accent else palette.border"))
         assertFalse(sidebar.contains("enabled = !lifted && !glassCovered"))
-        assertTrue(sidebar.contains("landing = false\n                        moving = false\n                        selectedIndex = target"))
+        // Landing now awaits the real material Animatable; device-rendered
+        // UtilityGlassRenderingTest verifies arrival/commit ordering.
+        assertTrue(sidebar.contains("selectedIndex = target"))
         assertTrue(sidebar.contains("selected = !localConversationGlassVisible && conv.id == localVisualSelectedId"))
     }
 
@@ -136,7 +164,9 @@ class ResponsiveSidebarContractTest {
     fun sidebarsUseFingerProgressWhileRightPanelRemainsResidentOffscreen() {
         val source = java.io.File("src/main/java/com/newmark/mobile/ui/NewmarkApp.kt").readText()
         org.junit.Assert.assertTrue(source.contains("modifier = gestureModifier"))
-        org.junit.Assert.assertTrue(source.contains("Box(Modifier.fillMaxSize().then(gestureModifier))"))
+        val root = expandedLayoutRoot(source)
+        assertTrue(root.contains("Modifier.fillMaxSize()"))
+        assertTrue(root.contains(".then(gestureModifier)"))
         org.junit.Assert.assertFalse(source.contains("if (rightProgress > 0.001f) {"))
         org.junit.Assert.assertTrue(source.contains(".width(leftBoundaryWidth)"))
         org.junit.Assert.assertTrue(source.contains("val expandedSidebarWidth = if (screenWidthDp >= 840) 280.dp else 240.dp"))

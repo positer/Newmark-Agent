@@ -29,6 +29,105 @@ function assignedFunctionSource(source: string, memberName: string): string {
   return found;
 }
 
+function verifyVisibleBlockAnchoring(source: string): void {
+  const ast = ts.createSourceFile('newmark-ui.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const wire = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'wireDirectLiquidMenuInteractionsV2');
+  assert.ok(wire && ts.isFunctionDeclaration(wire), 'real liquid selection initializer is available');
+  for (const optionClass of ['newmark-select-option', 'model-select-menu-option']) {
+    const dom = new JSDOM(`<!doctype html><body><button id="trigger">Open</button><div id="menu" class="liquid-glass-popup"><button class="${optionClass}">One</button><button class="${optionClass} selected">Two</button><button class="${optionClass}">Three</button></div></body>`, { pretendToBeVisual: true });
+    const win = dom.window;
+    const menu = win.document.getElementById('menu') as HTMLElement & { _liquidColorBlock: HTMLElement; _liquidSyncSelectedBlock(): void };
+    const button = win.document.getElementById('trigger') as HTMLElement;
+    let visible = false, triggerWidth = 180;
+    const rect = (left: number, top: number, width: number, height: number) => ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON() {} });
+    button.getBoundingClientRect = () => rect(130, 110, triggerWidth, 32);
+    menu.getClientRects = () => (visible ? [rect(130, 150, triggerWidth, 120)] : []) as unknown as DOMRectList;
+    Object.defineProperty(menu, 'scrollHeight', { get: () => visible ? 120 : 0 });
+    Object.defineProperty(menu, 'offsetHeight', { get: () => visible ? 120 : 0 });
+    const rows = Array.from(menu.querySelectorAll('button'));
+    rows.forEach((row, index) => {
+      row.getClientRects = () => (visible ? [rect(136, 150 + 8 + index * 38, triggerWidth - 12, 32)] : []) as unknown as DOMRectList;
+      const dimensions: Record<string, () => number> = { offsetLeft: () => 6, offsetTop: () => 8 + index * 38, offsetWidth: () => parseFloat(menu.style.width || '0') - 12, offsetHeight: () => 32 };
+      for (const [key, value] of Object.entries(dimensions)) {
+        Object.defineProperty(row, key, { get: () => visible ? value() : 0 });
+      }
+    });
+    menu.setPointerCapture = () => {};
+    menu.releasePointerCapture = () => {};
+    const frames: FrameRequestCallback[] = [];
+    const timers = new Map<number, {callback: () => void; due: number}>();
+    let timerId = 0, clock = 0;
+    const advance = (elapsed: number) => {
+      clock += elapsed;
+      for (const [id, timer] of [...timers]) if (timer.due <= clock) { timers.delete(id); timer.callback(); }
+    };
+    const factory = new Function('window', 'document', 'getComputedStyle', 'requestAnimationFrame', 'setTimeout', 'clearTimeout', `
+      function setLiquidPopupPressDeformation() {}
+      function setLiquidPopupDeformation() {}
+      ${source.match(/var LIQUID_HOLD_DRAG_ACTIVATION_MS = \d+;/)?.[0] || ''}
+      ${wire.getText(ast)}
+      window.positionSelectPopup = ${assignedFunctionSource(source, 'positionSelectPopup')};
+      return wireDirectLiquidMenuInteractionsV2;
+    `);
+    const initialize = factory(win, win.document, win.getComputedStyle.bind(win), (callback: FrameRequestCallback) => { frames.push(callback); return frames.length; }, (callback: () => void, delay: number) => { timers.set(++timerId, {callback, due: clock + Number(delay || 0)}); return timerId; }, (id: number) => timers.delete(id)) as (menu: HTMLElement) => void;
+    const position = () => (win as unknown as { positionSelectPopup(button: HTMLElement, menu: HTMLElement): void }).positionSelectPopup(button, menu);
+    const geometry = () => [menu._liquidColorBlock.style.left, menu._liquidColorBlock.style.top, menu._liquidColorBlock.style.width, menu._liquidColorBlock.style.height];
+    const pointer = (type: string, target: EventTarget) => { const event = new win.MouseEvent(type, { button: 0, clientX: 150, clientY: 240, bubbles: true }); Object.defineProperties(event, { pointerId: { value: 7 }, pointerType: { value: 'mouse' } }); target.dispatchEvent(event); };
+    try {
+      initialize(menu);
+      const block = menu._liquidColorBlock;
+      assert.ok(block?.isConnected, `${optionClass}: hidden setup creates one reusable block`);
+      assert.equal(block.style.width, '', `${optionClass}: hidden zero geometry is never stored as the source`);
+      block.style.transition = 'left 240ms';
+      const flushes: string[] = [];
+      Object.defineProperty(block, 'offsetWidth', { get: () => { flushes.push(block.style.transition); return parseFloat(block.style.width || '0'); } });
+      visible = true;
+      position();
+      assert.deepEqual(geometry(), ['6px', '46px', '168px', '32px'], `${optionClass}: final visible popup width initializes the selected row source`);
+      assert.equal(flushes.at(-1), 'none', `${optionClass}: idle anchor is committed without a fictitious transition`);
+      assert.equal(block.style.transition, 'left 240ms', `${optionClass}: initialization restores the existing animation contract`);
+      visible = false;
+      initialize(menu);
+      assert.equal(menu._liquidColorBlock, block, `${optionClass}: a hidden rerender reuses the block`);
+      assert.deepEqual(geometry(), ['6px', '46px', '168px', '32px'], `${optionClass}: hidden rerender cannot replace valid geometry with zero`);
+      triggerWidth = 220;
+      visible = true;
+      position();
+      assert.deepEqual(geometry(), ['6px', '46px', '208px', '32px'], `${optionClass}: reopening anchors to the newly measured popup width`);
+      pointer('pointerdown', rows[2]);
+      const beforeHold = geometry();
+      advance(79);
+      assert.equal(block.classList.contains('liquid-block-lifted'), false, `${optionClass}: 79ms is still the initial press`);
+      assert.deepEqual(geometry(), beforeHold, `${optionClass}: the source does not move before activation`);
+      advance(1);
+      assert.equal(block.classList.contains('liquid-block-lifted'), true, `${optionClass}: the real timer activates pickup at 80ms`);
+      pointer('pointercancel', win);
+      assert.equal(block.classList.contains('liquid-block-lifted'), false, `${optionClass}: cancellation clears the activated pickup`);
+      frames.length = 0; timers.clear();
+      pointer('pointerdown', rows[2]);
+      advance(79); pointer('pointercancel', win); advance(1);
+      assert.equal(block.classList.contains('liquid-block-lifted'), false, `${optionClass}: cancelling before 80ms never activates a late drag`);
+      frames.length = 0; timers.clear(); position();
+      pointer('pointerdown', rows[2]);
+      const duringPointer = geometry();
+      triggerWidth = 260;
+      position();
+      assert.deepEqual(geometry(), duringPointer, `${optionClass}: active pointer owns its geometry during popup positioning`);
+      pointer('pointerup', win);
+      assert.ok(menu.dataset.liquidPendingCommit, `${optionClass}: the real release path starts the deferred commit flight`);
+      while (frames.length) frames.shift()!(0);
+      const duringFlight = geometry();
+      position();
+      assert.deepEqual(geometry(), duringFlight, `${optionClass}: visible layout refresh never reanchors an in-flight block to the old selection`);
+      assert.equal(menu.querySelectorAll('.liquid-menu-color-block').length, 1, `${optionClass}: reopen and flight preserve a single material block`);
+    } finally {
+      timers.clear();
+      frames.length = 0;
+      dom.window.close();
+    }
+  }
+}
+
 function main(): void {
   const source = uiScriptSource();
   const names = ['closeNewmarkSelect', 'positionSelectPopup', 'positionNewmarkSelectMenu', 'selectReadableControlWidth', 'syncNewmarkSelectWidth', 'syncNewmarkSelect', 'enhanceNewmarkSelect', 'enhanceNewmarkSelects'];
@@ -44,6 +143,7 @@ function main(): void {
     function escAttr(value) { return esc(value).replace(/"/g, '&quot;'); }
     function iconSvg() { return '<svg></svg>'; }
     function wireLiquidMenuInteractions(menu) { if (menu) menu.dataset.liquidInteractions = 'true'; }
+    function wireDirectLiquidMenuInteractionsV2(menu) { if (menu) menu.dataset.liquidDirectOptions = 'true'; }
     window.closeModelSelectMenu = function() {};
     window.setLiquidSidebarGestureLock = function() {};
     ${assignments}
@@ -118,6 +218,7 @@ function main(): void {
   api.enhanceNewmarkSelects(dynamic);
   assert.ok(document.getElementById('workspace-select')?.parentElement?.classList.contains('newmark-select-shell'), 'dynamic dialog select is enhanced');
   dom.window.close();
+  verifyVisibleBlockAnchoring(source);
   console.log('Newmark select verification passed');
 }
 

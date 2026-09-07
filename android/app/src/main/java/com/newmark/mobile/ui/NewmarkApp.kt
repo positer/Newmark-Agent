@@ -1,7 +1,9 @@
 package com.newmark.mobile.ui
 
+import android.app.Activity
 import android.Manifest
 import android.content.ClipData
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -357,11 +359,17 @@ private data class ConversationUiActions(
     val guideQueueItem: (String) -> Unit,
     val inspectBranch: (String, Int) -> Unit,
     val editUserMessage: (Int, String) -> Unit,
+    val guideEditedQueueItem: RemoteQueueEditSender? = null,
+    val guideImages: RemoteImageGuideSender? = null,
+    val sendAccepted: RemoteImageGuideSender? = null,
+    val updateQueueAccepted: RemoteQueueEditSender? = null,
+    val reorderQueueAccepted: RemoteQueueOrderSender? = null,
 )
 
 /** One immutable argument surface shared by compact and expanded layouts. */
 private data class ConversationSurface(
     val title: String,
+    val composerTargetKey: String,
     val items: List<ChatItem>,
     val isSending: Boolean,
     val remoteMode: Boolean,
@@ -404,6 +412,19 @@ fun NewmarkApp(
         darkMode = themeStore.loadDarkMode()
     }
     val dark = darkMode ?: isSystemInDarkTheme()
+    val themeView = LocalView.current
+    LaunchedEffect(dark, themeView) {
+        val activity = (context as? Activity)
+            ?: (context as? ContextWrapper)?.baseContext as? Activity
+        activity?.window?.let { window ->
+            // Manual app themes can differ from the system theme. Keep system
+            // icons readable over the actual edge-to-edge app canvas as well.
+            androidx.core.view.WindowCompat.getInsetsController(window, themeView).apply {
+                isAppearanceLightStatusBars = !dark
+                isAppearanceLightNavigationBars = !dark
+            }
+        }
+    }
     CompositionLocalProvider(
         LocalThemeMode provides ThemeMode(darkMode) { new ->
             darkMode = new
@@ -673,8 +694,11 @@ private fun NewmarkAppContent(
             } else {
                 // The false lane owns a separate unattached WebView. It never
                 // resolves the right-sidebar session and never enters Compose.
-                val host = backgroundBrowserHosts[browserTargetKey]
-                    ?: withContext(Dispatchers.Main.immediate) {
+                val host = backgroundBrowserHosts[browserTargetKey]?.takeUnless { it.isClosed }
+                    ?: run {
+                        BrowserStartup.await(context)
+                        withContext(Dispatchers.Main.immediate) {
+                        backgroundBrowserHosts.remove(browserTargetKey)?.close()
                         backgroundBrowserHosts.getOrPut(browserTargetKey) {
                             BackgroundBrowserHost(
                                 context = context.applicationContext,
@@ -682,6 +706,7 @@ private fun NewmarkAppContent(
                                 correctOcr = vm::correctFinalVisualOcr,
                             )
                         }
+                    }
                     }
                 host.execute(args)
             }
@@ -757,21 +782,28 @@ private fun NewmarkAppContent(
     }
     val intelligence = if (useRemote) (linkVm.desktopState?.intelligence ?: "medium") else vm.intelligence
     val selectedMode = if (useRemote) {
-        linkVm.desktopState?.mode.orEmpty().ifBlank { "build" }.replaceFirstChar(Char::titlecase)
+        remoteUi.mode.ifBlank { "build" }.replaceFirstChar(Char::titlecase)
     } else vm.currentMode.replaceFirstChar(Char::titlecase)
     // 强制停止态（octagon-x）：仅远程，PC 端 runtime.status 为 stopping / force_restarting
     val escalating = useRemote && linkVm.desktopState?.status in setOf("stopping", "force_restarting")
+    val remoteComposerKey = linkVm.remoteComposerTargetKey
     val conversationActions = if (useRemote) ConversationUiActions(
         send = linkVm::sendToDesktop,
-        sendImages = { text, _ -> linkVm.sendToDesktop(text) },
+        sendImages = { text, images -> linkVm.sendToDesktop(text, images = images) },
+        guideImages = { text, images, onAccepted ->
+            linkVm.sendToDesktop(text, forceGuide = true, images = images, onAccepted = onAccepted, expectedTargetKey = remoteComposerKey)
+        },
+        sendAccepted = { text, images, onAccepted ->
+            linkVm.sendToDesktop(text, images = images, onAccepted = onAccepted, expectedTargetKey = remoteComposerKey)
+        },
         guide = { text ->
-            linkVm.guideRemoteConversation(text)
+            linkVm.sendToDesktop(text, forceGuide = true)
             true
         },
         stop = { if (remoteUi.flow?.running == true) linkVm.pauseRemoteFlow() else linkVm.stopRemoteConversation() },
         selectModel = linkVm::selectRemoteModel,
         selectIntelligence = linkVm::selectRemoteIntelligence,
-        selectMode = {},
+        selectMode = linkVm::selectRemoteMode,
         editGoal = linkVm::submitRemoteGoalEdit,
         toggleGoalPause = linkVm::toggleRemoteGoalPause,
         deleteGoal = linkVm::clearRemoteGoal,
@@ -781,6 +813,9 @@ private fun NewmarkAppContent(
         deleteQueueItem = linkVm::deleteRemoteQueueMessage,
         reorderQueueItems = linkVm::reorderRemoteQueueMessages,
         guideQueueItem = linkVm::guideRemoteQueueMessage,
+        guideEditedQueueItem = { id, text, onAccepted -> linkVm.guideEditedRemoteQueueMessage(id, text, onAccepted, remoteComposerKey) },
+        updateQueueAccepted = { id, text, onAccepted -> linkVm.updateRemoteQueueMessage(id, text, onAccepted, remoteComposerKey) },
+        reorderQueueAccepted = { ids, onAccepted -> linkVm.reorderRemoteQueueMessages(ids, onAccepted, remoteComposerKey) },
         inspectBranch = linkVm::inspectRemoteBranch,
         editUserMessage = linkVm::branchRemoteMessage,
     ) else ConversationUiActions(
@@ -911,6 +946,7 @@ private fun NewmarkAppContent(
 
     val conversationSurface = ConversationSurface(
         title = title,
+        composerTargetKey = if (useRemote) "remote:$remoteComposerKey" else "local:${vm.currentId.orEmpty()}",
         items = displayItems,
         isSending = sending,
         remoteMode = useRemote,
@@ -1017,6 +1053,19 @@ private fun NewmarkAppContent(
             expandedDevice != null -> expandedDevice = null
             else -> { /* no mobile layer; host activity handles the back */ }
         }
+    }
+    // A local Agent is owned by LocalAgentForegroundService and must keep
+    // running when the user returns to the launcher. Intercept only the root
+    // back gesture while a local runtime is live, placing the task in the
+    // background instead of destroying the activity and its selected-conversation
+    // state. When no local Agent is running the host keeps its normal back
+    // behavior, so users can still finish the task.
+    BackHandler(
+        enabled = screen == Screen.Main && !hasMainOverlay && vm.hasRunningLocalAgents,
+    ) {
+        val hostActivity = (context as? Activity)
+            ?: (context as? ContextWrapper)?.baseContext as? Activity
+        hostActivity?.moveTaskToBack(true)
     }
     val sidebarGestureLocks = remember { mutableStateMapOf<String, Boolean>() }
     val sidebarGesturesLocked = sidebarGestureLocks.values.any { it }
@@ -1313,6 +1362,12 @@ private fun CompactMainLayout(
                         } else {
                             palette.bgSecondary
                         },
+                        // The portrait drawer is a full-height rectangular
+                        // carrier. A global Kyant edge highlight on that
+                        // rectangle reads as a bright outline in dark mode;
+                        // controls inside the drawer keep their own bounded
+                        // glass edges and pointer glow.
+                        edgeHighlight = false,
                     ),
                 drawerContainerColor = Color.Transparent,
                 drawerContentColor = palette.textPrimary,
@@ -1413,7 +1468,10 @@ private fun ExpandedMainLayout(
     // actual right edge crosses it, the conversation boundary follows that
     // exact edge rather than a separate normalized animation curve.
     val leftBoundaryWidth = maxOf(48.dp, expandedSidebarWidth * leftReveal)
-    Box(Modifier.fillMaxSize().then(gestureModifier)) {
+    // Wide layouts reserve transparent slots beneath their overlay sidebars.
+    // Give those slots the app canvas, so translucent carriers never composite
+    // against the window's unrelated default background.
+    Box(Modifier.fillMaxSize().background(palette.bgPrimary).then(gestureModifier)) {
         Row(Modifier.layerBackdrop(liquidBackdrop).fillMaxSize()) {
             // These slots only reserve the currently visible boundaries. The
             // actual sidebars are fixed-size overlay surfaces below and never
@@ -1539,6 +1597,7 @@ private fun ConversationSurfaceContent(
 ) {
     ChatScreen(
         title = surface.title,
+        composerTargetKey = surface.composerTargetKey,
         items = surface.items,
         isSending = surface.isSending,
         showMenuButton = showMenuButton,
@@ -1557,6 +1616,8 @@ private fun ConversationSurfaceContent(
         onSend = surface.actions.send,
         onSendWithImages = surface.actions.sendImages,
         onGuide = surface.actions.guide,
+        onGuideWithImages = surface.actions.guideImages,
+        onSendAccepted = surface.actions.sendAccepted,
         onStop = surface.actions.stop,
         escalating = surface.escalating,
         showConnectRemote = surface.showConnectRemote,
@@ -1574,6 +1635,9 @@ private fun ConversationSurfaceContent(
         onDeleteQueueItem = surface.actions.deleteQueueItem,
         onReorderQueueItems = surface.actions.reorderQueueItems,
         onGuideQueueItem = surface.actions.guideQueueItem,
+        onGuideEditedQueueItem = surface.actions.guideEditedQueueItem,
+        onUpdateQueueItemAccepted = surface.actions.updateQueueAccepted,
+        onReorderQueueItemsAccepted = surface.actions.reorderQueueAccepted,
         onInspectBranch = surface.actions.inspectBranch,
         onEditUserMessage = surface.actions.editUserMessage,
         onOpenWebLink = surface.onOpenWebLink,

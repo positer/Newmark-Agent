@@ -57,7 +57,6 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.json.JSONArray
 import java.util.UUID
@@ -402,6 +401,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val convs = conversationStore.load()
             val archivedFromDisk = conversationStore.loadArchived()
+            val activeId = conversationStore.loadActiveId()
             val provs = providerStore.load()
             val act = providerStore.loadActive()
             val (live, legacyArchived) = convs.partition { !it.archived }
@@ -426,8 +426,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 activeModelName = act.modelName
                 intelligence = if (act.intelligence in INTELLIGENCE_TIERS) act.intelligence else "medium"
                 normalizeActive()
-                if (conversations.isNotEmpty() && currentId == null) {
-                    currentId = conversations.first().id
+                if (currentId == null && conversations.isNotEmpty()) {
+                    currentId = activeId
+                        ?.takeIf { id -> conversations.any { it.id == id } }
+                        ?: conversations.first().id
+                    conversationStore.saveActiveId(currentId)
                 }
             }
         }
@@ -628,12 +631,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
         conversations = listOf(c) + conversations
         currentId = c.id
+        conversationStore.saveActiveId(c.id)
         error = null
         persist()
     }
 
     fun selectConversation(id: String) {
         currentId = id
+        conversationStore.saveActiveId(id)
         error = null
     }
 
@@ -842,52 +847,26 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         updateConversation(id) { it.copy(title = t, updatedAt = System.currentTimeMillis()) }
     }
 
-    private fun normalizeGeneratedConversationTitle(raw: String, source: String): String {
-        val title = raw.lineSequence().map(String::trim).firstOrNull(String::isNotBlank).orEmpty()
-            .replace(Regex("^#{1,6}\\s*|^[-*+>]\\s*"), "")
-            .trim('"', '\'', '“', '”', '‘', '’')
-            .replace(Regex("\\s+"), " ").trim().take(80)
-        val normalizedSource = source.replace(Regex("\\s+"), " ").trim()
-        if (title.length < 2 || title == normalizedSource) return ""
-        return title
-    }
-
-    private fun requestFirstInputConversationTitle(
+    private suspend fun requestFirstInputConversationTitle(
         conversationId: String,
         messageId: String,
         firstInput: String,
         config: ApiConfig,
         turnIntelligence: String,
         turnThinkingTierMap: Map<String, String>,
-    ): kotlinx.coroutines.Deferred<Boolean> {
-        val job = LocalAgentForegroundService.asyncRuntime {
-            val prompt = "Summarize the user's intent and output only a short concrete noun-phrase conversation title. " +
-                "Do not quote, repeat, or truncate the input. No Markdown or explanation.\n\n" +
-                "First user input:\n${firstInput.take(4000)}"
-            val response = withTimeoutOrNull(15_000L) {
-                apiClient.chat(
-                    config = config,
-                    messages = listOf(ChatMessage(role = "user", content = prompt)),
-                    tools = emptyList(),
-                    intelligence = turnIntelligence,
-                    thinkingTierMap = turnThinkingTierMap,
-                    maxOutputTokens = 64,
-                ).getOrNull()
-            }
-            val title = normalizeGeneratedConversationTitle(response?.content.orEmpty(), firstInput)
-            if (title.isBlank()) return@asyncRuntime false
-            var applied = false
-            updateConversation(conversationId) { current ->
-                val firstUser = current.messages.firstOrNull { it.role == "user" }
-                if (current.titleRequestMessageId != messageId || firstUser?.messageId != messageId || current.firstAgentResponseStarted) current
-                else {
-                    applied = true
-                    current.copy(title = if (current.title == "新对话") title else current.title, updatedAt = System.currentTimeMillis())
-                }
-            }
-            applied
-        }
-        return job
+        onFailure: (String) -> Unit,
+    ): Boolean = requestAndApplyFirstInputTitle(
+        apiClient, firstInput, config, turnIntelligence, turnThinkingTierMap,
+        onFailure = onFailure,
+    ) { title ->
+        commitFirstInputConversationTitle(
+            conversations, conversationId, messageId, title,
+            persist = { updated ->
+                if (loaded) conversationStore.save(updated)
+                else Result.failure(IllegalStateException("Conversations are not loaded"))
+            },
+            publish = { conversations = it },
+        )
     }
 
     fun archiveConversation(id: String) {
@@ -899,6 +878,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         conversationStore.saveArchived(archived)
         if (currentId == id) {
             currentId = conversations.firstOrNull()?.id
+            conversationStore.saveActiveId(currentId)
         }
     }
 
@@ -1213,11 +1193,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     ?.messages?.firstOrNull { it.role == "user" }
                 val titleInput = firstUser?.content.orEmpty().ifBlank { "用户提交了 ${firstUser?.imageAttachments?.size ?: images.size} 个图片附件" }
                 var titleReady = false
+                var lastTitleFailure = ""
                 // 标题探测失败（空响应、响应重复用户输入、临时传输错误）使用
                 // 0s → 1s → 2s → 4s → 8s 的 5 级退避，全部失败才阻断正式首轮。
                 val titleAttemptLimit = 5
                 val titleRetryDelaysMs = listOf(0L, 1000L, 2000L, 4000L, 8000L)
                 for (attempt in 0 until titleAttemptLimit) {
+                    lastTitleFailure = ""
                     titleReady = requestFirstInputConversationTitle(
                         targetConversationId,
                         firstTitleMessageId,
@@ -1225,7 +1207,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         titleConfig,
                         turnIntelligence,
                         turnThinkingTierMap,
-                    ).await()
+                        onFailure = { lastTitleFailure = it },
+                    )
                     if (titleReady) break
                     if (attempt < titleAttemptLimit - 1 && currentCoroutineContext().isActive) {
                         delay(titleRetryDelaysMs[attempt])
@@ -1233,7 +1216,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 if (!titleReady) {
                     val endedAt = System.currentTimeMillis()
-                    val message = "标题总结在自动重试后仍失败，首轮 Agent 尚未执行。"
+                    val message = "标题总结在自动重试后仍失败，首轮 Agent 尚未执行。" +
+                        lastTitleFailure.takeIf(String::isNotBlank)?.let { "\n原因：$it" }.orEmpty()
                     localLiveRuns[targetConversationId] = LocalWorkRun(
                         runId = runId,
                         status = "error",
@@ -2234,7 +2218,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun persist() {
-        if (loaded) conversationStore.save(conversations)
+        if (loaded) conversationStore.save(conversations).onFailure {
+            error = com.newmark.mobile.data.CONVERSATION_SAVE_FAILURE_MESSAGE
+        }
     }
 
 }

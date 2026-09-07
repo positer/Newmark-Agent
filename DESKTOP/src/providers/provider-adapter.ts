@@ -111,6 +111,8 @@ export interface ActualApiUsage {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   totalTokens: number;
+  /** Legacy injected providers may omit this; normal protocol parsing fills it. */
+  reported?: import('../core/types').ProviderUsageReported;
 }
 
 export interface ProviderResponseMetadata {

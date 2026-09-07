@@ -26,8 +26,9 @@ export interface ConversationQueueItemSnapshot {
   goalObjective?: string;
   runId?: string;
   createdAt: string;
+  images?: AgentPromptMessage['images'];
 }
-export type ConversationQueueAction = 'enqueue' | 'update' | 'delete' | 'reorder' | 'toggle_pause' | 'guide';
+export type ConversationQueueAction = 'enqueue' | 'update' | 'delete' | 'reorder' | 'toggle_pause' | 'set_pause' | 'guide';
 export interface ConversationQueueActionInput {
   id?: string;
   text?: string;
@@ -36,6 +37,7 @@ export interface ConversationQueueActionInput {
   createdAt?: string;
   images?: AgentPromptMessage['images'];
   orderedIds?: string[];
+  paused?: boolean;
 }
 export interface AgentPromptMessage {
   text: string;
@@ -49,6 +51,9 @@ export interface AgentPromptMessage {
   images?: Array<{ dataUrl: string; name?: string; type?: string }>;
   attachments?: ConversationImageAttachment[];
   clientMessageId?: string;
+  /** Stable ordinary user identity; unlike clientMessageId alone, never denotes a Guide. */
+  userMessageId?: string;
+  createdAt?: string;
   guideId?: string;
   runId?: string;
   /**
@@ -157,6 +162,7 @@ interface ConversationRuntime {
   unsubscribe?: () => void;
   unsubscribePeer?: () => void;
   unsubscribeRootInboxWake?: () => void;
+  unsubscribeUserMessageStart?: () => void;
   runId: string;
   generation: number;
   stopRequestedRunId: string;
@@ -168,6 +174,8 @@ interface ConversationRuntime {
   goalContinuationTimer?: ReturnType<typeof setTimeout>;
   pendingContinuationRunId?: string;
   lastAutomaticAssistantFingerprint?: string;
+  externalOwner?: { active: boolean; wasPaused: boolean };
+  preparingArchive?: boolean;
 }
 
 type WorkListener = (event: AgentWorkEvent) => void;
@@ -205,14 +213,115 @@ export class ConversationKernel {
   }
 
   isRunning(target: ConversationTargetInput): boolean {
-    return !!this.findRuntime(target)?.activePromise;
+    const runtime = this.findRuntime(target);
+    return !!runtime?.activePromise || runtime?.externalOwner?.active === true;
+  }
+
+  conversationOwner(target: ConversationTargetInput): Agent | null {
+    return this.findRuntime(target)?.runner || null;
+  }
+
+  /** Branch mutations retain the Agent but reload that branch's durable queue. */
+  refreshIdleConversation(target: ConversationTargetInput): void {
+    const previous = this.findRuntime(target);
+    if (!previous) return;
+    if (this.isRunning(target) || previous.preparingArchive) throw new Error('Cannot refresh a running conversation');
+    previous.preparingArchive = true;
+    this.finishArchive(target, true, true);
+    const restored = this.runtime(previous.target, previous.options, previous.runner);
+    restored.queuePaused = previous.queuePaused;
+    restored.externalOwner = previous.externalOwner;
+    restored.runId = previous.runId;
+    this.emitQueueUpdate(restored);
+  }
+
+  /** Detach idle owners before config replacement or workspace removal. */
+  disposeIdle(workspaceKey?: string): string[] {
+    const runtimes = Array.from(this.runtimes.values()).filter(runtime => !workspaceKey || runtime.target.workspaceKey === workspaceKey);
+    if (runtimes.some(runtime => runtime.activePromise || runtime.externalOwner || runtime.pendingNextTurn.length || runtime.runner.subagents.hasPendingWork())) {
+      throw new Error('Cannot release a conversation with running or queued work');
+    }
+    for (const runtime of runtimes) {
+      runtime.runner.flushWorkspaceConversationState();
+      runtime.preparingArchive = true;
+      this.finishArchive(runtime.target, true);
+    }
+    return runtimes.map(runtime => runtime.runtimeKey);
+  }
+
+  /** A Flow and its queue share one Agent; no second history writer is created. */
+  beginExternalRun(targetInput: ConversationTargetInput, options: ConversationKernelRunOptions, createOwner: () => Agent, previousQueuePaused?: boolean): Agent {
+    const target = this.normalizeTarget(targetInput);
+    const existing = this.findRuntime(target);
+    if (existing?.activePromise || existing?.externalOwner?.active) throw new Error('Target conversation is already running');
+    const runtime = existing || this.runtime(target, options, createOwner());
+    runtime.options = { ...options };
+    runtime.externalOwner = { active: true, wasPaused: runtime.externalOwner?.wasPaused ?? previousQueuePaused ?? runtime.queuePaused };
+    runtime.queuePaused = true;
+    runtime.runId ||= randomUUID();
+    runtime.stopRequestedRunId = '';
+    this.emitQueueUpdate(runtime);
+    return runtime.runner;
+  }
+
+  settleExternalRun(target: ConversationTargetInput, completed: boolean): void {
+    const runtime = this.findRuntime(target);
+    if (!runtime?.externalOwner) return;
+    const wasPaused = runtime.externalOwner.wasPaused;
+    if (completed) runtime.externalOwner = undefined;
+    else runtime.externalOwner.active = false;
+    runtime.queuePaused = completed && !runtime.preparingArchive ? wasPaused : true;
+    runtime.runner.saveWorkspaceConversationState(true);
+    this.emitQueueUpdate(runtime);
+    if (!runtime.queuePaused && runtime.pendingNextTurn.length) this.schedulePendingRuntimeContinuation(runtime, runtime.runId);
+  }
+
+  releaseExternalRun(target: ConversationTargetInput, paused: boolean): void {
+    const runtime = this.findRuntime(target);
+    if (!runtime) return;
+    if (runtime.externalOwner?.active) throw new Error('Wait for the Flow to stop before releasing its queue');
+    runtime.externalOwner = undefined;
+    this.setQueuePaused(target, paused);
+  }
+
+  async prepareForArchive(target: ConversationTargetInput): Promise<Agent | null> {
+    const runtime = this.findRuntime(target);
+    if (!runtime) return null;
+    if (runtime.runner.subagents.hasPendingWork()) throw new Error('Cannot archive a conversation with running or queued subagents');
+    runtime.preparingArchive = true;
+    runtime.queuePaused = true;
+    if (runtime.goalContinuationTimer) clearTimeout(runtime.goalContinuationTimer);
+    runtime.goalContinuationTimer = undefined;
+    runtime.runner.abortActiveKernelRun('user_stop');
+    if (runtime.activePromise) {
+      runtime.stopRequestedRunId = runtime.runId;
+      try { await runtime.activePromise; } catch { /* archive owns the terminal outcome */ }
+    }
+    runtime.runner.flushWorkspaceConversationState();
+    return runtime.runner;
+  }
+
+  finishArchive(target: ConversationTargetInput, completed: boolean, preserveOwner = false): void {
+    const runtime = this.findRuntime(target);
+    if (!runtime?.preparingArchive) return;
+    if (!completed) { runtime.preparingArchive = false; runtime.queuePaused = true; return; }
+    // Branch refresh reuses this facade immediately; terminal release must
+    // detach its shared-manager callbacks as well as the kernel subscriptions.
+    if (!preserveOwner) runtime.runner.releaseConversationRuntimeBindings();
+    runtime.unsubscribe?.(); runtime.unsubscribePeer?.(); runtime.unsubscribeRootInboxWake?.(); runtime.unsubscribeUserMessageStart?.();
+    if (runtime.goalContinuationTimer) clearTimeout(runtime.goalContinuationTimer);
+    this.runtimes.delete(runtime.runtimeKey);
   }
 
   isAnyRunning(): boolean {
     for (const runtime of this.runtimes.values()) {
-      if (runtime.activePromise) return true;
+      if (runtime.activePromise || runtime.externalOwner?.active) return true;
     }
     return false;
+  }
+
+  hasRetainedWork(): boolean {
+    return Array.from(this.runtimes.values()).some(runtime => runtime.activePromise || runtime.externalOwner || runtime.pendingNextTurn.length || runtime.runner.subagents.hasPendingWork());
   }
 
   flushPersistence(): void {
@@ -249,10 +358,12 @@ export class ConversationKernel {
     const visibleMode = message.visibleMode;
     return {
       text,
+      ...(message.userMessageId || message.clientMessageId ? { userMessageId: message.userMessageId || message.clientMessageId } : {}),
       ...(images?.length ? { images } : {}),
       ...(attachments?.length ? { attachments } : {}),
       ...(visible ? { visibleUserInput: visible } : {}),
       ...(visibleMode ? { visibleMode } : {}),
+      ...(message.goalObjective ? { goalObjective: message.goalObjective } : {}),
       // A normal user follow-up must never inherit the identity metadata that
       // was only needed while it lived in the runtime queue.  In particular,
       // do not let a stale/forwarded hiddenUserInput flag classify it as an
@@ -277,6 +388,7 @@ export class ConversationKernel {
         goalObjective: item.message.goalObjective,
         runId: item.message.runId,
         createdAt: String((item.message as AgentPromptMessage & { createdAt?: string }).createdAt || ''),
+        images: item.message.images?.map(image => ({ ...image })),
       }];
     });
   }
@@ -286,7 +398,8 @@ export class ConversationKernel {
     input: { id: string; text: string; requestedMode?: string; goalObjective?: string; createdAt?: string; images?: AgentPromptMessage['images'] },
   ): ConversationQueueItemSnapshot {
     const runtime = this.findRuntime(target);
-    if (!runtime?.activePromise || !runtime.runId) throw new Error('Target conversation is not running');
+    if (!runtime) throw new Error('Target conversation runtime is unavailable');
+    runtime.runId ||= randomUUID();
     const id = String(input.id || '').trim().slice(0, 200);
     const text = String(input.text || '').trim();
     if (!id || !text) throw new Error('Queue item id and text are required');
@@ -313,13 +426,18 @@ export class ConversationKernel {
       clientMessageId: id,
       runId: runtime.runId,
       createdAt,
+      images: input.images,
+      visibleUserInput: text,
+      visibleMode: String(input.requestedMode || 'build'),
+      goalObjective: input.goalObjective,
     }]);
     this.trackQueuedMessage(runtime, prompt, 'followUp');
     this.emitQueueUpdate(runtime);
+    if (!runtime.activePromise && !runtime.externalOwner && !runtime.queuePaused) this.schedulePendingRuntimeContinuation(runtime, runtime.runId);
     return this.queueItems(runtime.target).find(item => item.id === id)!;
   }
 
-  updateQueueItem(target: ConversationTargetInput, idInput: string, textInput: string): ConversationQueueItemSnapshot {
+  updateQueueItem(target: ConversationTargetInput, idInput: string, textInput: string, input: ConversationQueueActionInput = {}): ConversationQueueItemSnapshot {
     const runtime = this.findRuntime(target);
     if (!runtime) throw new Error('Target conversation runtime is unavailable');
     const id = String(idInput || '').trim();
@@ -327,17 +445,23 @@ export class ConversationKernel {
     if (!id || !text) throw new Error('Queue item id and text are required');
     const pending = runtime.pendingNextTurn.find(item => typeof item.message !== 'string' && item.message.clientMessageId === id);
     if (!pending || typeof pending.message === 'string') throw new Error('Queue item is no longer editable');
-    const oldPrompt = pending.message.text;
+    const previous = runtime.runner.conversationContinuations().find(item => item.clientMessageId === id);
     pending.message.text = `[Next queued while current turn is running]\n${text}`;
     pending.message.visibleUserInput = text;
-    runtime.runner.consumeConversationContinuation({ content: oldPrompt, queueMode: pending.queueMode, clientMessageId: id });
+    if (input.requestedMode !== undefined) pending.message.visibleMode = input.requestedMode;
+    if (input.goalObjective !== undefined) pending.message.goalObjective = input.goalObjective;
+    if (input.images !== undefined) pending.message.images = input.images.map(image => ({ ...image }));
     runtime.runner.retainConversationContinuations([{
+      ...previous,
       content: pending.message.text,
       queueMode: pending.queueMode,
       clientMessageId: id,
       runId: pending.message.runId,
+      images: pending.message.images,
+      visibleUserInput: text,
+      visibleMode: pending.message.visibleMode,
+      goalObjective: pending.message.goalObjective,
     }]);
-    this.replaceTrackedQueuedMessage(runtime, oldPrompt, pending.message.text, pending.queueMode);
     this.emitQueueUpdate(runtime);
     return this.queueItems(runtime.target).find(item => item.id === id)!;
   }
@@ -351,7 +475,6 @@ export class ConversationKernel {
     const [removed] = runtime.pendingNextTurn.splice(index, 1);
     if (typeof removed.message !== 'string') {
       runtime.runner.consumeConversationContinuation({ content: removed.message.text, queueMode: removed.queueMode, clientMessageId: id });
-      this.consumeQueuedMessage(runtime, removed.message.text);
     }
     this.emitQueueUpdate(runtime);
     return true;
@@ -399,6 +522,7 @@ export class ConversationKernel {
   setQueuePaused(target: ConversationTargetInput, paused: boolean): boolean {
     const runtime = this.findRuntime(target);
     if (!runtime) throw new Error('Target conversation runtime is unavailable');
+    if (!paused && runtime.externalOwner) throw new Error('Release the Flow owner before resuming its queue');
     runtime.queuePaused = paused;
     this.emitQueueUpdate(runtime);
     if (!paused && !runtime.activePromise && runtime.pendingNextTurn.length) {
@@ -418,8 +542,12 @@ export class ConversationKernel {
     queued: { steering: string[]; followUp: string[] };
     receipt?: GuideReceipt;
   } {
-    const runtime = this.findRuntime(target);
-    if (!runtime) throw new Error('Target conversation runtime is unavailable');
+    const normalized = this.normalizeTarget(target);
+    const runtime = this.findRuntime(normalized) || this.runtime(normalized, {
+      mode: this.host.mode, model: this.host.model, intelligence: this.host.intelligence,
+      inputMode: this.host.inputMode, engine: this.host.engine,
+    });
+    runtime.runId ||= randomUUID();
     let receipt: GuideReceipt | undefined;
     if (action === 'enqueue') {
       this.enqueueNext(runtime.target, {
@@ -431,14 +559,17 @@ export class ConversationKernel {
         images: input.images,
       });
     } else if (action === 'update') {
-      this.updateQueueItem(runtime.target, String(input.id || ''), String(input.text || ''));
+      this.updateQueueItem(runtime.target, String(input.id || ''), String(input.text || ''), input);
     } else if (action === 'delete') {
       if (!this.deleteQueueItem(runtime.target, String(input.id || ''))) throw new Error('Queue item was not found');
     } else if (action === 'reorder') {
       this.reorderQueueItems(runtime.target, input.orderedIds || []);
     } else if (action === 'toggle_pause') {
       this.setQueuePaused(runtime.target, !runtime.queuePaused);
+    } else if (action === 'set_pause') {
+      this.setQueuePaused(runtime.target, input.paused === true);
     } else if (action === 'guide') {
+      if (input.text !== undefined) this.updateQueueItem(runtime.target, String(input.id || ''), input.text, input);
       const item = this.queueItems(runtime.target).find(entry => entry.id === String(input.id || ''));
       if (!item) throw new Error('Queue item was not found');
       receipt = this.enqueueGuide({
@@ -449,6 +580,7 @@ export class ConversationKernel {
         deliveryMode: 'steer',
         text: item.goalObjective ? `Goal for the current Build:\n${item.goalObjective}` : item.text,
         goalObjective: item.goalObjective,
+        images: (runtime.pendingNextTurn.find(entry => typeof entry.message !== 'string' && entry.message.clientMessageId === item.id)?.message as AgentPromptMessage | undefined)?.images,
         createdAt: item.createdAt || new Date().toISOString(),
       });
       if (receipt.status === 'rejected') return {
@@ -487,7 +619,7 @@ export class ConversationKernel {
     })) : undefined;
   }
 
-  snapshot(target: ConversationTargetInput): ReturnType<Agent['getConversationSnapshot']> & {
+  snapshot(target: ConversationTargetInput, options: { window?: number; before?: number } = {}): ReturnType<Agent['getConversationSnapshot']> & {
     target: NormalizedConversationTarget;
     queued: { steering: string[]; followUp: string[] };
     queueItems: ConversationQueueItemSnapshot[];
@@ -509,9 +641,16 @@ export class ConversationKernel {
     autoRouteRatingAvailable: boolean;
   } {
     const normalized = this.normalizeTarget(target);
-    const runtime = this.findRuntime(normalized);
+    let runtime = this.findRuntime(normalized);
     const runner = runtime?.runner || this.createRunner(normalized);
-    const conversationSnapshot = runner.getConversationSnapshot(normalized.conversationId);
+    if (!runtime && runner.conversationContinuations().length) {
+      runtime = this.runtime(normalized, { mode: runner.mode, model: runner.model, intelligence: runner.intelligence, inputMode: runner.inputMode, engine: runner.engine }, runner);
+      // Recovered user input remains visible and manageable until its owner
+      // explicitly restores the persisted queue policy or resumes the queue.
+      runtime.queuePaused = true;
+      runtime.runId ||= randomUUID();
+    }
+    const conversationSnapshot = runner.getConversationSnapshot(normalized.conversationId, options);
     return {
       ...conversationSnapshot,
       workRuns: this.bindWorkRunsToRuntimeTarget(conversationSnapshot.workRuns, normalized),
@@ -583,7 +722,7 @@ export class ConversationKernel {
     const canReactivateFinalizingRun = !runtime.activePromise
       && runtime.guideAcceptanceClosedRunId === runtime.runId
       && (!requestedRunId || requestedRunId === runtime.runId);
-    if (!runtime.activePromise && !canReactivateFinalizingRun) {
+    if (!runtime.activePromise && !runtime.externalOwner?.active && !canReactivateFinalizingRun) {
       return { ...base, reason: 'Target conversation is not running' };
     }
     let safeImages: AgentPromptMessage['images'] = [];
@@ -697,6 +836,13 @@ export class ConversationKernel {
       return accepted;
     }
 
+    if (runtime.externalOwner) {
+      const rejected: GuideReceipt = { ...accepted, status: 'rejected', reason: 'The current Flow Build is not accepting Guide input.', updatedAt: new Date().toISOString() };
+      runtime.guideEnvelopes.delete(clientMessageId);
+      runtime.guideReceipts.set(clientMessageId, rejected);
+      return runtime.runner.recordGuideReceipt(rejected);
+    }
+
     const deferred: GuideReceipt = { ...accepted, status: 'deferred', updatedAt: new Date().toISOString() };
     runtime.guideReceipts.set(clientMessageId, deferred);
     runtime.runner.recordGuideReceipt(deferred);
@@ -751,7 +897,7 @@ export class ConversationKernel {
   ): Promise<Record<string, unknown>> {
     const normalized = this.normalizeTarget(target);
     const runtime = this.findRuntime(normalized);
-    if (runtime?.activePromise) {
+    if (runtime?.activePromise || runtime?.externalOwner?.active) {
       return { ok: false, error: 'Context compression is unavailable while this conversation is running.' };
     }
     const runner = runtime?.runner || this.createRunner(normalized);
@@ -804,8 +950,7 @@ export class ConversationKernel {
     const normalized = this.normalizeTarget(target);
     const runtime = this.findRuntime(normalized);
     const runner = runtime?.runner || this.createRunner(normalized);
-    runner.setMode(mode);
-    runner.saveWorkspaceConversationState(true);
+    runner.selectConversationMode(mode);
     if (runtime) runtime.options.mode = mode;
     return runner.mode;
   }
@@ -849,6 +994,17 @@ export class ConversationKernel {
     return paused;
   }
 
+  updateGoal(target: ConversationTargetInput, objective: string): ReturnType<Agent['getConversationSnapshot']>['goal'] {
+    const normalized = this.normalizeTarget(target);
+    const runtime = this.findRuntime(normalized);
+    if (runtime?.activePromise || runtime?.externalOwner?.active) throw new Error('Use Guide to change the Goal of a running conversation');
+    const runner = runtime?.runner || this.createRunner(normalized);
+    runner.updateGoal(objective);
+    runner.selectConversationMode('goal');
+    if (runtime) runtime.options.mode = 'goal';
+    return runner.getConversationSnapshot(normalized.conversationId).goal;
+  }
+
   clearGoal(target: ConversationTargetInput): boolean {
     const normalized = this.normalizeTarget(target);
     const runtime = this.findRuntime(normalized);
@@ -877,7 +1033,7 @@ export class ConversationKernel {
       runtimeKey: runtime.runtimeKey,
       runId: runtime.runId,
       generation: runtime.generation,
-      running: !!runtime.activePromise,
+      running: !!runtime.activePromise || runtime.externalOwner?.active === true,
       stopRequested: !!runtime.runId && runtime.stopRequestedRunId === runtime.runId,
       workRuns: this.bindWorkRunsToRuntimeTarget(
         runtime.runner.getConversationSnapshot(runtime.id).workRuns,
@@ -890,16 +1046,20 @@ export class ConversationKernel {
     const normalized = this.normalizeTarget(target);
     const runtime = this.findRuntime(target);
     const runtimeKey = runtime?.runtimeKey || normalized.runtimeKey;
-    if (runtime && !runtime.activePromise && runtime.runId && runtime.stopRequestedRunId === runtime.runId) {
-      this.settleCooperativeStop(runtime, runtime.runId);
-    }
-    if (!runtime?.activePromise || !runtime.runId) {
-      return { action: 'not_running', runtimeKey, runId: runtime?.runId || undefined, generation: runtime?.generation || undefined, checkpointed: false };
-    }
-    if (expectedRunId && expectedRunId !== runtime.runId) {
+    // A stale stop cannot pause another generation's peer scheduler or emit
+    // control messages before its target identity has been checked.
+    if (runtime && expectedRunId && expectedRunId !== runtime.runId) {
       return { action: 'stale', runtimeKey, runId: runtime.runId, generation: runtime.generation, checkpointed: false };
     }
+    const peerWork = !!runtime?.runner.subagents.hasPendingWork();
+    if (runtime && !runtime.activePromise && !runtime.runner.hasRunningSubagents() && runtime.runId && runtime.stopRequestedRunId === runtime.runId) {
+      this.settleCooperativeStop(runtime, runtime.runId);
+    }
+    if (!runtime || (!runtime.activePromise && !peerWork) || !runtime.runId) {
+      return { action: 'not_running', runtimeKey, runId: runtime?.runId || undefined, generation: runtime?.generation || undefined, checkpointed: false };
+    }
     if (runtime.stopRequestedRunId === runtime.runId && runtime.forceStopArmedRunId === runtime.runId) {
+      runtime.runner.abortActiveKernelRun('force_stop');
       runtime.runner.emitWorkEvent({
         type: 'status',
         content: 'Force stopping this conversation run.',
@@ -922,7 +1082,7 @@ export class ConversationKernel {
     runtime.runner.abortActiveKernelRun('user_stop');
     runtime.runner.emitWorkEvent({
       type: 'status',
-      content: 'Stop requested. Saving progress and interrupting this conversation.',
+      content: 'Stop requested for this conversation and all of its subagents. Saving progress and interrupting execution.',
       status: 'stopping',
       runId: runtime.runId,
     });
@@ -943,6 +1103,11 @@ export class ConversationKernel {
     if (runtime?.unsubscribe) runtime.unsubscribe();
     if (runtime?.unsubscribePeer) runtime.unsubscribePeer();
     if (runtime?.unsubscribeRootInboxWake) runtime.unsubscribeRootInboxWake();
+    runtime?.unsubscribeUserMessageStart?.();
+    if (runtime) {
+      runtime.preparingArchive = true;
+      if (runtime.goalContinuationTimer) clearTimeout(runtime.goalContinuationTimer);
+    }
     if (runtime) this.runtimes.delete(runtime.runtimeKey);
     const runner = runtime?.runner || this.createRunner(normalized);
     return runner.rewindConversation(id, messageIndex);
@@ -956,6 +1121,7 @@ export class ConversationKernel {
   ): Promise<ConversationKernelRunResult> {
     const normalized = this.normalizeTarget(target);
     const active = this.findRuntime(normalized);
+    if (active?.preparingArchive) throw new Error('This conversation is being archived');
     if (active?.activePromise) {
       // A Build block is already running: queue this message. Queued messages
       // carry no send-time model/mode; the running block keeps its settings and
@@ -1018,7 +1184,7 @@ export class ConversationKernel {
           if (runtime.stopRequestedRunId === runId) {
             stopped = true;
             this.settleCooperativeStop(runtime, runId);
-          } else if (!failed && !runtime.queuePaused && runtime.pendingNextTurn.length > 0) {
+          } else if (!failed && !runtime.preparingArchive && !runtime.queuePaused && runtime.pendingNextTurn.length > 0) {
             // A renderer/IPC Guide can arrive after the final-drain barrier's
             // last check but before this promise settles. Do not leave the
             // deferred continuation queued on an idle runtime.
@@ -1026,7 +1192,7 @@ export class ConversationKernel {
           }
         }
       }
-      if (!failed && !stopped && runtime.runId === runId) this.scheduleGoalContinuation(runtime, runId);
+      if (!failed && !stopped && !runtime.preparingArchive && runtime.runId === runId) this.scheduleGoalContinuation(runtime, runId);
       if (stopped) {
         const settled = this.result(runtime, []);
         if (result?.tokens) settled.tokens = result.tokens;
@@ -1124,9 +1290,17 @@ export class ConversationKernel {
           };
           lastTokens = await this.runSingle(runtime, batchMessage, 'steer');
           if (this.repeatedAutomaticAssistant(runtime, batchMessage, 'steer')) break;
-        } else {
+    } else {
           const drained = this.drainQueuedFollowUpMessage(next.message);
-          lastTokens = await this.runSingle(runtime, drained, next.queueMode);
+          lastTokens = await this.runPendingQueueItem(runtime, next, async () => {
+            if (typeof drained !== 'string' && drained.visibleMode && ['build', 'chat', 'plan', 'goal'].includes(drained.visibleMode)) {
+              runtime.runner.setMode(drained.visibleMode as AgentMode);
+              runtime.options.mode = drained.visibleMode as AgentMode;
+            }
+            this.activateAcceptedGoal(runtime, typeof drained === 'string' ? '' : drained.goalObjective);
+            return this.runSingle(runtime, drained, next.queueMode,
+              typeof next.message === 'string' ? undefined : next.message.clientMessageId);
+          });
           if (this.repeatedAutomaticAssistant(runtime, drained, next.queueMode)) break;
         }
       }
@@ -1217,31 +1391,27 @@ export class ConversationKernel {
     runtime.options.model = runtime.runner.modelSelectionValue();
   }
 
-  private async runSingle(runtime: ConversationRuntime, message: string | AgentPromptMessage, continuationMode?: ConversationQueueMode): Promise<StreamToken[]> {
-    this.syncPendingModel(runtime);
-    this.consumeQueuedMessage(runtime, typeof message === 'string' ? message : message.text);
+  private async runSingle(runtime: ConversationRuntime, message: string | AgentPromptMessage, continuationMode?: ConversationQueueMode, continuationClientMessageId?: string): Promise<StreamToken[]> {
+    // Display payloads intentionally omit queue identity. Keep the exact
+    // durable owner separately so equal text cannot consume another item.
+    const clientMessageId = continuationClientMessageId || (typeof message === 'string' ? undefined : message.clientMessageId || message.userMessageId);
+    const durable = clientMessageId
+      ? runtime.runner.conversationContinuations().find(item => item.clientMessageId === clientMessageId)
+      : undefined;
+    const consumedMode = continuationMode || durable?.queueMode;
+    const text = typeof message === 'string' ? message : message.text;
+    let accepted = false;
+    const unsubscribe = durable?.queueMode === 'followUp' && clientMessageId
+      ? runtime.runner.subscribeAgentKernelUserMessageStart((content, acceptedId) => {
+        if (acceptedId ? acceptedId === clientMessageId : content === text) accepted = true;
+      }) : undefined;
     const timeoutMs = this.processTimeoutMs(runtime);
-    if (timeoutMs <= 0) {
-      let tokens: StreamToken[];
-      try {
-        tokens = await runtime.runner.process(message);
-      } catch (error) {
-        this.consumeFailedAutomaticContinuation(runtime, message, continuationMode);
-        throw error;
-      }
-      if (continuationMode) runtime.runner.consumeConversationContinuation({
-        content: typeof message === 'string' ? message : message.text,
-        queueMode: continuationMode,
-        clientMessageId: typeof message === 'string' ? undefined : message.clientMessageId,
-      });
-      return tokens;
-    }
-
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      let tokens: StreamToken[];
-      try {
-        tokens = await Promise.race([
+      this.syncPendingModel(runtime);
+      this.consumeQueuedMessage(runtime, text);
+      const tokens = timeoutMs <= 0 ? await runtime.runner.process(message)
+        : await Promise.race([
           runtime.runner.process(message),
           new Promise<never>((_, reject) => {
             timeout = setTimeout(() => {
@@ -1260,18 +1430,23 @@ export class ConversationKernel {
             }, timeoutMs);
           }),
         ]);
-      } catch (error) {
-        this.consumeFailedAutomaticContinuation(runtime, message, continuationMode);
-        throw error;
+      if (unsubscribe && !accepted) {
+        // Workspace/attachment rejection can resolve error tokens without
+        // accepting input. Resolution alone must not remove a queued row.
+        throw new Error('Queued input was not accepted; it remains paused for correction or retry.');
       }
-      if (continuationMode) runtime.runner.consumeConversationContinuation({
+      if (consumedMode) runtime.runner.consumeConversationContinuation({
         content: typeof message === 'string' ? message : message.text,
-        queueMode: continuationMode,
-        clientMessageId: typeof message === 'string' ? undefined : message.clientMessageId,
+        queueMode: consumedMode,
+        clientMessageId,
       });
       return tokens;
+    } catch (error) {
+      this.consumeFailedAutomaticContinuation(runtime, message, continuationMode);
+      throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
+      unsubscribe?.();
     }
   }
 
@@ -1337,13 +1512,18 @@ export class ConversationKernel {
     });
     for (const continuation of runner.conversationContinuations()) {
       runtime.pendingNextTurn.push({
-        message: continuation.clientMessageId || continuation.images?.length
+        message: continuation.clientMessageId || continuation.images?.length || continuation.hiddenUserInput
           ? {
               text: continuation.content,
               images: continuation.images,
               attachments: continuation.attachments,
               clientMessageId: continuation.clientMessageId,
               runId: continuation.runId,
+              visibleUserInput: continuation.visibleUserInput,
+              visibleMode: continuation.visibleMode,
+              goalObjective: continuation.goalObjective,
+              createdAt: continuation.createdAt,
+              hiddenUserInput: continuation.hiddenUserInput,
             }
           : continuation.content,
         queueMode: continuation.queueMode,
@@ -1351,6 +1531,7 @@ export class ConversationKernel {
       this.trackQueuedMessage(runtime, continuation.content, continuation.queueMode);
     }
     runtime.unsubscribe = runner.subscribeWorkEvents(event => {
+      if (runtime.externalOwner?.active && event.runId) runtime.runId = event.runId;
       const routedEvent: AgentWorkEvent = {
         ...event,
         conversationId: runtime.target.conversationId,
@@ -1370,7 +1551,7 @@ export class ConversationKernel {
     runtime.unsubscribePeer = runner.subscribePeerWorkEvents(event => {
       for (const listener of this.listeners) listener(event);
     });
-    runner.subscribeAgentKernelUserMessageStart((content, clientMessageId) => {
+    runtime.unsubscribeUserMessageStart = runner.subscribeAgentKernelUserMessageStart((content, clientMessageId) => {
       this.consumeQueuedMessage(runtime, content);
       if (!clientMessageId) return;
       const receipt = this.guideReceipt(runtime, clientMessageId);
@@ -1385,11 +1566,24 @@ export class ConversationKernel {
       runtime.runner.recordGuideReceipt(applied);
       runtime.guideEnvelopes.delete(clientMessageId);
     });
-    runtime.unsubscribeRootInboxWake = runner.subscribeRootInboxWake(message => {
-      this.enqueueRootInboxWake(runtime, message);
+    runtime.unsubscribeRootInboxWake = runner.subscribeRootInboxWake((message, options) => {
+      this.enqueueRootInboxWake(runtime, message, options?.wakeup !== false);
       return true;
+    }, ids => {
+      const retired = new Set(ids);
+      const before = runtime.pendingNextTurn.length;
+      runtime.pendingNextTurn = runtime.pendingNextTurn.filter(item => {
+        if (item.queueMode !== 'followUp' || typeof item.message === 'string'
+          || !item.message.hiddenUserInput || item.message.clientMessageId) return true;
+        const id = item.message.text.match(/^\[Root subagent inbox id=([0-9a-f-]{36})\b/i)?.[1];
+        return !id || !retired.has(id);
+      });
+      if (runtime.pendingNextTurn.length !== before) this.emitQueueUpdate(runtime);
     });
     this.runtimes.set(target.runtimeKey, runtime);
+    // An already-read inbox entry is not replayed by the mailbox listener.
+    // Reconcile saved result receipts after hydrating its continuation copy.
+    runner.acknowledgeSubagentSettlementReceipts();
     return runtime;
   }
 
@@ -1398,7 +1592,7 @@ export class ConversationKernel {
     runtime.runner.flushWorkspaceConversationState();
     runtime.goalContinuationTimer = setTimeout(() => {
       runtime.goalContinuationTimer = undefined;
-      if (runtime.runId !== completedRunId || runtime.activePromise) return;
+      if (runtime.preparingArchive || runtime.runId !== completedRunId || runtime.activePromise) return;
       this.queueState(runtime);
       if (runtime.pendingNextTurn.length > 0
         || runtime.queued.steering.length > 0
@@ -1426,16 +1620,60 @@ export class ConversationKernel {
     }
     setImmediate(() => {
       runtime.pendingContinuationRunId = undefined;
-      if (runtime.runId !== runId || runtime.activePromise || runtime.stopRequestedRunId === runId || runtime.queuePaused) return;
+      if (runtime.preparingArchive || runtime.runId !== runId || runtime.activePromise || runtime.externalOwner || runtime.stopRequestedRunId === runId || runtime.queuePaused) return;
       const next = runtime.pendingNextTurn.shift();
       if (!next) return;
-      const message = typeof next.message === 'string'
-        ? { text: next.message, runId }
-        : { ...next.message, runId: next.message.runId || runId };
-      void this.prompt(message, runtime.target, runtime.options, next.queueMode).catch(() => {
+      const delivery = next.queueMode === 'followUp' ? this.drainQueuedFollowUpMessage(next.message) : next.message;
+      const message: AgentPromptMessage = typeof delivery === 'string'
+        ? { text: delivery, runId }
+        : { ...delivery, runId: delivery.runId || runId };
+      void this.runPendingQueueItem(runtime, next, async () => {
+        if (message.visibleMode && ['build', 'chat', 'plan', 'goal'].includes(message.visibleMode)) {
+          this.setMode(runtime.target, message.visibleMode as AgentMode);
+        }
+        return this.prompt(message, runtime.target, runtime.options, next.queueMode);
+      }).catch(() => {
         // Agent.process and the work-run finalizer already publish the error.
       });
     });
+  }
+
+  private async runPendingQueueItem<T>(
+    runtime: ConversationRuntime,
+    next: ConversationRuntime['pendingNextTurn'][number],
+    execute: () => Promise<T>,
+  ): Promise<T> {
+    const queuedMessage = typeof next.message === 'string' ? undefined : next.message;
+    const id = queuedMessage?.clientMessageId;
+    if (next.queueMode !== 'followUp' || !id) return execute();
+    let accepted = false;
+    const unsubscribe = runtime.runner.subscribeAgentKernelUserMessageStart((content, clientMessageId) => {
+      // Normal in-run dequeues omit display identity, but retain the exact
+      // execution text. Never let an unrelated Guide accept this queue row.
+      if (clientMessageId ? clientMessageId === id : content === queuedMessage.text) accepted = true;
+    });
+    try {
+      return await execute();
+    } catch (error) {
+      // Model/title/setup failures before user-message acceptance must leave
+      // the same row manageable. A provider failure after acceptance must
+      // never replay the already submitted user input after restart/resume.
+      runtime.queuePaused = true;
+      throw error;
+    } finally {
+      unsubscribe();
+      if (accepted) runtime.runner.consumeConversationContinuation({
+        content: queuedMessage.text, clientMessageId: id, queueMode: 'followUp',
+      });
+      else if (runtime.runner.conversationContinuations().some(item => item.clientMessageId === id && item.queueMode === 'followUp')) {
+        // Cooperative Stop can turn a rejected process into a resolved outer
+        // result. Restore on every unaccepted exit, including failed archive;
+        // the pause/archive guards still prevent any automatic execution.
+        if (!runtime.pendingNextTurn.some(item => typeof item.message !== 'string' && item.message.clientMessageId === id)) runtime.pendingNextTurn.unshift(next);
+        runtime.queuePaused = true;
+      }
+      this.emitQueueUpdate(runtime);
+    }
   }
 
   private startGoalDrivenBuild(runtime: ConversationRuntime): void {
@@ -1481,16 +1719,19 @@ export class ConversationKernel {
     return runner;
   }
 
-  private enqueueRootInboxWake(runtime: ConversationRuntime, message: string): void {
+  private enqueueRootInboxWake(runtime: ConversationRuntime, message: string, wakeup = false): void {
+    const acceptedWhileActive = !!runtime.activePromise;
     queueMicrotask(() => {
       const rootInboxId = message.match(/^\[Root subagent inbox id=([0-9a-f-]{36})\b/i)?.[1];
       if (rootInboxId && !runtime.runner.subagents.readRootInbox().some(item => item.id === rootInboxId)) return;
+      if (runtime.queuePaused || runtime.runner.subagents.isSchedulingPaused()) return;
       if (runtime.activePromise) {
         if (!runtime.pendingNextTurn.some(item => typeof item.message === 'string' ? item.message === message : item.message.text === message)) {
           runtime.pendingNextTurn.push({ message: { text: message, hiddenUserInput: true }, queueMode: 'followUp' });
         }
         return;
       }
+      if (!wakeup && !acceptedWhileActive) return;
       void this.prompt({ text: message, hiddenUserInput: true }, runtime.target, runtime.options, 'followUp').catch(error => {
         runtime.runner.recordWorkStatus(`Subagent result follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
       });
@@ -1624,6 +1865,9 @@ export class ConversationKernel {
         images: queuedMessage.images?.map(image => ({ ...image })),
         attachments: queuedMessage.attachments?.map(attachment => ({ ...attachment })),
         createdAt: queuedMessage.createdAt,
+        visibleUserInput: queuedMessage.visibleUserInput,
+        visibleMode: queuedMessage.visibleMode,
+        goalObjective: queuedMessage.goalObjective,
       }]);
       this.trackQueuedMessage(runtime, prompt, 'followUp');
       runtime.runner.recordWorkStatus(runtime.stopRequestedRunId === runtime.runId
@@ -1670,14 +1914,13 @@ export class ConversationKernel {
 
   private trackQueuedMessage(runtime: ConversationRuntime, message: string, queueMode: ConversationQueueMode): void {
     this.queueState(runtime);
-    const list = queueMode === 'steer' ? runtime.queued.steering : runtime.queued.followUp;
-    list.push(message);
+    if (queueMode === 'steer') runtime.queued.steering.push(message);
   }
 
   private consumeQueuedMessage(runtime: ConversationRuntime, message: string): void {
     this.queueState(runtime);
     let changed = false;
-    for (const key of ['steering', 'followUp'] as const) {
+    for (const key of ['steering'] as const) {
       const index = runtime.queued[key].indexOf(message);
       if (index >= 0) {
         runtime.queued[key].splice(index, 1);
@@ -1685,13 +1928,6 @@ export class ConversationKernel {
       }
     }
     if (changed) this.emitQueueUpdate(runtime);
-  }
-
-  private replaceTrackedQueuedMessage(runtime: ConversationRuntime, oldMessage: string, nextMessage: string, queueMode: ConversationQueueMode): void {
-    this.queueState(runtime);
-    const list = queueMode === 'steer' ? runtime.queued.steering : runtime.queued.followUp;
-    const index = list.indexOf(oldMessage);
-    if (index >= 0) list[index] = nextMessage;
   }
 
   private emitQueueUpdate(runtime: ConversationRuntime): void {
@@ -1719,7 +1955,14 @@ export class ConversationKernel {
   private queueState(runtime: ConversationRuntime): ConversationRuntime {
     if (!runtime.queued) runtime.queued = { steering: [], followUp: [] };
     if (!Array.isArray(runtime.queued.steering)) runtime.queued.steering = [];
-    if (!Array.isArray(runtime.queued.followUp)) runtime.queued.followUp = [];
+    // Follow-up order belongs to the pending entries, not a second text-only
+    // ledger. Repeated text, edits and user-message-start callbacks must not
+    // independently remove/reorder that projection. Internal auto-continuations
+    // without user identity remain outside the visible user queue.
+    runtime.queued.followUp = runtime.pendingNextTurn
+      .filter(item => item.queueMode === 'followUp' && (typeof item.message === 'string'
+        || item.message.hiddenUserInput !== true || !!item.message.clientMessageId))
+      .map(item => typeof item.message === 'string' ? item.message : item.message.text);
     return runtime;
   }
 

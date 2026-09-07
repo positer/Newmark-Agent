@@ -7,6 +7,8 @@ import { spawn, spawnSync } from 'child_process';
 import { Agent, ConversationBranchLocator, FlowSuspensionRecord } from './core/agent';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope } from './core/types';
 import { AgentPromptMessage, ConversationKernel, ConversationQueueAction, ConversationTargetInput } from './core/conversationKernel';
+import { ConversationCommandStateStore } from './core/conversationCommandState';
+import { conversationListEvent } from './core/conversationListEvent';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, conversationStateWorkspacePrefix, normalizeConversationTarget } from './core/conversationTarget';
 import { AutomationManager } from './core/automation';
 import { AutomationWakeScheduler, WakeSyncResult } from './core/automationWake';
@@ -102,6 +104,7 @@ interface ActiveFlowState {
   componentId: number;
   completedResults: FlowCompletedResult[];
   previousMode: AgentMode;
+  queueWasPaused?: boolean;
   previousFlow: Agent['flow'];
   previousPc: number;
   /** '' while running; 'question' or 'interrupted' only while suspended. */
@@ -114,6 +117,7 @@ interface ActiveFlowState {
   flowAgent: Agent | null;
   /** Archive won the lifecycle race; the settling Flow must not recreate state. */
   archiveRequested?: boolean;
+  settlement?: Promise<void>;
 }
 const activeFlowsByRuntimeKey = new Map<string, ActiveFlowState>();
 
@@ -122,7 +126,22 @@ function activeFlowStateKey(target: ConversationRuntimeTarget): string {
 }
 
 function activeFlowStateFor(target: ConversationRuntimeTarget): ActiveFlowState | null {
-  return activeFlowsByRuntimeKey.get(activeFlowStateKey(target)) || null;
+  const key = activeFlowStateKey(target);
+  const current = activeFlowsByRuntimeKey.get(key);
+  if (current) return current;
+  const saved = agent?.getStoredFlowSuspension(target.conversationId, (target.workspace || null) as Agent['workspace']['current']);
+  if (!agent || !saved || (saved.target && activeFlowStateKey(saved.target) !== key)) return null;
+  const dir = path.join(agent.rootPath, 'Flow');
+  const found = FlowEngine.findWorkflow(saved.workflowName, dir);
+  const workflow = found ? FlowEngine.load(dir, found) : null;
+  if (!workflow) return null;
+  const restored: ActiveFlowState = {
+    workflow, input: saved.input, componentId: saved.componentId, completedResults: saved.completedResults,
+    previousMode: saved.previousMode, previousFlow: null, previousPc: 0, queueWasPaused: saved.queueWasPaused,
+    reason: saved.reason, message: saved.message, target, abortController: null, name: workflow.name, flowAgent: null,
+  };
+  activeFlowsByRuntimeKey.set(key, restored);
+  return restored;
 }
 let wslAgentClient: WslAgentClient | null = null;
 let electronUtilityRuntimePool: ElectronUtilityRuntimePool | null = null;
@@ -228,7 +247,8 @@ async function runShellCommand(command: string, shellId: string, cwd: string): P
 }
 
 function resetConversationKernel(): void {
-  if (conversationKernel?.isAnyRunning()) return;
+  if (conversationKernel?.hasRetainedWork()) return;
+  conversationKernel?.disposeIdle();
   conversationKernel = null;
 }
 
@@ -349,9 +369,13 @@ function dispatchAgentWorkEvent(event: unknown, mirrorToMobile = true): void {
 
 const workEventCoalescer = new WorkEventCoalescer(event => dispatchAgentWorkEvent(event, true));
 const workEventNoMobileCoalescer = new WorkEventCoalescer(event => dispatchAgentWorkEvent(event, false));
+let projectConversationEvent: ((event: AgentWorkEvent) => AgentWorkEvent) | null = null;
+function publishConversationList(workspace: Agent['workspace']['current'] = agent?.workspace.current || null): void {
+  if (agent && workspace) broadcastAgentWorkEvent(conversationListEvent(agent, workspace));
+}
 
 function broadcastAgentWorkEvent(event: unknown, mirrorToMobile = true): void {
-  const workEvent = event as AgentWorkEvent;
+  const workEvent = projectConversationEvent?.(event as AgentWorkEvent) || event as AgentWorkEvent;
   // Response and thought deltas are coalesced at the IPC/SSE boundary; all
   // lifecycle/tool events retain immediate ordering.
   if (workEvent.type === 'text' || workEvent.type === 'thought_delta') {
@@ -360,7 +384,7 @@ function broadcastAgentWorkEvent(event: unknown, mirrorToMobile = true): void {
   }
   workEventCoalescer.flushAll();
   workEventNoMobileCoalescer.flushAll();
-  dispatchAgentWorkEvent(event, mirrorToMobile);
+  dispatchAgentWorkEvent(workEvent, mirrorToMobile);
 }
 
 function ensureConversationKernel(root: string): ConversationKernel | null {
@@ -379,6 +403,7 @@ function persistedFlowSuspensionRecord(suspension: ActiveFlowState, message = ''
     input: String(suspension.input || ''),
     completedResults: Array.isArray(suspension.completedResults) ? suspension.completedResults : [],
     previousMode: suspension.previousMode,
+    queueWasPaused: suspension.queueWasPaused,
     reason: suspension.reason === '' ? 'interrupted' : suspension.reason,
     message: String(message || suspension.message || ''),
     target: suspension.target ? {
@@ -1304,13 +1329,13 @@ function viewerDocument(request: any): string {
     ? `<img src="${viewerEscape(request.dataUrl)}" alt="${title}">`
     : '<div class="empty">Image unavailable</div>';
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'"><title>${title}</title><style>
-  :root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#090d16;color:#dce8f7;font:12px system-ui,sans-serif}main{height:100%;display:grid;grid-template-rows:auto 1fr;padding:14px;gap:10px}header{font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#a8bdd4}section{min-height:0;display:flex;align-items:center;justify-content:center;border:1px solid #233044;border-radius:10px;background:#0d1420}img{display:block;max-width:100%;max-height:100%;object-fit:contain}svg{width:100%;height:100%}.edges line{stroke:#30435b;stroke-width:1;opacity:.62}text{fill:#9fb2c7;font-size:9px}.empty{color:#6f8196}</style></head><body><main><header>${title}</header><section>${image}</section></main></body></html>`;
+  :root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#101010;color:#f2f2f2;font:12px system-ui,sans-serif}main{height:100%;display:grid;grid-template-rows:auto 1fr;padding:14px;gap:10px}header{font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#cecece}section{min-height:0;display:flex;align-items:center;justify-content:center;border:1px solid #383838;border-radius:10px;background:#181818}img{display:block;max-width:100%;max-height:100%;object-fit:contain}svg{width:100%;height:100%}.edges line{stroke:#484848;stroke-width:1;opacity:.62}text{fill:#cecece;font-size:9px}.empty{color:#949494}</style></head><body><main><header>${title}</header><section>${image}</section></main></body></html>`;
 }
 
 async function createViewerWindow(request: unknown): Promise<BrowserWindow> {
   const viewerRequest = request && typeof request === 'object' ? request as Record<string, unknown> : {};
   const windowTitle = String(viewerRequest.title || viewerRequest.caption || (viewerRequest.type === 'memory-overview' ? 'Memory Lab Overview' : '示意图')).trim().slice(0, 160) || '示意图';
-  const win = new BrowserWindow({ width: 760, height: 600, minWidth: 420, minHeight: 320, show: false, autoHideMenuBar: true, title: windowTitle, backgroundColor: '#090d16', webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const win = new BrowserWindow({ width: 760, height: 600, minWidth: 420, minHeight: 320, show: false, autoHideMenuBar: true, title: windowTitle, backgroundColor: '#101010', webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
   if (viewerRequest.type === 'memory-overview') {
     await win.loadFile(path.join(__dirname, 'ui', 'index.html'), {
       query: { newmarkViewer: 'memory-overview', viewerTitle: windowTitle },
@@ -1798,7 +1823,7 @@ if (isViewerArg) {
         frame: false,
         title: 'Newmark Agent',
         icon: themedAppIconPath(),
-        backgroundColor: '#0a0a1a',
+        backgroundColor: '#101010',
         webPreferences: {
           preload: path.join(__dirname, 'preload.js'),
           contextIsolation: true,
@@ -1948,6 +1973,7 @@ if (isViewerArg) {
         componentId: Math.max(0, Math.floor(Number(stored.componentId) || 0)),
         completedResults: Array.isArray(stored.completedResults) ? stored.completedResults : [],
         previousMode: stored.previousMode === 'plan' || stored.previousMode === 'goal' ? stored.previousMode : 'build',
+        queueWasPaused: stored.queueWasPaused,
         previousFlow: null,
         previousPc: 0,
         reason,
@@ -2011,174 +2037,12 @@ if (isViewerArg) {
                 mobileServerWorkEventSubscribers.add(listener);
                 return () => mobileServerWorkEventSubscribers.delete(listener);
               },
-              conversationUiState: async requested => {
-                const target = conversationRuntimeTarget(requested);
-                const snapshot = wslBackendEnabled()
-                  ? await ensureWslConversationPool()!.snapshot(target)
-                  : await ensureElectronUtilityPool().snapshot(target);
-                const flowRunning = flowRunningForTarget(target);
-                const flowSuspension = flowSuspensionForTarget(target);
-                return {
-                  ...snapshot,
-                  flow: flowRunning ? {
-                    running: true,
-                    paused: false,
-                    name: flowRunning.name,
-                    promptText: String(activeFlowStateFor(target)?.input || ''),
-                    message: '',
-                  } : flowSuspension ? {
-                    running: true,
-                    paused: true,
-                    name: flowSuspension.workflowName || '',
-                    promptText: String(flowSuspension.input || ''),
-                    message: String(flowSuspension.message || ''),
-                    reason: flowSuspension.reason || '',
-                  } : null,
-                };
-              },
-              conversationUiAction: async (requested, action, value, input) => {
-                const target = conversationRuntimeTarget(requested);
-                if (action.startsWith('queue_')) {
-                  const queueAction = action === 'queue_enqueue' ? 'enqueue'
-                    : action === 'queue_update' ? 'update'
-                      : action === 'queue_delete' ? 'delete'
-                        : action === 'queue_reorder' ? 'reorder'
-                          : action === 'queue_toggle_pause' ? 'toggle_pause'
-                            : 'guide';
-                  const queueInput = {
-                    id: String(input?.id || ''),
-                    text: String(input?.text || value || ''),
-                    requestedMode: String(input?.requestedMode || 'build'),
-                    goalObjective: String(input?.goalObjective || ''),
-                    createdAt: String(input?.createdAt || ''),
-                    orderedIds: Array.isArray(input?.orderedIds)
-                      ? input.orderedIds.map((id: unknown) => String(id || ''))
-                      : undefined,
-                  };
-                  return wslBackendEnabled()
-                    ? await ensureWslConversationPool()!.queueAction(target, queueAction, queueInput)
-                    : await ensureElectronUtilityPool().queueAction(target, queueAction, queueInput);
-                }
-                if (action === 'goal_update') {
-                  return { goal: await mutateTargetConversation(target, () => {
-                    const isolated = isolatedConversationAgent(target);
-                    isolated.updateGoal(String(value || '').trim());
-                    isolated.setMode('goal');
-                    isolated.saveWorkspaceConversationState(true);
-                    return isolated.getConversationSnapshot(target.conversationId).goal;
-                  }) };
-                }
-                if (action === 'goal_guide' || action === 'conversation_guide') {
-                  const objective = action === 'goal_guide' ? String(value || '').trim() : '';
-                  const guideText = String(value || '').trim();
-                  const snapshot = wslBackendEnabled()
-                    ? await ensureWslConversationPool()!.snapshot(target)
-                    : await ensureElectronUtilityPool().snapshot(target);
-                  const runtime = snapshot.runtime as { running?: boolean; runId?: string } | null | undefined;
-                  // `running` may turn false one IPC task before a finalization-
-                  // window Guide reaches the worker. Preserve the authoritative
-                  // runId and let ConversationKernel decide whether that run can
-                  // be reactivated or must reject a genuinely stale request.
-                  if (!guideText || !runtime?.runId) {
-                    return { ok: false, error: action === 'goal_guide'
-                      ? 'There is no active Build for this Goal Guide.'
-                      : 'Target conversation is not running.' };
-                  }
-                  const prefix = 'Goal for the current Build:\n';
-                  const now = new Date().toISOString();
-                  const envelope: ConversationInputEnvelope = {
-                    clientMessageId: randomUUID(),
-                    guideId: randomUUID(),
-                    target: { workspaceId: target.workspaceId, conversationId: target.conversationId },
-                    runId: runtime.runId,
-                    deliveryMode: 'steer',
-                    text: objective ? prefix + objective : guideText,
-                    goalObjective: objective || undefined,
-                    createdAt: now,
-                  };
-                  const receipt = wslBackendEnabled()
-                    ? await ensureWslConversationPool()!.enqueueGuide(envelope)
-                    : await ensureElectronUtilityPool().enqueueGuide(envelope);
-                  return { ok: receipt.status !== 'rejected', receipt };
-                }
-                if (action === 'goal_toggle_pause') {
-                  const resident = wslBackendEnabled()
-                    ? await ensureWslConversationPool()!.toggleGoalPause(target)
-                    : await ensureElectronUtilityPool().toggleGoalPause(target);
-                  const paused = resident !== null ? resident : await mutateTargetConversation(target, () => isolatedConversationAgent(target).toggleGoalPause());
-                  return { ok: true, paused };
-                }
-                if (action === 'goal_clear') {
-                  const resident = wslBackendEnabled()
-                    ? await ensureWslConversationPool()!.clearGoal(target)
-                    : await ensureElectronUtilityPool().clearGoal(target);
-                  if (resident === null) await mutateTargetConversation(target, () => isolatedConversationAgent(target).clearGoal());
-                  return { ok: true, cleared: true };
-                }
-                if (action === 'flow_pause') return await stopFlowForTarget(target);
-                if (action === 'flow_resume') return await resumeFlowForTarget(String(value || ''), target);
-                if (action === 'conversation_stop') {
-                  const snapshot = wslBackendEnabled()
-                    ? await ensureWslConversationPool()!.snapshot(target)
-                    : await ensureElectronUtilityPool().snapshot(target);
-                  const runtime = snapshot.runtime as { runId?: string } | null | undefined;
-                  return wslBackendEnabled()
-                    ? await ensureWslConversationPool()!.requestStop(target, runtime?.runId)
-                    : await ensureElectronUtilityPool().requestStop(target, runtime?.runId);
-                }
-                if (action === 'input_mode') {
-                  const mode = String(value || '') === 'next' ? 'next' : 'guide';
-                  const selected = wslBackendEnabled()
-                    ? await ensureWslConversationPool()!.setInputMode(target, mode)
-                    : await ensureElectronUtilityPool().setInputMode(target, mode);
-                  return { ok: true, inputMode: selected || mode };
-                }
-                const flow = activeFlowStateFor(target);
-                if (!flow?.abortController || !flow.flowAgent) return { ok: false, error: 'No active Flow accepts Guide input.' };
-                const accepted = flow.flowAgent.queueActiveKernelMessage(String(value || '').trim(), 'steer') || false;
-                return accepted ? { ok: true, accepted: true, flow: flow.name } : { ok: false, error: 'The current Flow Build is not accepting Guide input.' };
-              },
-              conversationPrompt: async (requested, message, requestedOptions) => {
-                const target = conversationRuntimeTarget(requested);
-                if (activeFlowStateFor(target)) clearFlowSuspensionForNewWork(target);
-                const snapshot = wslBackendEnabled()
-                  ? await ensureWslConversationPool()!.snapshot(target)
-                  : await ensureElectronUtilityPool().snapshot(target);
-                const requestedMode = String(requestedOptions?.requestedMode || '').toLowerCase();
-                const goalObjective = String(requestedOptions?.goalObjective || '').trim();
-                const mode = (goalObjective || requestedMode === 'goal') ? 'build' : String(snapshot.mode || 'build') as AgentMode;
-                const inputMode: 'guide' | 'next' = String(requestedOptions?.inputMode || snapshot.inputMode || 'guide') === 'next' ? 'next' : 'guide';
-                const options = {
-                  mode,
-                  model: String(snapshot.model || agent!.ensureUsableModelSelection()),
-                  intelligence: String(snapshot.intelligence || agent!.intelligence),
-                  inputMode,
-                  engine: agent!.engine,
-                };
-                const queueMode = inputMode === 'guide' ? 'steer' : 'followUp';
-                const promptMessage: string | AgentPromptMessage = goalObjective ? {
-                  text: message,
-                  visibleMode: 'goal',
-                  goalObjective,
-                } : message;
-                const result = wslBackendEnabled()
-                  ? await ensureWslConversationPool()!.prompt({
-                    message: promptMessage,
-                    target,
-                    conversationId: target.conversationId,
-                    options,
-                    queueMode,
-                    workspace: target.workspace ? {
-                      id: target.workspace.id,
-                      name: target.workspace.name,
-                      path: target.workspace.path,
-                      isInternal: target.workspace.isInternal,
-                      kind: target.workspace.kind,
-                    } : null,
-                  })
-                  : await ensureElectronUtilityPool().prompt({ message: promptMessage, target, options, queueMode });
-                return { ...result } as Record<string, unknown>;
-              },
+              conversationUiState: async (requested, options) =>
+                await runtimeSnapshotForTarget(conversationRuntimeTarget(requested), options),
+              conversationUiAction: async (requested, action, value, input) =>
+                await applyConversationAction(requested, action, value, input),
+              conversationPrompt: async (requested, message, options) =>
+                await submitConversationCommand(message, requested, options),
           });
           if (agent.config.getBool('remote', 'touch_enabled')) {
             runServer(root);
@@ -2189,7 +2053,7 @@ if (isViewerArg) {
         }
       }
     };
-    const localConversationSnapshotForStartup = (target: ConversationRuntimeTarget): Record<string, unknown> => {
+    const localConversationSnapshotForStartup = (target: ConversationRuntimeTarget, options: { window?: number; before?: number } = {}): Record<string, unknown> => {
       const startupAgent = agent;
       if (!startupAgent) throw new Error('Agent is unavailable for startup conversation hydration');
       const normalizedTarget = normalizeConversationTarget(target);
@@ -2197,7 +2061,7 @@ if (isViewerArg) {
       if (normalizedTarget.runtimeKey !== currentTarget.runtimeKey) {
         throw new Error('Startup hydration requested a conversation other than the current Agent conversation');
       }
-      const conversationSnapshot = startupAgent.ensureConversationSnapshot(target.conversationId);
+      const conversationSnapshot = startupAgent.ensureConversationSnapshot(target.conversationId, options);
       if (conversationSnapshot.conversationId !== normalizedTarget.conversationId) {
         throw new Error('Startup conversation snapshot identity mismatch');
       }
@@ -2748,7 +2612,7 @@ if (isViewerArg) {
       if (state && (state.reason === 'question' || state.reason === 'interrupted')) {
         return persistedFlowSuspensionRecord(state, state.message || '');
       }
-      const stored = agent?.getStoredFlowSuspension(target.conversationId);
+      const stored = agent?.getStoredFlowSuspension(target.conversationId, (target.workspace || null) as Agent['workspace']['current']);
       if (!stored) return null;
       if (!stored.target) return target.conversationId === agent?.activeConversationId ? stored : null;
       return stored.target.workspaceId === target.workspaceId && stored.target.conversationId === target.conversationId
@@ -2756,8 +2620,10 @@ if (isViewerArg) {
         : null;
     };
 
-    const flowRunningForTarget = (target: ConversationRuntimeTarget): { name: string } | null => {
+    const flowRunningForTarget = (target: ConversationRuntimeTarget): { name: string; promptText?: string; waiting?: boolean } | null => {
       const state = activeFlowStateFor(target);
+      const pending = pendingFlowStarts.get(activeFlowStateKey(target));
+      if (!state && pending) return { name: pending.name, promptText: pending.input, waiting: true };
       if (!state || state.reason === 'question' || state.reason === 'interrupted') return null;
       return { name: state.name || state.workflow.name || '' };
     };
@@ -2767,7 +2633,12 @@ if (isViewerArg) {
       conversationId: owner.activeConversationId || 'default',
     });
 
-    const setTargetFlowMode = async (target: ConversationRuntimeTarget, mode: AgentMode): Promise<void> => {
+    const setTargetFlowMode = async (target: ConversationRuntimeTarget, mode: AgentMode, restoreSelection = false): Promise<void> => {
+      if (restoreSelection) {
+        const selected = conversationSelections.get(activeFlowStateKey(target))?.mode;
+        mode = selected && selected !== 'flow' ? selected : mode === 'flow' ? 'build' : mode;
+        conversationSelections.set(activeFlowStateKey(target), { mode });
+      }
       conversationKernel?.setMode(target, mode);
       if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, mode);
       else await ensureElectronUtilityPool()!.setMode(target, mode);
@@ -2788,21 +2659,8 @@ if (isViewerArg) {
         owner.flowPc = suspension.previousPc;
         owner.setMode(suspension.previousMode);
       }
-      agent.clearStoredFlowSuspension(suspension.target.conversationId);
-      await setTargetFlowMode(suspension.target, suspension.previousMode);
-    };
-
-    // Drops a paused Flow for exactly one conversation without restoring the
-    // previous mode so a user's new Build/Plan/Goal/Flow instruction owns the
-    // current mode. The renderer keeps the mode in sync through agent:setMode
-    // before the send lands. Other conversations' Flow state is untouched.
-    const clearFlowSuspensionForNewWork = (target: ConversationRuntimeTarget): void => {
-      if (!agent) return;
-      const key = activeFlowStateKey(target);
-      const state = activeFlowsByRuntimeKey.get(key) || null;
-      if (!state) return;
-      activeFlowsByRuntimeKey.delete(key);
-      agent.clearStoredFlowSuspension(state.target.conversationId);
+      agent.clearStoredFlowSuspension(suspension.target.conversationId, (suspension.target.workspace || null) as Agent['workspace']['current']);
+      await setTargetFlowMode(suspension.target, suspension.previousMode, true);
     };
 
     // Archive is a destructive lifecycle boundary. It must cancel the Flow
@@ -2966,10 +2824,53 @@ if (isViewerArg) {
         throw new Error('This conversation or workspace is being mutated. Retry after the operation completes.');
       }
     };
-    const runtimeSnapshotForTarget = async (target: ConversationRuntimeTarget): Promise<Record<string, unknown>> => {
-      return wslBackendEnabled()
-        ? await ensureWslConversationPool()!.snapshot(target)
-        : await ensureElectronUtilityPool().snapshot(target) as unknown as Record<string, unknown>;
+    const conversationSelections = new ConversationCommandStateStore(root);
+    const conversationCommands = new Map<string, Promise<Record<string, unknown>>>();
+    const mainConversationOwners = new Set<string>();
+    const pendingFlowStarts = new Map<string, { name: string; input: string; cancelled: boolean; settlement: Promise<void> }>();
+    projectConversationEvent = event => {
+      if (event.type !== 'queue_update' || !event.workspaceId || !event.conversationId) return event;
+      const target = conversationRuntimeTarget({ workspaceId: event.workspaceId, conversationId: event.conversationId });
+      const selected = conversationSelections.get(activeFlowStateKey(target));
+      if (typeof event.queuePaused === 'boolean') conversationSelections.set(activeFlowStateKey(target), { queuePaused: event.queuePaused });
+      return {
+        ...event,
+        stateScope: 'conversation',
+        mode: selected?.mode || (activeFlowStateFor(target) ? 'flow' : event.mode),
+        inputMode: selected?.inputMode,
+        flowRunning: flowRunningForTarget(target),
+        flowSuspension: flowSuspensionForTarget(target),
+      } as AgentWorkEvent;
+    };
+    const runtimeSnapshotForTarget = async (target: ConversationRuntimeTarget, options: { window?: number; before?: number } = {}): Promise<Record<string, unknown>> => {
+      const key = activeFlowStateKey(target);
+      let snapshot = mainConversationOwners.has(key)
+        ? ensureConversationKernel(root)!.snapshot(target, options)
+        : wslBackendEnabled()
+          ? await ensureWslConversationPool()!.snapshot(target, options)
+          : await ensureElectronUtilityPool().snapshot(target, options);
+      const flow = activeFlowStateFor(target);
+      const selected = conversationSelections.get(key);
+      if (!flow && !pendingFlowStarts.has(key) && selected?.queuePaused === true && !snapshot.queuePaused) {
+        if (mainConversationOwners.has(key)) ensureConversationKernel(root)!.queueAction(target, 'set_pause', { paused: true });
+        else if (wslBackendEnabled()) await ensureWslConversationPool()!.queueAction(target, 'set_pause', { paused: true });
+        else await ensureElectronUtilityPool().queueAction(target, 'set_pause', { paused: true });
+        snapshot = mainConversationOwners.has(key) ? ensureConversationKernel(root)!.snapshot(target, options)
+          : wslBackendEnabled() ? await ensureWslConversationPool()!.snapshot(target, options) : await ensureElectronUtilityPool().snapshot(target, options);
+      }
+      return {
+        ...snapshot,
+        executionMode: snapshot.mode,
+        mode: selected?.mode || (flow || pendingFlowStarts.has(key) ? 'flow' : snapshot.mode),
+        inputMode: selected?.inputMode || (snapshot as { inputMode?: string }).inputMode || 'guide',
+        flow: flow ? {
+          running: true, paused: flow.reason === 'interrupted', name: flow.name,
+          promptText: flow.input, message: flow.message || '', reason: flow.reason,
+        } : pendingFlowStarts.has(key) ? {
+          running: true, paused: false, name: pendingFlowStarts.get(key)!.name,
+          promptText: pendingFlowStarts.get(key)!.input, message: '', reason: '', waiting: true,
+        } : null,
+      };
     };
     const runtimeIsRestarting = (target: ConversationRuntimeTarget): boolean => wslBackendEnabled()
       ? !!wslAgentRuntimePool?.isRestarting(target)
@@ -2988,9 +2889,15 @@ if (isViewerArg) {
         throw new Error('Cannot mutate a conversation while its runtime is running or stopping.');
       }
     };
-    const peekTargetRuntime = (target: ConversationRuntimeTarget) => wslBackendEnabled()
-      ? (wslAgentRuntimePool?.peek(target) || { resident: false, running: false, stopping: false, connected: false })
-      : (electronUtilityRuntimePool?.peek(target) || { resident: false, running: false, stopping: false, connected: false });
+    const peekTargetRuntime = (target: ConversationRuntimeTarget) => {
+      if (mainConversationOwners.has(activeFlowStateKey(target))) {
+        const runtime = conversationKernel?.runtimeState(target);
+        if (runtime) return { resident: true, running: runtime.running, stopping: runtime.stopRequested, connected: true };
+      }
+      return wslBackendEnabled()
+        ? (wslAgentRuntimePool?.peek(target) || { resident: false, running: false, stopping: false, connected: false })
+        : (electronUtilityRuntimePool?.peek(target) || { resident: false, running: false, stopping: false, connected: false });
+    };
     const stopTargetRuntime = async (target: ConversationRuntimeTarget): Promise<void> => {
       if (wslBackendEnabled()) await wslAgentRuntimePool?.stopTarget(target);
       else await electronUtilityRuntimePool?.stopTarget(target);
@@ -3021,6 +2928,13 @@ if (isViewerArg) {
       isolated.setConversation(normalized.conversationId);
       return isolated;
     };
+    const conversationAgentForTarget = (target: ConversationRuntimeTarget): Agent => {
+      if (mainConversationOwners.has(activeFlowStateKey(target))) {
+        const owner = conversationKernel?.conversationOwner(target);
+        if (owner) return owner;
+      }
+      return isolatedConversationAgent(target);
+    };
     const mutateTargetConversation = async <T>(target: ConversationRuntimeTarget, mutation: () => T | Promise<T>): Promise<T> => {
       const normalized = normalizeConversationTarget(target);
       assertTargetNotMutating(normalized);
@@ -3035,7 +2949,194 @@ if (isViewerArg) {
       }
     };
 
-    ipcMain.handle('agent:send', async (_event, message: string | AgentPromptMessage, targetInput?: ConversationTargetInput) => {
+    interface ConversationCommandOptions {
+      requestedMode?: string; inputMode?: string; goalObjective?: string; clientMessageId?: string;
+      flowName?: string; flowStart?: number;
+    }
+    const selectConversationMode = async (target: ConversationRuntimeTarget, raw: string): Promise<AgentMode> => {
+      const mode = (['build', 'plan', 'chat', 'goal', 'flow'].includes(raw) ? raw : 'build') as AgentMode;
+      const key = activeFlowStateKey(target);
+      conversationSelections.set(key, { ...conversationSelections.get(key), mode });
+      if (!activeFlowStateFor(target)) {
+        if (mainConversationOwners.has(key)) ensureConversationKernel(root)!.setMode(target, mode);
+        else {
+          const result = wslBackendEnabled() ? await ensureWslConversationPool()!.setMode(target, mode) : await ensureElectronUtilityPool().setMode(target, mode);
+          if (result === null) isolatedConversationAgent(target).selectConversationMode(mode);
+        }
+      }
+      if (agent && activeFlowStateKey(conversationRuntimeTarget(agent.activeConversationId || 'default')) === key) agent.mode = mode;
+      await publishConversationState(target);
+      return mode;
+    };
+    const selectConversationInputMode = async (target: ConversationRuntimeTarget, raw: string): Promise<'guide' | 'next'> => {
+      const mode = raw === 'next' ? 'next' : 'guide';
+      const key = activeFlowStateKey(target);
+      conversationSelections.set(key, { ...conversationSelections.get(key), inputMode: mode });
+      if (mainConversationOwners.has(key)) ensureConversationKernel(root)!.setInputMode(target, mode);
+      else {
+        const selected = wslBackendEnabled() ? await ensureWslConversationPool()!.setInputMode(target, mode) : await ensureElectronUtilityPool().setInputMode(target, mode);
+        if (selected === null) isolatedConversationAgent(target).setInputMode(mode);
+      }
+      if (agent && activeFlowStateKey(conversationRuntimeTarget(agent.activeConversationId || 'default')) === key) agent.inputMode = mode;
+      await publishConversationState(target);
+      return mode;
+    };
+    const publishConversationState = async (target: ConversationRuntimeTarget): Promise<void> => {
+      const snapshot = await runtimeSnapshotForTarget(target);
+      broadcastAgentWorkEvent({
+        id: randomUUID(), type: 'queue_update', content: '', timestamp: new Date().toISOString(),
+        workspaceId: target.workspaceId, conversationId: target.conversationId, mode: snapshot.mode,
+        model: snapshot.model, inputMode: snapshot.inputMode, queue: snapshot.queued,
+        queueItems: snapshot.queueItems, queuePaused: snapshot.queuePaused,
+      });
+    };
+    const enqueueConversationGuide = async (envelope: ConversationInputEnvelope) => {
+      const target = conversationRuntimeTarget(envelope.target);
+      return mainConversationOwners.has(activeFlowStateKey(target))
+        ? ensureConversationKernel(root)!.enqueueGuide(envelope)
+        : wslBackendEnabled() ? await ensureWslConversationPool()!.enqueueGuide(envelope) : await ensureElectronUtilityPool().enqueueGuide(envelope);
+    };
+    const mutateConversationQueue = async (target: ConversationRuntimeTarget, rawAction: string, input: Record<string, any> = {}): Promise<Record<string, unknown>> => {
+      const action = rawAction.replace(/^queue_/, '') as ConversationQueueAction;
+      if (!['enqueue', 'update', 'delete', 'reorder', 'toggle_pause', 'set_pause', 'guide'].includes(action)) throw new Error('Unknown queue action');
+      const key = activeFlowStateKey(target);
+      const flow = activeFlowStateFor(target);
+      const resumesQueue = action === 'set_pause' ? input.paused === false : action === 'toggle_pause' && flow;
+      const pending = pendingFlowStarts.get(key);
+      if (pending && (resumesQueue || action === 'toggle_pause')) {
+        pending.cancelled = true;
+        // Startup may be disposing the previous utility/WSL owner. Keep the
+        // cancellation visible until that transfer settles before mutating it.
+        await pending.settlement;
+      }
+      if (flow && resumesQueue) {
+        if (flow.abortController) {
+          await stopFlowForTarget(target);
+          await flow.settlement;
+        }
+        await discardFlowSuspensionForTarget(target);
+        ensureConversationKernel(root)!.releaseExternalRun(target, false);
+        conversationSelections.set(key, { queuePaused: false });
+        return { ok: true, ...await runtimeSnapshotForTarget(target) };
+      }
+      const result = mainConversationOwners.has(key)
+        ? ensureConversationKernel(root)!.queueAction(target, action, input)
+        : wslBackendEnabled() ? await ensureWslConversationPool()!.queueAction(target, action, input) : await ensureElectronUtilityPool().queueAction(target, action, input);
+      if (typeof result.queuePaused === 'boolean') conversationSelections.set(key, { queuePaused: result.queuePaused });
+      return { ...result, ...await runtimeSnapshotForTarget(target) };
+    };
+
+    const applyConversationAction = async (requested: ConversationTargetInput, action: string, value = '', input: Record<string, any> = {}): Promise<Record<string, unknown>> => {
+                const target = conversationRuntimeTarget(requested);
+                if (action === 'conversation_branch_inspect') return await inspectConversationBranchForTarget(target, String(input.branchId || ''), String(input.branchGroupId || ''));
+                if (action === 'conversation_branch_activate') return await activateConversationBranchForTarget(target, String(input.branchId || ''), String(input.branchGroupId || ''));
+                if (action === 'conversation_branch_create') return await branchConversationForTarget(target, Number(input.messageIndex), String(input.editedText ?? input.text ?? value), {
+                  messageId: input.messageId, guideId: input.guideId, clientMessageId: input.clientMessageId,
+                  runId: input.runId, branchNodePath: input.branchNodePath,
+                });
+                if (action === 'conversation_archive') return await archiveConversationForTarget(target);
+                if (action.startsWith('queue_')) return await mutateConversationQueue(target, action, input);
+                if (action === 'mode') return { ok: true, mode: await selectConversationMode(target, value), ...await runtimeSnapshotForTarget(target) };
+                if (action === 'goal_update') {
+                  const goal = mainConversationOwners.has(activeFlowStateKey(target))
+                    ? ensureConversationKernel(root)!.updateGoal(target, String(value || '').trim())
+                    : await mutateTargetConversation(target, () => {
+                    const isolated = isolatedConversationAgent(target);
+                    isolated.updateGoal(String(value || '').trim());
+                    isolated.setMode('goal');
+                    isolated.saveWorkspaceConversationState(true);
+                    return isolated.getConversationSnapshot(target.conversationId).goal;
+                  });
+                  await selectConversationMode(target, 'goal');
+                  return { goal };
+                }
+                if (action === 'goal_guide' || action === 'conversation_guide') {
+                  const objective = action === 'goal_guide' ? String(value || '').trim() : '';
+                  const guideText = String(value || '').trim();
+                  const snapshot = await runtimeSnapshotForTarget(target);
+                  const runtime = snapshot.runtime as { running?: boolean; runId?: string } | null | undefined;
+                  // `running` may turn false one IPC task before a finalization-
+                  // window Guide reaches the worker. Preserve the authoritative
+                  // runId and let ConversationKernel decide whether that run can
+                  // be reactivated or must reject a genuinely stale request.
+                  if (!guideText || !runtime?.runId) {
+                    return { ok: false, error: action === 'goal_guide'
+                      ? 'There is no active Build for this Goal Guide.'
+                      : 'Target conversation is not running.' };
+                  }
+                  const prefix = 'Goal for the current Build:\n';
+                  const now = new Date().toISOString();
+                  const envelope: ConversationInputEnvelope = {
+                    clientMessageId: randomUUID(),
+                    guideId: randomUUID(),
+                    target: { workspaceId: target.workspaceId, conversationId: target.conversationId },
+                    runId: runtime.runId,
+                    deliveryMode: 'steer',
+                    text: objective ? prefix + objective : guideText,
+                    goalObjective: objective || undefined,
+                    createdAt: now,
+                  };
+                  const receipt = await enqueueConversationGuide(envelope);
+                  return { ok: receipt.status !== 'rejected', receipt };
+                }
+                if (action === 'goal_toggle_pause') {
+                  if (mainConversationOwners.has(activeFlowStateKey(target))) return { ok: true, paused: await ensureConversationKernel(root)!.toggleGoalPause(target) };
+                  const resident = wslBackendEnabled()
+                    ? await ensureWslConversationPool()!.toggleGoalPause(target)
+                    : await ensureElectronUtilityPool().toggleGoalPause(target);
+                  const paused = resident !== null ? resident : await mutateTargetConversation(target, () => isolatedConversationAgent(target).toggleGoalPause());
+                  return { ok: true, paused };
+                }
+                if (action === 'goal_clear') {
+                  if (mainConversationOwners.has(activeFlowStateKey(target))) {
+                    const cleared = ensureConversationKernel(root)!.clearGoal(target);
+                    if (conversationSelections.get(activeFlowStateKey(target))?.mode === 'goal') await selectConversationMode(target, 'build');
+                    return { ok: true, cleared };
+                  }
+                  const resident = wslBackendEnabled()
+                    ? await ensureWslConversationPool()!.clearGoal(target)
+                    : await ensureElectronUtilityPool().clearGoal(target);
+                  if (resident === null) await mutateTargetConversation(target, () => isolatedConversationAgent(target).clearGoal());
+                  if (conversationSelections.get(activeFlowStateKey(target))?.mode === 'goal') await selectConversationMode(target, 'build');
+                  return { ok: true, cleared: true };
+                }
+                if (action === 'flow_pause') return await stopFlowForTarget(target);
+                if (action === 'flow_resume') return { ...await resumeFlowForTarget(String(value || ''), target), ...await runtimeSnapshotForTarget(target) };
+                if (action === 'conversation_stop') {
+                  if (activeFlowStateFor(target) || pendingFlowStarts.has(activeFlowStateKey(target))) return await stopFlowForTarget(target);
+                  const snapshot = await runtimeSnapshotForTarget(target);
+                  const runId = (snapshot.runtime as { runId?: string } | undefined)?.runId;
+                  return mainConversationOwners.has(activeFlowStateKey(target))
+                    ? { ...ensureConversationKernel(root)!.requestStop(target, runId) }
+                    : wslBackendEnabled() ? await ensureWslConversationPool()!.requestStop(target, runId) : await ensureElectronUtilityPool().requestStop(target, runId);
+                }
+                if (action === 'input_mode') return { ok: true, inputMode: await selectConversationInputMode(target, value) };
+                const flow = activeFlowStateFor(target);
+                if (!flow?.abortController || !flow.flowAgent) return { ok: false, error: 'No active Flow accepts Guide input.' };
+                const accepted = flow.flowAgent.queueActiveKernelMessage(String(value || '').trim(), 'steer') || false;
+                return accepted ? { ok: true, accepted: true, flow: flow.name } : { ok: false, error: 'The current Flow Build is not accepting Guide input.' };
+              };
+
+    const submitConversationCommand = async (message: string | AgentPromptMessage, targetInput?: ConversationTargetInput, requested: ConversationCommandOptions = {}): Promise<Record<string, unknown>> => {
+      const target = conversationRuntimeTarget(targetInput);
+      const id = String(requested.clientMessageId || (typeof message === 'string' ? '' : message.clientMessageId) || randomUUID());
+      const key = activeFlowStateKey(target) + '::' + id;
+      const accepted = conversationCommands.get(key);
+      if (accepted) return { ...await accepted, ...await runtimeSnapshotForTarget(target) };
+      const work = executeConversationCommand(message, target, { ...requested, clientMessageId: id });
+      conversationCommands.set(key, work);
+      // Retain settled ids to reject ambiguous transport replays without
+      // retaining an unbounded history or deduplicating different user inputs.
+      void work.then(result => {
+        conversationCommands.set(key, Promise.resolve({
+          ...(result.error ? { error: result.error } : { ok: true }), duplicate: true,
+          workspaceId: target.workspaceId, conversationId: target.conversationId,
+        }));
+        if (conversationCommands.size > 1000) conversationCommands.delete(conversationCommands.keys().next().value!);
+      }).catch(() => {});
+      return await work;
+    };
+    const executeConversationCommand = async (message: string | AgentPromptMessage, targetInput?: ConversationTargetInput, requested: ConversationCommandOptions = {}): Promise<Record<string, unknown>> => {
       if (!agent) return { tokens: [], error: 'Agent not initialized' };
       let promptLeaseKey = '';
       let promptLeaseWorkspaceKey = '';
@@ -3046,7 +3147,41 @@ if (isViewerArg) {
         // conversation into the user's new process (Flow pause state exit rule).
         // flow:run already discards the suspension for a new Flow workflow.
         // Other conversations' paused Flows are never touched by this send.
-        if (activeFlowStateFor(target)) clearFlowSuspensionForNewWork(target);
+        const flow = activeFlowStateFor(target);
+        const snapshot = await runtimeSnapshotForTarget(target);
+        const structured = typeof message === 'string' ? { text: message } : { ...message };
+        const requestedMode = String(requested.requestedMode || structured.visibleMode || snapshot.mode || 'build') as AgentMode;
+        const inputMode = String(requested.inputMode || snapshot.inputMode || 'guide') === 'next' ? 'next' : 'guide';
+        const objective = String(requested.goalObjective ?? structured.goalObjective ?? (requestedMode === 'goal' ? structured.text : '')).trim();
+        const id = String(requested.clientMessageId || structured.clientMessageId || randomUUID());
+        message = { ...structured, clientMessageId: id, userMessageId: id, visibleMode: requestedMode, goalObjective: objective || undefined };
+        const runtime = snapshot.runtime as { running?: boolean; runId?: string } | undefined;
+        if (flow?.reason === 'interrupted') {
+          await discardFlowSuspensionForTarget(target);
+          ensureConversationKernel(root)!.releaseExternalRun(target, true);
+        }
+        if (requestedMode === 'flow' && !activeFlowStateFor(target) && !pendingFlowStarts.has(activeFlowStateKey(target))) {
+          if (inputMode === 'guide' && runtime?.running) return { ok: false, error: 'Flow Guide cannot take over a running Build. Use Next to start after it finishes.' };
+          const selectedFlow = (snapshot as { flowSelection?: { name?: string } }).flowSelection;
+          const name = String(requested.flowName || selectedFlow?.name || agent.flow?.name || agent.config.getStr('flow', 'default_flow') || '');
+          return { ...await runFlowForTarget(name, structured.text, requested.flowStart || 0, target), ...await runtimeSnapshotForTarget(target) };
+        }
+        if (flow?.reason !== 'interrupted' && (flow || pendingFlowStarts.has(activeFlowStateKey(target)) || runtime?.running || snapshot.queuePaused)) {
+          if (inputMode === 'guide' && (runtime?.running || flow?.abortController)) {
+            const receipt = await enqueueConversationGuide({
+              clientMessageId: id, guideId: structured.guideId || randomUUID(), target,
+              runId: runtime?.runId || '', deliveryMode: 'steer', text: objective ? 'Goal for the current Build:\n' + objective : structured.text,
+              goalObjective: objective || undefined, images: structured.images, createdAt: new Date().toISOString(),
+            });
+            return { ok: receipt.status !== 'rejected', accepted: receipt.status !== 'rejected', receipt, ...await runtimeSnapshotForTarget(target) };
+          }
+          return await applyConversationAction(target, 'queue_enqueue', '', {
+            id, text: structured.visibleUserInput || structured.text, requestedMode: requestedMode === 'flow' ? 'build' : requestedMode,
+            goalObjective: objective, images: structured.images, createdAt: new Date().toISOString(),
+          });
+        }
+        await selectConversationMode(target, requestedMode);
+        await selectConversationInputMode(target, inputMode);
         const normalizedPromptTarget = normalizeConversationTarget(target);
         promptLeaseKey = normalizedPromptTarget.runtimeKey;
         promptLeaseWorkspaceKey = normalizedPromptTarget.workspaceKey;
@@ -3056,12 +3191,12 @@ if (isViewerArg) {
         // 发送命令时锁定输入框选择的模型：接受命令后的整个运行过程都以该
         // 模型为准（唯一例外是显式的不可用回退，且回退会以结构化事件同步
         // 到前端输入框下方的选择区，而不是隐藏的参数回退）。
-        const requestedModel = agent.model;
+        const requestedModel = String(snapshot.model || agent.model);
         const options = {
-          mode: agent.mode,
-          model: agent.ensureUsableModelSelection(),
-          intelligence: agent.intelligence,
-          inputMode: agent.inputMode,
+          mode: requestedMode === 'goal' ? 'goal' as AgentMode : requestedMode,
+          model: String(snapshot.model || agent.ensureUsableModelSelection()),
+          intelligence: String(snapshot.intelligence || agent.intelligence),
+          inputMode: inputMode as 'guide' | 'next',
           engine: agent.engine,
         };
         if (options.model && requestedModel && options.model !== requestedModel) {
@@ -3079,9 +3214,11 @@ if (isViewerArg) {
             fallback: { from: requestedModel, to: options.model, providerId: usableConfig?.provider_id || agent.activeDeployment()?.providerId },
           });
         }
-        const queueMode = agent.inputMode === 'guide' ? 'steer' : 'followUp';
+        const queueMode = inputMode === 'guide' ? 'steer' : 'followUp';
         let result;
-        if (wslBackendEnabled()) {
+        if (mainConversationOwners.has(activeFlowStateKey(target))) {
+          result = await ensureConversationKernel(root)!.prompt(message, target, options, queueMode);
+        } else if (wslBackendEnabled()) {
           const pool = ensureWslConversationPool();
           if (!pool) return { error: 'WSL Agent backend is enabled but unavailable.' };
           result = await pool.prompt({
@@ -3109,6 +3246,7 @@ if (isViewerArg) {
         // target-scoped snapshot consumed by the renderer.
         return {
           ...result,
+          ...await runtimeSnapshotForTarget(target),
           conversationId: targetConversation,
           activeConversationId: agent.activeConversationId || previousConversation,
           conversationLocked: false,
@@ -3128,7 +3266,8 @@ if (isViewerArg) {
           else activePromptWorkspaces.delete(promptLeaseWorkspaceKey);
         }
       }
-    });
+    };
+    ipcMain.handle('agent:send', async (_event, message, target, options) => await submitConversationCommand(message, target, options));
 
     ipcMain.handle('browser:registerGuest', (event, guestContentsId: number, target?: ConversationTargetInput) => {
       const guest = webContents.fromId(Number(guestContentsId || 0));
@@ -3137,14 +3276,14 @@ if (isViewerArg) {
     ipcMain.handle('browser:control', async (_event, request: BrowserControlRequest) => {
       return await BrowserControl.run(request);
     });
-    ipcMain.handle('flow:run', async (_event, name: string, input = '', start = 0) => {
+    const runFlowForTarget = async (name: string, input = '', start = 0, requestedTarget?: ConversationTargetInput) => {
       if (!agent) return { ok: false, error: 'Agent not initialized' };
       // Bind the Flow to the conversation that started it, exactly like resume.
       // Running on an isolated conversation agent keeps the Flow's builds pinned
       // to its owning conversation id and branch, so switching conversations
       // mid-run can never make the next component write into another
       // conversation or strand the running flag.
-      const flowTarget = conversationRuntimeTarget(agent.activeConversationId || 'default');
+      const flowTarget = conversationRuntimeTarget(requestedTarget || agent.activeConversationId || 'default');
       const flowKey = activeFlowStateKey(flowTarget);
       const existing = activeFlowsByRuntimeKey.get(flowKey) || null;
       if (existing && (existing.reason === 'question' || existing.reason === 'interrupted')) {
@@ -3157,11 +3296,39 @@ if (isViewerArg) {
       if (!found) return { ok: false, error: `Workflow not found: ${name}` };
       const workflow = FlowEngine.load(flowDir, found);
       if (!workflow) return { ok: false, error: `Workflow failed to load: ${found}` };
-      const flowAgent = isolatedConversationAgent(flowTarget);
+      if (pendingFlowStarts.has(flowKey)) return { ok: false, error: 'A Flow is already waiting for this conversation.' };
+      let resolvePendingSettlement!: () => void;
+      const pending = {
+        name: workflow.name, input: String(input || ''), cancelled: false,
+        settlement: new Promise<void>(resolve => { resolvePendingSettlement = resolve; }),
+      };
+      pendingFlowStarts.set(flowKey, pending);
+      let previousQueuePaused = false;
+      try {
+        let state = await runtimeSnapshotForTarget(flowTarget);
+        previousQueuePaused = state.queuePaused === true;
+        await mutateConversationQueue(flowTarget, 'queue_set_pause', { paused: true });
+        while ((state.runtime as { running?: boolean } | undefined)?.running) {
+          if (pending.cancelled) return { ok: false, interrupted: true, error: 'Flow start cancelled.' };
+          await new Promise<void>(resolve => setTimeout(resolve, 50));
+          state = await runtimeSnapshotForTarget(flowTarget);
+        }
+        if (pending.cancelled) return { ok: false, interrupted: true, error: 'Flow start cancelled.' };
+        if (!mainConversationOwners.has(flowKey)) await stopTargetRuntime(flowTarget);
+        if (pending.cancelled) return { ok: false, interrupted: true, error: 'Flow start cancelled.' };
+      } finally {
+        if (pendingFlowStarts.get(flowKey) === pending) pendingFlowStarts.delete(flowKey);
+        resolvePendingSettlement();
+      }
+      const flowAgent = ensureConversationKernel(root)!.beginExternalRun(flowTarget, {
+        mode: 'flow', model: agent.model, intelligence: agent.intelligence, inputMode: agent.inputMode, engine: agent.engine,
+      }, () => isolatedConversationAgent(flowTarget), previousQueuePaused);
+      mainConversationOwners.add(flowKey);
+      conversationSelections.set(flowKey, { ...conversationSelections.get(flowKey), mode: 'flow' });
       const previousMode = flowAgent.mode;
       const previousFlow = flowAgent.flow;
       const previousPc = flowAgent.flowPc;
-      if (previousMode === 'plan') return { ok: false, error: 'Plan mode is fully read-only; Flow execution is blocked.' };
+
       const flowAbortController = new AbortController();
       const flowState: ActiveFlowState = {
         workflow,
@@ -3169,6 +3336,7 @@ if (isViewerArg) {
         componentId: 0,
         completedResults: [],
         previousMode,
+        queueWasPaused: previousQueuePaused,
         previousFlow,
         previousPc,
         reason: '',
@@ -3178,7 +3346,10 @@ if (isViewerArg) {
         flowAgent,
       };
       activeFlowsByRuntimeKey.set(flowKey, flowState);
-      const stopRelayingFlowEvents = relayFlowAgentWorkEvents(flowAgent, flowTarget);
+      let resolveSettlement!: () => void;
+      flowState.settlement = new Promise<void>(resolve => { resolveSettlement = resolve; });
+      void publishConversationState(flowTarget).catch(console.error);
+      const stopRelayingFlowEvents = () => {}; // The shared kernel already relays this exact owner.
       let suspended = false;
       try {
         flowAgent.flow = workflow;
@@ -3225,7 +3396,7 @@ if (isViewerArg) {
           flowState.reason = 'question';
           flowState.message = '';
           flowState.abortController = null;
-          agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(flowState), flowTarget.conversationId);
+          flowAgent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(flowState), flowTarget.conversationId);
           return {
             ok: true,
             pending: true,
@@ -3263,7 +3434,7 @@ if (isViewerArg) {
         flowState.message = interruptedMessage;
         flowState.abortController = null;
         flowAgent.pendingOptions = [];
-        agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(flowState), flowTarget.conversationId);
+        flowAgent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(flowState), flowTarget.conversationId);
         return {
           ok: true,
           pending: true,
@@ -3282,9 +3453,16 @@ if (isViewerArg) {
           flowAgent.flowPc = previousPc;
           flowAgent.setMode(previousMode);
           activeFlowsByRuntimeKey.delete(flowKey);
+          if (!flowState.archiveRequested) await setTargetFlowMode(flowTarget, previousMode, true);
         }
+        try {
+          ensureConversationKernel(root)!.settleExternalRun(flowTarget, !suspended);
+          conversationSelections.set(flowKey, { queuePaused: ensureConversationKernel(root)!.snapshot(flowTarget).queuePaused });
+        }
+        finally { resolveSettlement(); }
       }
-    });
+    };
+    ipcMain.handle('flow:run', async (_event, name, input, start, target) => await runFlowForTarget(name, input, start, target));
     const resumeFlowForTarget = async (response: string, targetInput?: ConversationTargetInput) => {
       if (!agent) return { ok: false, error: 'No suspended Flow is waiting for user input.' };
       const requestedTarget = targetInput ? conversationRuntimeTarget(targetInput) : null;
@@ -3306,18 +3484,32 @@ if (isViewerArg) {
       }
       const flowTarget = suspension.target;
       const flowKey = activeFlowStateKey(flowTarget);
-      const flowAgent = isolatedConversationAgent(flowTarget);
+      if (!mainConversationOwners.has(flowKey)) await stopTargetRuntime(flowTarget);
+      const flowAgent = ensureConversationKernel(root)!.beginExternalRun(flowTarget, {
+        mode: 'flow', model: suspension.flowAgent?.model || agent.model, intelligence: suspension.flowAgent?.intelligence || agent.intelligence,
+        inputMode: suspension.flowAgent?.inputMode || agent.inputMode, engine: agent.engine,
+      }, () => suspension.flowAgent || isolatedConversationAgent(flowTarget), suspension.queueWasPaused ?? true);
+      mainConversationOwners.add(flowKey);
       suspension.flowAgent = flowAgent;
       // A previous Flow may have been interrupted just before its isolated
       // Agent flushed the work ledger. Reconcile only this explicitly paused
       // target before starting the next component; the normal runner guard
       // remains intact for genuine concurrent Builds.
       flowAgent.interruptRunningConversationWorkRuns(flowTarget, 'interrupted');
+      const resumeReason = suspension.reason;
       const flowAbortController = new AbortController();
+      // The pause reason belongs to the previous component wait. Once this
+      // owner resumes, mobile projection and the next Stop must see a running
+      // Flow, while the captured reason retains question-answer semantics.
+      suspension.reason = '';
+      suspension.message = '';
       suspension.abortController = flowAbortController;
       activeFlowsByRuntimeKey.set(flowKey, suspension);
-      agent.clearStoredFlowSuspension(flowTarget.conversationId);
-      const stopRelayingFlowEvents = relayFlowAgentWorkEvents(flowAgent, flowTarget);
+      flowAgent.clearStoredFlowSuspension(flowTarget.conversationId);
+      let resolveSettlement!: () => void;
+      suspension.settlement = new Promise<void>(resolve => { resolveSettlement = resolve; });
+      void publishConversationState(flowTarget).catch(console.error);
+      const stopRelayingFlowEvents = () => {};
       let suspendedAgain = false;
       try {
         flowAgent.flow = suspension.workflow;
@@ -3326,7 +3518,7 @@ if (isViewerArg) {
         await runFlow(flowAgent, suspension.workflow, {
           startInput: suspension.input,
           startPc: suspension.componentId,
-          resumePrompt: suspension.reason === 'interrupted' ? '' : String(response || ''),
+          resumePrompt: resumeReason === 'interrupted' ? '' : String(response || ''),
           completedResults: suspension.completedResults,
           quiet: true,
           signal: flowAbortController.signal,
@@ -3361,7 +3553,7 @@ if (isViewerArg) {
           suspension.reason = 'question';
           suspension.message = '';
           suspension.abortController = null;
-          agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(suspension), flowTarget.conversationId);
+          flowAgent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(suspension), flowTarget.conversationId);
           return {
             ok: true,
             pending: true,
@@ -3396,7 +3588,7 @@ if (isViewerArg) {
         suspension.message = interruptedMessage;
         suspension.abortController = null;
         flowAgent.pendingOptions = [];
-        agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(suspension), flowTarget.conversationId);
+        flowAgent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(suspension), flowTarget.conversationId);
         return {
           ok: true,
           pending: true,
@@ -3415,26 +3607,19 @@ if (isViewerArg) {
           flowAgent.flowPc = suspension.previousPc;
           flowAgent.setMode(suspension.previousMode);
           activeFlowsByRuntimeKey.delete(flowKey);
-          await setTargetFlowMode(flowTarget, suspension.previousMode);
+          await setTargetFlowMode(flowTarget, suspension.previousMode, true);
         }
+        try {
+          ensureConversationKernel(root)!.settleExternalRun(flowTarget, !suspendedAgain);
+          conversationSelections.set(flowKey, { queuePaused: ensureConversationKernel(root)!.snapshot(flowTarget).queuePaused });
+        }
+        finally { resolveSettlement(); }
       }
     };
     ipcMain.handle('flow:resume', async (_event, response: string, targetInput?: ConversationTargetInput) =>
       await resumeFlowForTarget(response, targetInput));
-    ipcMain.handle('agent:setMode', async (_event, mode: string) => {
-      if (agent) {
-        const nextMode = mode as AgentMode;
-        agent.setMode(nextMode);
-        const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
-        // The target-bound runner owns conversation persistence. Updating only
-        // the host Agent lets an existing/cold runner restore the stale Build
-        // snapshot and silently erase Plan/Goal/Flow on the next send.
-        ensureConversationKernel(root)?.setMode(target, nextMode);
-        if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, nextMode);
-        else await ensureElectronUtilityPool().setMode(target, nextMode);
-      }
-      return agent?.mode;
-    });
+    ipcMain.handle('agent:setMode', async (_event, mode: string, target?: ConversationTargetInput) =>
+      await selectConversationMode(conversationRuntimeTarget(target), mode));
 
     ipcMain.handle('agent:setModel', async (_event, model: string) => {
       if (agent) {
@@ -3490,27 +3675,20 @@ if (isViewerArg) {
       };
     });
 
-    ipcMain.handle('agent:setInputMode', async (_event, mode: string, targetInput?: ConversationTargetInput) => {
-      if (!agent) return mode === 'next' ? 'next' : 'guide';
-      const target = normalizeConversationTarget(conversationRuntimeTarget(targetInput));
-      const current = normalizeConversationTarget(conversationRuntimeTarget({
-        workspaceId: agent.workspace.current?.id || '',
-        conversationId: agent.activeConversationId,
-      }));
-      const persisted = target.runtimeKey === current.runtimeKey
-        ? agent.setInputMode(mode)
-        : isolatedConversationAgent(target).setInputMode(mode);
-      if (wslBackendEnabled()) await ensureWslConversationPool()!.setInputMode(target, persisted);
-      else await ensureElectronUtilityPool().setInputMode(target, persisted);
-      return persisted;
-    });
+    ipcMain.handle('agent:setInputMode', async (_event, mode: string, target?: ConversationTargetInput) =>
+      await selectConversationInputMode(conversationRuntimeTarget(target), mode));
+
     ipcMain.handle('agent:setConversation', async (_event, id: string) => {
       return agent?.setConversationFromStorage(id);
     });
     ipcMain.handle('agent:ensureConversation', async (_event, targetInput: ConversationTargetInput) => {
       if (!agent) return {};
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
-      return await runtimeSnapshotForTarget(target);
+      const workspace = (target.workspace || agent.workspace.current) as Agent['workspace']['current'];
+      const existed = agent.hasConversationInWorkspace(target.conversationId, workspace);
+      const snapshot = await runtimeSnapshotForTarget(target);
+      if (!existed) publishConversationList(workspace);
+      return snapshot;
     });
     ipcMain.handle('agent:activateConversation', async (_event, targetInput: ConversationTargetInput) => {
       if (!agent) return {};
@@ -3525,23 +3703,28 @@ if (isViewerArg) {
         icon: '',
         kind: target.workspace.kind === 'ssh' ? 'ssh' as const : 'local' as const,
       } : agent.workspace.current;
+      const existed = agent.hasConversationInWorkspace(target.conversationId, workspace);
       agent.persistActiveConversationSelection(target.conversationId, workspace);
       const resident = peekTargetRuntime(target).resident;
       if (!resident) {
-        return {
+        const snapshot = {
           ...localConversationSnapshotForStartup(target),
           runtimeDeferred: true,
         };
+        if (!existed) publishConversationList(workspace);
+        return snapshot;
       }
-      return {
+      const snapshot = {
         ...await runtimeSnapshotForTarget(target),
         runtimeDeferred: false,
       };
+      if (!existed) publishConversationList(workspace);
+      return snapshot;
     });
     ipcMain.handle('agent:setConversationBranchCommunication', async (_event, targetInput: ConversationTargetInput, enabled: boolean) => {
       if (!agent) return false;
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
-      return mutateTargetConversation(target, () => isolatedConversationAgent(target).setBranchCommunication(enabled !== false));
+      return mutateTargetConversation(target, () => conversationAgentForTarget(target).setBranchCommunication(enabled !== false));
     });
     ipcMain.handle('agent:computerUseState', async (_event, targetInput?: ConversationTargetInput) => {
       if (!agent) return { enabled: false, occupied: false, runtimeKey: '' };
@@ -3564,35 +3747,18 @@ if (isViewerArg) {
     ipcMain.handle('agent:updateGoal', async (_event, goal: string, targetInput?: ConversationTargetInput) => {
       if (!agent) return null;
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
-      return mutateTargetConversation(target, () => {
-        const isolated = isolatedConversationAgent(target);
-        isolated.updateGoal(goal);
-        isolated.setMode('goal');
-        isolated.saveWorkspaceConversationState(true);
-        return isolated.getConversationSnapshot(target.conversationId).goal;
-      });
+      return (await applyConversationAction(target, 'goal_update', goal)).goal;
     });
 
     ipcMain.handle('agent:toggleGoalPause', async (_event, targetInput?: ConversationTargetInput) => {
       if (!agent) return false;
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
-      const residentResult = wslBackendEnabled()
-        ? await ensureWslConversationPool()!.toggleGoalPause(target)
-        : await ensureElectronUtilityPool().toggleGoalPause(target);
-      if (residentResult !== null) return residentResult;
-      return mutateTargetConversation(target, () => isolatedConversationAgent(target).toggleGoalPause());
+      return (await applyConversationAction(target, 'goal_toggle_pause')).paused;
     });
     ipcMain.handle('agent:clearGoal', async (_event, targetInput?: ConversationTargetInput) => {
       if (!agent) return false;
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
-      const residentResult = wslBackendEnabled()
-        ? await ensureWslConversationPool()!.clearGoal(target)
-        : await ensureElectronUtilityPool().clearGoal(target);
-      if (residentResult !== null) return residentResult;
-      return mutateTargetConversation(target, () => {
-        isolatedConversationAgent(target).clearGoal();
-        return true;
-      });
+      return (await applyConversationAction(target, 'goal_clear')).cleared;
     });
 
     ipcMain.handle('agent:getState', async (event, targetInput?: ConversationTargetInput) => {
@@ -3609,14 +3775,12 @@ if (isViewerArg) {
         ? targetInput as { window?: number; before?: number }
         : {});
       const requestedWindow = Math.max(1, Math.floor(Number(windowInput.window) || 0) || 200);
-      const requestedBefore = Math.max(0, Math.floor(Number(windowInput.before) || 0));
+      const requestedBefore = windowInput.before == null ? undefined : Math.max(0, Math.floor(Number(windowInput.before) || 0));
       let conversationSnapshot: Record<string, unknown>;
       try {
         conversationSnapshot = startupPrewarmRequest
-          ? localConversationSnapshotForStartup(target)
-          : wslBackendEnabled()
-            ? await ensureWslConversationPool()!.snapshot(target)
-            : await ensureElectronUtilityPool().snapshot(target);
+          ? localConversationSnapshotForStartup(target, { window: requestedWindow, before: requestedBefore })
+          : await runtimeSnapshotForTarget(target, { window: requestedWindow, before: requestedBefore });
       } catch (error) {
         conversationSnapshot = {
           target,
@@ -3629,11 +3793,8 @@ if (isViewerArg) {
           workRuns: [],
         };
       }
-      const fullMessages = Array.isArray(conversationSnapshot.chatMessages) ? conversationSnapshot.chatMessages as Array<unknown> : [];
-      const totalMessages = fullMessages.length;
-      const before = requestedBefore > 0 ? Math.min(totalMessages, requestedBefore) : totalMessages;
-      const windowStart = Math.max(0, before - requestedWindow);
-      const windowedMessages = fullMessages.slice(windowStart, before);
+      // The owner already applied this window to its complete live history.
+      // Re-slicing here would lose the absolute cursor and repeat recent rows.
       return {
         mode: agent.mode,
         model: agent.modelSelectionValue(),
@@ -3642,9 +3803,9 @@ if (isViewerArg) {
         routeDecision: agent.lastRouteDecision,
         intelligence: agent.intelligence,
         ...conversationSnapshot,
-        chatMessages: windowedMessages,
-        totalMessages,
-        windowStart,
+        chatMessages: conversationSnapshot.chatMessages || [],
+        totalMessages: conversationSnapshot.totalMessages || 0,
+        windowStart: conversationSnapshot.windowStart || 0,
         conversationLocked: conversationSnapshot.conversationLocked ?? false,
         status: conversationSnapshot.status ?? 'idle',
         goal: conversationSnapshot.goal ?? null,
@@ -3683,7 +3844,7 @@ if (isViewerArg) {
         fallbackOnUnavailable: agent.config.getBool('models', 'fallback_on_unavailable'),
         openAIApiMode: agent.config.openAIApiMode(),
         autoAdjust: agent.config.getBool('agent', 'auto_adjust_settings'),
-        inputMode: agent.inputMode,
+        inputMode: conversationSnapshot.inputMode || agent.inputMode,
         terminalInterruptTimeoutMs: agent.config.getNum('terminal', 'interrupt_timeout_ms'),
         platform: process.platform,
         defaultTerminalShell: resolveTerminalShell(agent.config.getStr('terminal', 'default_shell') || defaultTerminalShell()).id,
@@ -3741,17 +3902,11 @@ if (isViewerArg) {
       const windowInput = targetInput && typeof targetInput === 'object' ? targetInput as { window?: number; before?: number } : {};
       const requestedWindow = Math.max(1, Math.floor(Number(windowInput.window) || 0) || 200);
       const requestedBefore = Math.max(0, Math.floor(Number(windowInput.before) || 0));
-      const snapshot = wslBackendEnabled()
-        ? await ensureWslConversationPool()!.snapshot(target)
-        : await ensureElectronUtilityPool().snapshot(target);
-      const fullMessages = Array.isArray(snapshot.chatMessages) ? snapshot.chatMessages as Array<unknown> : [];
-      const totalMessages = fullMessages.length;
-      const before = Math.min(totalMessages, requestedBefore);
-      const windowStart = Math.max(0, before - requestedWindow);
+      const snapshot = await runtimeSnapshotForTarget(target, { window: requestedWindow, before: requestedBefore });
       return {
-        chatMessages: fullMessages.slice(windowStart, before),
-        totalMessages,
-        windowStart,
+        chatMessages: snapshot.chatMessages || [],
+        totalMessages: snapshot.totalMessages || 0,
+        windowStart: snapshot.windowStart || 0,
         conversationId: target.conversationId,
         workspaceId: target.workspaceId,
       };
@@ -3770,17 +3925,23 @@ if (isViewerArg) {
 
     ipcMain.handle('agent:setConversationPinned', async (_event, id: string, pinned: boolean) => {
       if (!agent) return false;
-      return agent.setConversationPinned(id, pinned);
+      const ok = agent.setConversationPinned(id, pinned);
+      if (ok) publishConversationList();
+      return ok;
     });
 
     ipcMain.handle('agent:renameConversation', async (_event, id: string, title: string) => {
       if (!agent) return false;
-      return agent.renameConversation(id, title);
+      const ok = agent.renameConversation(id, title);
+      if (ok) publishConversationList();
+      return ok;
     });
 
     ipcMain.handle('agent:reorderConversations', async (_event, ids: string[]) => {
       if (!agent) return false;
-      return agent.reorderConversations(ids);
+      const ok = agent.reorderConversations(ids);
+      if (ok) publishConversationList();
+      return ok;
     });
 
     ipcMain.handle('automation:list', async () => {
@@ -3912,7 +4073,7 @@ if (isViewerArg) {
 
     ipcMain.handle('agent:reloadGlobalConfig', async () => {
       if (!agent) return { error: 'Agent is not initialized' };
-      if (conversationKernel?.isAnyRunning()) return { error: 'Wait for the active Agent turn to finish before refreshing config.json.' };
+      if (conversationKernel?.hasRetainedWork()) return { error: 'Finish or stop retained Flow and queued work before refreshing config.json.' };
       try {
         agent.config.reload();
         if (agent.workspace.current) agent.config.loadWorkspaceConfig(agent.workspace.current.path);
@@ -3931,7 +4092,9 @@ if (isViewerArg) {
             'Config refresh runtime cleanup',
           );
         }
+        conversationKernel?.disposeIdle();
         conversationKernel = null;
+        mainConversationOwners.clear();
         return { ok: true, path: path.join(agent.rootPath, 'config.json') };
       } catch (error) {
         return { error: String(error) };
@@ -3953,6 +4116,15 @@ if (isViewerArg) {
         ? conversationRuntimeTarget(targetInput)
         : conversationRuntimeTarget(agent.activeConversationId || 'default');
       const state = activeFlowStateFor(target);
+      const pending = pendingFlowStarts.get(activeFlowStateKey(target));
+      if (pending) {
+        pending.cancelled = true;
+        // Stop can arrive while startup awaits disposal of the previous owner.
+        // Reading a new snapshot before disposal ends re-enters a stopping pool.
+        await pending.settlement;
+        await publishConversationState(target);
+        return { ok: true, action: 'stopping' };
+      }
       if (!state) return { ok: true, action: 'not_running' };
       if (state.reason === 'question' || state.reason === 'interrupted') {
         // A suspension exists: this is the second consecutive Stop/Esc (the Flow
@@ -4011,7 +4183,6 @@ if (isViewerArg) {
     ipcMain.handle('agent:enqueueGuide', async (_event, raw: ConversationInputEnvelope) => {
       if (!agent) throw new Error('Agent not initialized');
       const target = conversationRuntimeTarget({ target: raw?.target });
-      if (activeFlowStateFor(target)) clearFlowSuspensionForNewWork(target);
       const envelope: ConversationInputEnvelope = {
         clientMessageId: String(raw?.clientMessageId || '').trim().slice(0, 200),
         target: { workspaceId: target.workspaceId, conversationId: target.conversationId },
@@ -4022,14 +4193,13 @@ if (isViewerArg) {
         images: Array.isArray(raw?.images) ? raw.images : [],
         createdAt: String(raw?.createdAt || new Date().toISOString()),
       };
-      return wslBackendEnabled()
-        ? await ensureWslConversationPool()!.enqueueGuide(envelope)
-        : await ensureElectronUtilityPool().enqueueGuide(envelope);
+      return await enqueueConversationGuide(envelope);
     });
 
     ipcMain.handle('agent:checkpointConversation', async (_event, request: { target?: ConversationTargetInput }) => {
       if (!agent) throw new Error('Agent not initialized');
       const target = conversationRuntimeTarget(request);
+      if (mainConversationOwners.has(activeFlowStateKey(target))) return ensureConversationKernel(root)!.checkpoint(target);
       return wslBackendEnabled()
         ? await ensureWslConversationPool()!.checkpoint(target)
         : await ensureElectronUtilityPool().checkpoint(target);
@@ -4042,6 +4212,7 @@ if (isViewerArg) {
         keepRecent: Number.isFinite(Number(request?.keepRecent)) ? Math.floor(Number(request.keepRecent)) : undefined,
         force: request?.force !== false,
       };
+      if (mainConversationOwners.has(activeFlowStateKey(target))) return await ensureConversationKernel(root)!.compressContext(target, options);
       return wslBackendEnabled()
         ? await ensureWslConversationPool()!.contextCompress(target, options)
         : await ensureElectronUtilityPool()!.contextCompress(target, options);
@@ -4052,6 +4223,7 @@ if (isViewerArg) {
       const target = conversationRuntimeTarget(request);
       const score = Number(request?.score);
       const routeId = String(request?.routeId || '');
+      if (mainConversationOwners.has(activeFlowStateKey(target))) return ensureConversationKernel(root)!.rateAutoRoute(target, score, routeId);
       return wslBackendEnabled()
         ? await ensureWslConversationPool()!.rateAutoRoute(target, score, routeId)
         : await ensureElectronUtilityPool().rateAutoRoute(target, score, routeId);
@@ -4061,6 +4233,8 @@ if (isViewerArg) {
       if (!agent) throw new Error('Agent not initialized');
       const target = conversationRuntimeTarget(request);
       const runId = String(request?.runId || '').trim() || undefined;
+      if (activeFlowStateFor(target) || pendingFlowStarts.has(activeFlowStateKey(target))) return await stopFlowForTarget(target);
+      if (mainConversationOwners.has(activeFlowStateKey(target))) return ensureConversationKernel(root)!.requestStop(target, runId);
       // The runtime, not a renderer flag, decides whether this is the first
       // checkpointing stop or the second target-local hard restart.
       return wslBackendEnabled()
@@ -4073,6 +4247,7 @@ if (isViewerArg) {
       const target = conversationRuntimeTarget(request);
       const runId = String(request?.runId || '').trim();
       if (!runId) return false;
+      if (mainConversationOwners.has(activeFlowStateKey(target))) return ensureConversationKernel(root)!.setWorkRunExpanded(target, runId, request?.expanded !== false);
       return wslBackendEnabled()
         ? await ensureWslConversationPool()!.setWorkRunExpanded(target, runId, request?.expanded !== false)
         : await ensureElectronUtilityPool().setWorkRunExpanded(target, runId, request?.expanded !== false);
@@ -4081,9 +4256,7 @@ if (isViewerArg) {
     ipcMain.handle('agent:abortConversation', async (_event, targetInput?: ConversationTargetInput) => {
       if (!agent) return false;
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
-      const result = wslBackendEnabled()
-        ? await ensureWslConversationPool()!.requestStop(target)
-        : await ensureElectronUtilityPool().requestStop(target);
+      const result = await applyConversationAction(target, 'conversation_stop');
       return result.action !== 'not_running' && result.action !== 'stale';
     });
 
@@ -4091,32 +4264,35 @@ if (isViewerArg) {
       if (!agent) return { error: 'Agent not initialized' };
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
       try {
-        const snapshot = await mutateTargetConversation(target, () => wslBackendEnabled()
-          ? ensureWslConversationPool()!.rewind(target, messageIndex)
-          : ensureElectronUtilityPool().rewind(target, messageIndex));
+        const snapshot = await mutateTargetConversation(target, () => mainConversationOwners.has(activeFlowStateKey(target))
+          ? ensureConversationKernel(root)!.rewind(target, messageIndex)
+          : wslBackendEnabled() ? ensureWslConversationPool()!.rewind(target, messageIndex) : ensureElectronUtilityPool().rewind(target, messageIndex));
         return { ...snapshot, queued: { steering: [], followUp: [] }, workEvents: [] };
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
     });
-    ipcMain.handle('agent:branchConversation', async (_event, targetInput: ConversationTargetInput, messageIndex: number, text: string, locator?: ConversationBranchLocator) => {
+    const branchConversationForTarget = async (targetInput: ConversationTargetInput, messageIndex: number, text: string, locator?: ConversationBranchLocator) => {
       if (!agent) return { error: 'Agent not initialized' };
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
       try {
         const snapshot = await mutateTargetConversation(target, () => {
-          const isolated = isolatedConversationAgent(target);
-          return isolated.branchConversation(target.conversationId, messageIndex, text, locator);
+          const isolated = conversationAgentForTarget(target);
+          const branched = isolated.branchConversation(target.conversationId, messageIndex, text, locator);
+          if (mainConversationOwners.has(activeFlowStateKey(target))) conversationKernel?.refreshIdleConversation(target);
+          return branched;
         });
         return { ...snapshot, queued: { steering: [], followUp: [] }, workEvents: [] };
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
-    });
-    ipcMain.handle('agent:inspectConversationBranch', async (_event, targetInput: ConversationTargetInput, branchId: string, branchGroupId?: string) => {
+    };
+    ipcMain.handle('agent:branchConversation', async (_event, targetInput: ConversationTargetInput, messageIndex: number, text: string, locator?: ConversationBranchLocator) => await branchConversationForTarget(targetInput, messageIndex, text, locator));
+    const inspectConversationBranchForTarget = async (targetInput: ConversationTargetInput, branchId: string, branchGroupId?: string) => {
       if (!agent) return { error: 'Agent not initialized' };
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
       try {
-        const isolated = isolatedConversationAgent(target);
+        const isolated = conversationAgentForTarget(target);
         const snapshot = isolated.inspectConversationBranch(target.conversationId, branchId, branchGroupId);
         if (snapshot.runtimeBranchId === snapshot.activeBranchId && peekTargetRuntime(target).resident) {
           const live = await runtimeSnapshotForTarget(target);
@@ -4135,21 +4311,25 @@ if (isViewerArg) {
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
-    });
-    ipcMain.handle('agent:activateConversationBranch', async (_event, targetInput: ConversationTargetInput, branchId: string, branchGroupId?: string) => {
+    };
+    ipcMain.handle('agent:inspectConversationBranch', async (_event, targetInput: ConversationTargetInput, branchId: string, branchGroupId?: string) => await inspectConversationBranchForTarget(targetInput, branchId, branchGroupId));
+    const activateConversationBranchForTarget = async (targetInput: ConversationTargetInput, branchId: string, branchGroupId?: string) => {
       if (!agent) return { error: 'Agent not initialized' };
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
       try {
         if (peekTargetRuntime(target).running) await stopTargetRuntime(target);
         const snapshot = await mutateTargetConversation(target, () => {
-          const isolated = isolatedConversationAgent(target);
-          return isolated.switchConversationBranch(target.conversationId, branchId, branchGroupId);
+          const isolated = conversationAgentForTarget(target);
+          const switched = isolated.switchConversationBranch(target.conversationId, branchId, branchGroupId);
+          if (mainConversationOwners.has(activeFlowStateKey(target))) conversationKernel?.refreshIdleConversation(target);
+          return switched;
         });
         return { ...snapshot, queued: { steering: [], followUp: [] }, workEvents: [] };
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
-    });
+    };
+    ipcMain.handle('agent:activateConversationBranch', async (_event, targetInput: ConversationTargetInput, branchId: string, branchGroupId?: string) => await activateConversationBranchForTarget(targetInput, branchId, branchGroupId));
     ipcMain.handle('flow:list', async () => {
       if (!agent) return [];
       return FlowEngine.listAll(path.join(agent.rootPath, 'Flow'));
@@ -4175,7 +4355,7 @@ if (isViewerArg) {
       return { ok: true, workflow };
     });
 
-    ipcMain.handle('agent:archive', async (_event, targetInput?: ConversationTargetInput) => {
+    const archiveConversationForTarget = async (targetInput?: ConversationTargetInput) => {
       if (!agent) return { ok: false, error: 'Agent not initialized' };
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
       const normalized = normalizeConversationTarget(target);
@@ -4183,13 +4363,19 @@ if (isViewerArg) {
       if (existing) return existing;
       const operation = (async () => {
         mutatingRuntimeKeys.add(normalized.runtimeKey);
+        let completed = false;
         try {
           // Archive is a destructive lifecycle command. It intentionally
           // bypasses the normal mutation/active-prompt guard. Cancel the
           // conversation-local Flow synchronously, then start the resident
           // runtime hard-stop in the background so a stuck child cannot hold
           // the archive click hostage.
+          const ownedFlow = activeFlowStateFor(normalized);
+          const mainOwnerPreparation = mainConversationOwners.has(normalized.runtimeKey)
+            ? ensureConversationKernel(root)!.prepareForArchive(normalized) : Promise.resolve(null);
           interruptActiveFlowForArchive(normalized);
+          const mainArchiveOwner = await mainOwnerPreparation;
+          if (ownedFlow?.settlement) await ownedFlow.settlement;
           void forceStopTargetRuntime(normalized).catch(error => {
             console.error('[Newmark] archive runtime force-stop failed:', error instanceof Error ? error.message : String(error));
           });
@@ -4203,14 +4389,19 @@ if (isViewerArg) {
           // starts payload I/O in parallel and finalizes deletion against the
           // latest locked state snapshot, so rapid clicks do not serialize on
           // large Markdown bodies or lose a sibling deletion.
-          const archiveOwner = ownsTargetWorkspace ? agent! : isolatedConversationAgent(normalized);
+          const archiveOwner = mainArchiveOwner || (ownsTargetWorkspace ? agent! : isolatedConversationAgent(normalized));
           archiveOwner.clearStoredFlowSuspension(normalized.conversationId);
           const archived = await archiveOwner.archiveConversationAsync(normalized.conversationId);
           if (!archived) return { ok: false, error: 'Conversation archive could not be written.' };
+          completed = true;
+          conversationSelections.delete(normalized.runtimeKey);
+          publishConversationList((normalized.workspace || agent!.workspace.current) as Agent['workspace']['current']);
           return { ok: true, fileName: archived, conversationId: normalized.conversationId, workspaceId: normalized.workspaceId };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         } finally {
+          conversationKernel?.finishArchive(normalized, completed);
+          if (completed) mainConversationOwners.delete(normalized.runtimeKey);
           mutatingRuntimeKeys.delete(normalized.runtimeKey);
         }
       })();
@@ -4220,7 +4411,8 @@ if (isViewerArg) {
       } finally {
         if (archiveInFlight.get(normalized.runtimeKey) === operation) archiveInFlight.delete(normalized.runtimeKey);
       }
-    });
+    };
+    ipcMain.handle('agent:archive', async (_event, targetInput?: ConversationTargetInput) => await archiveConversationForTarget(targetInput));
 
     ipcMain.handle('agent:listArchives', async (_event, scope?: string) => {
       if (!agent) return [];
@@ -4244,6 +4436,7 @@ if (isViewerArg) {
       if (!restored.ok || !restored.workspaceId || !restored.conversationId) return restored;
       agent.selectWorkspaceFromStorage(restored.workspaceId);
       agent.setConversationFromStorage(restored.conversationId);
+      publishConversationList();
       return { ...restored, snapshot: agent.getConversationSnapshot(restored.conversationId) };
     });
 
@@ -4383,20 +4576,11 @@ if (isViewerArg) {
       if (session) session.buffer = terminalOutput.history(sessionId);
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('pty:data', sessionId, text);
     });
-    ipcMain.handle('agent:queueAction', async (_event, actionInput: string, input: Record<string, unknown> = {}, targetInput?: ConversationTargetInput) => {
-      const target = conversationRuntimeTarget(targetInput);
-      const action = String(actionInput || '').replace(/^queue_/, '') as ConversationQueueAction;
-      if (!['enqueue', 'update', 'delete', 'reorder', 'toggle_pause', 'guide'].includes(action)) {
-        return { ok: false, error: 'Unknown queue action' };
-      }
-      try {
-        return wslBackendEnabled()
-          ? await ensureWslConversationPool()!.queueAction(target, action, input)
-          : await ensureElectronUtilityPool().queueAction(target, action, input);
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) };
-      }
+    ipcMain.handle('agent:queueAction', async (_event, action: string, input: Record<string, unknown> = {}, target?: ConversationTargetInput) => {
+      try { return await applyConversationAction(conversationRuntimeTarget(target), 'queue_' + action.replace(/^queue_/, ''), '', input); }
+      catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
     });
+
     const sendTerminalData = (sessionId: string, session: BottomTerminalSession, text: string): void => {
       terminalOutput.push(sessionId, text);
       session.buffer = terminalOutput.history(sessionId);
@@ -4687,6 +4871,8 @@ if (isViewerArg) {
           wslAgentRuntimePool?.hasActiveWorkspace(normalized) || false,
         ]);
         if (nativeActive || wslActive) throw new Error('Cannot delete a workspace while one of its conversations is running, stopping, or restarting.');
+        const releasedOwners = conversationKernel?.disposeIdle(normalized.workspaceKey) || [];
+        for (const key of releasedOwners) mainConversationOwners.delete(key);
         await Promise.all([
           electronUtilityRuntimePool?.stopWorkspace(normalized),
           wslAgentRuntimePool?.stopWorkspace(normalized),

@@ -215,8 +215,10 @@ async function main(): Promise<void> {
       && emptyRetrySource.includes('MAX_EMPTY_RESPONSE_RETRIES = EMPTY_RESPONSE_RETRY_DELAYS_MS.length')
       && emptyRetrySource.includes('[200, 800, 2_000, 10_000, 60_000]')
       && runnerSource.includes('let consecutiveEmptyResponses = 0')
-      && runnerSource.includes('const emptyResponseState = observeEmptyResponseOutcome(consecutiveEmptyResponses, providerTurnIsEmpty(lastTurn))')
-      && runnerSource.includes('if (!emptyResponseState.retry) break')
+      && runnerSource.includes('if (providerTurnIsEmpty(lastTurn) || lastTurn.thoughtOnly)')
+      && runnerSource.includes('const emptyResponseState = observeEmptyResponseOutcome(consecutiveEmptyResponses, true)')
+      && runnerSource.includes('if (!emptyResponseState.retry)')
+      && runnerSource.includes('the recovery limit was reached.')
       && runnerSource.includes('${retryNumber}/${MAX_EMPTY_RESPONSE_RETRIES}')
       && runnerSource.includes('waitForPlannedRouteRetry(emptyResponseRetryDelayMs(consecutiveEmptyResponses))')
       && runnerSource.includes('retrying the same deployment'),
@@ -224,7 +226,7 @@ async function main(): Promise<void> {
     ok(runnerSource.includes('if (lastTurn.thoughtOnly)')
       && runnerSource.includes('removeTrailingThoughtOnlyAssistant(kernel.state.messages)')
       && runnerSource.includes('!finalContent.length && !thinking.trim()'),
-    'thought-only activity resets empty accounting and continues without synthesizing an empty-response error');
+    'thought-only activity uses bounded same-deployment continuation without synthesizing an empty-response error');
     ok(!runnerSource.includes('let emptyResponseRetries = 0')
       && !runnerSource.includes('(${emptyResponseRetries}/2)'),
     'legacy build-local two-retry counter is removed');
@@ -236,9 +238,9 @@ async function main(): Promise<void> {
       runnerSource.indexOf('async function transformContext'),
       runnerSource.indexOf('async function shouldStopAfterTurn'),
     );
-    ok(providerStreamSource.includes('const currentProvider = currentAgent.engineModel()')
+    ok(providerStreamSource.includes('const currentProvider = currentAgent.engineModel(buildProviderCache)')
       && providerStreamSource.includes('currentProvider.intelligenceConfig(currentAgent.intelligence)')
-      && /const provider(?:\s*:\s*LLMProvider\s*\|\s*null)?\s*=\s*agent\.engineModel\(\)/.test(transformSource)
+      && /const provider(?:\s*:\s*LLMProvider\s*\|\s*null)?\s*=\s*agent\.engineModel\(providerCache\)/.test(transformSource)
       && !runnerSource.includes('transformContext(agent, provider,'),
     'provider streaming and context compression re-resolve the active deployment instead of capturing the initial provider');
   } finally {

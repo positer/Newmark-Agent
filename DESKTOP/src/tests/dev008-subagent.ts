@@ -135,14 +135,14 @@ async function main(): Promise<void> {
   await tick();
   assert.strictEqual(wakeManager.get(wakeId)?.status, 'completed');
   assert.strictEqual(wakeManager.read(wakeId, wakeId).ok, true, 'peer may read another/current conversation record through shared coordinator API');
-  assert.strictEqual(wakeManager.sendMessage('peer-sender', wakeId, 'reactivate-after-complete').ok, true);
+  assert.strictEqual(wakeManager.sendMessage('peer-sender', wakeId, 'reactivate-after-complete', 'directive', {}, true).ok, true);
   await tick();
   assert.ok(['queued', 'working'].includes(wakeManager.get(wakeId)?.status || ''));
   wakeReleases.get(3)?.();
   await tick();
   await tick();
   assert.strictEqual(wakeManager.get(wakeId)?.status, 'error');
-  assert.strictEqual(wakeManager.sendMessage('peer-sender', wakeId, 'reactivate-after-error').ok, true);
+  assert.strictEqual(wakeManager.sendMessage('peer-sender', wakeId, 'reactivate-after-error', 'directive', {}, true).ok, true);
   await tick();
   assert.ok(['queued', 'working'].includes(wakeManager.get(wakeId)?.status || ''));
   const peerTargetId = wakeManager.create('peer-target', 'peer target prompt');
@@ -181,6 +181,7 @@ async function main(): Promise<void> {
   });
   const rootDelivery = rootInboxManager.sendRootMessage('peer-result-source', 'peer result for root', 'result');
   assert.strictEqual(rootDelivery.ok, true);
+  assert.strictEqual(rootDelivery.message?.wakeup, false, 'mailbox transport preserves passive default independently of root runtime state');
   assert.strictEqual(rootInboxManager.readRootInbox().length, 1);
   assert.strictEqual(persistedRootStates.at(-1)?.rootInbox.length, 1, 'root inbox persists before wake acknowledgement');
   assert.deepStrictEqual(rootWakeMessages, ['peer result for root']);
@@ -221,6 +222,7 @@ async function main(): Promise<void> {
     followUp: message => rootFollowUps.push(String((message as { content?: string }).content || '')),
   });
   const rootMessage = rootAgent.subagents.sendRootMessage('peer-running-source', 'running root receives safely', 'result');
+  assert.strictEqual(rootMessage.message?.wakeup, false, 'an active root accepts a passive message');
   assert.strictEqual(rootSteering.length, 0, 'running root does not inject peer results as same-turn steering');
   assert.ok(rootFollowUps.some(message => message.includes(rootMessage.message!.id) && message.includes('running root receives safely')), 'running root queues peer results as a safe follow-up turn');
   assert.strictEqual(rootAgent.subagents.readRootInbox().length, 1);
@@ -237,9 +239,15 @@ async function main(): Promise<void> {
     onRootInboxMessage: (message: { id: string; body: string; kind: string; fromAgentId: string }) =>
       (routedRoot as unknown as { deliverRootInboxMessage(value: typeof message): boolean }).deliverRootInboxMessage(message),
   });
-  routedRoot.subagents.sendRootMessage('peer-routed-source', 'route exactly once', 'result');
-  assert.strictEqual(routedWake.length, 1, 'conversation-owned root wake listener receives a peer result exactly once');
-  assert.strictEqual(routedKernelFollowUps.length, 0, 'root wake routing does not also enqueue a duplicate direct kernel follow-up');
+  const routedMessage = routedRoot.subagents.sendRootMessage('peer-routed-source', 'route exactly once', 'result');
+  assert.strictEqual(routedWake.length, 0, 'an active native kernel receives mail without starting a separate hosted process');
+  assert.strictEqual(routedKernelFollowUps.length, 1, 'active root routing appends exactly one native follow-up and retains its request snapshot');
+  assert.ok(routedKernelFollowUps[0].includes(routedMessage.message!.id), 'the native follow-up carries the persisted inbox identity');
+  routedRoot.attachAgentKernelRuntime(null);
+  const fallbackMessage = routedRoot.subagents.sendRootMessage('peer-routed-source', 'hosted fallback after native detach', 'result');
+  assert.strictEqual(routedWake.length, 1, 'the conversation-owned listener remains the fallback when no native kernel is attached');
+  assert.ok(routedWake[0].includes(fallbackMessage.message!.id), 'hosted fallback carries the new persisted inbox identity');
+  assert.strictEqual(routedKernelFollowUps.length, 1, 'the hosted fallback does not duplicate a native follow-up');
   fs.rmSync(path.join(process.cwd(), 'test-tmp-dev008-root-route'), { recursive: true, force: true });
 
   class RootWakeProbeAgent extends Agent {
@@ -277,16 +285,26 @@ async function main(): Promise<void> {
     guideReceipts: new Map(),
     guideEnvelopes: new Map(),
   };
-  wakeProbe.subscribeRootInboxWake(message => (kernel as unknown as { enqueueRootInboxWake(runtime: typeof wakeRuntime, prompt: string): void }).enqueueRootInboxWake(wakeRuntime, message));
+  wakeProbe.subscribeRootInboxWake((message, options) => (kernel as unknown as { enqueueRootInboxWake(runtime: typeof wakeRuntime, prompt: string, wakeup: boolean): void }).enqueueRootInboxWake(wakeRuntime, message, options?.wakeup === true));
   (kernel as unknown as { runtimes: Map<string, typeof wakeRuntime> }).runtimes.set(wakeRuntime.runtimeKey, wakeRuntime);
   (wakeProbe.subagents as unknown as { bind(options: Record<string, unknown>): void }).bind({
     onRootInboxMessage: (message: { id: string; body: string; kind: string; fromAgentId: string }) =>
       (wakeProbe as unknown as { deliverRootInboxMessage(value: typeof message): boolean }).deliverRootInboxMessage(message),
   });
-  const idleWake = wakeProbe.subagents.sendRootMessage('idle-peer-source', 'idle root summary result', 'result');
+  const idleBeforeHistory = JSON.stringify(wakeProbe.history);
+  const idlePassive = wakeProbe.subagents.sendRootMessage('idle-peer-source', 'passive root summary result', 'result');
+  await tick();
+  await tick();
+  assert.strictEqual(idlePassive.message?.wakeup, false);
+  assert.strictEqual(wakeProbe.processCalls.length, 0, 'passive mail cannot start an idle root');
+  assert.strictEqual(JSON.stringify(wakeProbe.history), idleBeforeHistory, 'passive root mail stays outside the provider history until activation');
+  assert.ok(wakeProbe.subagents.readRootInbox().some(message => message.id === idlePassive.message!.id));
+  const idleWake = wakeProbe.subagents.sendRootMessage('idle-peer-source', 'idle root summary result', 'result', undefined, true);
   await tick();
   await tick();
   assert.ok(wakeProbe.processCalls.some(call => call.includes(idleWake.message!.id) && call.includes('idle root summary result')), 'idle root queues an automatic follow-up turn');
+  assert.strictEqual(idleWake.message?.wakeup, true);
+  assert.ok(wakeProbe.processCalls.some(call => call.includes(idlePassive.message!.id)), 'explicit activation also consumes earlier passive mail');
   assert.strictEqual(wakeProbe.subagents.readRootInbox().length, 0);
 
   const activeWakeRuntime = {

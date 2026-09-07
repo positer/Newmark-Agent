@@ -12,7 +12,7 @@ import { ConversationKernel } from '../core/conversationKernel';
  * 算进当前 Build Block，上下文显示窗口的长期历史（longHistoryTokens）恒为
  * 0——即使对话已有大量历史。修复后：
  * - 有活动 run：boundary 取活动 run 起点（长期历史 = 之前的消息）；
- * - 无活动 run + 有 run_id 历史：boundary 取最后一个 run 起点之后；
+ * - 无活动 run：已完成的有归属或旧无归属历史全部算长期历史；
  * - 无活动 run + 无 run_id 历史：全部算长期历史（buildBlockTokens = 0）。
  */
 
@@ -43,7 +43,7 @@ try {
   check(window1.buildBlockTokens === 0, '场景1：无活动 run 时 buildBlockTokens = 0（没有当前 Build Block）');
   check(window1.longHistoryTokens >= window1.estimatedTokens, '场景1：长期历史覆盖全部历史估算');
 
-  // 场景 2：无活动 run + 有 run_id 历史 → 最后一个 run 起点之前算长期历史
+  // 场景 2：无活动 run + 旧版缺失 run_id 的尾部 → 全部属于已完成历史
   const agent2 = new Agent(root);
   agent2.history = [
     { role: 'user', content: 'old-1 '.repeat(100), run_id: 'old-run' },
@@ -57,7 +57,7 @@ try {
     estimatedTokens: number;
   };
   check(window2.longHistoryTokens > 0, '场景2：无活动 run + 有 run_id 历史 → 长期历史 > 0');
-  check(window2.buildBlockTokens > 0, '场景2：无归属的最近消息算当前区块');
+  check(window2.buildBlockTokens === 0, '场景2：空闲时不把旧版缺失归属的消息伪装成活动 Build');
   check(
     window2.longHistoryTokens + window2.buildBlockTokens >= window2.estimatedTokens,
     '场景2：长期历史 + 当前区块 ≈ 总估算',
@@ -126,8 +126,8 @@ try {
   );
   check(
     typeof kernelSnapshot.contextWindow?.buildBlockTokens === 'number'
-      && kernelSnapshot.contextWindow.buildBlockTokens > 0,
-    '场景4：Kernel snapshot.contextWindow.buildBlockTokens > 0（无归属最近消息）',
+      && kernelSnapshot.contextWindow.buildBlockTokens === 0,
+    '场景4：Kernel snapshot空闲历史不包含伪活动 Build（旧无归属消息归长期）',
   );
   check(Number(kernelSnapshot.historyMessages) > 0, '场景4：snapshot.historyMessages > 0（历史已落盘加载）');
   fs.rmSync(wsRoot, { recursive: true, force: true });

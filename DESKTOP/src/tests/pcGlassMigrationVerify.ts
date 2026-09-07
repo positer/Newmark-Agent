@@ -20,8 +20,88 @@ function check(condition: boolean, message: string): void {
   assert.ok(condition, message);
 }
 
+function verifyPopupPixelBudget(html: string): void {
+  const start = html.indexOf('var LIQUID_POPUP_MAX_EDGE_JITTER_PX =');
+  const end = html.indexOf('function startLiquidMotionTracking(float)', start);
+  assert.ok(start >= 0 && end > start, 'Production popup material functions must exist');
+  const dom = new JSDOM('<!doctype html><body></body>', {runScripts: 'outside-only'});
+  const window = dom.window as any;
+  const frames = new Map<number, () => void>();
+  let sequence = 0;
+  window.requestAnimationFrame = (callback: () => void) => { frames.set(++sequence, callback); return sequence; };
+  window.cancelAnimationFrame = (id: number) => frames.delete(id);
+  const frame = () => { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback()); };
+  window.eval(html.slice(start, end));
+  try {
+    for (const nativePopover of [false, true]) for (const [width, height] of [[180, 120], [1200, 800]]) {
+      const popup = window.document.createElement('div');
+      popup.style.cssText = 'display:block;visibility:visible;position:fixed;opacity:1;border-radius:16px';
+      window.document.body.append(popup);
+      Object.defineProperties(popup, {clientWidth: {value: width}, clientHeight: {value: height}});
+      popup.getBoundingClientRect = () => ({x:100,y:100,left:100,top:100,width,height,right:100+width,bottom:100+height});
+      const matches = popup.matches.bind(popup);
+      popup.matches = (selector: string) => selector === ':popover-open' ? nativePopover : matches(selector);
+      for (const [dx, dy] of [[1000, 0], [-1000, 0], [0, 1000], [0, -1000], [1000, 1000], [-1000, -1000]]) {
+        window.setLiquidPopupDeformation(popup, dx, dy, false); frame();
+        const feedback = popup._liquidPopupFeedback;
+        const outset = Number.parseFloat(feedback.surface.style.getPropertyValue('--liquid-popup-outset'));
+        check(outset === 4 && feedback.target === 4, `Actual popup material ${nativePopover ? 'popover' : 'sibling'} ${width}x${height} direction ${dx},${dy}: full pull is exactly 4px`);
+        const distance = Math.hypot(dx, dy);
+        const expectedSides = {left: Math.max(0, -dx / distance), right: Math.max(0, dx / distance), top: Math.max(0, -dy / distance), bottom: Math.max(0, dy / distance)};
+        check(Object.entries(expectedSides).every(([side, expected]) => Math.abs(Number.parseFloat(feedback.surface.style.getPropertyValue('--liquid-popup-pull-' + side)) - expected) < 0.000001),
+          `Actual popup ${width}x${height} direction ${dx},${dy}: only force-facing sides receive the bounded directional projection`);
+        assert.equal(popup.style.getPropertyValue('--liquid-popup-edge-x'), '0px');
+        assert.equal(popup.style.getPropertyValue('--liquid-popup-edge-y'), '0px');
+        assert.equal(popup.style.getPropertyValue('scale'), '1');
+      }
+      window.setLiquidPopupDeformation(popup, 45, 0, false); frame();
+      check(Number.parseFloat(popup._liquidPopupFeedback.surface.style.getPropertyValue('--liquid-popup-outset')) === 2,
+        `Actual popup ${width}x${height}: half pull preserves its existing response curve within the new budget`);
+      window.setLiquidPopupPressDeformation(popup);
+      check(popup._liquidPopupFeedback === null && popup.style.getPropertyValue('--liquid-popup-edge-x') === '0.384px' && popup.style.getPropertyValue('--liquid-popup-edge-y') === '1.600px',
+        `Actual popup ${width}x${height}: press contracts by 0.384/1.6px and removes the outward shell`);
+      window.setLiquidPopupDeformation(popup, 0, 0, true);
+      check(popup.style.getPropertyValue('--liquid-popup-edge-x') === '0px' && popup.style.getPropertyValue('--liquid-popup-edge-y') === '0px',
+        `Actual popup ${width}x${height}: release restores the uncompressed material`);
+      window.setLiquidPopupOutset(popup, 1000, 1000, 0); frame();
+      window.clearLiquidPopupOutset(popup, false);
+      window.setLiquidPopupOutset(popup, 1000, 1000, 0); frame();
+      check(Number.parseFloat(popup._liquidPopupFeedback.surface.style.getPropertyValue('--liquid-popup-outset')) === 4,
+        `Actual popup ${width}x${height}: oversized repeated pull after reset remains capped at 4px`);
+      window.clearLiquidPopupOutset(popup, true); popup.remove();
+    }
+  } finally { dom.window.close(); }
+}
+
+function verifyHeldPopupGate(html: string): void {
+  const shell = html.slice(html.indexOf('function wireLiquidPopupShellInteractions()'), html.indexOf('function wireLiquidFloatGlowInteractions()'));
+  const start = shell.indexOf("window.addEventListener('pointermove', function(event) {");
+  const end = shell.indexOf("  window.addEventListener('pointerup'", start);
+  assert.ok(start >= 0 && end > start, 'Actual shared popup pointer handler must exist');
+  let handler: (event: any) => void = () => { throw Error('Handler not registered'); };
+  let clock = 0, deformations = 0;
+  const active = {popup: {isConnected: true}, pointer: 7, x: 0, y: 0, startedAt: 0, trackOwned: false};
+  const factory = new Function('window', 'performance', 'active', 'setLiquidPopupDeformation', 'clearPopup', 'updateLight', `
+    ${html.match(/var LIQUID_HOLD_DRAG_ACTIVATION_MS = \d+;/)?.[0] || ''}
+    ${shell.slice(start, end)}
+  `);
+  factory({addEventListener(_type: string, value: typeof handler) {handler = value;}}, {now: () => clock}, active,
+    () => {deformations++;}, () => {}, () => {});
+  const event = {pointerId: 7, clientX: 50, clientY: 0};
+  clock = 79; handler(event);
+  check(deformations === 0, 'Actual shared popup handler: 79ms remains an initial press');
+  clock = 80; handler(event);
+  check(deformations === 1, 'Actual shared popup handler: outward hold is enabled at 80ms');
+  active.trackOwned = true; clock = 300; handler(event);
+  check(deformations === 1, 'Actual shared popup handler: menu-owned rails never gain a second deformation owner');
+  active.trackOwned = false; handler({...event, pointerId: 8});
+  check(deformations === 1, 'Actual shared popup handler: unrelated pointers cannot activate feedback');
+}
+
 function main(): void {
   const html = uiHtml();
+  verifyPopupPixelBudget(html);
+  verifyHeldPopupGate(html);
   const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main.ts'), 'utf-8');
 
   // 1) 外围主要表面挂 .liquid-glass；中心输入/终端保持实体表面
@@ -32,9 +112,9 @@ function main(): void {
   check(/id="right" class="open"/.test(html), '#right 恢复原有静态表面');
 
   // 2) 弹层菜单挂 .liquid-glass
-  check(/class="conv-action-menu liquid-glass liquid-glass-carrier"/.test(html), '.conv-action-menu 使用磨砂承载玻璃');
-  check(/class="model-select-menu liquid-glass liquid-glass-carrier"/.test(html), '.model-select-menu 使用磨砂承载玻璃');
-  check(/newmark-select-menu liquid-glass liquid-glass-carrier'/.test(html), '.newmark-select-menu（JS 创建）使用磨砂承载玻璃');
+  check(/class="conv-action-menu liquid-glass liquid-glass-carrier liquid-glass-popup"/.test(html), '.conv-action-menu 使用强化液态承载玻璃');
+  check(/class="model-select-menu liquid-glass liquid-glass-carrier liquid-glass-popup"/.test(html), '.model-select-menu 使用强化液态承载玻璃');
+  check(/newmark-select-menu liquid-glass liquid-glass-carrier liquid-glass-popup'/.test(html), '.newmark-select-menu（JS 创建）使用强化液态承载玻璃');
 
   // 3) 外围表面恢复各自原有静态模糊；输入区/终端保持实体
   const topbarBlock = extractRule(html, '#topbar');
@@ -43,10 +123,23 @@ function main(): void {
   check(!/backdrop-filter/.test(inputAreaBlock), '#input-area 无重复内联 backdrop-filter');
   const menuBlock = extractRule(html, '.conv-action-menu');
   check(!/backdrop-filter/.test(menuBlock), '.conv-action-menu 无重复内联 backdrop-filter');
-  check(/\.conv-action-menu\.liquid-glass,[\s\S]*\.newmark-select-menu\.liquid-glass\s*\{[^}]*box-shadow:\s*none/s.test(html) &&
-    /\.conv-action-menu\.liquid-glass::before,[\s\S]*\.newmark-select-menu\.liquid-glass::before\s*\{[^}]*background:\s*none;[^}]*opacity:\s*0/s.test(html) &&
-    /\.conv-action-menu\.liquid-glass::after,[\s\S]*\.newmark-select-menu\.liquid-glass::after\s*\{[^}]*box-shadow:\s*none/s.test(html),
-    'PC List 弹窗停止绘制旧版固定外阴影、整面明暗渐变和内阴影');
+  check(/\.liquid-glass-popup\s*\{[^}]*backdrop-filter:[^}]*var\(--liquid-popup-blur\)[^}]*box-shadow:\s*inset[^}]*scale:/s.test(html) &&
+    /--liquid-popup-glow-radius:\s*20px/.test(html) &&
+    /\.liquid-glass-popup::before\s*\{[^}]*background:\s*none/s.test(html) &&
+    html.includes('background: var(--liquid-popup-surface)') &&
+    !html.includes('linear-gradient(115deg, rgba(108,174,255') &&
+    html.includes("liquidGlassCssNumber('--liquid-popup-glow-radius', 20)") &&
+    html.includes('configuredRadius * canvasScale') &&
+    /\.liquid-glass-popup::after\s*\{[^}]*border:\s*var\(--liquid-popup-edge-width\)/s.test(html),
+    'PC 弹窗使用均匀磨砂底色和窄边缘，内部触控光源保留固定 20px 半径');
+  const activeColorBlock = extractRule(html, '.liquid-menu-color-block.liquid-block-lifted');
+  check(/backdrop-filter:\s*none/.test(activeColorBlock) &&
+    !/background:|border:|box-shadow:|z-index:/.test(activeColorBlock) &&
+    /\.liquid-menu-color-block\.liquid-block-lifted::after\s*\{\s*content:\s*none/s.test(html),
+    'PC 菜单移动状态继承原色块材质，不切换玻璃或增加光学浮块');
+  check(html.includes('background-attachment: scroll;') &&
+    /\.liquid-glass-popup > \.liquid-popup-optical-canvas\s*\{\s*display:\s*none/s.test(html),
+    '滚动菜单在滚动视口本体绘制材质，停用随内容滚动的 Canvas');
 
   // 4) 主要表面保留 position: relative（.liquid-glass 伪元素定位上下文）
   check(/id="input-area"(?![^>]*liquid-glass)/.test(html), '#input-area 不挂玻璃类');
@@ -76,12 +169,105 @@ function main(): void {
   check(/button\.conversation-work-run-head:active:not\(:disabled\)\s*\{[^}]*background:\s*transparent\s*!important[^}]*background-image:\s*none\s*!important/s.test(html)
     && !/button\.conversation-work-run-head:active:not\(:disabled\),\s*button\.shell-block-header:active:not\(:disabled\),\s*button\.diff-block-header:active:not\(:disabled\),\s*button\.work-review-head:active:not\(:disabled\)\s*\{[^}]*background-color:\s*revert\s*!important/s.test(html),
     'PC Build Block 标题按住态保持透明，不回退到 Chromium 原生白色按钮背景');
-  check(html.includes('function wireLiquidMenuInteractions(menu)') &&
-    html.includes('source.classList.add(\'liquid-selection-source\')') &&
-    html.includes('float.classList.add(\'visible\')') &&
-    html.includes("window.addEventListener('pointermove', onPointerMove, true)") &&
-    html.includes('positionAlongPointer(event)'),
-    'PC select 菜单从原选中项淡入浮起玻璃并在窗口级持续定轨拖动');
+  const directMenuStart = html.indexOf('function wireDirectLiquidMenuInteractionsV2(menu)');
+  const directMenuBlock = html.slice(directMenuStart, html.indexOf('function wireDirectPopupOptionPress()'));
+  check(directMenuStart >= 0 &&
+    directMenuBlock.includes('setTimeout(function()') &&
+    directMenuBlock.includes('}, LIQUID_HOLD_DRAG_ACTIVATION_MS)') &&
+    html.includes('var LIQUID_HOLD_DRAG_ACTIVATION_MS = 80;') &&
+    directMenuBlock.includes("menu._liquidColorBlock") &&
+    directMenuBlock.includes('positionBlock(option)') &&
+    directMenuBlock.includes('finishAndCommit') &&
+    directMenuBlock.includes('function updatePopupShellDrag') &&
+    directMenuBlock.includes('setLiquidPopupDeformation(popup, dx, dy, clear)') &&
+    directMenuBlock.includes('setLiquidPopupPressDeformation(popup)') &&
+    directMenuBlock.includes('function animateBlockTo(option, done)') &&
+    directMenuBlock.includes("block.style.transition = 'none'") &&
+    directMenuBlock.includes('block.getBoundingClientRect()') &&
+    directMenuBlock.includes('void block.offsetWidth') &&
+    (directMenuBlock.match(/requestAnimationFrame\(function\(\)/g) || []).length >= 2 &&
+    directMenuBlock.includes("block.style.transition = ''") &&
+    directMenuBlock.includes('menu._liquidColorFlightTimer') &&
+    directMenuBlock.includes('menu.dataset.liquidPendingCommit') &&
+    directMenuBlock.includes('if (!menu.dataset.liquidPendingCommit) positionSelectedBlock()') &&
+    directMenuBlock.includes('function animateBlockToLongPressRow(option, done)') &&
+    directMenuBlock.includes('setBlockLifted(true)') &&
+    directMenuBlock.includes('blockStartLeft = landed ? landed.offsetLeft') &&
+    directMenuBlock.includes('if (blockLiftAnimating)') &&
+    directMenuBlock.includes('source = menu.querySelector') &&
+    directMenuBlock.includes('target = pressed') &&
+    directMenuBlock.includes('option content is inert') &&
+    html.includes('transform: none !important;') &&
+    html.includes('scale: 1 !important;') &&
+    html.includes('.liquid-menu-color-block.liquid-block-lifted') &&
+    directMenuBlock.includes('option.click()') &&
+    !directMenuBlock.includes("source.style.setProperty('--liquid-option-x'") &&
+    !directMenuBlock.includes("source.style.setProperty('--liquid-option-y'"),
+    'PC 弹窗选项以共享 80ms 长按门槛启动拖动色块，保留松手应用和点击中心反馈');
+  check(/menu\.innerHTML = html;[\s\S]*?wireDirectLiquidMenuInteractionsV2\(menu\);/s.test(html) &&
+    directMenuBlock.includes('Reuse the expando-backed node') &&
+    directMenuBlock.includes('menu.appendChild(block)') &&
+    directMenuBlock.includes("menu.addEventListener('click', function(event)") &&
+    directMenuBlock.includes('if (!option || !menu.contains(option) || !event.isTrusted) return') &&
+    directMenuBlock.indexOf('ensureBlock();') < directMenuBlock.indexOf("if (menu.dataset.liquidDirectOptions === 'true') return;") &&
+    html.includes('Let the color block finish its full source→target flight before the') &&
+    html.includes('option.click();\n        delete menu.dataset.liquidPendingCommit;'),
+    'PC 选择菜单重绘保留色块节点，目标切换先完整播放 240ms 位移动画后再提交');
+  const popupDeformationStart = html.indexOf('function setLiquidPopupDeformation(popup, dx, dy, clear)');
+  const popupDeformationEnd = html.indexOf('function setLiquidPopupPressDeformation(popup)', popupDeformationStart);
+  const popupDeformationBlock = popupDeformationStart >= 0 && popupDeformationEnd > popupDeformationStart
+    ? html.slice(popupDeformationStart, popupDeformationEnd)
+    : '';
+  check(popupDeformationStart >= 0 &&
+    popupDeformationBlock.includes('popup.clientWidth') &&
+    popupDeformationBlock.includes('popup.clientHeight') &&
+    popupDeformationBlock.includes('LIQUID_POPUP_MAX_EDGE_JITTER_PX') &&
+    popupDeformationBlock.includes('LIQUID_POPUP_DRAG_RESPONSE') &&
+    popupDeformationBlock.includes('LIQUID_POPUP_DRAG_DISTANCE_PX') &&
+    popupDeformationBlock.includes('var edgeJitter = Math.min(LIQUID_POPUP_MAX_EDGE_JITTER_PX, amount * LIQUID_POPUP_MAX_EDGE_JITTER_PX)') &&
+    popupDeformationBlock.includes('var stretch = (edgeJitter * 2) / axisSize') &&
+    popupDeformationBlock.includes('var squash = -((crossJitter * 2) / crossSize)') &&
+    html.includes('var LIQUID_POPUP_MAX_EDGE_JITTER_PX = 4;') &&
+    html.includes('var LIQUID_POPUP_DRAG_RESPONSE = 1;') &&
+    html.includes('var LIQUID_POPUP_DRAG_DISTANCE_PX = 90;') &&
+    !html.includes('Math.max(0.5, distance / 90)') &&
+    html.includes('function updatePopupShellDrag') &&
+    html.includes("'--liquid-popup-stretch'") &&
+    html.includes("'--liquid-popup-squash'") &&
+    html.includes("popup.style.setProperty('scale'") &&
+    html.includes('if (!active.popup || !active.popup.isConnected)') &&
+    popupDeformationBlock.includes('setLiquidPopupOutset(popup, edgeJitter, dx, dy)') &&
+    popupDeformationBlock.includes("popup.style.setProperty('--liquid-popup-edge-x', '0px')") &&
+    popupDeformationBlock.includes("popup.style.setProperty('--liquid-popup-edge-y', '0px')"),
+    'PC 弹窗外拉只扩展玻璃材料，充分拉动可使用 4px 预算且不内缩内容');
+  check(html.includes(".liquid-glass-popup[data-liquid-popup-feedback='outward']::backdrop") &&
+    html.includes('popup.parentNode.insertBefore(layer, popup)') &&
+    html.includes('width: calc(var(--liquid-feedback-width) + var(--liquid-popup-outset) * (var(--liquid-popup-pull-left, 0) + var(--liquid-popup-pull-right, 0)))') &&
+    html.includes('height: calc(var(--liquid-feedback-height) + var(--liquid-popup-outset) * (var(--liquid-popup-pull-top, 0) + var(--liquid-popup-pull-bottom, 0)))') &&
+    html.includes('background: var(--liquid-feedback-color)') &&
+    html.includes('backdrop-filter: var(--liquid-feedback-filter)') &&
+    /if \(dragging\)\s*\{\s*setLiquidPopupDeformation\(popup, 0, 0, true\);\s*\} else \{\s*setLiquidPopupPressDeformation\(popup\)/s.test(directMenuBlock),
+    'PC 原生菜单和普通弹窗都绘制真实外扩磨砂材料，拖动松手只恢复而点击才内缩');
+  check(/function applyPress\(option, event\)\s*\{[\s\S]*?setLiquidPopupPressDeformation\(popup\)/s.test(directMenuBlock) &&
+    /dragging = true;\s*blockLiftAnimating = true;\s*(?:\/\/[^\n]*\n\s*)?updatePopupShellDrag\(0, 0, true\);\s*setBlockLifted\(true\)/s.test(directMenuBlock) &&
+    directMenuBlock.includes('popup.isConnected && pointer === null'),
+    'PC 选项按下立即压缩，80ms 长按进入移动时回弹，旧点击计时器不取消新按压');
+  check(html.includes('window.animateLiquidPopupExit = function') &&
+    html.includes("popup.classList.add('liquid-popup-exit')") &&
+    html.includes("window.animateLiquidPopupExit(menu, button") &&
+    html.includes("window.animateLiquidPopupExit(panel, ring") &&
+    html.includes("window.animateLiquidPopupExit(popup, null") &&
+    html.includes('function finish()'),
+    'PC popover 关闭时收缩回发起位置并延迟移除，不再闪现退出');
+  check((html.match(/wireLiquidMenuInteractions\(menu\)/g) || []).length === 1 &&
+    html.includes('function wireDirectPopupOptionPress()') &&
+    html.includes('wireDirectPopupOptionPress();'),
+    'PC 弹窗选择菜单不再调用旧顶层浮块入口，普通非弹窗选项浮块保留');
+  check(html.includes("menu.className = 'model-select-menu newmark-select-menu liquid-glass liquid-glass-carrier liquid-glass-popup'") &&
+    html.includes("class=\"model-select-menu-option newmark-select-option' + (child.value === select.value ? ' selected' : '')") &&
+    html.includes('function wireLiquidPopupShellInteractions()') &&
+    html.includes("closest('.liquid-glass-popup')"),
+    'PC Settings 等大弹窗内的嵌套选项子弹窗同步使用统一液态玻璃');
   check(/--liquid-interaction-edge:\s*6px/.test(html) &&
     /\.liquid-selection-float\.visible\s*\{[^}]*opacity:\s*1[^}]*--liquid-lift-scale:\s*1/s.test(html) &&
     html.includes("liquidGlassCssNumber('--liquid-interaction-edge', 6)") &&
@@ -92,7 +278,7 @@ function main(): void {
     html.includes("float.style.setProperty('--liquid-motion-angle'") &&
     html.includes("float.style.setProperty('--liquid-motion-stretch'") &&
     html.includes("float.style.setProperty('--liquid-motion-squash'") &&
-    html.includes('float.appendChild(displayCanvas)') &&
+    html.includes('float.insertBefore(displayCanvas, float.firstChild)') &&
     /transform:\s*scale\(var\(--liquid-lift-scale\)\)\s*rotate\(var\(--liquid-motion-angle\)\)/.test(floatingGlassBlock) &&
     /--liquid-motion-stretch:\s*1/.test(floatingGlassBlock),
     'PC 浮块按实时速度方向轻度拉伸/正交收缩，折射展示画布共享同一合成变换');
@@ -147,7 +333,7 @@ function main(): void {
   check(/\.liquid-glass-carrier\s*\{[^}]*blur\(var\(--carrier-glass-blur\)\)[^}]*background:/s.test(html) ||
     /\.liquid-glass-carrier\s*\{[^}]*background:[^}]*blur\(var\(--carrier-glass-blur\)\)/s.test(html),
     '弹窗承载玻璃使用独立底图磨砂层');
-  check(html.includes('class="sub-win liquid-glass liquid-glass-carrier"'),
+  check(html.includes('class="sub-win liquid-glass liquid-glass-carrier liquid-glass-popup"'),
     '设置等大型弹窗使用折射外壳加底图磨砂承载层');
   check(html.includes("root.style.setProperty('--carrier-glass-blur'") &&
     html.includes("root.style.setProperty('--liquid-float-refraction-amount'") &&
@@ -189,6 +375,10 @@ function main(): void {
     html.includes('renderer.lastGeometry === geometryKey') &&
     html.includes("size: gl.getUniformLocation(program,'size')"),
     'PC 玻璃绘制合并同帧请求、跳过重复几何/uniform 并避免重复分配 drawing buffer');
+  check(html.includes("var clipped = typeof displayContext.save === 'function'") &&
+    html.includes('displayContext.clip()') &&
+    html.includes('if (clipped) displayContext.restore()'),
+    'PC 浮块折射与交互泛光共享圆角裁剪，避免透明画布外出现方形光晕');
   check(html.includes("canvas.getContext('webgl2', { alpha:true, antialias:false, premultipliedAlpha:true, powerPreference:'high-performance' })") &&
     !html.includes('desynchronized:true'),
     'PC 透明 WebGL 使用标准预乘 alpha 并禁用可能丢失 alpha 的 desynchronized swap chain');
@@ -198,10 +388,44 @@ function main(): void {
     html.includes("displayCanvas.style.width = width + 'px'") &&
     html.includes("displayCanvas.style.height = height + 'px'") &&
     html.includes('if (renderer.displayCanvas) renderer.displayCanvas.remove();') &&
-    html.includes('if (displayCanvas.parentNode !== float) float.appendChild(displayCanvas)') &&
+    html.includes('float.insertBefore(displayCanvas, float.firstChild)') &&
     html.indexOf("gl.drawArrays(gl.TRIANGLES,0,6)") < html.indexOf('displayContext.drawImage(canvas,0,0)') &&
     html.includes('displayContext.drawImage(canvas,0,0)'),
     'PC WebGL 离屏着色后为每个浮块创建独立且尺寸锁定的透明 2D surface，避免 Windows 跨浮块重挂载污染合成边界');
+  check(/\.liquid-selection-canvas\s*\{[^}]*z-index:\s*0[^}]*mix-blend-mode:\s*normal/s.test(html) &&
+    /\.liquid-selection-float\s*>\s*:not\(\.liquid-selection-canvas\)\s*\{[^}]*z-index:\s*1/s.test(html) &&
+    html.includes("var surfaceStateKey = glow && glow.opacity > 0") &&
+    html.includes('renderer.lastGeometry === geometryKey && renderer.lastSurfaceState === surfaceStateKey') &&
+    html.includes('renderer.lastSurfaceState = surfaceStateKey'),
+    'PC 浮块交互泛光与折射同画布合成且位于内容下层，指针移动不被几何缓存跳过');
+  check(/\.liquid-glass-popup\s*\{[^}]*overflow:\s*hidden[^}]*clip-path:\s*inset\(var\(--liquid-popup-edge-y, 0px\) var\(--liquid-popup-edge-x, 0px\) round var\(--liquid-popup-radius, var\(--radius-xl\)\)\)/s.test(html) &&
+    /\.liquid-popup-optical-canvas\s*\{[^}]*z-index:\s*0[^}]*mix-blend-mode:\s*normal/s.test(html) &&
+    /\.liquid-glass-popup\s*>\s*:not\(\.liquid-popup-optical-canvas\)\s*\{[^}]*z-index:\s*1/s.test(html) &&
+    /\.liquid-glass-popup\s*>\s*\.liquid-menu-color-block\s*\{[^}]*position:\s*absolute[^}]*z-index:\s*0/s.test(html) &&
+    /\.liquid-menu-color-block\s*\{[^}]*border-radius:\s*var\(--radius-full\)/s.test(html) &&
+    html.includes('ensureAllPopupCanvases(document)') &&
+    html.includes('popupObserver.observe(document.body, { childList: true, subtree: true })'),
+    'PC 交互泛光画布压入弹窗承载玻璃 surface，色块仍保持底层绝对定位，随弹窗形状裁剪且动态弹窗同样挂载');
+  check(!/\.liquid-menu-color-block\s*\{[^}]*inset:\s*auto\s*!important/s.test(html) &&
+    html.includes('freezeBlockGeometry(block)') && html.includes('pickupId !== pickupGeneration'),
+    'PC 色块坐标不被 important inset 覆盖，拾起中断从实际插值位置继续且旧回调失效');
+  check(html.includes('popup._liquidPopupLightPending = null') &&
+    html.includes('popup._liquidPopupLightFrame = requestAnimationFrame') &&
+    html.includes('popup._liquidPopupLightPending = { x: x / 100, y: y / 100, opacity: opacity }'),
+    'PC 弹窗指针光源按帧合并，避免高频 pointermove 同步写样式造成绘制抖动');
+  check(!/\.liquid-popup-optical-canvas\s*\{[^}]*mix-blend-mode:\s*screen/s.test(html),
+    'PC 弹窗泛光不再作为独立 screen 顶层合成层');
+  const popupShellRuleIndex = html.indexOf('.liquid-glass-popup {');
+  const popupScrollRuleIndex = html.indexOf('.conv-action-menu.liquid-glass-popup,');
+  const popupScrollRule = popupScrollRuleIndex >= 0 ? html.slice(popupScrollRuleIndex, popupScrollRuleIndex + 420) : '';
+  check(popupShellRuleIndex >= 0 && popupScrollRuleIndex > popupShellRuleIndex &&
+    /\.conv-action-menu\.liquid-glass-popup,[\s\S]*\.newmark-select-menu\.liquid-glass-popup\s*\{[^}]*overflow-y:\s*auto[^}]*overflow-x:\s*hidden/s.test(popupScrollRule) &&
+    /\.model-select-menu\s*\{[^}]*max-height:\s*min\(56vh,\s*430px\)[^}]*overflow:\s*auto/s.test(html) &&
+    /\.newmark-select-menu\s*\{[^}]*max-height:\s*min\(56vh,\s*430px\)[^}]*overflow:\s*auto/s.test(html) &&
+    /\.conv-action-menu\s*\{[^}]*max-height:\s*min\(56vh,\s*320px\)[^}]*overflow:\s*auto/s.test(html) &&
+    html.includes('var desiredHeight = Math.min(430, menu.scrollHeight || menu.offsetHeight || 0)') &&
+    html.includes('menu.style.maxHeight = Math.min(430, available) + \'px\''),
+    'PC 列表弹窗在统一玻璃壳之后保留纵向滚动，并按可用视口高度限制滚动区域');
   check(html.includes('gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)') &&
     html.includes('1.-cssCoord.y/viewport.y'),
     'PC backdrop 恢复原纹理上传与 shader 坐标流程');
@@ -375,11 +599,11 @@ function main(): void {
     !/window\.animateConversationGlassTo\(row\);\s*window\.switchConversation\(idx\)/.test(activateConversationBlock),
     'PC 对话浮块覆盖时关闭静态/动态边框，并在最终落地后才切换对话页面');
   check(/#000 0deg, #fff 90deg, #000 180deg, #fff 270deg, #000 360deg/.test(html), '运行光效为连续黑白黑白边框渐变');
-  check(html.includes('--settings-modal-surface: rgba(255,255,255,0.94);') &&
+  check(html.includes('--liquid-popup-rgb: 248 250 253;') &&
     html.includes("classList.toggle('settings-window'") &&
-    /\[data-theme="light"\] \.sub-win\.liquid-glass-carrier\s*\{[^}]*var\(--settings-modal-surface\)/s.test(html) &&
+    /\[data-theme="light"\] \.sub-win\.liquid-glass-carrier\s*\{[^}]*var\(--liquid-popup-surface\)/s.test(html) &&
     !html.includes('0 0 42px rgba(255,255,255,0.72)'),
-    'PC 左侧工具栏打开的全部 sub-window 与设置弹窗共享亮色本底并保留单层玻璃壳');
+    'PC 全部 sub-window 与设置弹窗共享主题磨砂材质，不覆盖为近乎不透明的亮色板');
   check((html.match(/window\.addEventListener\('pointermove', onPointerMove, true\)/g) || []).length >= 2 &&
     html.includes("window.removeEventListener('pointermove', onPointerMove, true)") &&
     html.includes("document.addEventListener('dragover', function(event)") &&

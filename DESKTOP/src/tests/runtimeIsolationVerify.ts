@@ -376,7 +376,8 @@ async function verifyColdSnapshotBindsTargetWorkspace(): Promise<void> {
 class RuntimeProbeAgent extends Agent {
   checkpointCount = 0;
   abortCount = 0;
-  readonly processInputs: string[] = [];
+  readonly abortReasons: string[] = [];
+  readonly processInputs: Parameters<Agent['process']>[0][] = [];
   private settle: ((tokens: StreamToken[]) => void) | null = null;
   private queuedKernelMessages: Array<{ content: string; queueMode: 'steer' | 'followUp'; clientMessageId?: string; runId?: string; images?: Array<{ dataUrl: string; name?: string; type?: string }> }> = [];
 
@@ -385,8 +386,9 @@ class RuntimeProbeAgent extends Agent {
     super.saveWorkspaceConversationState();
   }
 
-  override abortActiveKernelRun(): boolean {
+  override abortActiveKernelRun(reason = 'unspecified'): boolean {
     this.abortCount++;
+    this.abortReasons.push(reason);
     return true;
   }
 
@@ -399,8 +401,10 @@ class RuntimeProbeAgent extends Agent {
     return this.queuedKernelMessages.splice(0);
   }
 
-  override async process(input: string): Promise<StreamToken[]> {
+  override async process(input: Parameters<Agent['process']>[0]): Promise<StreamToken[]> {
     this.processInputs.push(input);
+    const text = typeof input === 'string' ? input : input.text;
+    this.notifyAgentKernelUserMessageStart(text, typeof input === 'string' ? undefined : input.clientMessageId || input.userMessageId);
     return await new Promise<StreamToken[]>(resolve => { this.settle = resolve; });
   }
 
@@ -560,6 +564,7 @@ async function verifyKernelCompositeRuntimeAndStop(): Promise<void> {
     assert.equal(kernel.snapshot(betaTarget).workRuns[0]?.runtimeKey, betaState?.runtimeKey,
       'same-named conversations in another workspace must not recompute a divergent work-run key');
     assert.equal(probes.size, 2, 'same conversation id in two workspaces owns two independent runners');
+    kernel.queueAction(betaTarget, 'enqueue', { id: 'beta-independent-next', text: 'beta keeps working' });
 
     const events: Array<Record<string, unknown>> = [];
     kernel.subscribe(event => events.push(event as unknown as Record<string, unknown>));
@@ -583,11 +588,14 @@ async function verifyKernelCompositeRuntimeAndStop(): Promise<void> {
     void kernel.prompt('plain Next that must survive stop', alphaTarget, runOptions, 'followUp');
     probes.get(alphaState!.runtimeKey)!.checkpointCount = 0;
     probes.get(alphaState!.runtimeKey)!.abortCount = 0;
+    probes.get(alphaState!.runtimeKey)!.abortReasons.length = 0;
     const firstStop: ConversationStopResult = kernel.requestStop(alphaTarget, alphaState!.runId);
     assert.equal(firstStop.action, 'graceful');
     assert.equal(firstStop.checkpointed, true);
     assert.ok(probes.get(alphaState!.runtimeKey)!.checkpointCount >= 1);
     assert.equal(probes.get(alphaState!.runtimeKey)!.abortCount, 1);
+    assert.deepEqual(probes.get(alphaState!.runtimeKey)!.abortReasons, ['user_stop']);
+    assert.equal(probes.get(betaState!.runtimeKey)!.abortCount, 0, 'first stop cannot broadcast to another conversation runner');
     const deferred = kernel.snapshot(alphaTarget).workRuns.flatMap(run => run.guides).find(item => item.clientMessageId === 'stop-race-guide');
     assert.equal(deferred?.status, 'deferred', 'first stop must persist an unapplied accepted Guide as a deferred continuation');
     assert.match(String(deferred?.reason || ''), /retained/);
@@ -598,7 +606,11 @@ async function verifyKernelCompositeRuntimeAndStop(): Promise<void> {
     const secondStop = kernel.requestStop(alphaTarget, alphaState!.runId);
     assert.equal(secondStop.action, 'force');
     assert.equal(secondStop.runId, alphaState!.runId);
-    assert.equal(probes.get(alphaState!.runtimeKey)!.abortCount, 1, 'second stop must signal the supervisor instead of retrying broad cooperative abort');
+    assert.equal(probes.get(alphaState!.runtimeKey)!.abortCount, 2, 'second stop broadcasts force cancellation to the same target runner before supervisor termination');
+    assert.deepEqual(probes.get(alphaState!.runtimeKey)!.abortReasons, ['user_stop', 'force_stop']);
+    assert.equal(probes.get(betaState!.runtimeKey)!.abortCount, 0, 'force stop cannot broadcast to another conversation runner');
+    assert.equal(kernel.runtimeState(betaTarget)?.running, true);
+    assert.deepEqual(kernel.snapshot(betaTarget).queueItems.map(item => item.id), ['beta-independent-next'], 'another running conversation retains its queued continuation');
     const rejected = kernel.snapshot(alphaTarget).workRuns.flatMap(run => run.guides).find(item => item.clientMessageId === 'stop-race-guide');
     assert.equal(rejected?.status, 'rejected', 'hard restart must explicitly reject a deferred Guide it cannot retain across process death');
     const retainedAfterForce = kernel.snapshot(alphaTarget).continuations;
@@ -607,9 +619,17 @@ async function verifyKernelCompositeRuntimeAndStop(): Promise<void> {
     assert.ok(retainedAfterForce.some(item => item.queueMode === 'followUp' && /plain Next/.test(item.content)),
       'ordinary Next remains durable across a target-local force restart');
     assert.equal(kernel.requestStop(betaTarget, alphaState!.runId).action, 'stale', 'a stop carrying another target/run id must be harmless');
+    assert.equal(probes.get(betaState!.runtimeKey)!.abortCount, 0, 'stale target/run stop never reaches the other runner broadcast');
+    assert.deepEqual(probes.get(alphaState!.runtimeKey)!.abortReasons, ['user_stop', 'force_stop'], 'stale stop never re-broadcasts to the original target');
 
     probes.get(alphaState!.runtimeKey)!.finish('alpha done');
     probes.get(betaState!.runtimeKey)!.finish('beta done');
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(probes.get(betaState!.runtimeKey)!.processInputs.length, 2, 'the unaffected conversation starts its queued continuation after the other target is force stopped');
+    const betaNext = probes.get(betaState!.runtimeKey)!.processInputs[1];
+    assert.match(typeof betaNext === 'string' ? betaNext : betaNext.text, /beta keeps working/);
+    assert.equal(probes.get(betaState!.runtimeKey)!.abortCount, 0);
+    probes.get(betaState!.runtimeKey)!.finish('beta queued done');
     await Promise.all([alphaRun, betaRun]);
     assert.equal(kernel.runtimeState(alphaTarget)?.running, false);
   } finally {
@@ -683,13 +703,19 @@ async function verifyAuthoritativeEditablePausedQueue(): Promise<void> {
     kernel.queueAction(queueTarget, 'toggle_pause');
     await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(runner.processInputs.length, 2, 'resume drains one and only one queued continuation');
-    const resumedInput = runner.processInputs[1] as unknown as { text?: string; visibleUserInput?: string; clientMessageId?: string };
+    const resumedInput = runner.processInputs[1] as Exclude<Parameters<Agent['process']>[0], string>;
     assert.equal(resumedInput.text, '[Next queued while current turn is running]\nsecond queued value');
     assert.equal(resumedInput.visibleUserInput, 'second queued value');
-    assert.equal(resumedInput.clientMessageId, 'mobile-next-2',
+    assert.equal(resumedInput.userMessageId, 'mobile-next-2',
       'resume preserves the PC continuation identity instead of degrading the queue item to a renderer string');
+    assert.equal(resumedInput.clientMessageId, undefined, 'ordinary Next does not carry Guide-only identity');
+    assert.equal(resumedInput.runId, kernel.runtimeState(queueTarget)?.runId,
+      'scheduled ordinary Next is bound to its current execution run');
+    assert.equal(resumedInput.runId, runId,
+      'resuming the paused ordinary continuation retains its supervisor-owned work chain');
     runner.finish('queued complete');
-    await kernel.waitForIdle(queueTarget);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(runner.processInputs.length, 3, 'the next queued input starts before the held runtime can become idle');
     runner.finish('remaining queued complete');
     await kernel.waitForIdle(queueTarget);
     assert.equal(kernel.snapshot(queueTarget).queueItems.length, 0);
@@ -724,6 +750,21 @@ async function verifyCooperativeStopSettlesInterrupted(): Promise<void> {
     fs.mkdirSync(workspacePath, { recursive: true });
     const stopTarget = target('cooperative-stop', workspacePath, 'default');
     const host = new Agent(root, { agentOnly: true });
+    // Cancellation targets an existing conversation. A fresh conversation now
+    // correctly requires a configured title provider before OpenCode starts;
+    // that separate gate must not replace this controlled transport fixture.
+    host.workspace.current = { id: 'cooperative-stop', name: 'cooperative-stop', path: workspacePath,
+      isInternal: false, hostBinding: '', icon: '', kind: 'local' };
+    host.setConversation('default');
+    host.mirrorConversationStateFrom('default', {
+      chatMessages: [
+        { messageId: 'completed-fixture-user', role: 'user', content: 'Earlier completed input', mode: 'build', model: '', timestamp: '00:00:00' },
+        { role: 'assistant', content: 'Earlier completed response', mode: 'build', model: '', timestamp: '00:00:01' },
+      ],
+      history: [{ role: 'user', content: 'Earlier completed input' }, { role: 'assistant', content: 'Earlier completed response' }],
+      conversationPlan: { items: [] },
+      titleGateState: { titleRequestMessageId: 'completed-fixture-user', firstAgentResponseStarted: true },
+    });
     let runner!: Agent;
     let enteredResolve!: () => void;
     const entered = new Promise<void>(resolve => { enteredResolve = resolve; });
@@ -775,6 +816,8 @@ async function verifyCooperativeStopSettlesInterrupted(): Promise<void> {
       'a stop after cooperative settlement cannot escalate a completed run');
 
     const unrelatedAbort = new Agent(root, { agentOnly: true });
+    unrelatedAbort.workspace.current = { ...host.workspace.current! };
+    unrelatedAbort.setConversationFromStorage('default');
     unrelatedAbort.engine = 'opencode';
     unrelatedAbort.setModel('');
     (unrelatedAbort as unknown as {
@@ -879,6 +922,10 @@ async function verifyRendererReconcilesCompletionAgainstFirstStop(): Promise<voi
   const start = uiHtml.indexOf('async function refreshConversationRuntimeAfterStopRace');
   const end = uiHtml.indexOf('window.submitCurrentAction = function(', start);
   assert.ok(start >= 0 && end > start, 'renderer stop reconciliation block is discoverable');
+  const runOwnershipHelper = uiHtml.match(/function conversationRunStillOwnsTarget\([^]*?\n\}/)?.[0];
+  assert.ok(runOwnershipHelper, 'renderer stop reconciliation retains its real run ownership guard');
+  const workRevisionHelper = uiHtml.match(/function conversationWorkRevision\([^]*?\n\}/)?.[0];
+  assert.ok(workRevisionHelper, 'renderer stop reconciliation retains its real work revision guard');
 
   const target = { workspaceId: 'workspace-stop-race', conversationId: 'default' };
   const keyFor = (value: typeof target) => `${value.workspaceId}::${value.conversationId}`;
@@ -916,7 +963,7 @@ async function verifyRendererReconcilesCompletionAgainstFirstStop(): Promise<voi
     'window', 'state', 'api', 'activeConversationId', 'runningConversationRecord', 'currentConversationTarget',
     'runtimeKeyFor', 'registerRuntimeKey', 'setBackendQueueForTarget', 'isActiveConversationTarget', 'syncWorkRunsSnapshot', 'setConversationRuntimeState', 'updateSubmitButtonState',
     'renderConversations', 'setWorking', 'showUiNotice',
-    uiHtml.slice(start, end),
+    `${runOwnershipHelper}\n${workRevisionHelper}\n${uiHtml.slice(start, end)}`,
   );
   run(
     windowObject,
@@ -1184,7 +1231,7 @@ async function verifyWslPerTargetPool(): Promise<void> {
 function commandResult(overrides: Partial<WslCommandResult> = {}): WslCommandResult {
   return {
     status: 0,
-    stdout: 'terminated\n',
+    stdout: JSON.stringify({ terminated: true, method: 'pidfd_tree', rootPid: 701 }),
     stderr: '',
     aborted: false,
     timedOut: false,
@@ -1196,7 +1243,7 @@ function commandResult(overrides: Partial<WslCommandResult> = {}): WslCommandRes
 function seedWslClientRuntime(
   client: WslAgentClient,
   generation: number,
-  identity: WslRuntimeIdentity,
+  identity: Pick<WslRuntimeIdentity, 'pid' | 'pgid' | 'sessionId'> & Partial<Pick<WslRuntimeIdentity, 'startTimeTicks' | 'bootId'>>,
 ): { killed: boolean; kill(): boolean } {
   const child = {
     killed: false,
@@ -1211,6 +1258,8 @@ function seedWslClientRuntime(
     remotePid: identity.pid,
     remotePgid: identity.pgid,
     remoteSessionId: identity.sessionId,
+    remoteStartTimeTicks: identity.startTimeTicks || '100',
+    remoteBootId: identity.bootId || '00000000-0000-4000-8000-000000000001',
   });
   return child;
 }
@@ -1234,10 +1283,12 @@ async function verifyWslAsyncProcessGroupTermination(): Promise<void> {
   assert.equal(calls.length, 1);
   assert.ok(calls[0].timeoutMs >= 5_000, 'the async WSL kill helper budget includes Windows helper startup and Linux PGID verification');
   assert.ok(calls[0].args.includes('Fake'));
-  assert.match(calls[0].args.at(-1) || '', /kill -KILL -- "-701"/,
-    'the helper targets only the recorded Linux PGID and never terminates the distribution');
-  assert.match(calls[0].args.at(-1) || '', /kill -0 -- "-701"/,
-    'the helper verifies the old process group no longer exists');
+  const encodedHelper = String(calls[0].args.at(-1)).match(/printf %s '([^']+)'/);
+  assert.ok(encodedHelper, 'the Linux helper travels through an expansion-safe encoded script');
+  const helperSource = Buffer.from(encodedHelper![1], 'base64').toString('utf8');
+  assert.match(helperSource, /pidfd_send_signal/, 'the helper signals captured kernel identities rather than numeric process groups');
+  assert.match(helperSource, /startTimeTicks.*100/);
+  assert.ok(!helperSource.includes('killpg(') && !helperSource.includes('os.kill('), 'there is no unsafe numeric signal fallback');
   assert.ok(!calls[0].args.includes('--terminate'));
 
   for (const failure of [
@@ -1255,7 +1306,7 @@ async function verifyWslAsyncProcessGroupTermination(): Promise<void> {
   }
 
   let disposeCalls = 0;
-  const disposeRunner: WslCommandRunner = async () => { disposeCalls++; return commandResult(); };
+  const disposeRunner: WslCommandRunner = async () => { disposeCalls++; return commandResult({ stdout: JSON.stringify({ terminated: true, method: 'pidfd_tree', rootPid: 1100 + disposeCalls }) }); };
   for (const method of ['stop', 'shutdownNow'] as const) {
     const disposingClient = new WslAgentClient('Fake', 'C:\\root', 'host.js', normalized, disposeRunner);
     const disposingChild = seedWslClientRuntime(disposingClient, 11 + disposeCalls, { pid: 1101 + disposeCalls, pgid: 1101 + disposeCalls, sessionId: 1101 + disposeCalls });
@@ -1273,7 +1324,7 @@ async function verifyWslAsyncProcessGroupTermination(): Promise<void> {
   (staleClient as unknown as { start(): Promise<void> }).start = async () => { staleStarts++; };
   const staleStop = staleClient.forceRestartRuntimeGroup();
   const replacement = seedWslClientRuntime(staleClient, 10, { pid: 1001, pgid: 1001, sessionId: 1001 });
-  resolveStale(commandResult());
+  resolveStale(commandResult({ stdout: JSON.stringify({ terminated: true, method: 'pidfd_tree', rootPid: 901 }) }));
   await staleStop;
   assert.equal(replacement.killed, false, 'a late kill result from an old generation cannot detach a replacement runtime');
   assert.equal(staleStarts, 0, 'a stale generation result cannot start another replacement');
@@ -1410,12 +1461,12 @@ async function verifyRealUbuntuProcessGroupTermination(): Promise<void> {
     if (client.status().connected) {
       try { await client.shutdownNow(); } catch {}
     }
-    if (pgid > 1) {
-      await runAsyncProcess('wsl.exe', [
-        '-d', distro, '--', 'bash', '-lc', `kill -KILL -- -${pgid} 2>/dev/null || true`,
-      ], { timeoutMs: 5_000 });
+    if (client.status().connected) {
+      console.error(`Real WSL fixture cleanup remains unconfirmed; retained target root ${root}`);
+      process.exitCode = 1;
+    } else {
+      fs.rmSync(root, { recursive: true, force: true });
     }
-    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -2022,21 +2073,39 @@ async function verifyIdleEvictionCannotRaceNewPrompt(): Promise<void> {
     electronPool.prompt({ message: 'first', target: raceTarget, options, queueMode: 'steer' }),
     wslPool.prompt({ message: 'first', target: raceTarget, conversationId: 'same', options, queueMode: 'steer', workspace: null }),
   ]);
-  // Pool timers are intentionally unref'ed in production. Keep one test-owned
-  // timer referenced long enough for both TTL callbacks to enter snapshot().
-  await new Promise(resolve => setTimeout(resolve, 40));
-  await Promise.all([electronClient.snapshotEntered, wslClient.snapshotEntered]);
-  await Promise.all([
-    electronPool.prompt({ message: 'new prompt while eviction snapshot waits', target: raceTarget, options, queueMode: 'steer' }),
-    wslPool.prompt({ message: 'new prompt while eviction snapshot waits', target: raceTarget, conversationId: 'same', options, queueMode: 'steer', workspace: null }),
-  ]);
-  electronClient.releaseSnapshot();
-  wslClient.releaseSnapshot();
-  await Promise.resolve();
-  await Promise.resolve();
-  assert.equal(electronClient.stops, 0, 'stale utility TTL snapshot cannot stop a runtime touched by a concurrent prompt');
-  assert.equal(wslClient.stops, 0, 'stale WSL TTL snapshot cannot stop a runtime touched by a concurrent prompt');
-  await Promise.all([electronPool.stopAll(), wslPool.stopAll()]);
+  const oldElectron = electronClient, oldWsl = wslClient;
+  let deadline!: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error('TTL/prompt arbitration did not settle')), 5_000); });
+  try {
+    // Keep a referenced deadline: unresolved fake promises plus production's
+    // unref'ed TTL timers must never make this test silently exit successfully.
+    await Promise.race([Promise.all([oldElectron.snapshotEntered, oldWsl.snapshotEntered]), timeout]);
+    const nextPrompt = Promise.all([
+      electronPool.prompt({ message: 'new prompt while eviction snapshot waits', target: raceTarget, options, queueMode: 'steer' }),
+      wslPool.prompt({ message: 'new prompt while eviction snapshot waits', target: raceTarget, conversationId: 'same', options, queueMode: 'steer', workspace: null }),
+    ]);
+    await Promise.resolve();
+    assert.equal(oldElectron.prompts, 1, 'utility acquisition waits behind the in-flight capacity/eviction decision');
+    assert.equal(oldWsl.prompts, 1, 'WSL acquisition waits behind the in-flight capacity/eviction decision');
+    oldElectron.releaseSnapshot();
+    oldWsl.releaseSnapshot();
+    await Promise.race([nextPrompt, timeout]);
+    assert.equal(oldElectron.stops, 1, 'utility old idle owner settles before its queued replacement starts');
+    assert.equal(oldWsl.stops, 1, 'WSL old idle owner settles before its queued replacement starts');
+    assert.notEqual(electronClient, oldElectron);
+    assert.notEqual(wslClient, oldWsl);
+    assert.equal(electronClient.prompts, 1, 'new utility prompt executes exactly once after eviction arbitration');
+    assert.equal(wslClient.prompts, 1, 'new WSL prompt executes exactly once after eviction arbitration');
+    assert.equal(electronClient.stops, 0, 'old utility eviction cannot terminate the new owner');
+    assert.equal(wslClient.stops, 0, 'old WSL eviction cannot terminate the new owner');
+  } finally {
+    clearTimeout(deadline);
+    oldElectron.releaseSnapshot();
+    oldWsl.releaseSnapshot();
+    electronClient.releaseSnapshot();
+    wslClient.releaseSnapshot();
+    await Promise.all([electronPool.stopAll(), wslPool.stopAll()]);
+  }
 }
 
 async function verifyUtilityHostToolRouting(): Promise<void> {

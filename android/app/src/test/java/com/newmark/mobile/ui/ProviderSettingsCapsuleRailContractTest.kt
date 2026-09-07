@@ -45,6 +45,8 @@ class ProviderSettingsCapsuleRailContractTest {
     fun sharedRailsSupportAxisCorrectDragResistanceAndSingleLineFields() {
         val source = File("src/main/java/com/newmark/mobile/ui/components/ProviderSettingsCapsules.kt").readText()
         assertTrue(source.contains("internal val ProviderCapsuleHeight = 44.dp"))
+        assertTrue(source.contains("ProviderRailInteractionGlassEdge = MobileInteractionGlassEdge + 2.dp"))
+        assertTrue(source.split("refractionHeight = ProviderRailInteractionGlassEdge").size - 1 == 2)
         assertTrue(source.contains("fun ProviderVerticalCapsuleRail("))
         assertTrue(source.contains("position.y - with(density) { ProviderCapsuleHeight.toPx() } / 2f"))
         assertTrue(source.contains("runOverlappedLiquidFlight"))
@@ -79,7 +81,9 @@ class ProviderSettingsCapsuleRailContractTest {
 
         assertFalse(providers.contains("onClick = { activateRail(it) }"))
         assertFalse(detail.contains("onClick = onCreateModel"))
-        assertTrue(source.indexOf("land = { if (!hold) delay(240) }") < source.indexOf("onSelected(target)"))
+        val land = source.indexOf("land = { glassLift.animateTo(0f, tween(240, easing = ProviderRailEase)) }")
+        assertTrue(land >= 0)
+        assertTrue(land < source.indexOf("onSelected(target)"))
         assertTrue(settings.contains("horizontalBarrierIndices = setOf(1)"))
         assertTrue(settings.split("coordinator = railCoordinator").size - 1 >= 4)
     }
@@ -101,10 +105,10 @@ class ProviderSettingsCapsuleRailContractTest {
         assertTrue(model.contains("mutableIntStateOf(4)"))
         assertTrue(gestures.contains("canStartAt: (Offset) -> Boolean = { true }"))
         assertTrue(gestures.contains("if (!canStartAt(down.position)) return@awaitEachGesture"))
-        assertTrue(source.contains("val movement = launch"))
-        assertTrue(source.contains("val material = launch"))
-        assertTrue(source.indexOf("movement.join()") < source.indexOf("onSelected(target)"))
-        assertTrue(source.indexOf("material.join()") < source.indexOf("onSelected(target)"))
+        assertTrue(source.contains("suspend fun flySegment(target: Int, hold: Boolean) = runOverlappedLiquidFlight("))
+        assertTrue(source.contains("holdKeepsLifted = hold"))
+        assertTrue(source.contains("lift = { glassLift.animateTo(1f"))
+        assertFalse(source.contains("val glassProgress by animateFloatAsState("))
     }
 
     @Test
@@ -133,6 +137,28 @@ class ProviderSettingsCapsuleRailContractTest {
         assertTrue(source.contains("interruptedFlight?.cancelAndJoin()"))
         assertTrue(source.contains("glassTopPx.animateTo(commit * slotPx, tween(180, easing = ProviderRailEase))"))
         assertFalse(source.contains("runOverlappedLiquidFlight(lift = {}, move ="))
+        assertTrue(source.contains("else settle(indexAt(position.x), commit = true, fromDrag = true)"))
+        assertFalse(source.contains("thumbX.snapTo(source * slotPx)"))
+    }
+
+    @Test
+    fun draggedReleaseTransfersDisplayedFrameBeforeAnimatingAndCommitsRawTargetSlot() {
+        val source = File("src/main/java/com/newmark/mobile/ui/components/ProviderSettingsCapsules.kt").readText()
+        val snap = source.indexOf("thumbX.snapTo(dragFollower.stopAndRead())")
+        val clear = source.indexOf("dragging = false", snap)
+        val animate = source.indexOf("thumbX.animateTo(index * slotPx", clear)
+        assertTrue(snap >= 0)
+        assertTrue(clear > snap)
+        assertTrue(animate > clear)
+        assertTrue(source.contains("settle(indexAt(dragX + slotPx / 2f), commit = true, fromDrag = true)"))
+    }
+
+    @Test
+    fun pagerReleaseDoesNotSnapToStaleDragFrameWhenNoDragOccurred() {
+        val memory = File("src/main/java/com/newmark/mobile/ui/MemoryLabScreen.kt").readText()
+        val right = File("src/main/java/com/newmark/mobile/ui/RightSidebar.kt").readText()
+        assertTrue(memory.contains("if (draggingGlass) glassX.snapTo(dragFollower.stopAndRead())"))
+        assertTrue(right.contains("if (draggingGlass) glassX.snapTo(dragFollower.stopAndRead())"))
     }
 
     @Test

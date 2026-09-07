@@ -19,6 +19,7 @@ import kotlinx.coroutines.CancellationException
 fun Modifier.liquidHoldDragGesture(
     vararg keys: Any?,
     holdMillis: Long = 300L,
+    contact: LiquidContactState? = null,
     canStartAt: (Offset) -> Boolean = { true },
     onCandidateStart: () -> Unit = {},
     onCandidateEnd: () -> Unit = {},
@@ -27,7 +28,7 @@ fun Modifier.liquidHoldDragGesture(
     onDrag: (position: Offset, delta: Offset) -> Unit,
     onHoldEnd: (position: Offset, moved: Boolean) -> Unit,
     onCancel: () -> Unit = {},
-): Modifier = pointerInput(*keys) {
+): Modifier = trackLiquidContact(contact).pointerInput(*keys) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)
         if (!canStartAt(down.position)) return@awaitEachGesture
@@ -45,6 +46,9 @@ fun Modifier.liquidHoldDragGesture(
                 val event = awaitPointerEvent(PointerEventPass.Main)
                 val change = event.changes.firstOrNull { it.id == down.id }
                     ?: return@withTimeoutOrNull true
+                // Android CANCEL is delivered as a consumed release. It must
+                // not become an ordinary tap or a committed held selection.
+                if (change.isConsumed) return@withTimeoutOrNull true
                 latest = change.position
                 if (!change.pressed) {
                     released = true
@@ -66,17 +70,23 @@ fun Modifier.liquidHoldDragGesture(
         holdOwned = true
         onHoldStart(latest)
         var moved = false
+        var heldDisplacement = latest - start
         var canceled = false
         while (true) {
             val event = awaitPointerEvent(PointerEventPass.Main)
             val change = event.changes.firstOrNull { it.id == down.id }
-            if (change == null) {
+            if (change == null || change.isConsumed) {
                 canceled = true
                 break
             }
-            val delta = change.position - latest
+            // Compose maps both positions into this event's current local
+            // frame. A stored local point belongs to the previous frame: if
+            // a conversation row moved, subtracting it fabricates a reverse
+            // drag on the next move/up and sends the landing back to its start.
+            val delta = change.position - change.previousPosition
             latest = change.position
-            if ((latest - start).getDistance() > viewConfiguration.touchSlop) moved = true
+            heldDisplacement += delta
+            if (heldDisplacement.getDistance() > viewConfiguration.touchSlop) moved = true
             change.consume()
             if (delta != Offset.Zero) onDrag(latest, delta)
             if (!change.pressed) break

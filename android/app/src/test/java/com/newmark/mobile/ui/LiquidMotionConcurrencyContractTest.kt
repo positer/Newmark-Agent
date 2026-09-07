@@ -14,16 +14,18 @@ class LiquidMotionConcurrencyContractTest {
         val memory = File(root, "MemoryLabScreen.kt").readText()
         val chat = File(root, "ChatScreen.kt").readText()
 
-        listOf(sidebar, right, memory, chat).forEach { source ->
+        listOf(sidebar, right, memory).forEach { source ->
             assertFalse(source.contains("delay(220"))
         }
+        assertTrue(chat.contains("delay(220"))
         assertTrue(sidebar.contains("move = { localConversationGlassY.animateTo(target.top"))
         assertTrue(sidebar.contains("move = { flyingGlassY.animateTo(target.top"))
         assertTrue(right.contains("holdKeepsLifted = true"))
         assertTrue(memory.contains("holdKeepsLifted = true"))
-        assertTrue(chat.contains("runOverlappedLiquidFlight("))
+        assertFalse(chat.contains("directOptionInteraction("))
         assertTrue(right.contains("fun holdAt(index: Int)"))
         assertTrue(memory.contains("fun holdAt(index: Int)"))
+        assertTrue(chat.contains("runOverlappedLiquidFlight("))
         assertTrue(chat.contains("fun beginHeldSelection(index: Int)"))
     }
 }

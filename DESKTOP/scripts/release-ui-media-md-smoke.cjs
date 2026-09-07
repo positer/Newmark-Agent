@@ -229,6 +229,7 @@ async function runUiCheck(root) {
     : await freeTcpPort();
   let child;
   let cdp;
+  const rendererErrors = [];
   try {
     child = spawn(sourceMode ? sourceElectronPath : exePath, [...(sourceMode ? ['.'] : []), `--remote-debugging-port=${port}`, '--allow-multiple-instances', '--no-sandbox', '--root', root], {
       cwd: sourceMode ? path.join(repoRoot, 'DESKTOP') : undefined,
@@ -238,6 +239,20 @@ async function runUiCheck(root) {
     const target = await waitForTarget(port);
     log(`connected target: ${target.title || '(untitled)'} ${target.url || ''}`);
     cdp = connectCdp(target);
+    // Register passive error capture before the socket opens. The first CDP
+    // action after readiness must remain the promoted-main-UI gate below.
+    cdp.ws.addEventListener('message', event => {
+      const message = JSON.parse(event.data);
+      if (message.method === 'Runtime.consoleAPICalled' && message.params?.type === 'error') {
+        const text = (message.params.args || []).map(arg => String(arg.value || arg.description || '')).join(' ');
+        rendererErrors.push(text);
+        log('renderer error: ' + text);
+      }
+      if (message.method === 'Runtime.exceptionThrown') {
+        const details = message.params?.exceptionDetails;
+        rendererErrors.push(String(details?.exception?.description || details?.text || 'renderer exception'));
+      }
+    });
     await cdp.ready;
     await waitForPromotedMainUi(cdp);
     await cdp.call('Runtime.enable');
@@ -245,10 +260,40 @@ async function runUiCheck(root) {
     await cdp.call('Page.bringToFront');
 
     await waitFor(cdp, `(() => document.readyState === 'complete' && !!window.api && !!document.querySelector('#prompt'))()`, 30000, 'renderer ready');
-    const workspace = await evaluate(cdp, `window.api.createWorkspace('media-md-workspace').then(ws => window.api.selectWorkspace(ws.name))`, 30000);
+    await evaluate(cdp, `(() => {
+      window.__mediaErrorNotices = [];
+      const record = () => document.querySelectorAll('.ui-notice.error').forEach(node => {
+        const text = String(node.innerText || node.textContent || '').trim();
+        if (text && !window.__mediaErrorNotices.includes(text)) window.__mediaErrorNotices.push(text);
+      });
+      window.__mediaNoticeObserver = new MutationObserver(record);
+      window.__mediaNoticeObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+      record();
+      return true;
+    })()`, 15000);
+    const workspace = await evaluate(cdp, `window.api.createWorkspace('media-md-workspace')`, 30000);
     if (!workspace || workspace.name !== 'media-md-workspace') fail(`workspace creation failed: ${JSON.stringify(workspace)}`);
-    await evaluate(cdp, `window.selectWorkspace('media-md-workspace')`, 30000);
+    const selectionObservation = await evaluate(cdp, `(() => {
+      // Mirror the real workspace creation UI: register the returned workspace
+      // before selecting its canonical identity. A bare new name is not a
+      // conversation target and must not bypass the renderer registry.
+      const created = ${JSON.stringify(workspace)};
+      window.upsertWorkspaceState(created);
+      window.renderLeftWsList();
+      const identity = workspaceIdentity(created);
+      const registered = findWorkspaceByIdentity(identity);
+      const before = { registered: registered && { id: registered.id, name: registered.name }, currentId: window.state.currentWorkspaceId };
+      window.selectWorkspace(identity);
+      return { before, requestedTarget: currentConversationTarget() };
+    })()`, 30000);
+    log('workspace selection observation: ' + JSON.stringify({ createdWorkspaceId: workspace.id, ...selectionObservation }));
     await waitFor(cdp, `window.api.getState().then(s => s.workspaces && s.workspaces.current && s.workspaces.current.name === 'media-md-workspace')`, 30000, 'workspace selected');
+    const workspaceTarget = await evaluate(cdp, `(async () => {
+      const target = currentConversationTarget();
+      const result = await window.api.getState(target).then(snapshot => ({ ok: true, target: snapshot.target }), error => ({ ok: false, error: String(error?.message || error) }));
+      return { target, rendererWorkspaceId: window.state.currentWorkspaceId, rendererWorkspaces: (window.state.workspaces || []).map(ws => ({ id: ws.id, name: ws.name })), result };
+    })()`, 15000);
+    if (!workspaceTarget.result.ok) fail('media workspace target is invalid: ' + JSON.stringify({ createdWorkspaceId: workspace.id, ...workspaceTarget }));
 
     fs.writeFileSync(path.join(workspace.path, 'media-link-target.txt'), 'EDITOR_LINK_TARGET_OK_20260628', 'utf8');
     fs.writeFileSync(path.join(workspace.path, 'media-doc.md'), '# Media Smoke\n\n**MD_VIEWER_OK_20260628**\n\n- item', 'utf8');
@@ -342,6 +387,13 @@ async function runUiCheck(root) {
     log('file tree lists smoke files ok');
 
     await captureScreenshot(cdp, screenshotPath);
+    const errorNotices = await evaluate(cdp, `(() => {
+      window.__mediaNoticeObserver?.disconnect();
+      return window.__mediaErrorNotices || [];
+    })()`, 15000);
+    if (errorNotices.length) fail('media workflow emitted error notices: ' + JSON.stringify(errorNotices));
+    if (rendererErrors.length) fail('media workflow emitted renderer errors: ' + JSON.stringify(rendererErrors));
+    log('media workflow has no error notices and a valid canonical conversation target');
   } finally {
     try { if (cdp?.ws) cdp.ws.close(); } catch {}
     try { if (child && !child.killed) child.kill(); } catch {}

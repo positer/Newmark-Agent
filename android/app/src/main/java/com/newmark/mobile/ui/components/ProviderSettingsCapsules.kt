@@ -2,12 +2,12 @@ package com.newmark.mobile.ui.components
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -15,13 +15,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -31,25 +33,28 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.newmark.mobile.ui.theme.LocalNewmarkColors
+import com.kyant.backdrop.backdrops.layerBackdrop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.cancelAndJoin
@@ -58,7 +63,11 @@ import kotlin.math.roundToInt
 internal val ProviderCapsuleHeight = 44.dp
 private val ProviderCapsuleGap = 6.dp
 private val ProviderCapsuleShape = RoundedCornerShape(50)
+private val LocalProviderRailMoving = staticCompositionLocalOf { false }
 private val ProviderRailEase = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
+/** 供应商模型横向/纵向浮块包边：共享边带基础上再增加 2dp。 */
+internal val ProviderRailInteractionGlassEdge = MobileInteractionGlassEdge + 2.dp
+internal val ProviderRailRefractionAmount = 24.dp
 
 internal enum class ProviderRailAxis { Vertical, Horizontal }
 
@@ -103,7 +112,7 @@ fun ProviderCapsuleRow(
             .fillMaxWidth()
             .height(ProviderCapsuleHeight)
             .clip(ProviderCapsuleShape)
-            .background(if (active) p.accentSoft else p.bgSecondary)
+            .background(if (active && !LocalProviderRailMoving.current) p.accentSoft else p.bgSecondary)
             .then(click)
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -146,11 +155,15 @@ fun ProviderCapsuleAction(
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     var widthPx by remember { mutableIntStateOf(0) }
+    var lifted by remember { mutableStateOf(false) }
     Box(
         modifier = modifier
             .fillMaxWidth()
             .height(ProviderCapsuleHeight)
+            .zIndex(if (lifted) 8f else 0f)
             .onSizeChanged { widthPx = it.width },
+        // The parent is the Row sibling; elevating only its child cannot put
+        // a landing glass surface above the neighboring action's parent.
     ) {
         if (widthPx > 0) {
             GlassButtonCanvas(
@@ -160,6 +173,7 @@ fun ProviderCapsuleAction(
                 surfaceColor = if (active) p.accentSoft else p.bgSecondary,
                 alpha = if (active) .58f else .24f,
                 enabled = enabled,
+                onLiftedChange = { lifted = it },
                 onClick = {
                     scope.launch {
                         // glassButtonSurface completes a quick tap as 105ms
@@ -239,18 +253,16 @@ fun ProviderVerticalCapsuleRail(
     val slotPx = with(density) { (ProviderCapsuleHeight + ProviderCapsuleGap).toPx() }
     val trackHeight = ProviderCapsuleHeight * itemCount + ProviderCapsuleGap * (itemCount - 1)
     var moving by remember { mutableStateOf(false) }
-    var lifting by remember { mutableStateOf(false) }
-    var landing by remember { mutableStateOf(false) }
+    var dragging by remember { mutableStateOf(false) }
+    val glassLift = remember { Animatable(0f) }
     val glassTopPx = remember { Animatable(selectedIndex.coerceIn(0, itemCount - 1) * slotPx) }
+    val glassContact = rememberLiquidContactState()
+    val dragFollower = rememberLiquidDragFollower()
+    var dragTargetTopPx by remember { mutableFloatStateOf(glassTopPx.value) }
     var glassVelocityY by remember { mutableFloatStateOf(0f) }
     var flightJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var activeIndex by remember(selectedIndex, itemCount) { mutableIntStateOf(selectedIndex.coerceIn(0, itemCount - 1)) }
     val utilityBackdrop = rememberLiquidBackdrop()
-    val glassProgress by animateFloatAsState(
-        targetValue = if (landing || lifting) 0f else if (moving) 1f else 0f,
-        animationSpec = tween(if (landing) 240 else 100, easing = ProviderRailEase),
-        label = "providerSettingsGlassMaterial",
-    )
     val barriers = horizontalBarrierIndices.filter { it in 0 until itemCount }.toSet()
     val selectable = selectableIndices.filter { it in 0 until itemCount && it !in barriers }.toSet()
     fun nearestSelectable(index: Int, direction: Float = 0f): Int {
@@ -275,47 +287,37 @@ fun ProviderVerticalCapsuleRail(
     fun crossedBarrier(start: Int, target: Int): Int? = barriers.firstOrNull { barrier ->
         barrier > minOf(start, target) && barrier < maxOf(start, target)
     }
-    suspend fun flySegment(start: Int, target: Int, hold: Boolean) = kotlinx.coroutines.coroutineScope {
-        glassTopPx.snapTo(start * slotPx)
-        val movement = launch {
-            glassTopPx.animateTo(target * slotPx, tween(380, easing = ProviderRailEase))
-        }
-        val material = launch {
-            kotlinx.coroutines.yield()
-            lifting = false
-            delay(100)
-            if (!hold) {
-                landing = true
-                delay(240)
-                landing = false
-            }
-        }
-        movement.join()
-        material.join()
-    }
+    suspend fun flySegment(target: Int, hold: Boolean) = runOverlappedLiquidFlight(
+        holdKeepsLifted = hold,
+        lift = { glassLift.animateTo(1f, tween(100, easing = ProviderRailEase)) },
+        move = { glassTopPx.animateTo(target * slotPx, tween(380, easing = ProviderRailEase)) },
+        onLandingStarted = {},
+        land = { glassLift.animateTo(0f, tween(240, easing = ProviderRailEase)) },
+    )
     fun startFlight(target: Int, hold: Boolean) {
         if (!coordinator.acquire(ProviderRailAxis.Vertical)) return
         val start = if (moving) glassTopPx.value else activeIndex * slotPx
-        flightJob?.cancel()
+        val interruptedFlight = flightJob
+        interruptedFlight?.cancel()
         activeIndex = target
         moving = true
-        lifting = true
+        dragging = false
         flightJob = scope.launch {
+            interruptedFlight?.join()
+            glassTopPx.snapTo(start)
             val startIndex = nearestSelectable((start / slotPx).roundToInt())
             val barrier = crossedBarrier(startIndex, target)
             if (!hold && barrier != null) {
                 val before = if (target > startIndex) barrier - 1 else barrier + 1
                 val after = if (target > startIndex) barrier + 1 else barrier - 1
-                flySegment(startIndex, nearestSelectable(before), hold = false)
+                flySegment(nearestSelectable(before), hold = false)
                 moving = false
                 glassTopPx.snapTo(nearestSelectable(after) * slotPx)
                 kotlinx.coroutines.yield()
                 moving = true
-                lifting = true
-                flySegment(nearestSelectable(after), target, hold = false)
+                flySegment(target, hold = false)
             } else {
-                glassTopPx.snapTo(start)
-                flySegment(startIndex, target, hold)
+                flySegment(target, hold)
             }
             if (!hold) {
                 moving = false; glassVelocityY = 0f; coordinator.release(ProviderRailAxis.Vertical); onSelected(target)
@@ -331,6 +333,7 @@ fun ProviderVerticalCapsuleRail(
         modifier = modifier
             .fillMaxWidth()
             .height(trackHeight)
+            .testTag("provider-vertical-rail")
             .semantics {
                 contentDescription = "纵向设置胶囊浮块"
                 stateDescription = "${activeIndex + 1}/$itemCount"
@@ -342,19 +345,28 @@ fun ProviderVerticalCapsuleRail(
             canStartAt = { position ->
                 physicalIndexAt(position.y) in selectable
             },
+            contact = glassContact,
             onTap = { startFlight(indexAt(it.y), hold = false) },
             onHoldStart = { startFlight(indexAt(it.y), hold = true) },
             onDrag = { position, delta ->
                 if (!coordinator.acquire(ProviderRailAxis.Vertical)) return@liquidHoldDragGesture
-                flightJob?.cancel(); moving = true; lifting = false
+                if (!dragging) {
+                    flightJob?.cancel()
+                    dragTargetTopPx = glassTopPx.value
+                    dragFollower.startFrom(glassTopPx.value)
+                    dragging = true
+                    moving = true
+                    flightJob = scope.launch { glassLift.animateTo(1f, tween(100, easing = ProviderRailEase)) }
+                }
                 val candidate = indexAt(position.y, delta.y)
-                val current = nearestSelectable((glassTopPx.value / slotPx).roundToInt())
+                val current = nearestSelectable((dragTargetTopPx / slotPx).roundToInt())
                 val barrier = crossedBarrier(current, candidate)
                 activeIndex = if (barrier == null) candidate else current
                 val segmentMinimum = ((barriers.filter { it < current }.maxOrNull() ?: -1) + 1) * slotPx
                 val segmentMaximum = ((barriers.filter { it > current }.minOrNull() ?: itemCount) - 1) * slotPx
                 val resisted = resistedLiquidBoundaryPosition(position.y - with(density) { ProviderCapsuleHeight.toPx() } / 2f, segmentMinimum, segmentMaximum, with(density) { 4.dp.toPx() })
-                scope.launch { glassTopPx.snapTo(resisted) }
+                dragTargetTopPx = resisted
+                dragFollower.updateTarget(resisted)
                 glassVelocityY = delta.y * 60f
             },
             onHoldEnd = { _, _ ->
@@ -363,38 +375,67 @@ fun ProviderVerticalCapsuleRail(
                 flightJob = scope.launch {
                     interruptedFlight?.cancelAndJoin()
                     moving = true
-                    lifting = true
+                    if (dragging) glassTopPx.snapTo(dragFollower.stopAndRead())
+                    dragging = false
                     runOverlappedLiquidFlight(
-                        lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) },
+                        lift = { glassLift.animateTo(1f, tween(100, easing = ProviderRailEase)) },
                         move = { glassTopPx.animateTo(commit * slotPx, tween(180, easing = ProviderRailEase)) },
-                        onLandingStarted = { landing = true },
-                        land = { delay(240) },
+                        onLandingStarted = {},
+                        land = { glassLift.animateTo(0f, tween(240, easing = ProviderRailEase)) },
                     )
-                    landing = false; moving = false; glassVelocityY = 0f; coordinator.release(ProviderRailAxis.Vertical); onSelected(commit)
+                    moving = false; glassVelocityY = 0f; coordinator.release(ProviderRailAxis.Vertical); onSelected(commit)
                 }
             },
-            onCancel = { flightJob?.cancel(); moving = false; lifting = false; landing = false; glassVelocityY = 0f; scope.launch { glassTopPx.snapTo(activeIndex * slotPx) }; coordinator.release(ProviderRailAxis.Vertical) },
+            onCancel = {
+                dragFollower.cancel()
+                flightJob?.cancel(); moving = false; dragging = false; glassVelocityY = 0f
+                activeIndex = selectedIndex.coerceIn(0, itemCount - 1)
+                scope.launch { glassTopPx.snapTo(activeIndex * slotPx); glassLift.snapTo(0f) }
+                coordinator.release(ProviderRailAxis.Vertical)
+            },
             ),
     ) {
-        Column(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().layerBackdrop(utilityBackdrop)) {
                 repeat(itemCount) { index ->
                 Box(Modifier.fillMaxWidth().height(ProviderCapsuleHeight)) {
                     if (!moving && index == activeIndex && index in selectable) {
                         Box(Modifier.fillMaxWidth().height(ProviderCapsuleHeight).background(p.accentSoft, ProviderCapsuleShape))
                     }
-                    itemContent(index)
+                    CompositionLocalProvider(LocalProviderRailMoving provides moving) {
+                        itemContent(index)
+                    }
                 }
                 if (index < itemCount - 1) Spacer(Modifier.height(ProviderCapsuleGap))
             }
         }
         if (moving) {
-            Box(
-                Modifier.fillMaxWidth().height(ProviderCapsuleHeight)
-                    .graphicsLayer { translationY = glassTopPx.value }
-                    .liquidMotionDeformation(0f, glassVelocityY, density.density)
-                    .zIndex(4f)
-                    .liquidSelectionMorph(backdrop = utilityBackdrop, shape = ProviderCapsuleShape, fillColor = p.accentSoft, glassProgress = glassProgress, glassAlpha = 0.08f, blurRadius = 2.dp, refractionHeight = MobileInteractionGlassEdge, refractionAmount = 20.dp),
-            ) {}
+            BoxWithConstraints(Modifier.fillMaxWidth().height(ProviderCapsuleHeight)) {
+                val envelope = with(density) {
+                    expandedLiquidBounds(Size(maxWidth.toPx(), ProviderCapsuleHeight.toPx()), GlassButtonCanvasOutset.toPx(), glassLift.value)
+                }
+                // Grow the actual supported capsule shape equally outwards;
+                // an inset shape erased the expansion and broke the lens shader.
+                Box(
+                    Modifier
+                        .wrapContentSize(Alignment.TopStart, unbounded = true)
+                        .requiredSize(with(density) { envelope.width.toDp() }, with(density) { envelope.height.toDp() })
+                        .graphicsLayer {
+                            translationX = envelope.left
+                            translationY = (if (dragging) dragFollower.value else glassTopPx.value) + envelope.top
+                        }
+                        .graphicsLayer { clip = false }
+                        .liquidMotionDeformationDeferred({ 0f }, { if (dragging) dragFollower.velocity else glassVelocityY }, density.density)
+                        .zIndex(8f)
+                        .testTag("provider-vertical-glass")
+                        .liquidSelectionMorph(backdrop = utilityBackdrop, shape = ProviderCapsuleShape, fillColor = p.accentSoft, glassProgress = glassLift.value, glassAlpha = 0.18f, blurRadius = 2.dp, refractionHeight = ProviderRailInteractionGlassEdge, refractionAmount = ProviderRailRefractionAmount,
+                            contact = glassContact,
+                            contactGeometry = {
+                                glassTopPx.value; glassLift.value; dragging
+                                dragFollower.value; dragFollower.velocity; glassVelocityY
+                            },
+                        ),
+                ) {}
+            }
         }
     }
 }
@@ -414,34 +455,39 @@ fun ProviderProtocolRail(
     var widthPx by remember { mutableIntStateOf(0) }
     var dragging by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf(false) }
-    var lifting by remember { mutableStateOf(false) }
-    var landing by remember { mutableStateOf(false) }
+    val glassLift = remember { Animatable(0f) }
     var dragX by remember { mutableFloatStateOf(0f) }
+    var holdFlightActive by remember { mutableStateOf(false) }
     var velocityX by remember { mutableFloatStateOf(0f) }
     var flightJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val selectedIndex = options.indexOfFirst { it.first == value }.coerceAtLeast(0)
     val thumbX = remember { Animatable(0f) }
+    val glassContact = rememberLiquidContactState()
+    val dragFollower = rememberLiquidDragFollower()
     val slotPx = if (widthPx > 0) widthPx.toFloat() / options.size else 0f
     fun indexAt(x: Float) = (x / slotPx.coerceAtLeast(1f)).toInt().coerceIn(0, options.lastIndex)
     val utilityBackdrop = rememberLiquidBackdrop()
-    val glassProgress by animateFloatAsState(
-        targetValue = if (landing || lifting) 0f else if (moving || dragging) 1f else 0f,
-        animationSpec = tween(if (landing) 240 else 100, easing = ProviderRailEase),
-        label = "providerProtocolGlassMaterial",
-    )
     fun settle(index: Int, commit: Boolean, fromDrag: Boolean = false) {
         if (!coordinator.acquire(ProviderRailAxis.Horizontal)) return
-        flightJob?.cancel()
+        val interruptedFlight = flightJob
+        interruptedFlight?.cancel()
         flightJob = scope.launch {
+            interruptedFlight?.join()
             moving = true
-            lifting = !fromDrag
+            if (fromDrag && dragging) {
+                // Transfer the released thumb position into the animatable
+                // before starting the final flight. Clear dragging now so the
+                // renderer follows thumbX during the move instead of keeping
+                // the old dragX until the color block flashes into place.
+                thumbX.snapTo(dragFollower.stopAndRead())
+                dragging = false
+            }
             runOverlappedLiquidFlight(
-                lift = { if (!fromDrag) { kotlinx.coroutines.yield(); lifting = false; delay(100) } },
+                lift = { glassLift.animateTo(1f, tween(100, easing = ProviderRailEase)) },
                 move = { thumbX.animateTo(index * slotPx, tween(if (fromDrag) 120 else 380, easing = ProviderRailEase)) },
-                onLandingStarted = { landing = true },
-                land = { delay(240) },
+                onLandingStarted = {},
+                land = { glassLift.animateTo(0f, tween(240, easing = ProviderRailEase)) },
             )
-            landing = false
             moving = false
             dragging = false
             velocityX = 0f
@@ -458,6 +504,7 @@ fun ProviderProtocolRail(
             .height(ProviderCapsuleHeight)
             .background(p.bgQuaternary, ProviderCapsuleShape)
             .onSizeChanged { widthPx = it.width }
+            .testTag("provider-protocol-rail")
             .semantics {
                 contentDescription = "协议滑轨"
                 stateDescription = options[selectedIndex].second
@@ -465,42 +512,108 @@ fun ProviderProtocolRail(
             .liquidHoldDragGesture(
                 options,
                 value,
+                contact = glassContact,
                 onTap = { settle(indexAt(it.x), commit = true) },
                 onHoldStart = {
                     if (coordinator.acquire(ProviderRailAxis.Horizontal)) {
-                        dragging = true; moving = true; dragX = it.x - slotPx / 2f
+                        val source = if (moving) thumbX.value else selectedIndex * slotPx
+                        val target = indexAt(it.x)
+                        val interruptedFlight = flightJob
+                        interruptedFlight?.cancel()
+                        moving = true; holdFlightActive = true
+                        flightJob = scope.launch {
+                            interruptedFlight?.join()
+                            thumbX.snapTo(source)
+                            runOverlappedLiquidFlight(
+                                holdKeepsLifted = true,
+                                lift = { glassLift.animateTo(1f, tween(100, easing = ProviderRailEase)) },
+                                move = { thumbX.animateTo(target * slotPx, tween(380, easing = ProviderRailEase)) },
+                                onLandingStarted = {}, land = {},
+                            )
+                            if (holdFlightActive) {
+                                dragX = target * slotPx
+                                dragFollower.startFrom(thumbX.value)
+                                dragging = true
+                            }
+                        }
                     }
                 },
                 onDrag = { position, delta ->
-                    if (!dragging) return@liquidHoldDragGesture
+                    if (!dragging) {
+                        if (!holdFlightActive) return@liquidHoldDragGesture
+                        holdFlightActive = false
+                        flightJob?.cancel()
+                        dragFollower.startFrom(thumbX.value)
+                        dragging = true
+                        moving = true
+                        flightJob = scope.launch { glassLift.animateTo(1f, tween(100, easing = ProviderRailEase)) }
+                    }
                     dragX = resistedLiquidBoundaryPosition(
                         raw = position.x - slotPx / 2f,
                         minimum = 0f,
                         maximum = (options.size - 1) * slotPx,
                         maxDisplacement = with(density) { 4.dp.toPx() },
                     )
+                    dragFollower.updateTarget(dragX)
                     velocityX = delta.x * 60f
                 },
-                onHoldEnd = { position, _ -> if (dragging) settle(indexAt(position.x), commit = true, fromDrag = true) },
-                onCancel = { dragging = false; moving = false; velocityX = 0f; coordinator.release(ProviderRailAxis.Horizontal); settle(selectedIndex, commit = false) },
+                onHoldEnd = { position, _ ->
+                    holdFlightActive = false
+                    if (dragging) {
+                        settle(indexAt(dragX + slotPx / 2f), commit = true, fromDrag = true)
+                    }
+                    else settle(indexAt(position.x), commit = true, fromDrag = true)
+                },
+                onCancel = {
+                    holdFlightActive = false
+                    dragFollower.cancel()
+                    flightJob?.cancel(); dragging = false; moving = false; velocityX = 0f
+                    scope.launch { thumbX.snapTo(selectedIndex * slotPx); glassLift.snapTo(0f) }
+                    coordinator.release(ProviderRailAxis.Horizontal)
+                },
             ),
     ) {
         if (slotPx > 0f) {
-            GlassButtonCanvas(
-                visualWidth = with(density) { slotPx.toDp() },
-                visualHeight = ProviderCapsuleHeight,
-                shape = ProviderCapsuleShape,
-                surfaceColor = p.accentSoft,
-                alpha = .58f,
-                enabled = false,
-                onClick = {},
-                modifier = Modifier
-                    .graphicsLayer { translationX = if (dragging) dragX else thumbX.value }
-                    .liquidMotionDeformation(velocityX, 0f, density.density)
-                    .liquidSelectionMorph(backdrop = utilityBackdrop, shape = ProviderCapsuleShape, fillColor = p.accentSoft, glassProgress = glassProgress, glassAlpha = 0.08f, blurRadius = 2.dp, refractionHeight = MobileInteractionGlassEdge, refractionAmount = 20.dp),
-            ) {}
+            val thumbModifier = Modifier
+                .graphicsLayer { translationX = if (dragging) dragFollower.value else thumbX.value }
+                .liquidMotionDeformationDeferred({ if (dragging) dragFollower.velocity else velocityX }, { 0f }, density.density)
+                .zIndex(8f)
+            if (moving || dragging) {
+                // The raised thumb is a real glass envelope. Its optical
+                // canvas is larger than the color block so the thick edge is
+                // visible during a tap/drag.
+                val envelope = with(density) {
+                    expandedLiquidBounds(Size(slotPx, ProviderCapsuleHeight.toPx()), GlassButtonCanvasOutset.toPx(), glassLift.value)
+                }
+                Box(
+                    Modifier
+                        .wrapContentSize(Alignment.TopStart, unbounded = true)
+                        .requiredSize(with(density) { envelope.width.toDp() }, with(density) { envelope.height.toDp() })
+                        .graphicsLayer {
+                            translationX = (if (dragging) dragFollower.value else thumbX.value) + envelope.left
+                            translationY = envelope.top
+                        }
+                        .zIndex(8f)
+                        .testTag("provider-protocol-glass")
+                        .liquidMotionDeformationDeferred({ if (dragging) dragFollower.velocity else velocityX }, { 0f }, density.density)
+                        .liquidSelectionMorph(backdrop = utilityBackdrop, shape = ProviderCapsuleShape, fillColor = p.accentSoft, glassProgress = glassLift.value, glassAlpha = 0.18f, blurRadius = 2.dp, refractionHeight = ProviderRailInteractionGlassEdge, refractionAmount = ProviderRailRefractionAmount,
+                            contact = glassContact,
+                            contactGeometry = {
+                                thumbX.value; glassLift.value; dragging
+                                dragFollower.value; dragFollower.velocity; velocityX
+                            },
+                        ),
+                ) {}
+            } else {
+                // Resting state is intentionally a flat semantic color block.
+                Box(
+                    thumbModifier
+                        .size(with(density) { slotPx.toDp() }, ProviderCapsuleHeight)
+                        .background(p.accentSoft, ProviderCapsuleShape),
+                )
+            }
         }
-        Row(Modifier.fillMaxWidth().height(ProviderCapsuleHeight)) {
+        Row(Modifier.fillMaxWidth().height(ProviderCapsuleHeight).layerBackdrop(utilityBackdrop)) {
             options.forEach { (key, label) ->
                 Box(Modifier.weight(1f).height(ProviderCapsuleHeight), contentAlignment = Alignment.Center) {
                     androidx.compose.material3.Text(

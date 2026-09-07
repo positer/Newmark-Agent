@@ -667,12 +667,13 @@ function runMsiExec(args: string[]): { exitCode: number; stdout: string; stderr:
 
 function windowsCommandQuote(value: string): string {
   const text = String(value);
-  return /\s/.test(text) ? `"${text.replace(/"/g, '\\"')}"` : text;
+  return `"${text.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`;
 }
 
 function runElevatedMsiExec(args: string[]): { exitCode: number; stdout: string; stderr: string } {
   const argumentString = args.map(arg => windowsCommandQuote(arg)).join(' ');
   const script = [
+    '$ErrorActionPreference = "Stop"',
     `$argumentList = '${argumentString.replace(/'/g, "''")}'`,
     '$process = Start-Process -FilePath "msiexec.exe" -ArgumentList $argumentList -Verb RunAs -Wait -PassThru',
     'Write-Output ("EXITCODE:" + $process.ExitCode)',
@@ -681,7 +682,8 @@ function runElevatedMsiExec(args: string[]): { exitCode: number; stdout: string;
   const stdout = String(result.stdout || '');
   const match = stdout.match(/EXITCODE:(\d+)/);
   return {
-    exitCode: match ? Number(match[1]) : (result.status === null ? -1 : result.status),
+    // A shell exit of 0 without the MSI completion marker is not installation.
+    exitCode: match ? Number(match[1]) : -1,
     stdout,
     stderr: String(result.stderr || ''),
   };
@@ -701,16 +703,34 @@ export function uninstallNewmarkProduct(productCode: string, logPath: string): {
 }
 
 export function installMsiPackage(msiPath: string, options: { logDir?: string; allowElevate?: boolean } = {}): { ok: boolean; exitCode: number; logPath: string; error?: string } {
-  const logPath = path.join(options.logDir || os.tmpdir(), `newmark-msi-install-${process.pid}-${Date.now()}.log`);
-  const args = ['/i', path.resolve(msiPath), '/qn', '/norestart', '/l*v', logPath];
-  let result = runMsiExec(args);
-  if (result.exitCode !== 0 && result.exitCode !== 3010 && options.allowElevate !== false) result = runElevatedMsiExec(args);
-  const ok = result.exitCode === 0 || result.exitCode === 3010;
+  const logDir = path.resolve(options.logDir || os.tmpdir());
+  fs.mkdirSync(logDir, { recursive: true });
+  const evidence = fs.mkdtempSync(path.join(logDir, 'newmark-msi-install-'));
+  const logPath = path.join(evidence, 'result.json');
+  // The same verified workflow owns CLI, GUI, and developer installs. MSI major
+  // upgrades handle old ProductCodes; only an already-installed exact ProductCode
+  // uses REINSTALL=ALL + vamus. Fresh installs must select ADDLOCAL=ALL instead.
+  const helperCandidates = [
+    path.join(process.resourcesPath || path.dirname(process.execPath), 'installer', 'install-windows-msi.ps1'),
+    path.resolve(__dirname, '..', '..', 'scripts', 'install-windows-msi.ps1'),
+  ];
+  const helper = helperCandidates.find(candidate => fs.existsSync(candidate) && !candidate.includes(`${path.sep}app.asar${path.sep}`));
+  if (!helper) return { ok: false, exitCode: -1, logPath, error: 'Verified MSI installer helper is missing from this application.' };
+  const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', helper,
+    '-MsiPath', path.resolve(msiPath), '-EvidenceDirectory', evidence];
+  if (options.allowElevate === false) args.push('-NoElevate');
+  // Node passes argv directly; no Start-Process ArgumentList array re-parsing.
+  // Do not detach or impose a timeout which abandons an active MSI transaction.
+  const result = spawnSync('powershell.exe', args, { encoding: 'utf-8', windowsHide: true });
+  let completion: { Success?: boolean; Error?: string; Steps?: Array<{ ExitCode?: number }> } = {};
+  try { completion = JSON.parse(fs.readFileSync(logPath, 'utf-8').replace(/^\uFEFF/, '')); } catch { /* Missing evidence is failure. */ }
+  const ok = result.status === 0 && completion.Success === true;
+  const exitCode = ok ? (completion.Steps?.some(step => step.ExitCode === 3010) ? 3010 : 0) : (result.status || -1);
   return {
     ok,
-    exitCode: result.exitCode,
+    exitCode,
     logPath,
-    error: ok ? undefined : `msiexec install exited ${result.exitCode}`,
+    error: ok ? undefined : (completion.Error || result.error?.message || String(result.stderr || '').trim() || 'MSI installation has no verified completion receipt.'),
   };
 }
 
@@ -819,30 +839,18 @@ export function executeManagedMsiInstall(msiPath: string, options: ManagedMsiIns
     ? stopNewmarkProcesses(plan.runningProcesses.map(process => process.pid))
     : { stopped: [] as number[], errors: [] as string[] };
   const uninstalled: string[] = [];
-  if (options.uninstallPrevious !== false) {
-    for (const product of plan.installedProducts) {
-      const logPath = path.join(options.logDir || os.tmpdir(), `newmark-msi-uninstall-${product.productCode}-${process.pid}-${Date.now()}.log`);
-      const uninstallResult = uninstallNewmarkProduct(product.productCode, logPath);
-      if (!uninstallResult.ok) {
-        return {
-          ok: false,
-          plan,
-          stopped: stopResult.stopped,
-          uninstalled,
-          removedLegacy: [],
-          exitCode: uninstallResult.exitCode,
-          logPath: uninstallResult.logPath,
-          error: `Failed to uninstall previous Newmark version ${product.productCode}: ${uninstallResult.error}`,
-        };
-      }
-      uninstalled.push(product.productCode);
-    }
-  }
+  // AllowSameVersionUpgrades removes related old products within one MSI/UAC
+  // transaction. Pre-uninstalling here caused multiple prompts and a fresh
+  // product incorrectly sent through the old REINSTALL-only path.
 
   const removeResult = plan.legacyExecutables.length
     ? removeLegacyNewmarkExecutables(plan.legacyExecutables)
     : { removed: [] as string[], errors: [] as string[] };
   const installResult = installMsiPackage(plan.msiPath, { logDir: options.logDir, allowElevate: options.allowElevate });
+  if (installResult.ok) {
+    const remaining = new Set(listInstalledNewmarkProducts().map(product => product.productCode));
+    uninstalled.push(...plan.installedProducts.filter(product => !remaining.has(product.productCode)).map(product => product.productCode));
+  }
   return {
     ok: installResult.ok,
     plan,

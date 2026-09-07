@@ -189,10 +189,26 @@ async function clickAndHold(cdp, selector) {
     };
     return { float: pick(float), canvas: pick(canvas) };
   })()`);
+  held.glowMovement = await evaluate(cdp, `(() => {
+    const float = document.querySelector('.liquid-selection-float');
+    const renderer = float && float._kyantRendererRef;
+    if (!float || !renderer || !float._renderKyantGlass) return null;
+    const before = renderer.lastSurfaceState;
+    float._liquidGlow = { x: 0.18, y: 0.34, opacity: 0.7 };
+    float._renderKyantGlass(null, true);
+    const first = renderer.lastSurfaceState;
+    float._liquidGlow = { x: 0.82, y: 0.66, opacity: 0.7 };
+    float._renderKyantGlass(null, true);
+    const second = renderer.lastSurfaceState;
+    return { before, first, second, canvasFirst: float.firstElementChild && float.firstElementChild.className };
+  })()`);
   await mouseEvent(cdp, 'mouseReleased', point, 'left');
   await sleep(700);
   if (held.renderer !== 'webgl2' || !held.textureReady || !held.drawReady || !(held.width > 0) || !(held.height > 0)) {
     throw new Error(`liquid float did not render a fresh WebGL texture: ${JSON.stringify(held)}`);
+  }
+  if (!held.glowMovement || held.glowMovement.first === held.glowMovement.second || held.glowMovement.canvasFirst !== 'liquid-selection-canvas') {
+    throw new Error(`liquid glow was not composited inside the bottom glass surface: ${JSON.stringify(held.glowMovement)}`);
   }
   return held;
 }
@@ -249,7 +265,11 @@ async function main() {
     await cdp.call('Runtime.enable');
     await cdp.call('Page.enable');
     await cdp.call('Page.bringToFront');
-    await evaluate(cdp, 'window.resizeTo(1280, 900)');
+    // Desktop automation may leave the isolated window occluded. Keep the
+    // renderer visible to Chromium and measure a known CSS viewport, as the
+    // gesture regression does, instead of relying on OS foreground focus.
+    await cdp.call('Emulation.setFocusEmulationEnabled', { enabled: true });
+    await cdp.call('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
     await sleep(300);
     await evaluate(cdp, `(() => {
       const counts = window.__liquidPerfCounts = { contexts:0, shaderCompiles:0, programLinks:0, textureUploads:0, uniformLookups:0, uniformUpdates:0, draws:0, bufferUploads:0 };
@@ -262,8 +282,6 @@ async function main() {
           if (amount > window.__liquidMaxMotionAmount) window.__liquidMaxMotionAmount = amount;
         }
       }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-liquid-motion-amount'] });
-      Element.prototype.setPointerCapture = function() {};
-      Element.prototype.releasePointerCapture = function() {};
       const canvasGetContext = HTMLCanvasElement.prototype.getContext;
       HTMLCanvasElement.prototype.getContext = function(kind, options) {
         const value = canvasGetContext.call(this, kind, options);

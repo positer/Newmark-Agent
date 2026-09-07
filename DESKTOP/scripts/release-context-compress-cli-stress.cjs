@@ -162,12 +162,14 @@ function runCli(root, prompt, conversation) {
   if (process.env.NEWMARK_CONTEXT_COMPRESS_AGENT_ONLY === '1') args.splice(2, 0, '--agent-only');
   const timeoutMs = Math.max(1_000, Number(process.env.NEWMARK_CONTEXT_COMPRESS_TIMEOUT_MS || 90_000));
   return new Promise(resolve => {
+    const startedAt = Date.now();
     const child = spawn(exePath, args, {
       cwd: root,
       windowsHide: true,
       env: { ...process.env, NEWMARK_PROVIDER_DIAGNOSTICS: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    console.log(`[context-compress-cli-stress] process-start pid=${child.pid} at=${new Date(startedAt).toISOString()}`);
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -180,6 +182,7 @@ function runCli(root, prompt, conversation) {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      console.log(`[context-compress-cli-stress] process-exit pid=${child.pid} status=${status} elapsedMs=${Date.now() - startedAt}`);
       resolve({ status, signal, error, stdout, stderr });
     };
     const timeout = setTimeout(() => {

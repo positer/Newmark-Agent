@@ -13,7 +13,7 @@ class GlassButtonCanvasOutsetContractTest {
         val memoryLab = File("src/main/java/com/newmark/mobile/ui/MemoryLabScreen.kt").readText()
         val settings = File("src/main/java/com/newmark/mobile/ui/SettingsScreen.kt").readText()
 
-        assertTrue(liquid.contains("val GlassButtonCanvasOutset = 8.dp"))
+        assertTrue(liquid.contains("val GlassButtonCanvasOutset = 12.dp"))
         assertTrue(liquid.contains("modifier\n            .size(visualSize)"))
         assertTrue(liquid.contains(".size(visualSize)\n            .then(clickModifier)"))
         assertTrue(liquid.contains(".requiredSize(visualSize + GlassButtonCanvasOutset * 2)"))
@@ -59,7 +59,7 @@ class GlassButtonCanvasOutsetContractTest {
 
         val buttonEdge = liquid.substringAfter("fun Modifier.kyantGlassEdge(")
             .substringBefore("fun LiquidGlassSwitch(")
-        assertTrue(buttonEdge.contains("clipToShape = false"))
+        assertTrue(buttonEdge.contains("clipToShape = true"))
         assertTrue(backdrop.contains("clipToShape: Boolean = true"))
         assertTrue(backdrop.contains("clip = clipToShape"))
         assertTrue(backdrop.contains("properties[\"clipToShape\"] = clipToShape"))

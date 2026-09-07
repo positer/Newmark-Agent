@@ -1,5 +1,175 @@
 # Newmark Agent Project Taste
 
+## 2026-09-07 dev-0.5.15 release identity
+
+- Bind release assets to the verified source commit and version, retaining separate byte hashes for locally built and CI artifacts. Fresh CI Android runners generate a different default debug keystore unless an existing signing identity is restored; never replace an upgrade-compatible local APK with a CI APK merely because its version matches.
+- A dev tag also triggers the existing npm publishing workflow. Candidate workflow dispatches build platform artifacts without a public release; final tag/release publication is a separate verified operation. Preserve already published assets, and compare all six remote downloads with the approved local asset set.
+
+## 2026-09-07 Peer continuity and communication cache
+
+- New mailbox messages default to `wakeup=false`. A stopped receiver stores them without activation; an active receiver accepts both flags normally. Persist whether peer mail was accepted while active so settlement and cold loading cannot lose its continuation intent. Legacy persisted messages without this field retain their prior wake behavior. Explicit close and the user stop gate remain authoritative.
+- The sender owns communication content: default to the last visible text-history entry, or choose summary/text/tool selections with explicit ranges. A summary is supplied by the sender; never launch another model to compose it. Preserve complete tool call/result pairs and actual payload bytes. Do not recursively remove legitimate business fields named metadata, system or analysis from a selected tool result. Reject an oversized selection instead of silently truncating evidence.
+- Passive mail changes only the mailbox. Append received content at the execution boundary; never pre-insert messages into another peer's history. Keep system, catalog and cache snapshots independent of wake flags, changing mailbox counts and selected content. List peers through a bounded summary projection.
+- Retire only provenance-marked automatic settlement messages for the exact peer/result revision after the complete result and its internal receipt have been durably saved. Remove matching unconsumed native, hosted and persisted queue copies; preserve manual messages, newer results and existing history.
+- User stop broadcasts a distinct non-waking control receipt to every non-closed peer in the targeted conversation before cancellation. Stop controls must never become future model prompts. Both cooperative and forced stop are scoped to the exact conversation/runtime and current run; another conversation's providers, tools, scheduler and caches must remain live.
+- WSL force termination uses boot/start identity and kernel pidfds, including descendants that created their own process groups. Keep the worker alive until its supervisor captures the tree. Never fall back to bare PID/PGID signals after an identity check, and never report unconfirmed cleanup as success. Missing capabilities or interrupted capture must retain an error and quarantine across client/pool cleanup paths; helper cleanup must release processes it paused when termination is denied.
+- A peer has one executor at a time. Mailbox wakeup records intent once, and dispatch assembles the unread batch once. Working, settled and restored peers share the same mailbox path; compatibility APIs must not bypass it.
+- A read receipt must persist together with either the exact dispatched input or its committed working history. Once input is committed, cold recovery uses a continuation marker and preserves completed tool results. Keep a committed user message even when the first provider reply has not arrived.
+- Persist peer history at actual message/tool boundaries, skipping saves when history and compression are unchanged. Never write every streaming delta. Clone nested tool calls and metadata so returned snapshots cannot mutate live context.
+- Peer request metadata and supplied tool order survive mailbox jobs and cold loading through a deployment, policy, catalog, protocol and compression identity. Restore schemas only through the current authorized catalog; stored cache names cannot grant permissions. Keep task-dependent diagnostics stable on the peer assignment.
+- Root Build provider caches remain Build-scoped. A separately owned peer provider cache may span that peer's jobs with full configuration invalidation, independent per-peer slots, bounded idle retention and close cleanup. Never serialize provider objects, credentials or HTTP pools.
+- Ultra roots assign independent responsibilities, file boundaries, dependencies and acceptance checks while retaining useful local work. Ultra specialists complete their own assignment and only delegate an independent subset when useful; avoid chains that simply forward the same task.
+- Prefer reusing a peer and concise addressed communication about new evidence, dependencies, blockers and actionable corrections. Do not fill concurrency slots with redundant assignments or send repeated unchanged status messages.
+- Report model-directed delegation separately from harness-directed concurrency, and upstream cache usage separately from client prefix invariants. Private broker turns remain excluded from public durable history; the first persistence boundary after provisioning may change that message segment, while supplied schemas remain available.
+
+## 2026-09-06 Build continuity and protocol compatibility
+
+- Preserve already published partial text across interruption/error and cold loading, as an incomplete response boundary. Buffer by run only until the corresponding completed response; do not write every delta to disk, release a private broker preface, fabricate a final answer or alter model history to preserve display.
+- Recovery classifies every outcome in one loop, including outcomes after a route transition. Empty and reasoning-only replies share a bounded no-progress allowance; completed useful tool/text progress resets it. Neither alternating failure classes nor fallback may create an unbounded loop.
+- Distinguish the current request's replay boundary from the whole Build's deployment-switch boundary. A transient request failure before its text/tool envelope may retry once with the exact existing history and deployment; never replay completed tools, received partial output, authentication errors or invalid requests to improve apparent availability.
+- All retry delays are owned by the originating Build's cancellation signal. Respect Retry-After and automatic retry budgets; never shorten server-directed waits or allow a stopped owner to launch a later request.
+- Protocol completion is explicit. EOF, error/incomplete payloads and partial tool parameters cannot be promoted to success. Validate the complete tool batch before dispatch, preserve call IDs and already delivered usage, and retain legitimate JSON and streaming compatibility.
+- Request construction preserves configured gateway prefixes, queries, authentication families and supported version headers. Match Accept to stream/JSON; do not guess a different credential or emit fake empty authentication. Response rate-limit header families have different reset units; normalize their actual semantics and keep HTTP cache metadata separate from LLM token cache accounting.
+- Coalesced text retains original event boundaries so snapshots and live batches can overlap without guessing by text. Late stop/snapshot/activation responses are scoped to target, load generation and Build progress; fresh authoritative deletion still works. Preserve toolCallId in live and cold projections to distinguish same-name tools.
+
+## 2026-09-06 Context inspector measurement contract
+
+- Provider spend and local context estimates have different provenance. Preserve explicit zero, missing reporting and legacy unknown coverage; never silently turn missing usage into a measured zero percent.
+- Aggregate cache read by token-weighted measured input, not by averaging per-request percentages. Show a whole-conversation ratio only when coverage is complete; identify the denominator of any reported subset. Keep request handles so cumulative/partial stream updates do not double count.
+- Bind usage callbacks to their original conversation/workspace. A late response must update both the durable entry and any pending same-store snapshot without discarding another conversation's pending changes. Keep measured counts on branch/rewind/archive; these actions do not refund consumed tokens.
+- Context composition is estimated from the actual submitted request while running; system and active tool schemas count alongside long and Build history. Capture input ownership after the existing title/start gate has assigned a run ID. Preserve role/content/schema ordering and the cache-stable prefix. Never move the title gate to fix metrics.
+- Label local component estimates and image-token limitations. Do not derive a supposedly measured Build/history split by scaling to server input totals. Keep the latest measured main-request input separate from auxiliary title/compaction usage and current idle history.
+- Context refreshes must respect target, load generation and snapshot revision. Opening the inspector may request one coalesced refresh; do not add per-token polling. Size only this inspector to the available viewport and allow internal scrolling, preserving existing glass interaction.
+
+## 2026-09-06 Build request reuse and cache acceptance
+
+- The client preserves stable eligible prefixes and reports measured usage. Server-side zero cached tokens are an observation, not a failure condition or a reason to retry completed work.
+- Reuse a provider only through a caller-owned Build cache whose identity covers deployment, credentials, protocol/API mode, thinking configuration and effective proxy. Invalidate on change; never keep the slot globally or on Agent across Builds. Preserve unscoped and forced-provider semantics.
+- Same-deployment recovery retains initialized system/tool order even after a Guide. Actual capability/deployment changes still refresh disclosure and permissions. Do not freeze live permission checks to improve cacheability.
+- Expensive diagnostic serialization/hashing requires a current subscriber or enabled log. Keep direct inspection and usage accounting available, and allow subscription changes mid-Build. Measure this local work separately from model latency and upstream cache hits.
+
+## 2026-09-06 Build cache prefix and list corner consistency
+
+- A Build's request-only task ledger and tool-awareness metadata are initialized once and retained byte-for-byte from its first provider call onward. Never remove that block after the first tool result or regenerate it from changing task counts. New Builds initialize fresh snapshots; Guides and tool results retain their original roles and append to the input.
+- On-demand native tool provisioning keeps all prior schemas, including the broker, in order and appends newly granted schemas. Preserve the compact initial surface and all permission checks. Adding a schema, explicitly compressing context, or consuming a transient image changes the provider input; do not claim complete upstream cache reuse across those changes without measurement.
+- Cache acceptance is Build-scoped and uses actual per-request provider usage. A stable prefix is a client invariant, not a guarantee of upstream cache availability; never synthesize cached-token counts or retry completed model/tool work to chase cache hits.
+- PC model, generic select and conversation-action list shells share a 25px corner token for both border and clipping. The standard 34px option capsule has a 17px radius plus 7px inset and 1px rim. Preserve row capsules, selection travel, tracks, 4px feedback, 80ms hold, padding and material; do not change non-list dialogs to enforce this list-only rule.
+- Outward PC pull follows its direction vector, not a centered uniform scale. Only force-facing edges extend; the opposite contour and its unaffected corners stay anchored. Reuse the existing bounded 4px magnitude and 120ms return with per-side direction coefficients. Reversing direction must not retain expansion on the former side. Press contraction, the actual scroll container, text geometry and selection-track logic remain unchanged.
+
+## 2026-09-06 Long history and measured usage ownership
+
+- History, local context estimates and measured provider usage are separate data. Preserve full message content, identity and timestamps through persistence; normalization may add default fields without changing the transcript. Do not equate raw object serialization differences with lost messages.
+- Store measured provider totals and the last usage under the conversation, with an optional versioned schema. New or legacy conversations without recorded usage start empty. Switching targets, runtime ownership and archive recovery must not leak or duplicate another conversation's counters; editing or branching text does not refund already spent usage.
+- Parse actual Responses input_tokens_details and Chat prompt_tokens_details, including cache reads and writes, and retain compatible aliases without classifying a read as a write. A local estimate, saved history, faster response or simulated usage is not proof of an upstream cache hit.
+- Every asynchronous UI writer validates its workspace/conversation and loading generation on both success and failure. A->B->A still invalidates old requests. Pagination also validates its captured cursor; a global in-flight context request must schedule the latest target's pending refresh instead of dropping it.
+- Pass history windows to the actual runtime owner and retain its absolute cursors; never window an already-windowed snapshot again. An explicit before:0 means an empty page, while an omitted cursor means latest. Custom older pages must not overwrite the runtime pool's latest-state cache. Check delayed UI writes immediately upon release as well as after settling.
+- Report real cache observations with provider/model and workload boundaries. Keep request prefixes and credential-free fingerprints for comparisons; never claim an upstream cache policy or all-turn hit guarantee from fixture tests.
+
+## 2026-09-06 PC popup 4px limit and 80ms hold — current parameters
+
+- The current PC popup edge deformation budget is 4 CSS pixels per edge. This supersedes the earlier 8px budget below; keep historical package and installation evidence unchanged. The existing 0.4 press ratio gives 1.6px vertical contraction and 0.384px horizontal contraction; a fully blocked outward pull can use the full 4px budget.
+- The current PC long-press drag activation delay is 80ms, replacing the former 300ms delay in existing timed hold paths. Keep these paths consistent. Do not change animation duration, editor debounce or settling deadlines, and do not introduce a delay into controls that already activate from movement distance alone.
+- Preserve pointer phases, track constraints, initial selection anchor, travel and commit logic, CSS material, opacity and layout. Press starts immediately and clears when hold pickup starts. These PC changes do not modify Android thresholds or elasticity.
+- Validate the actual packaged surface throughout press, hold, pull and release, in both themes and across popup sizes. A source constant or successful build alone is not evidence of the rendered maximum; package verification is distinct from an MSI installation.
+
+## 2026-09-06 Shared conversation commands and dual-client queue
+
+- Keep authentication and transport adapters distinct from command semantics. IPC, browser and paired mobile commands resolve the same workspace/conversation owner, queue and visible mode; never add a mobile-only execution policy on PC.
+- Queue identity is target plus stable item ID, never text or a mutable global display index. Preserve requested mode, Goal objective, images and creation time across edits and reorders. Resolve DOM actions against current identity after background updates.
+- Ordinary user message identity is separate from Guide identity. Accept-before-consume is an observed Agent event, not a resolved Promise. Unaccepted failure restores the same manageable item and pauses; accepted failure must not replay the request.
+- Flow, queue, history and archive operations must share one retained owner. Keep provisional Flow-start cancellation separate from idle backend snapshots, and prevent old asynchronous completion from clearing a newer command.
+- A composer draft belongs to its conversation and revision. Clear only the submitted revision after explicit acceptance; preserve selection/composition, new typing and rejected edits. Reorder against the latest complete authoritative ID set, including an item being edited.
+- Workspace directory notifications update membership and metadata without making either client follow the other's selected conversation. Conversation state events and workspace directory events have separate scope guards.
+- A package build is not user-flow acceptance. Keep failed candidate evidence, verify source-to-package and installed APK identity, exercise real paired clients, and investigate observed unresponsiveness before claiming stability. A successful restart alone is not a hang fix.
+
+## 2026-09-06 Model request lifetime and measured renderer updates
+
+- A title probe must retain its final failure category without echoing raw provider bodies, credentials or URLs. Keep request identity, retry count, cancellation and the first-turn gate intact. A later empty title replaces an earlier HTTP failure; a user stop is neither provider failure nor local persistence failure.
+- In-memory title assignment is not a persistence barrier. Save the complete candidate snapshot successfully before publishing that title or opening the formal first turn. Active conversation saves return an explicit result, use a same-directory staged write and replacement, and retain the prior snapshot when writing fails. Never delete the prior file as a fallback for a failed rename; validate actual replacement on Android, not a Windows assumption. Ordinary save failures also need a fixed local error message.
+- A real-provider test must distinguish explicit upstream errors from client timeouts and cross-conversation leakage. Only the current target and a new matching run may terminate the wait; historical failures cannot. Register passive startup diagnostics before waiting for socket readiness, then keep the promoted-main-UI gate immediately ahead of all UI operations.
+
+- SSE is a continuous byte stream, not a sequence of independent network chunks. Preserve UTF-8 and CR/LF state across chunks, accept the optional space after `data:`, combine multiple data fields, and dispatch at event boundaries. Cover every split position and single-byte chunks with real parser behavior, including Chinese and emoji.
+- Protocol success or failure ends the model request without waiting for HTTP EOF. Cancellation and early consumer return must cancel owned readers/responses and remove listeners. EOF alone is not a successful Responses terminal and must not manufacture an empty-response retry or replay already published model/tool activity.
+- Model POSTs, both SSE and complete JSON, use the request-local dispatcher wrapper to suppress hidden Undici headers/body deadlines. Preserve the chosen proxy delegate, connection-establishment policy, explicit application deadlines, model discovery GETs and unrelated fetch behavior. Do not change the global dispatcher or introduce retries to conceal a transport-lifetime bug.
+- JSON request ownership lasts until the body is consumed, not merely until headers arrive. Keep parent cancellation and any explicit total deadline attached through body decoding; release timers/listeners on completion and failure, and close a blocked body when cancelled.
+- Android `CancellableHttpExchange` owns one structured IO worker and its active OkHttp call across response headers, body consumption and subsequent call registration. Parent cancellation must close a silent read promptly, including cancellation in the registration gap. Desktop-link SSE uses the same lifetime bridge without changing generation guards, reconnection policy or event batching.
+- First-title requests on both platforms use normal provider read policy and the current run's cancellation owner. Do not add a separate 15-second deadline or detach the title as a sibling of the stopped run. Keep the title-first persistence gate, frozen deployment/native reasoning, first-message identity, manual-title priority and existing empty-title retry limit; stopping during retry backoff must release ownership without another model request.
+- Renderer caches must represent exact displayed content and all rendering inputs, including language, live/terminal state and partial Markdown context. A stable ID or equal text length is insufficient. Reuse unchanged Guide/image nodes; when a run ends, restore terminal Markdown even if the text did not change. Write row attributes and HTML only when their actual values change.
+- Performance claims require a reproducible workload and artifact identity. Record DOM mutations as well as timings, preserve functional content checks, and compare source previews separately from final unpack/installed binaries. The current 500-row/30-refresh source measurement is evidence for that workload only; do not extrapolate it to streaming throughput, all user flows or delivered packages. Use fresh isolated roots and owned process cleanup while preserving the user's running app and data.
+
+## 2026-09-06 Neutral dark surfaces and sidebar materials
+
+- Dark canvases, carriers, editor surfaces and ordinary text use neutral gray RGB channels: canvas #101010, raised layers #181818/#222222/#292929/#303030/#383838, labels #f2f2f2/#cecece/#949494. Keep functional accents, status colors, syntax highlighting and optical edge dispersion. Apply the same palette to startup shells, independent viewer windows, native select menus and Material surface containers; a shared token change must not leave a separate blue-black fallback.
+- Palette work preserves geometry, opacity, blur and interaction timing. Light-theme values retain their existing palette. Wide layouts must paint the app canvas beneath transparent reserved sidebar slots; translucent panel material must not expose a platform window background.
+- Right sidebar paging uses flat semantic fills while idle. Only its shared moving float owns interaction glass, and fixed icons render above that float. Its backdrop records the carrier plane only; sampling foreground glyphs produces a refracted duplicate underneath translucent text even when z-order is correct. Preserve the original alpha when modulating any button fill; Color.Transparent must remain transparent and accentSoft must remain distinct from its accent-colored icon. Verify idle, held and landed pixels in both themes, plus the complete wide-layout carrier against the actual app canvas.
+
+## 2026-09-06 Mobile physical contact and popup content
+
+- A floating glass surface follows its constrained rail; contact light follows the actual finger. Record the original pointer's window-space position before pickup, and reproject it into the current float at draw time. Never substitute a thumb center, clamp the light origin to the rail, or expect a newly created float to receive the original down event.
+- Read position, lift and velocity geometry in the surface draw callback so layer-only movement remaps a stationary contact. Keep the existing shape-clipped surface pass and 66dp radius. Retain the final contact through landing; a completed float must not clear a newer press.
+- Mobile float drag uses one short, frame-rate-independent follower (55ms time constant), without overshoot. Raw pointer coordinates still own track constraints, target selection and reorder. Release stops the follower and transfers its displayed value into the original travel-then-contract sequence. High-frequency velocity reads belong in the layer phase, not whole-page composition.
+- Conversation lenses grow toward the right of the source capsule, with a 2dp lifted offset that returns to zero on landing. Anchor their oversized layout explicitly at TopStart with unbounded measurement; requiredWidth must not silently center overflow inside the sidebar and add another leftward offset. Preserve both click and reorder color endpoints, the full 28dp horizontal envelope, and actual rendering beyond the panel's right edge. Test local and remote conversations separately.
+- A dragged row changes its own local coordinate frame. Compute each held pointer delta from the current event's position and previousPosition, which share that frame; subtracting a cached local position invents an opposite drag when the row moves, including on release. Keep physical movement separate from the carrier's display damping.
+- Mobile popups share a real Compose graphics layer between material and all contents. Place their non-consuming pointer observer outside that transform, so feedback does not change its own input coordinate frame. A graph popup may disable pan displacement while keeping press response; its graph gestures remain unconsumed. This supersedes earlier mobile popup-only-optics instructions. Ordinary buttons and independent rail labels retain their prior content behavior.
+- Pixel tests must discriminate the previous failure: off-axis finger light, stationary finger during carrier travel, damped drag, and popup content motion. A failed capture is an infrastructure diagnostic, not proof of the rendering bug. Keep source-contract updates tied to confirmed behavior.
+- Android instrumentation may disable hardware drawing. Whole-window visual fixtures must explicitly enable HardwareRendererCompat for their lifetime and restore its prior state; use frame-committed PixelCopy and verify a known baseline pixel before comparing the effect. A changing blank/old display can fool a relative pixel comparison. Inspect the resulting PNGs before accepting a passing visual gate.
+
+## MSI reboot-queue and authoring verification
+
+- Exact installed files and a working GUI do not close an upgrade while historical `PendingFileRenameOperations` can delete or replace those files. Verify the target queue before installation and again after payload verification; preserve unrelated pairs, including their ordering and empty destinations, and check writes for concurrent changes and readback errors.
+- Normalize supported NT and legacy `*1\??\` prefixes before a directory-boundary comparison. Never match a product name anywhere in an arbitrary path or clean another application's pending operations.
+- Keep PowerShell source out of MSI Formatted command text. Use static encoded scripts and native working-directory arguments. Resolve old roots from related registered products and their executable components; ambiguous or missing roots fail explicitly.
+- A checked immediate action stops old registered processes before `RemoveExistingProducts`; it is not assumed to hold an administrator token. A checked deferred action handles machine-level queue cleanup after `CreateFolders` and before `InstallFiles`. Preserve legal major-upgrade sequencing and confirm process exit before proceeding.
+- Native authoring tests must start from the production template's declarations. A Type 34 reference to a standard directory still requires its Directory-table row; insert `SystemFolder` under `TARGETDIR` only when absent. Test real MSI tables and `MsiFormatRecord`, initially absent custom paths, literal Unicode/punctuation and explicit failure paths.
+- During an installer-only repack, compare every payload file with the verified build and record the exact allowed delta. Preserve rejected intermediate packages as rejected evidence; promote only the final verified MSI to the standard release path.
+- Capture Windows build/test stdout and stderr as native byte streams and persist the child's actual exit code. Windows PowerShell 5 can promote deliberate negative-test stderr into a terminating `NativeCommandError` under `ErrorActionPreference=Stop`; a wrapper error is neither a recorded npm failure nor a recorded npm success. Preserve the failed wrapper evidence, fix the recorder, and obtain an explicit final gate result.
+
+## APK repeat packaging evidence
+
+- When Android inputs are unchanged, Gradle may correctly report the release artifact up-to-date. Record the current build gate, source hashes, APK identity and clipboard readback; disclose byte identity with the previous artifact. Reuse device results only when their recorded APK SHA-256 matches exactly, and distinguish reused evidence from a fresh device run. Keep each packaging receipt in its own timestamped archive.
+
+## 2026-09-06 PC material and scrollport rules — latest rendering decisions
+
+- PC popup surfaces are uniform translucent frost. Remove baked blue/pink light planes and broad top-to-bottom shading; real backdrop blur and a narrow neutral rim provide depth. Theme and glass-opacity preferences continue to govern the material. The latest popup-only alpha factor is 0.82 (0.5576 at the default preference); preserve the shared alpha/blur mapping for other surfaces.
+- The current PC popup selection movement is accepted. Preserve its geometry, thresholds, timing, rail constraint, selection commit and travel/landing logic. Pointer down compresses the shell immediately and remains pressed until the existing 300ms hold transition starts the selected block's pickup; that transition starts elastic recovery, then only a constrained outward pull expands the optics. Drag release returns to rest without another press. A previous click's delayed reset must not clear a new active press. `liquid-block-lifted` is a state marker only; every stage inherits the same color-block fill and outline, without a glass plate, backdrop filter, glow or elevated shadow.
+- A scrolling popup is its own scroll container. An absolute pseudo-element or canvas inserted inside it scrolls with the options. Render the list shell rim and touch light in the scrollport background/inset shadow and disable those scrolling decoration layers. Do not compensate with per-scroll JavaScript, transform the content, or alter option offsets.
+- Mouse light remains zero. Touch light remains visible inside the carrier boundary; disabling all light is not a scroll fix. Verify stationary shell pixels across trusted wheel events in both themes, plus uniform pixels on a flat backdrop and a visible response to changed real backdrops.
+- Source/UI verification does not update an installed MSI. Keep source-preview status separate from packaged/installed artifact identity.
+
+## 2026-09-05 Recovery rules — supersede earlier glass/install notes
+
+- Reproduce a reported crash using the delivered artifact and preserve its exception before changing renderer behavior. Source-string checks and successful builds do not prove geometry, clipping, animation order or installation state.
+- Sampling lens shapes must be `CornerBasedShape`; never wrap a lens in an arbitrary inset `Shape`. Expand the visible outline itself. Provider rails share a centered 12dp-per-edge optical envelope; preserve layout, hit targets and label pixels.
+- Join actual lift and travel animations before contraction. Cancel superseded jobs; release resumes the current frame, reaches the destination, contracts, then commits exactly once. A delay or `yield()` is not evidence that another animation finished.
+- Clip backdrop, surface and front optical draw passes explicitly. Child layout clipping alone does not clip a preceding `onDrawSurface`. New floating nodes drive light from their animation lifecycle because they did not observe the initiating pointer down.
+- Mobile touch light uses a 66dp radius and remains inside the glass. Active button elevation survives until its entire optical animation ends. Transform optics independently of real content.
+- Desktop mouse glow is disabled in every renderer path, including CSS and residual canvas alpha. Touch glow remains enabled. Retain refraction, material edge highlights and frame-coalesced rendering.
+- Desktop feedback is bounded by 8 CSS pixels at an edge, per the latest direction correction. An outward held pull grows the actual frosted surface; a click shrinks inward. Positive clip insets are contraction and must never be accepted as proof of outward growth. Use one optical material layer during outward feedback, below the original content and outside its scroll container; do not scale text or stack two frosted fills. Full pull can use the entire budget. Track movement is axis constrained; only blocked directions receive elastic boundary feedback. Text and carrier layout remain fixed. Verify actual material pixels outside the original box, release direction and focus-loss cleanup.
+- Use the shared MSI workflow for GUI, CLI and manual installation. Avoid shell-joined installer paths; call native MSI APIs from one prepared elevated worker. Fresh ProductCodes must not receive reinstall flags. Retry only the documented busy result 1618; invalid arguments 1639 must fail with diagnostics.
+- Installation success requires complete logs, exact installed payload hashes, ProductCode/PackageCode/version and shortcut targets, then installed CLI/normal-user GUI verification. Version `0.5.15` alone cannot distinguish cumulative builds. Preserve `.Newmark` user data and never substitute a per-user install for the authorized machine upgrade.
+
+## 2026-09-05 Desktop glass performance
+
+- Pointer-driven optical effects must be frame-coalesced; never draw a popup canvas synchronously for every pointer event.
+- Liquid glass retains chromatic edge hints and bounded shadows; mouse interaction glow is disabled by the later recovery rules above.
+- Reduced-motion and compact viewport fallbacks are part of the desktop material system.
+
+## 2026-09-04 交互泛光必须属于承载玻璃 surface
+
+- PC 弹窗的交互泛光画布必须是 `.liquid-glass-popup` 内部 z-index 0 的 surface pass，普通混合模式、由弹窗自身 `overflow/clip-path` 裁剪，内容子树位于其上；禁止使用页面/视口级 Canvas 或 `mix-blend-mode: screen` 顶层合成伪装绑定。
+- 动态创建的弹窗必须通过统一 MutationObserver 自动挂载光学画布，不能只覆盖初始 DOM。
+- PC 活动浮块的可见 Canvas 也必须首子节点化并置于 z-index 0，携带内容显式位于 z-index 1；泛光坐标必须参与 surface 重绘缓存键，不能因几何未变而冻结在旧指针位置。
+- 弹窗选中色块属于同一承载 surface 的底层 pass，必须保持 `position:absolute; z-index:0`，不能被通用内容层规则提升或参与布局。
+- Android 泛光必须在 `drawBackdrop` 的 `onDrawSurface`/承载 RenderNode 内合成；`drawWithContent` 追加在玻璃节点之后的光效不再符合“压入底层玻璃”语义。弹窗外部状态仍经 `layerBlock` 进入同一 RenderNode。
+
+## dev-0.5.15 双端弹窗、会话恢复与玻璃 token 准则
+
+- 移动端本地会话追踪是持久状态：新建、切换、归档和冷启动加载都调用 `saveActiveId`，禁止让 `currentId` 只存在 Activity/ViewModel 内存中；本地 Agent 运行中的根返回应先 `moveTaskToBack(true)`，不能销毁活动任务。
+- 弹窗是统一液态表面：Android 使用 `liquidPopupShell`，PC 使用 `.liquid-glass-popup`；设置等大弹窗内动态生成的 nested 选择弹窗也必须复用同一 class 和同一交互。弹窗内选项内容是静态的，不创建顶层玻璃浮块，也不随指针移动；点击其他选项时专用色块先平滑移动到新选项、到位后立即执行变更，不等待额外落地；长按 300ms 后色块从原选项跟踪长按位置，弹窗承载玻璃同步做微量弹性缩放，只有轨道末端或不可拖动时弹窗壳才轻度响应，普通点按/拖动响应只施加于弹窗壳；关闭动画必须收缩回发起锚点。普通非玻璃底按钮/菜单的玻璃浮块组件保留，禁止全局误删。
+- 玻璃边带厚度是系统 token：供应商横向/纵向浮块必须共用 `ProviderRailInteractionGlassEdge = MobileInteractionGlassEdge + 2.dp`，高光、折射、色散同步增厚；左侧栏浮块抬起右移 3dp 时起终点仍落在色块。
+- 图标颜色走主题语义色，不写死为暗色图标色。发送/停止/Guide 图标使用 `p.textPrimary`，修复“亮色模式仍显示暗色图标”一类回归。
+- 视觉/弹窗验收不能只靠源码断言：本轮只声明构建、JVM 与 PC `test:desktop:built` 证据；真机/设备截图、安装态冒烟和完整 `test:full-release` 未执行时不得声称通过。
+
 ## dev-0.5.14 时序与下载工具准则
 
 - 首次标题不是 Build 的尾随装饰：必须先独立生成、持久化并向当前 UI 发布元数据，再启动首次正式 Agent provider 请求；标题事件不进入 WorkRun 或模型历史。
@@ -283,3 +453,22 @@ Build 标题按钮的 hover、focus、active 与键盘触发态都必须保持�
 
 - `pdf_read.timeout_ms` 是一次调用的累计预算，不是只包围扫描页浏览器观察。异步文件读取、pdf.js 文档加载、逐页文本提取与视觉观察必须共享同一 deadline；任何阶段超时都返回带阶段、预算和 `recoverable=true` 的工具回执，使同一 Agent run 可以继续响应。
 - 父级 run 取消与工具预算超时必须区分：用户/运行时 abort 继续向外传播，不能伪装成可恢复 PDF 超时。超时后要销毁 pdf.js loading task、解绑 abort listener、清除 timer，禁止遗留 worker、未处理 rejection 或悬空 tool call。
+
+
+### 20260905-141515 动画状态约定补充
+长按释放必须先停止拖动态并把当前指针帧转移到 Animatable，再执行落点移动，移动完成后才开始玻璃收缩；无实际拖动的长按释放不得使用未初始化的拖动坐标。
+
+
+### 20260905-143414 PC 液态玻璃绘制约定
+WebGL 折射与 2D 泛光必须共享同一圆角裁剪路径；高频指针光源先写 pending 状态，由 requestAnimationFrame 合并后再触发 CSS 与画布更新，避免同步 pointermove 造成抖动。
+
+### 20260905-144650 PC 长按交互约定
+
+- 选项菜单长按状态机必须按 selected source → pointerdown target 飞行 → 目标处持续拖动 → 最终选项飞行 → 提交并收缩落地执行。
+- 飞行完成后 lockStartLeft/blockStartTop 必须取 landed target 几何，禁止恢复 source 几何。
+- 长按玻璃只由 carrier block 绘制；选项文字/图标节点固定 	ransform:none、scale:1、ilter:none。
+- 玻璃泛光必须在 carrier 自身圆角路径内合成，不能污染弹窗或整幅画布。
+
+### 20260905-145603 移动端暗色抽屉边缘约定
+
+全高矩形的移动端抽屉承载层不得直接绘制全局 Kyant 外沿高光；暗色竖屏左栏使用无外沿高光的 carrier glass，按钮、胶囊和拖动浮块各自负责受边界约束的玻璃边缘与泛光。

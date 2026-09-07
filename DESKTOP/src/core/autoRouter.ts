@@ -252,6 +252,17 @@ export function classifyTaskClasses(taskText: string, requiredCapabilities: stri
 
 export function classifyRouteFailure(error: unknown): RouteFailure {
   const text = error instanceof Error ? `${error.name} ${error.message}` : String(error || '');
+  // Gateways may return HTTP 200 followed by a structured provider error.
+  // Match actual code/type fields, never incidental overload words in prose.
+  let structuredCodes: string[] = [];
+  const jsonStart = text.indexOf('{');
+  if (jsonStart >= 0) {
+    try {
+      const payload = JSON.parse(text.slice(jsonStart));
+      const detail = payload?.error || payload?.response?.error || payload;
+      structuredCodes = [detail?.code, detail?.type].filter(value => typeof value === 'string').map(value => value.toLowerCase());
+    } catch { /* Ordinary non-JSON errors retain their existing classification. */ }
+  }
   const statusMatch = text.match(/(?:http|error|status)?\s*[:=]?\s*(408|429|4\d\d|5\d\d)\b/i);
   const statusCode = statusMatch ? Number(statusMatch[1]) : undefined;
   const retryAfterMatch = text.match(/retry[- ]after\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(ms|s|seconds?)?/i);
@@ -278,10 +289,11 @@ export function classifyRouteFailure(error: unknown): RouteFailure {
     return { type: 'rate_limited', retryable: true, switchAllowed: true, statusCode: 429, retryAfterMs };
   }
   if (statusCode === 408 || /timeout|timed out|aborterror/i.test(text)) {
-    return { type: 'timeout', retryable: true, switchAllowed: true, statusCode };
+    return { type: 'timeout', retryable: true, switchAllowed: true, statusCode, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) };
   }
-  if (statusCode !== undefined && statusCode >= 500) {
-    return { type: 'server_error', retryable: true, switchAllowed: true, statusCode };
+  if ((statusCode !== undefined && statusCode >= 500)
+    || structuredCodes.some(code => ['server_is_overloaded', 'overloaded_error', 'service_unavailable_error', 'server_error', 'internal_server_error'].includes(code))) {
+    return { type: 'server_error', retryable: true, switchAllowed: true, statusCode, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) };
   }
   if (/empty response|no response body|empty completion/i.test(text)) return { type: 'empty_response', retryable: true, switchAllowed: true };
   if (/network|econn|enotfound|socket|fetch failed|connection reset|transport/i.test(text)) {

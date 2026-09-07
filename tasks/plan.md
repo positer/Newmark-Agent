@@ -1,3 +1,49 @@
+## 2026-09-07 dev-0.5.15 全平台发布
+
+从当前累计 Desktop／Android 源码统一发布 `dev-0.5.15`（Android 515）。执行完整 Desktop 发布门禁、Windows MSI/ZIP 与打包验证、Linux 原生构建的 AppImage/deb/ZIP、Android 测试/lint/Release APK，并核对六个资产的版本、签名边界、大小与 SHA256。推送经核对的源码与标签，发布英文后中文的 GitHub Release；下载远端六个资产再次校验。发布归档为 `archive/20260907-113605-dev-0.5.15-release/`。当前主机不构建 macOS，也不把开发证书 APK 描述为商店签名。
+
+## 2026-09-06 双端正常流程稳定性校准
+
+最新 Build 连续性与协议头兼容见[本轮计划](../archive/20260906-223658-build-response-continuity/plan.md)：统一有界恢复、原请求重试边界、协议完成性、请求/响应头及GUI流事件身份保护；保留此前上下文计量、缓存、玻璃交互和生产安装状态。
+
+该增量已完成：中断/错误时保存公开回复片段；最终编译、39组相关验证、实际HTTP Build18/18及Electron18/18（含完整进程冷启）通过。[验收记录](../archive/20260906-223658-build-response-continuity/REPORT.md)保留全部失败复现、修复原因、最终身份及未打包/未安装边界。
+
+最新 GUI 上下文增量见[真实计量计划](../archive/20260906-214235-context-inspector-accounting/plan.md)：区分服务端实测与本地分项估算，修复 request/Build/会话归属、计量覆盖和 GUI 晚回包，并用实际 HTTP Build 和 Electron 窗口校准。此前 Build 缓存增量见[性能计划](../archive/20260906-211514-build-cache-performance/plan.md)；服务端零缓存仍不作为阻塞条件。
+
+当前增量：list 外框/裁剪圆角统一为 25px；最新外拉需求改为按受力方向扩展相应边缘，反侧固定，维持 4px 限幅、按压内缩和 80ms 长按。同步完成 Build 首轮前缀保留、owner 历史分页与 Flow 启动立即取消修复，再共同冻结为 `package-final-context-radius` 验证，不用旧包代替。
+
+新增长对话检查见[长对话计划](../archive/20260906-124619-user-flow-stability/remote-flow-queue/long-conversation/plan.md)：缓存字段、会话计数归属/持久化与 owner 分页修复已进入最终 95F391A6 包。实际 UI/IPC/HTTP/重启 21/21、即时旧回包补充 15/15、快速取消 Flow 36/36 通过。1,200 条历史正文/身份/时间戳冷加载通过；真实 APInebula 仍有 Build 内零缓存命中，不能把 fixture 计数或前缀稳定当每轮命中。
+
+最新追加：PC 弹窗弹性形变上限为 4px，PC 长按拖动激活时间缩短为 80ms；其余点击/拖动逻辑、动画时长与移动端参数保持不变。中间 `package-final-4px` 已完成源到包核验及 16 项菜单校准，现独立生成组合参数包 `package-final-4px-80ms` 并测量实际形变和激活时刻；详见[本轮记录](../archive/20260906-124619-user-flow-stability/remote-flow-queue/pc-popup-4px/report.md)。此次不安装 MSI。
+
+当前执行计划与验收矩阵见 [本轮计划](../archive/20260906-124619-user-flow-stability/plan.md)。先复现供应商通信、Android 生命周期和桌面渲染问题，再完成源码门禁、独立 unpack 与模拟器实测；现有视觉和用户数据保持，完成状态以本轮实际证据更新。
+
+追加双端队列与 Flow 的执行合同见[远程阶段计划](../archive/20260906-124619-user-flow-stability/remote-flow-queue/plan.md)：共同命令/运行所有者、双端可见可管理、目录通知、按 ID 管理、异步接受后清草稿、按会话隔离以及冷启动恢复。2026-09-06 实包发现的跨目标旧索引、Flow 预启动竞态和移动编辑问题已纳入修复；当前继续执行最后构建、实际配对与用户报告的无响应调查。此前阶段通过不能代替后续变更的最终验收。
+
+## 2026-09-05 全面接手与证据修复
+
+旧记录中“已经解决”“UAC 未确认”的结论不能作为当前状态：已复现原 APK 形状异常，并查明 MSI 参数拆分及错误重装标记。当前需求逐项状态、执行证据、产物与安装结果统一见 [修复记录](../archive/20260905-171101-glass-recovery/recovery-report.md) 和 [需求对照](../archive/20260905-171101-glass-recovery/requirements.md)。以下保留历史计划，不再据此判定本轮交付完成。
+
+## 2026-09-04 弹窗选中色块层级复核增量
+
+1. 完成：复核弹窗内容层规则对 `liquid-menu-color-block` 的影响。
+2. 完成：为选中色块恢复绝对定位与 z-index 0，使其与 optical canvas 同属承载玻璃底层。
+3. 完成：扩展 PC 玻璃迁移契约，防止色块被提升到内容层或参与布局。
+4. 完成：Desktop build、PC 玻璃契约、新式 Select 契约与真实 Electron renderer smoke 通过。
+5. 待发布：同版本 MSI/APK 需下次发行构建时重新生成，真机视觉仍待设备条件。
+
+## 2026-09-04 dev-0.5.15 移动会话恢复与双端液态弹窗
+
+1. 完成：为移动端本地对话增加持久化最近对话 ID，并在冷启动、新建、切换和归档时写入。
+2. 完成：本地 Agent 运行时拦截根返回并转后台，保留活动状态。
+3. 完成：移动端左侧栏浮块抬起右移 3dp，模型/供应商浮块边带增加 2dp。
+4. 完成：双端弹窗统一强化液态玻璃，弹窗内选项内容不随指针移动，色块负责点击移动/长按跟踪并在到位后立即提交，不等待额外落地；弹窗承载玻璃随拖动微量弹性缩放，PC 设置大弹窗内嵌套选项同步。
+5. 完成：双端所有液态弹窗关闭先收缩回发起位置/0.62 再移除，不再闪现退出。
+6. 完成：提交按钮图标改为主题语义色，修复暗色图标误用。
+7. 完成：Android 273/273 JVM、Vital Lint、R8、Release assembly；PC build + test:desktop:built（1708/1708 主验证 + pcGlassMigrationVerify）。
+8. 完成：Windows 0.5.15 MSI/ZIP 包装与 packaged smoke、MSI 管理映像 22+12、per-user 安装验证；机器级 Program Files 升级因 UAC 取消仍待用户管理员确认。
+9. 待后续：真机/设备视觉、完整机器级安装态、完整 `test:full-release` 与远端发布。
+
 ## 2026-09-01 dev-0.5.13 移动端设置返回按钮玻璃画布
 
 1. 完成：定位设置主页及所有子页共用的 36dp 顶栏返回按钮，其按钮等大 RenderNode 会截断按压浮起、高光、阴影与折射外沿。
@@ -39,6 +85,16 @@
 5. 完成：Desktop 构建、1683 项最终主断言、版本一致性和 diff 检查。
 
 # Implementation Plan: Newmark Agent dev-0.5.8 连续空响应恢复与无动效历史展开
+
+## 2026-09-04 交互泛光压入承载玻璃层
+
+1. 完成：复核 PC 弹窗泛光 Canvas 的 DOM stacking、混合模式、裁剪和动态挂载边界。
+2. 完成：将 PC 弹窗泛光收敛为承载玻璃内部 z-index 0 surface pass，动态弹窗统一通过 MutationObserver 接入。
+3. 完成：将 Android 通用玻璃与按钮泛光从 `drawWithContent` 后置绘制迁移到 `drawBackdrop` `onDrawSurface`。
+4. 完成：保留弹窗受限拖动/点击 `layerBlock` 变形，使形变与泛光共享同一玻璃 RenderNode。
+5. 完成：Desktop build/PC 契约与 Android 273 项 JVM 测试通过；真机逐帧视觉验收作为未完成边界记录。
+6. 完成：PC 活动浮块 Canvas 首子节点化、明确层级和 radius token；泛光位置纳入 surface cache key，真实 Electron 交互 smoke 验证指针移动会重绘底层玻璃 Canvas。
+7. 待发布：现有 0.5.15 APK/MSI 未包含本轮 PC 增量，下一次发行构建时重新打包。
 
 ## 2026-08-28 dev-0.5.10 全移动玻璃响应与 Windows 安装
 

@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   onStartupStatus: (callback: (payload: Record<string, unknown>) => void) => {
     ipcRenderer.on('startup:status', (_event: unknown, payload: Record<string, unknown>) => callback(payload));
   },
-  sendMessage: (message: string | Record<string, unknown>, target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:send', message, target),
+  sendMessage: (message: string | Record<string, unknown>, target?: string | Record<string, unknown>, options?: Record<string, unknown>) => ipcRenderer.invoke('agent:send', message, target, options),
   enqueueGuide: (envelope: Record<string, unknown>) => ipcRenderer.invoke('agent:enqueueGuide', envelope),
   queueAction: (action: string, input: Record<string, unknown>, target: string | Record<string, unknown>) => ipcRenderer.invoke('agent:queueAction', action, input, target),
   checkpointConversation: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:checkpointConversation', request),
@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('api', {
   stopConversation: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:stopConversation', request),
   setWorkRunExpanded: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:setWorkRunExpanded', request),
   sendPrompt: (message: string, _model?: string) => ipcRenderer.invoke('agent:sendPrompt', message),
-  setMode: (mode: string) => ipcRenderer.invoke('agent:setMode', mode),
+  setMode: (mode: string, target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:setMode', mode, target),
   setModel: (model: string) => ipcRenderer.invoke('agent:setModel', model),
   setIntelligence: (tier: string) => ipcRenderer.invoke('agent:setIntelligence', tier),
   setInputMode: (mode: string, target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:setInputMode', mode, target),
@@ -47,7 +47,7 @@ contextBridge.exposeInMainWorld('api', {
   browserControl: (request: Record<string, unknown>) => ipcRenderer.invoke('browser:control', request),
   computerUseState: (target?: Record<string, unknown>) => ipcRenderer.invoke('agent:computerUseState', target),
   setComputerUseEnabled: (target: Record<string, unknown>, enabled: boolean) => ipcRenderer.invoke('agent:setComputerUseEnabled', target, enabled),
-  runFlow: (name: string, input?: string, start?: number) => ipcRenderer.invoke('flow:run', name, input, start),
+  runFlow: (name: string, input?: string, start?: number, target?: string | Record<string, unknown>) => ipcRenderer.invoke('flow:run', name, input, start, target),
   resumeFlow: (response: string, target?: string | Record<string, unknown>) => ipcRenderer.invoke('flow:resume', response, target),
   guideFlow: (message: string, target?: string | Record<string, unknown>) => ipcRenderer.invoke('flow:guide', message, target),
   stopFlow: (target?: string | Record<string, unknown>) => ipcRenderer.invoke('flow:stop', target),

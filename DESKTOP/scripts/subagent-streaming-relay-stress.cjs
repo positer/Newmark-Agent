@@ -30,6 +30,15 @@ async function main() {
   fs.mkdirSync(TEST_ROOT, { recursive: true });
   const agent = new Agent(TEST_ROOT);
   agent.subagents.reset();
+  // The production child resolves its accepted deployment before opening a
+  // stream. Register the fixture model just as a real configured provider is.
+  agent.config.set('models', 'providers', [{
+    id: 'relay-fixture', name: 'Relay fixture', base_url: 'https://relay.invalid/v1',
+    api_key: 'fixture', protocol: 'openai', enabled: true,
+    models: [{ name: 'test-model', enabled: true, max_tokens: 128000, thinking: false,
+      capabilities: ['text_input', 'text_output', 'tool_use'],
+      validation: { level: 'standard', status: 'verified', capabilities: { text_input: true, text_output: true, tool_use: true } } }],
+  }]);
   const provider = new FakeProvider(['streaming peer reply with several chunks']);
   agent.engineModel = () => provider;
   agent.setModel('test-model');

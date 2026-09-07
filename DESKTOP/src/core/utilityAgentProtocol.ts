@@ -66,7 +66,7 @@ export interface UtilityHostToolResult {
 export type UtilityAgentRequest =
   | { id: string; method: 'ping' }
   | { id: string; method: 'prompt'; params: UtilityPromptRequest }
-  | { id: string; method: 'snapshot'; params: { target: ConversationRuntimeTarget } }
+  | { id: string; method: 'snapshot'; params: { target: ConversationRuntimeTarget; options?: { window?: number; before?: number } } }
   | { id: string; method: 'rewind'; params: { target: ConversationRuntimeTarget; messageIndex: number } }
   | { id: string; method: 'stop'; params: { target: ConversationRuntimeTarget; runId?: string } }
   | { id: string; method: 'guide'; params: { target: ConversationRuntimeTarget; envelope: ConversationInputEnvelope } }

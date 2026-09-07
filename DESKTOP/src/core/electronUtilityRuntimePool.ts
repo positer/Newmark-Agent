@@ -16,7 +16,7 @@ export interface ElectronTargetRuntimeClient {
   subscribe(listener: (event: AgentWorkEvent) => void): () => void;
   setHostToolHandler(handler: UtilityHostToolHandler | null): void;
   prompt(params: UtilityPromptRequest): Promise<UtilityAgentPromptResult>;
-  snapshot(): Promise<UtilityAgentSnapshotResult>;
+  snapshot(options?: { window?: number; before?: number }): Promise<UtilityAgentSnapshotResult>;
   rewind(messageIndex: number): Promise<UtilityConversationRewindResult>;
   requestStop(runId?: string): Promise<UtilityAgentStopResult>;
   enqueueGuide(envelope: ConversationInputEnvelope): Promise<GuideReceipt>;
@@ -123,13 +123,18 @@ export class ElectronUtilityRuntimePool {
     }
   }
 
-  async snapshot(target: ConversationRuntimeTarget): Promise<UtilityAgentSnapshotResult> {
+  async snapshot(target: ConversationRuntimeTarget, options: { window?: number; before?: number } = {}): Promise<UtilityAgentSnapshotResult> {
     const entry = await this.acquire(normalizeConversationTarget(target));
     let scheduleIdle = false;
     try {
-      if (entry.stopIntent) return this.supervisorSnapshot(entry);
-      const result = await entry.client.snapshot();
-      entry.lastSnapshot = result;
+      const customWindow = options.before != null || (options.window != null && options.window !== 200);
+      if (entry.stopIntent) {
+        if (customWindow) throw new Error('Earlier history is temporarily unavailable while this conversation is stopping. Retry after it stops.');
+        return this.supervisorSnapshot(entry);
+      }
+      const result = await entry.client.snapshot(options);
+      // A fetched older page must not replace the latest supervisor snapshot.
+      if (!customWindow) entry.lastSnapshot = result;
       if (result.runtime?.runId) entry.lastRunId = result.runtime.runId;
       if (result.runtime?.generation) entry.lastGeneration = result.runtime.generation;
       scheduleIdle = !result.runtime?.running && !result.runtime?.stopRequested;
@@ -253,7 +258,7 @@ export class ElectronUtilityRuntimePool {
     action: ConversationQueueAction,
     input: ConversationQueueActionInput = {},
   ): Promise<Record<string, unknown>> {
-    const entry = await this.acquireExisting(target);
+    const entry = await this.acquire(normalizeConversationTarget(target));
     if (!entry || !entry.client.queueAction) throw new Error('Target conversation is not running');
     try {
       return await entry.client.queueAction(action, input);

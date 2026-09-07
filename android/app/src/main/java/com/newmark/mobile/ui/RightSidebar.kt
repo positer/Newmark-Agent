@@ -1,5 +1,13 @@
 package com.newmark.mobile.ui
 
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.wrapContentSize
+
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color as AndroidColor
@@ -11,6 +19,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.RenderProcessGoneDetail
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -62,10 +71,11 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -74,6 +84,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.zIndex
@@ -111,17 +122,23 @@ import com.newmark.mobile.ui.components.MarkdownBody
 import com.newmark.mobile.ui.theme.LocalNewmarkColors
 import com.newmark.mobile.ui.theme.scaledGlassAlpha
 import com.newmark.mobile.ui.theme.NewmarkLightThemeColors
+import com.newmark.mobile.ui.theme.NewmarkThemeColors
+import com.newmark.mobile.ui.components.liquidPopupShell
 import com.newmark.mobile.ui.components.liquidGlassModifier
 import com.newmark.mobile.ui.components.glassButtonSurface
 import com.newmark.mobile.ui.components.liquidHoldDragGesture
 import com.newmark.mobile.ui.components.DialogBackdropBlur
 import com.newmark.mobile.ui.components.MobilePopupShape
 import com.newmark.mobile.ui.components.MobileInteractionGlassEdge
-import com.newmark.mobile.ui.components.liquidMotionDeformation
+import com.newmark.mobile.ui.components.liquidMotionDeformationDeferred
 import com.newmark.mobile.ui.components.liquidSelectionMorph
 import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
 import com.newmark.mobile.ui.components.resistedLiquidBoundaryPosition
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
+import com.newmark.mobile.ui.components.rememberLiquidContactState
+import com.newmark.mobile.ui.components.rememberLiquidDragFollower
+import com.newmark.mobile.ui.components.rememberLiquidPopupExit
+import com.newmark.mobile.ui.components.liquidPopupExit
 import com.newmark.mobile.ui.components.LocalSidebarGestureLock
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.newmark.mobile.vm.ChatViewModel
@@ -156,6 +173,20 @@ private fun availableRightTabs(remoteMode: Boolean): List<RightSidebarTab> = if 
 private const val BrowserTextScript =
     "(function(){var b=document.body;return b?(b.innerText||b.textContent||''):'';})()"
 
+/** Renderer loss and Compose disposal can arrive for the same instance. */
+private class ManagedBrowserWebView(context: Context) : WebView(context) {
+    private var released = false
+    fun release(stopPendingLoad: Boolean = true) {
+        if (released) return
+        released = true
+        visibility = View.GONE
+        if (stopPendingLoad) stopLoading()
+        (parent as? android.view.ViewGroup)?.removeView(this)
+        removeAllViews()
+        destroy()
+    }
+}
+
 private fun WebView.applyNewmarkBrowserSettings() {
     setBackgroundColor(AndroidColor.TRANSPARENT)
     settings.javaScriptEnabled = true
@@ -187,8 +218,15 @@ private fun bindBrowserClients(
     webView: WebView,
     session: BrowserSessionState,
     onPageSettled: (() -> Unit)? = null,
+    onRendererGone: (WebView) -> Unit,
 ) {
     webView.webViewClient = object : WebViewClient() {
+        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+            session.onNavigationError("网页渲染进程已结束，可重新加载网页", false, false)
+            onPageSettled?.invoke()
+            onRendererGone(view)
+            return true
+        }
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val target = BrowserUrlPolicy.normalizeNavigation(request.url.toString())
             return if (target != null) {
@@ -253,23 +291,25 @@ private fun bindBrowserClients(
             isUserGesture: Boolean,
             resultMsg: android.os.Message,
         ): Boolean {
-            val popup = WebView(context).apply {
+            val popup = ManagedBrowserWebView(context).apply {
                 settings.javaScriptEnabled = view.settings.javaScriptEnabled
                 settings.domStorageEnabled = view.settings.domStorageEnabled
                 webViewClient = object : WebViewClient() {
+                    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                        (view as ManagedBrowserWebView).release(stopPendingLoad = false)
+                        return true
+                    }
                     override fun onPageStarted(popupView: WebView, url: String, favicon: android.graphics.Bitmap?) {
                         BrowserUrlPolicy.normalizeNavigation(url)?.let {
                             session.navigate(it)
-                            popupView.stopLoading()
-                            popupView.destroy()
+                            (popupView as ManagedBrowserWebView).release()
                         }
                     }
 
                     override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
                         BrowserUrlPolicy.normalizeNavigation(request.url.toString())?.let {
                             session.navigate(it)
-                            popupView.stopLoading()
-                            popupView.destroy()
+                            (popupView as ManagedBrowserWebView).release()
                             return true
                         }
                         return true
@@ -303,7 +343,7 @@ class BackgroundBrowserHost(
     private val session: BrowserSessionState,
     private val correctOcr: suspend (String, String) -> String = { _, _ -> "" },
 ) : Closeable {
-    private val webView = WebView(context.applicationContext).apply {
+    private val webView = ManagedBrowserWebView(context.applicationContext).apply {
         applyNewmarkBrowserSettings()
         visibility = View.GONE
     }
@@ -311,6 +351,7 @@ class BackgroundBrowserHost(
     private var settled = CompletableDeferred<Unit>().apply { complete(Unit) }
     private var handledCommandId = -1L
     private var closed = false
+    val isClosed: Boolean get() = closed
     private val recognitionHandler: suspend (String, Int) -> JSONObject = { url, maxChars ->
         val receipt = recognition.recognize(url, maxChars)
         val raw = receipt.optString("text")
@@ -327,9 +368,10 @@ class BackgroundBrowserHost(
     }
 
     init {
-        bindBrowserClients(context.applicationContext, webView, session) {
-            if (!settled.isCompleted) settled.complete(Unit)
-        }
+        bindBrowserClients(context.applicationContext, webView, session,
+            onPageSettled = { if (!settled.isCompleted) settled.complete(Unit) },
+            onRendererGone = { webView.release(stopPendingLoad = false); close() },
+        )
         session.bindRecognition(recognitionHandler)
     }
 
@@ -387,11 +429,7 @@ class BackgroundBrowserHost(
         closed = true
         session.unbindRecognition(recognitionHandler)
         recognition.close()
-        webView.stopLoading()
-        webView.loadUrl("about:blank")
-        webView.clearHistory()
-        webView.removeAllViews()
-        webView.destroy()
+        webView.release()
     }
 }
 
@@ -426,11 +464,7 @@ fun MobileRightSidebar(
     // backdrop blur, while the panel itself is a tinted carrier rather than a
     // full-height refractive lens. A large lens produces a mirrored vertical
     // band while the sidebar is only half revealed.
-    val panelSurface = if (p == NewmarkLightThemeColors) {
-        p.bgTertiary.copy(alpha = 0.98f)
-    } else {
-        p.bgTertiary.copy(alpha = scaledGlassAlpha(0.74f, com.newmark.mobile.ui.theme.DefaultGlassAlpha))
-    }
+    val panelSurface = rightSidebarCarrierColor(p)
     Column(
         modifier = modifier
             .width(visibleWidth)
@@ -490,6 +524,13 @@ fun MobileRightSidebar(
     }
     selectedSubagent?.let { agent -> SubagentHistoryDialog(agent, onDismiss = { selectedSubagent = null }) }
 }
+
+private fun rightSidebarCarrierColor(p: NewmarkThemeColors): Color =
+    if (p == NewmarkLightThemeColors) {
+        p.bgTertiary.copy(alpha = 0.98f)
+    } else {
+        p.bgTertiary.copy(alpha = scaledGlassAlpha(0.74f, com.newmark.mobile.ui.theme.DefaultGlassAlpha))
+    }
 
 @Composable
 private fun UploadsPanel(tasks: List<WorkspaceUploadProgress>) {
@@ -640,7 +681,7 @@ fun RightSidebarDragPreview(
 }
 
 @Composable
-private fun RightTabs(
+internal fun RightTabs(
     selected: RightSidebarTab,
     tabs: List<RightSidebarTab>,
     expanded: Boolean,
@@ -651,31 +692,35 @@ private fun RightTabs(
     val setSidebarGestureLock = LocalSidebarGestureLock.current
     val scope = rememberCoroutineScope()
     val slotWidth = 34.dp
-    val floatWidth = 44.dp
     val trackHeight = 40.dp
-    val floatHeight = 40.dp
     val density = LocalDensity.current
     val tabBackdrop = rememberLiquidBackdrop()
+    val glassContact = rememberLiquidContactState()
+    val dragFollower = rememberLiquidDragFollower()
     val selectedIndex = tabs.indexOf(selected).coerceAtLeast(0)
     val glassX = remember { Animatable(0f) }
     val tabBounds = remember(tabs) { mutableStateMapOf<Int, Rect>() }
     var activeIndex by remember(tabs) { mutableIntStateOf(selectedIndex) }
     var visualSelectedIndex by remember(tabs) { mutableIntStateOf(selectedIndex) }
     var moving by remember { mutableStateOf(false) }
-    var lifting by remember { mutableStateOf(false) }
-    var landing by remember { mutableStateOf(false) }
+
+
     var draggingGlass by remember { mutableStateOf(false) }
     var draggedGlassX by remember { mutableFloatStateOf(0f) }
-    var draggedGlassVelocityX by remember { mutableFloatStateOf(0f) }
     var flightJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     fun tabLeft(index: Int): Float = tabBounds[index]?.left
         ?: with(density) { index * slotWidth.toPx() }
     fun glassLeft(index: Int): Float = tabLeft(index) - with(density) { MobileInteractionGlassEdge.toPx() }
-    val glassProgress by animateFloatAsState(
-        targetValue = if (landing || lifting) 0f else if (moving) 1f else 0f,
-        animationSpec = tween(if (landing) 240 else 100),
-        label = "rightTabGlassMaterial",
-    )
+    val glassLift = remember { Animatable(0f) }
+    val glassProgress = glassLift.value
+    DisposableEffect(Unit) {
+        onDispose {
+            flightJob?.cancel()
+            dragFollower.cancel()
+            setSidebarGestureLock("right-tab-selector", false)
+            setSidebarGestureLock("right-tab-candidate", false)
+        }
+    }
     LaunchedEffect(selectedIndex, tabs) {
         if (!moving) {
             activeIndex = selectedIndex
@@ -691,23 +736,22 @@ private fun RightTabs(
         flightJob?.cancel()
         activeIndex = index
         setSidebarGestureLock("right-tab-selector", true)
-        if (!redirecting) lifting = true
         moving = true
         flightJob = scope.launch {
+            if (draggingGlass) glassX.snapTo(dragFollower.stopAndRead())
             draggingGlass = false
-            draggedGlassVelocityX = 0f
             if (!redirecting) {
                 glassX.snapTo(glassLeft(selectedIndex))
             }
             val targetX = glassLeft(index)
             val staysInPlace = kotlin.math.abs(glassX.value - targetX) < 0.5f
             runOverlappedLiquidFlight(
-                lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) },
+                lift = { glassLift.animateTo(1f, tween(100)) },
                 move = { if (!staysInPlace) glassX.animateTo(targetX, tween(380, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f))) },
-                onLandingStarted = { landing = true },
-                land = { delay(240) },
+                onLandingStarted = {},
+                land = { glassLift.animateTo(0f, tween(240)) },
             )
-            landing = false
+
             moving = false
             visualSelectedIndex = index
             setSidebarGestureLock("right-tab-selector", false)
@@ -719,15 +763,14 @@ private fun RightTabs(
         flightJob?.cancel()
         activeIndex = index
         setSidebarGestureLock("right-tab-selector", true)
-        if (!redirecting) lifting = true
         moving = true
         flightJob = scope.launch {
+            if (draggingGlass) glassX.snapTo(dragFollower.stopAndRead())
             draggingGlass = false
-            draggedGlassVelocityX = 0f
             if (!redirecting) glassX.snapTo(glassLeft(selectedIndex))
             runOverlappedLiquidFlight(
                 holdKeepsLifted = true,
-                lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) },
+                lift = { glassLift.animateTo(1f, tween(100)) },
                 move = { glassX.animateTo(glassLeft(index), tween(380, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f))) },
                 onLandingStarted = {}, land = {},
             )
@@ -744,9 +787,11 @@ private fun RightTabs(
                     Modifier
                         .width(slotWidth * tabs.size)
                         .height(trackHeight)
+                        .testTag("right-tab-rail")
                         .liquidHoldDragGesture(
                             tabs.size,
                             selectedIndex,
+                            contact = glassContact,
                             onCandidateStart = { setSidebarGestureLock("right-tab-candidate", true) },
                             onCandidateEnd = { setSidebarGestureLock("right-tab-candidate", false) },
                             onTap = { flyTo(indexAt(it.x), commit = true) },
@@ -754,57 +799,79 @@ private fun RightTabs(
                                 val index = indexAt(it.x)
                                 holdAt(index)
                             },
-                            onDrag = { position, delta ->
-                                flightJob?.cancel()
+                            onDrag = { position, _ ->
+                                if (!draggingGlass) {
+                                    flightJob?.cancel()
+                                    dragFollower.startFrom(glassX.value)
+                                    flightJob = scope.launch { glassLift.animateTo(1f, tween(100)) }
+                                }
                                 moving = true
-                                lifting = false
+
                                 draggingGlass = true
                                 activeIndex = indexAt(position.x)
                                 draggedGlassX = with(density) {
+                                    val nominalWidth = tabBounds[activeIndex]?.width ?: 32.dp.toPx()
                                     resistedLiquidBoundaryPosition(
-                                        raw = position.x - floatWidth.toPx() / 2f,
-                                        minimum = -6.dp.toPx(),
-                                        maximum = tabs.size * slotWidth.toPx() - floatWidth.toPx() + 6.dp.toPx(),
-                                        maxDisplacement = 4.dp.toPx(),
+                                        raw = position.x - nominalWidth / 2f - MobileInteractionGlassEdge.toPx(),
+                                        minimum = glassLeft(0),
+                                        maximum = glassLeft(tabs.lastIndex),
+                                        maxDisplacement = 0f,
                                     )
                                 }
-                                draggedGlassVelocityX = delta.x * 60f
+                                dragFollower.updateTarget(draggedGlassX)
                             },
                              onHoldEnd = { _, _ ->
                                  val commit = activeIndex
+                                 flightJob?.cancel()
                                  flightJob = scope.launch {
-                                     lifting = false
-                                     glassX.snapTo(draggedGlassX)
+
+                                     // Landing continues from the displayed,
+                                     // damped frame, never the raw pointer target.
+                                     // A stationary hold keeps its flight frame.
+                                     if (draggingGlass) glassX.snapTo(dragFollower.stopAndRead())
                                      draggingGlass = false
                                      runOverlappedLiquidFlight(
-                                         lift = {},
+                                         lift = { glassLift.animateTo(1f, tween(100)) },
                                          move = { glassX.animateTo(glassLeft(commit), tween(120, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f))) },
-                                         onLandingStarted = { landing = true },
-                                         land = { delay(240) },
+                                         onLandingStarted = {},
+                                         land = { glassLift.animateTo(0f, tween(240)) },
                                      )
-                                    landing = false
+
                                     moving = false
                                     draggingGlass = false
-                                    draggedGlassVelocityX = 0f
                                     visualSelectedIndex = commit
                                     setSidebarGestureLock("right-tab-selector", false)
                                     onSelect(tabs[commit])
                                 }
                             },
                             onCancel = {
+                                dragFollower.cancel()
+                                flightJob?.cancel()
+                                flightJob = scope.launch { glassLift.snapTo(0f) }
                                 moving = false
-                                lifting = false
-                                landing = false
+
+
                                 draggingGlass = false
-                                draggedGlassVelocityX = 0f
                                 setSidebarGestureLock("right-tab-selector", false)
                             },
                         ),
                 ) {
+                    if (moving) {
+                        // Sample only the carrier, never the fixed glyphs:
+                        // refracting the icon row creates a second copy below
+                        // its translucent foreground even with the correct z.
+                        Box(
+                            Modifier.matchParentSize()
+                                .layerBackdrop(tabBackdrop)
+                                .background(rightSidebarCarrierColor(p).compositeOver(p.bgPrimary)),
+                        )
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxHeight()
-                            .then(if (moving) Modifier.layerBackdrop(tabBackdrop) else Modifier),
+                            // Foreground glyphs remain sharp above the lens and
+                            // are excluded from its independent carrier sample.
+                            .zIndex(6f),
                         horizontalArrangement = Arrangement.spacedBy(2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -819,7 +886,9 @@ private fun RightTabs(
                                 modifier = Modifier.onGloballyPositioned { coordinates ->
                                     tabBounds[index] = coordinates.boundsInParent()
                                 },
-                                onClick = {},
+                                glassSurface = false,
+                                pointerClick = false,
+                                onClick = { flyTo(index, commit = true) },
                             )
                         }
                     }
@@ -831,16 +900,17 @@ private fun RightTabs(
                         val landingInset = MobileInteractionGlassEdge * (1f - glassProgress)
                         Box(
                             Modifier
-                                .width(targetWidth + edgeExpansion)
-                                .height(targetHeight + edgeExpansion)
+                                .wrapContentSize(Alignment.TopStart, unbounded = true)
+                                .requiredSize(targetWidth + edgeExpansion, targetHeight + edgeExpansion)
+                                .testTag("right-tab-float")
                                  .graphicsLayer {
-                                     translationX = (if (draggingGlass) draggedGlassX else glassX.value) + with(density) { landingInset.toPx() }
+                                     translationX = (if (draggingGlass) dragFollower.value else glassX.value) + with(density) { landingInset.toPx() }
                                      translationY = (targetBounds?.top ?: with(density) { 6.dp.toPx() }) -
                                          with(density) { (MobileInteractionGlassEdge * glassProgress).toPx() }
                                 }
-                                .liquidMotionDeformation(
-                                    velocityX = if (draggingGlass) draggedGlassVelocityX else glassX.velocity,
-                                    velocityY = 0f,
+                                .liquidMotionDeformationDeferred(
+                                    velocityX = { if (draggingGlass) dragFollower.velocity else glassX.velocity },
+                                    velocityY = { 0f },
                                     density = density.density,
                                 )
                                 .zIndex(5f)
@@ -853,6 +923,14 @@ private fun RightTabs(
                                      blurRadius = 2.dp,
                                      refractionHeight = MobileInteractionGlassEdge,
                                      refractionAmount = 20.dp,
+                                     contact = glassContact,
+                                     contactGeometry = {
+                                         // Reproject the physical contact after every
+                                         // translation, lift and velocity-scale frame.
+                                         glassX.value; glassX.velocity; glassLift.value
+                                         draggingGlass; dragFollower.value; dragFollower.velocity
+                                         tabBounds[activeIndex]
+                                     },
                                  ),
                         )
                     }
@@ -895,16 +973,42 @@ private fun IconButton(
     background: Color = Color.Transparent,
     border: Color = Color.Transparent,
     modifier: Modifier = Modifier,
+    glassSurface: Boolean = true,
+    pointerClick: Boolean = true,
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(50)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
     Box(
-        modifier.size(width = 32.dp, height = 28.dp).clip(shape).background(background)
-            .border(1.dp, border, shape).clickable(
-                interactionSource = remember { MutableInteractionSource() },
+        modifier.size(width = 32.dp, height = 28.dp)
+            .then(if (glassSurface) Modifier.liquidGlassModifier(
+                shape = shape,
+                alpha = 0f,
+                surfaceColor = background,
+                refractionHeight = if (pressed) MobileInteractionGlassEdge else 0.dp,
+                refractionAmount = if (pressed) 18.dp else 0.dp,
+                blurRadius = if (pressed) 2.dp else 0.dp,
+                pointerGlow = true,
+                ambientHighlight = pressed,
+            ) else Modifier)
+            // Transparent is transparent black; replacing its alpha with 1
+            // makes an opaque black button. AccentSoft must retain its alpha
+            // too, otherwise its RGB matches the selected icon exactly.
+            .clip(shape).background(background.copy(alpha = background.alpha * if (pressed) 0.18f else 1f))
+            .border(1.dp, border, shape)
+            .then(if (pointerClick) Modifier.clickable(
+                interactionSource = interaction,
                 indication = null,
                 onClick = onClick,
-            ),
+            ) else Modifier.semantics {
+                // The parent rail owns physical taps and held drags. A child
+                // clickable would consume UP in Main before that rail sees it.
+                // Keep an actionable tab for accessibility without a second
+                // physical pointer owner competing with the 300ms hold.
+                role = Role.Tab
+                this.onClick(label) { onClick(); true }
+            }),
         contentAlignment = Alignment.Center,
     ) { Icon(icon, label, tint = tint, modifier = Modifier.size(15.dp)) }
 }
@@ -963,7 +1067,7 @@ private fun FilesPanel(vm: DesktopLinkViewModel, onFileOpened: () -> Unit) {
 private fun EditorPanel(vm: DesktopLinkViewModel) {
     val p = LocalNewmarkColors.current
     val lightTheme = p == NewmarkLightThemeColors
-    val editorBackground = if (lightTheme) Color(0xFFF7F8FC) else Color(0xFF0B0D14)
+    val editorBackground = if (lightTheme) Color(0xFFF7F8FC) else Color(0xFF141414)
     val gutterBackground = if (lightTheme) Color(0x0B1D243A) else Color(0x06FFFFFF)
     val editorCaret = if (lightTheme) Color(0xFF172033) else Color.White
     val focusRequester = remember { FocusRequester() }
@@ -1245,26 +1349,28 @@ fun SubagentHistoryPage(agent: RemoteSubagent, onBack: () -> Unit) {
 @Composable
 private fun SubagentHistoryDialog(agent: RemoteSubagent, onDismiss: () -> Unit) {
     val p = LocalNewmarkColors.current
-    val (_, predictiveModifier) = predictiveBackMotion(onDismiss, fadeOnly = true)
+    val exit = rememberLiquidPopupExit(onDismiss)
+    val (_, predictiveModifier) = predictiveBackMotion(exit::requestClose, fadeOnly = true)
     val backdrop = rememberLiquidBackdrop()
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = exit::requestClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         DialogBackdropBlur(42.dp)
         Box(Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().layerBackdrop(backdrop))
         Box(predictiveModifier.fillMaxWidth(.82f).fillMaxHeight(.8f).widthIn(max = 680.dp)
-            .liquidGlassModifier(
+            .liquidPopupExit(exit)
+            .liquidPopupShell(
                 backdrop = backdrop,
                 shape = MobilePopupShape,
-                alpha = 0f,
-                blurRadius = 8.dp,
-                refractionHeight = 5.dp,
-                refractionAmount = 8.dp,
-                surfaceColor = Color.Transparent,
+                alpha = 0.18f,
+                blurRadius = 12.dp,
+                refractionHeight = MobileInteractionGlassEdge,
+                refractionAmount = 22.dp,
+                surfaceColor = p.bgSecondary,
             )) {
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("实时历史 — 运行期间自动更新。", color = p.textSecondary, fontSize = 11.sp, modifier = Modifier.weight(1f))
-                    IconButton(LucideIcons.X, "关闭", p.textSecondary, onClick = onDismiss)
+                    IconButton(LucideIcons.X, "关闭", p.textSecondary, onClick = exit::requestClose)
                 }
                 SubagentHistoryContent(agent, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp))
             }
@@ -1312,8 +1418,29 @@ private fun BrowserPanel(
     modifier: Modifier = Modifier,
 ) {
     key(session) {
+        val context = LocalContext.current
+        var startupReady by remember { mutableStateOf(false) }
+        var startupError by remember { mutableStateOf("") }
+        LaunchedEffect(visible, session.hasActivity) {
+            if (visible || session.hasActivity) {
+                try {
+                    BrowserStartup.await(context)
+                    startupReady = true
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    startupError = "浏览器暂时无法启动：${error.message.orEmpty()}"
+                }
+            }
+        }
         if (visible || session.hasActivity) {
-            ConversationBrowserPanel(session, visible, localVm, modifier)
+            if (startupReady) {
+                ConversationBrowserPanel(session, visible, localVm, modifier)
+            } else if (visible) {
+                Box(modifier, contentAlignment = Alignment.Center) {
+                    EmptyState(startupError.ifBlank { "正在准备浏览器…" })
+                }
+            }
         }
     }
 }
@@ -1353,6 +1480,7 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
     var webView by remember { mutableStateOf<WebView?>(null) }
     var recognition by remember { mutableStateOf<BrowserRecognition?>(null) }
     var recognitionHandler by remember { mutableStateOf<(suspend (String, Int) -> org.json.JSONObject)?>(null) }
+    var rendererFailed by remember { mutableStateOf(false) }
 
     LaunchedEffect(session.address) {
         if (session.address != address.text) {
@@ -1396,7 +1524,12 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
         Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             EditorToolbarButton(LucideIcons.ArrowLeft, "后退", session.canGoBack) { session.back() }
             EditorToolbarButton(LucideIcons.ArrowRight, "前进", session.canGoForward) { session.forward() }
-            EditorToolbarButton(LucideIcons.RefreshCw, "刷新", webView != null) { session.reload() }
+            EditorToolbarButton(LucideIcons.RefreshCw, "刷新", webView != null || rendererFailed) {
+                if (rendererFailed) {
+                    rendererFailed = false
+                    session.navigate(session.address)
+                } else session.reload()
+            }
             Box(
                 modifier = Modifier.weight(1f).height(30.dp)
                     .background(p.bgPrimary, RoundedCornerShape(8.dp))
@@ -1443,14 +1576,26 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
                 modifier = Modifier.fillMaxWidth().padding(top = 5.dp, bottom = 6.dp),
             )
         }
-        AndroidView(
+        if (rendererFailed) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                EmptyState("网页已停止，可点击刷新重新加载")
+            }
+        } else AndroidView(
             factory = {
-                WebView(context).apply {
+                ManagedBrowserWebView(context).apply {
                     // Route target=_blank/window.open into this conversation's
                     // single browser session so the resulting page keeps the
                     // address bar and Reload action.
                     applyNewmarkBrowserSettings()
-                    bindBrowserClients(context, this, session)
+                    bindBrowserClients(context, this, session, onRendererGone = { failed ->
+                        recognitionHandler?.let(session::unbindRecognition)
+                        recognitionHandler = null
+                        recognition?.close()
+                        recognition = null
+                        if (webView === failed) webView = null
+                        rendererFailed = true
+                        (failed as ManagedBrowserWebView).release(stopPendingLoad = false)
+                    })
                     val handler: suspend (String, Int) -> org.json.JSONObject = { url, maxChars ->
                         val browserRecognition = recognition
                             ?: BrowserRecognition(
@@ -1479,7 +1624,11 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
             update = { view ->
                 // INVISIBLE keeps the warmed WebView mounted and loading, but
                 // guarantees it cannot draw over or intercept sibling tabs.
-                view.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+                val visibility = if (visible) View.VISIBLE else View.INVISIBLE
+                if (view.visibility != visibility) {
+                    view.visibility = visibility
+                    if (visible) view.onResume() else view.onPause()
+                }
             },
             modifier = Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(8.dp)).border(1.dp, p.border2, RoundedCornerShape(8.dp)),
         )
@@ -1490,13 +1639,7 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
             recognitionHandler = null
             recognition?.close()
             recognition = null
-            webView?.apply {
-                stopLoading()
-                loadUrl("about:blank")
-                clearHistory()
-                removeAllViews()
-                destroy()
-            }
+            (webView as? ManagedBrowserWebView)?.release()
             webView = null
         }
     }

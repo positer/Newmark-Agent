@@ -2,8 +2,11 @@ package com.newmark.mobile.ui
 
 import com.newmark.mobile.data.ModelOption
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import java.io.File
 import org.junit.Test
@@ -42,7 +45,25 @@ class InputComposerAndModelMenuContractTest {
         val screenState = source.substringAfter("fun ChatScreen(").substringBefore("private fun ChatTopBar(")
         val composer = source.substringAfter("private fun InputArea(").substringBefore("private fun InputCompositeMenuOverlay(")
 
-        assertTrue(screenState.contains("mutableStateOf(TextFieldValue())"))
+        val draftState = source.substringAfter("internal class ConversationComposerDraft {")
+            .substringBefore("internal fun queueOrderAfterDrag(")
+        assertTrue(draftState.contains("mutableStateOf(TextFieldValue())"))
+        assertTrue(screenState.contains("var inputValue by draft::inputValue"))
+        val draft = ConversationComposerDraft()
+        val composing = TextFieldValue("你好 abc", selection = TextRange(2), composition = TextRange(3, 6))
+        draft.inputValue = composing
+        assertEquals(composing, draft.inputValue)
+        val rejected = draft.acceptance()
+        val moved = composing.copy(selection = TextRange(4, 6))
+        draft.inputValue = moved
+        rejected(false)
+        assertEquals(moved, draft.inputValue)
+        assertEquals(TextRange(3, 6), draft.inputValue.composition)
+        val oldAcceptance = draft.acceptance()
+        val moreText = TextFieldValue("你好 abcde", selection = TextRange(8), composition = TextRange(3, 8))
+        draft.inputValue = moreText
+        oldAcceptance(true)
+        assertEquals(moreText, draft.inputValue)
         assertTrue(screenState.contains("pass = PointerEventPass.Final"))
         assertTrue(screenState.contains("if (!down.isConsumed && inputBounds?.contains(down.position) != true)"))
         assertTrue(composer.contains("value: TextFieldValue"))
@@ -201,5 +222,14 @@ class InputComposerAndModelMenuContractTest {
         assertTrue(source.contains("val visibleAnchor = activeWindowAnchor?.let { anchor ->"))
         assertTrue(source.contains("inputMenuAnchorInContainer(anchor, container)"))
         assertTrue(source.contains("val bottomAnchorOffset = visibleAnchor.top.toInt() - gapPx - overlaySize.height"))
+    }
+
+    @Test
+    fun submitIconsUseThemeSemanticTextInsteadOfFixedDarkModeIcon() {
+        val source = File("src/main/java/com/newmark/mobile/ui/ChatScreen.kt").readText()
+        val submit = source.substringAfter("private fun SubmitButton(")
+        assertFalse(submit.contains("tint = if (isDark) Color.White"))
+        assertFalse(submit.contains("tint = Color.White"))
+        assertTrue(submit.split("tint = p.textPrimary").size - 1 >= 4)
     }
 }

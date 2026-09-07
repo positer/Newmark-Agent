@@ -20,6 +20,7 @@ import { AsyncProcessResult, runAsyncProcess } from './asyncProcess';
 import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
 import { performanceTimer } from './performanceDiagnostics';
+import { wslRuntimeProcessTreeCommand } from './wslRuntimeProcessTree';
 
 type WorkListener = (event: AgentWorkEvent) => void;
 type TerminalListener = (event: TerminalTakeoverEvent) => void;
@@ -40,6 +41,8 @@ export interface WslRuntimeIdentity {
   pid: number;
   pgid: number;
   sessionId: number;
+  startTimeTicks: string;
+  bootId: string;
 }
 
 const defaultWslCommandRunner: WslCommandRunner = async (args, options) => await new Promise<WslCommandResult>(resolve => {
@@ -48,10 +51,9 @@ const defaultWslCommandRunner: WslCommandRunner = async (args, options) => await
     if (settled) return;
     settled = true;
     clearTimeout(hardTimeout);
-    options.signal?.removeEventListener('abort', abortListener);
     resolve(result);
   };
-  const abortListener = (): void => finish({
+  const aborted = (): WslCommandResult => ({
     status: null,
     stdout: '',
     stderr: '',
@@ -69,20 +71,22 @@ const defaultWslCommandRunner: WslCommandRunner = async (args, options) => await
     timedOut: true,
     overflowed: false,
   }), options.timeoutMs + 200);
-  options.signal?.addEventListener('abort', abortListener, { once: true });
+  if (options.signal?.aborted) { finish(aborted()); return; }
+  // Once a Linux pidfd transaction may have paused its owned processes, external
+  // cancellation must wait for its bounded cleanup. Killing the Windows pipe
+  // mid-transaction could strand a held process. The helper has its own alarm
+  // and TERM/HUP/INT cleanup, and the outer timeout is the final failure bound.
   void runAsyncProcess('wsl.exe', args, {
     timeoutMs: options.timeoutMs,
-    signal: options.signal,
     maxBuffer: 64 * 1024,
     windowsHide: true,
   }).then(finish);
 });
 
 /**
- * Kills one previously verified WSL session/process group and proves that the
- * group no longer exists before its caller may launch a replacement. The bash
- * helper has its own bounded poll loop; the Windows child runner adds a second
- * timeout/cancellation boundary so Electron's event loop is never blocked.
+ * Terminates the verified runtime and its descendants, including detached
+ * tools, through identity-bound Linux pidfds. The historical export name is
+ * retained for callers; no numeric process-group signal is issued.
  */
 export async function terminateWslRuntimeProcessGroup(
   distro: string,
@@ -92,23 +96,18 @@ export async function terminateWslRuntimeProcessGroup(
 ): Promise<void> {
   const identity = normalizeRuntimeIdentity(identityInput);
   if (!identity || identity.pid !== identity.pgid || identity.pgid !== identity.sessionId) {
-    throw new Error(`WSL runtime process group termination refused: unverified pid/pgid/session identity`);
+    throw new Error(`WSL runtime process group termination refused: unverified pid/pgid/session/birth identity`);
   }
   const target = identity.pgid;
-  const command = [
-    `if kill -0 -- "-${target}" 2>/dev/null; then kill -KILL -- "-${target}" 2>/dev/null || { echo 'runtime process group kill failed' >&2; exit 71; }; fi`,
-    `for attempt in {1..24}; do if ! kill -0 -- "-${target}" 2>/dev/null; then printf 'terminated:%s\\n' "${target}"; exit 0; fi; sleep 0.05; done`,
-    `echo 'runtime process group is still alive' >&2`,
-    `exit 72`,
-  ].join('; ');
-  // The Linux poll itself is bounded to about 1.2 s, but starting a second
-  // wsl.exe/bash helper and reaping it can exceed two seconds under Windows
-  // load even while the distribution is already warm. Keep this well below
-  // the 30 s cold-start budget while leaving enough room to verify teardown.
-  const result = await runner(['-d', distro, '--', 'bash', '-lc', command], { timeoutMs: 5_500, signal });
+  const result = await runner(['-d', distro, '--', 'bash', '-lc', wslRuntimeProcessTreeCommand(identity)], { timeoutMs: 8_000, signal });
   if (result.status !== 0 || result.error || result.timedOut || result.aborted || result.overflowed) {
     const detail = String(result.stderr || result.error || `exit ${String(result.status)}`).trim().slice(-500);
     throw new Error(`WSL runtime process group termination failed for pgid ${target}: ${detail || 'unknown helper failure'}`);
+  }
+  let receipt: { terminated?: boolean; method?: string; rootPid?: number } | null = null;
+  try { receipt = JSON.parse(result.stdout.trim()); } catch {}
+  if (receipt?.terminated !== true || receipt.method !== 'pidfd_tree' || receipt.rootPid !== identity.pid) {
+    throw new Error(`WSL runtime process tree termination remains unconfirmed: missing identity-bound completion receipt`);
   }
 }
 
@@ -126,6 +125,10 @@ export class WslAgentClient {
   private remotePid = 0;
   private remotePgid = 0;
   private remoteSessionId = 0;
+  private remoteStartTimeTicks = '';
+  private remoteBootId = '';
+  private restartQuarantined = '';
+  private unconfirmedExit: { generation: number; reason: string } | null = null;
   private startPromise: Promise<void> | null = null;
 
   constructor(
@@ -150,7 +153,7 @@ export class WslAgentClient {
     this.hostToolHandler = handler;
   }
 
-  status(): { enabled: true; connected: boolean; distro: string; pid: number; pgid: number; sessionId: number; error: string } {
+  status(): { enabled: true; connected: boolean; distro: string; pid: number; pgid: number; sessionId: number; startTimeTicks: string; bootId: string; quarantined: boolean; error: string } {
     return {
       enabled: true,
       connected: !!this.child && !this.child.killed,
@@ -158,11 +161,15 @@ export class WslAgentClient {
       pid: this.remotePid,
       pgid: this.remotePgid,
       sessionId: this.remoteSessionId,
+      startTimeTicks: this.remoteStartTimeTicks,
+      bootId: this.remoteBootId,
+      quarantined: !!this.restartQuarantined,
       error: this.lastError,
     };
   }
 
   async start(): Promise<void> {
+    this.throwIfRestartQuarantined();
     if (this.child && !this.child.killed) return;
     if (this.startPromise) return await this.startPromise;
     this.startPromise = this.startInternal();
@@ -225,12 +232,15 @@ export class WslAgentClient {
       try { if (!child.killed) child.kill(); } catch {}
       this.detachChild(child, error);
       this.lastError = error.message;
+      this.restartQuarantined = this.lastError;
       throw error;
     }
     if (this.child !== child || this.childGeneration !== generation) throw new Error('WSL runtime startup identity belonged to a stale generation');
     this.remotePid = identity.pid;
     this.remotePgid = identity.pgid;
     this.remoteSessionId = identity.sessionId;
+    this.remoteStartTimeTicks = identity.startTimeTicks;
+    this.remoteBootId = identity.bootId;
     this.lastError = '';
     } finally {
       stopTimer();
@@ -238,15 +248,23 @@ export class WslAgentClient {
   }
 
   async stop(): Promise<void> {
+    // Pool disposal must not erase an owner whose descendant cleanup was never
+    // confirmed, including after its launcher exit cleared this.child.
+    this.throwIfRestartQuarantined();
     const child = this.child;
     if (!child) return;
     const generation = this.childGeneration;
-    const identity = { pid: this.remotePid, pgid: this.remotePgid, sessionId: this.remoteSessionId };
-    try { await this.request('shutdown', undefined, 250); } catch {}
+    const identity = { pid: this.remotePid, pgid: this.remotePgid, sessionId: this.remoteSessionId, startTimeTicks: this.remoteStartTimeTicks, bootId: this.remoteBootId };
+    // Keep the identity anchor alive until the supervisor has captured all
+    // descendants. A detached tool can outlive a worker that exits first.
+    try { await this.request('shutdown', { supervisorTerminates: true }, 250); } catch {}
+    if (this.childGeneration !== generation) return;
     try {
       await terminateWslRuntimeProcessGroup(this.distro, identity, this.commandRunner);
+      this.confirmTerminatedGeneration(generation);
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
+      this.restartQuarantined = this.lastError;
       throw error;
     }
     if (this.childGeneration !== generation) return;
@@ -290,9 +308,9 @@ export class WslAgentClient {
     return await this.request('snapshot', { target }, 15000) as Record<string, unknown>;
   }
 
-  async snapshotTarget(target: ConversationRuntimeTarget): Promise<Record<string, unknown>> {
+  async snapshotTarget(target: ConversationRuntimeTarget, options: { window?: number; before?: number } = {}): Promise<Record<string, unknown>> {
     await this.start();
-    return await this.request('snapshot', { target: await this.mapTarget(target) }, 15000) as Record<string, unknown>;
+    return await this.request('snapshot', { target: await this.mapTarget(target), options }, 15000) as Record<string, unknown>;
   }
 
   async rewind(target: ConversationRuntimeTarget, messageIndex: number): Promise<WslConversationRewindResult> {
@@ -376,15 +394,17 @@ export class WslAgentClient {
   }
 
   async forceStopRuntimeGroup(signal?: AbortSignal): Promise<'terminated' | 'stale'> {
+    this.throwIfRestartQuarantined();
     const child = this.child;
     const generation = this.childGeneration;
     const identity: WslRuntimeIdentity = {
       pid: this.remotePid,
       pgid: this.remotePgid,
       sessionId: this.remoteSessionId,
+      startTimeTicks: this.remoteStartTimeTicks,
+      bootId: this.remoteBootId,
     };
     if (!child || child.killed) throw new Error('WSL runtime process group termination failed: runtime launcher is not connected');
-    if (!normalizeRuntimeIdentity(identity)) throw new Error('WSL runtime process group termination failed: runtime identity was not recorded');
     for (const [requestId, run] of this.hostToolRuns) {
       if (run.generation !== generation) continue;
       run.controller.abort(new Error('WSL conversation runtime force-restarted'));
@@ -393,8 +413,10 @@ export class WslAgentClient {
     if (this.runtimeTarget) this.hostToolHandler?.cancelTarget?.(this.runtimeTarget.runtimeKey);
     try {
       await terminateWslRuntimeProcessGroup(this.distro, identity, this.commandRunner, signal);
+      this.confirmTerminatedGeneration(generation);
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
+      this.restartQuarantined = this.lastError;
       throw error;
     }
     if (this.childGeneration !== generation) return 'stale';
@@ -405,9 +427,23 @@ export class WslAgentClient {
   }
 
   async forceRestartRuntimeGroup(signal?: AbortSignal): Promise<void> {
+    this.throwIfRestartQuarantined();
     const outcome = await this.forceStopRuntimeGroup(signal);
     if (outcome === 'stale') return;
     await this.start();
+  }
+
+  private throwIfRestartQuarantined(): void {
+    if (this.restartQuarantined) throw new Error(`WSL runtime is quarantined until the app backend is restarted: ${this.restartQuarantined}`);
+  }
+
+  private confirmTerminatedGeneration(generation: number): void {
+    if (this.unconfirmedExit?.generation !== generation) return;
+    if (this.restartQuarantined === this.unconfirmedExit.reason) {
+      this.restartQuarantined = '';
+      this.lastError = '';
+    }
+    this.unconfirmedExit = null;
   }
 
   async terminalState(owner: TerminalTakeoverOwnerFilter, persistenceRoot?: string): Promise<TerminalTakeoverState[]> {
@@ -560,6 +596,12 @@ export class WslAgentClient {
   private handleExit(exitedChild: ChildProcessWithoutNullStreams, code: number | null): void {
     if (this.child !== exitedChild) return;
     this.lastError = this.stderrBuffer || this.lastError;
+    if (this.remoteStartTimeTicks && !this.restartQuarantined) {
+      const reason = 'WSL runtime owner exited before descendant termination was confirmed';
+      this.unconfirmedExit = { generation: this.childGeneration, reason };
+      this.restartQuarantined = reason;
+      this.lastError = reason;
+    }
     const error = new Error(`WSL Agent backend exited (${code ?? 'unknown'}): ${this.lastError || 'no stderr'}`);
     this.detachChild(exitedChild, error);
   }
@@ -570,6 +612,8 @@ export class WslAgentClient {
     this.remotePid = 0;
     this.remotePgid = 0;
     this.remoteSessionId = 0;
+    this.remoteStartTimeTicks = '';
+    this.remoteBootId = '';
     const generation = this.childGeneration;
     for (const [requestId, run] of this.hostToolRuns) {
       if (run.generation !== generation) continue;
@@ -607,7 +651,10 @@ function normalizeRuntimeIdentity(input: Partial<WslRuntimeIdentity> | null | un
   const pgid = Number(input?.pgid || 0);
   const sessionId = Number(input?.sessionId || 0);
   if (![pid, pgid, sessionId].every(value => Number.isSafeInteger(value) && value > 1)) return null;
-  return { pid, pgid, sessionId };
+  const startTimeTicks = String(input?.startTimeTicks || '');
+  const bootId = String(input?.bootId || '').toLowerCase();
+  if (!/^\d+$/.test(startTimeTicks) || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(bootId)) return null;
+  return { pid, pgid, sessionId, startTimeTicks, bootId };
 }
 
 function shellQuote(value: string): string {

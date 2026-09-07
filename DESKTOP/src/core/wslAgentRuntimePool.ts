@@ -15,7 +15,7 @@ export interface WslTargetRuntimeClient {
   subscribe(listener: (event: AgentWorkEvent) => void): () => void;
   setHostToolHandler(handler: WslHostToolHandler | null): void;
   prompt(params: WslAgentPromptRequest): Promise<WslAgentPromptResult>;
-  snapshotTarget(target: ConversationRuntimeTarget): Promise<Record<string, unknown>>;
+  snapshotTarget(target: ConversationRuntimeTarget, options?: { window?: number; before?: number }): Promise<Record<string, unknown>>;
   rewind(target: ConversationRuntimeTarget, messageIndex: number): Promise<WslConversationRewindResult>;
   requestStop(target: ConversationRuntimeTarget, runId?: string): Promise<WslAgentStopResult>;
   enqueueGuide(target: ConversationRuntimeTarget, envelope: ConversationInputEnvelope): Promise<GuideReceipt>;
@@ -126,14 +126,19 @@ export class WslAgentRuntimePool {
     }
   }
 
-  async snapshot(target: ConversationRuntimeTarget): Promise<Record<string, unknown>> {
+  async snapshot(target: ConversationRuntimeTarget, options: { window?: number; before?: number } = {}): Promise<Record<string, unknown>> {
     const normalized = normalizeConversationTarget(target);
     const entry = await this.acquire(normalized);
     let scheduleIdle = false;
     try {
-      if (entry.stopIntent) return this.supervisorSnapshot(entry);
-      const result = await entry.client.snapshotTarget(normalized);
-      entry.lastSnapshot = result;
+      const customWindow = options.before != null || (options.window != null && options.window !== 200);
+      if (entry.stopIntent) {
+        if (customWindow) throw new Error('Earlier history is temporarily unavailable while this conversation is stopping. Retry after it stops.');
+        return this.supervisorSnapshot(entry);
+      }
+      const result = await entry.client.snapshotTarget(normalized, options);
+      // A fetched older page must not replace the latest supervisor snapshot.
+      if (!customWindow) entry.lastSnapshot = result;
       const runtime = result.runtime as { running?: boolean; stopRequested?: boolean } | null | undefined;
       const runtimeIdentity = result.runtime as { runId?: string; generation?: number } | null | undefined;
       if (runtimeIdentity?.runId) entry.lastRunId = runtimeIdentity.runId;
@@ -252,7 +257,7 @@ export class WslAgentRuntimePool {
     action: ConversationQueueAction,
     input: ConversationQueueActionInput = {},
   ): Promise<Record<string, unknown>> {
-    const entry = await this.acquireExisting(target);
+    const entry = await this.acquire(normalizeConversationTarget(target));
     if (!entry || !entry.client.queueAction) throw new Error('Target conversation is not running');
     try {
       return await entry.client.queueAction(entry.target, action, input);
@@ -667,7 +672,14 @@ export class WslAgentRuntimePool {
   private scheduleIdle(entry: RuntimeEntry): void {
     this.touch(entry);
     const ttl = Math.max(10, Number(this.options.idleTtlMs ?? 5 * 60 * 1000));
-    const timer = setTimeout(() => { void this.evictIfIdle(entry.target.runtimeKey, entry.lastUsedAt); }, ttl);
+    const timer = setTimeout(() => {
+      void this.evictIfIdle(entry.target.runtimeKey, entry.lastUsedAt).catch(() => {
+        // Failed cleanup retains the entry and its client's explicit error /
+        // quarantine. A background timer must not turn that target-local
+        // uncertainty into an unhandled rejection in the shared supervisor.
+        // Explicit stopTarget/forceStopTarget callers still receive the error.
+      });
+    }, ttl);
     timer.unref?.();
     entry.idleTimer = timer;
   }

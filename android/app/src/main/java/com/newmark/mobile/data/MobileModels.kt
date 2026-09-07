@@ -169,6 +169,11 @@ data class RemoteWorkEvent(
     val queue: RemoteConversationQueue? = null,
     val queueItems: List<RemoteQueueItem>? = null,
     val queuePaused: Boolean? = null,
+    /** Explicit PC conversation projection, independent of any turn/run identity. */
+    val stateScope: String = "",
+    val inputMode: String = "",
+    val flowRunning: RemoteFlowRunning? = null,
+    val flowSuspension: RemoteFlowSuspension? = null,
     /** 桌面端结构化模型回退信号：from=回退前模型名，to=实际生效模型名。 */
     val fallback: RemoteModelFallback? = null,
 )
@@ -258,6 +263,19 @@ data class RemoteFlowTakeover(
     val promptText: String = "",
     val message: String = "",
     val reason: String = "",
+)
+
+data class RemoteFlowRunning(
+    val name: String = "",
+    val promptText: String = "",
+    val waiting: Boolean = false,
+)
+
+data class RemoteFlowSuspension(
+    val workflowName: String = "",
+    val input: String = "",
+    val reason: String = "",
+    val message: String = "",
 )
 
 data class RemoteRuntimeState(
@@ -363,6 +381,8 @@ object RemotePayloadNormalizer {
         // an explicit empty list is authoritative and must clear stale rows.
         queueItems = value.queueItems?.map(::queueItem),
         queuePaused = value.queuePaused,
+        stateScope = value.stateScope.orEmpty(),
+        inputMode = value.inputMode.orEmpty(),
     )
 
     private fun goal(value: RemoteGoal) = value.copy(objective = value.objective.orEmpty())
@@ -379,20 +399,47 @@ object RemotePayloadNormalizer {
 
     fun queueItems(values: List<RemoteQueueItem>): List<RemoteQueueItem> = values.map(::queueItem)
 
-    /** Apply an id-bearing queue event only to the runtime that emitted it. */
+    fun isConversationStateEvent(event: RemoteWorkEvent): Boolean =
+        event.type == "queue_update" && event.stateScope == "conversation"
+
+    /** Caller must first verify the exact selected workspace/conversation. */
     fun queueUpdateState(
         current: RemoteConversationUiState,
         event: RemoteWorkEvent,
     ): RemoteConversationUiState? {
         val hasQueuePayload = event.queue != null || event.queueItems != null || event.queuePaused != null
-        if (!hasQueuePayload || !RemoteTrackingContract.sameRun(current.runtime?.runId.orEmpty(), event.runId)) {
+        val conversationState = isConversationStateEvent(event)
+        if (!conversationState && (!hasQueuePayload || !RemoteTrackingContract.sameRun(current.runtime?.runId.orEmpty(), event.runId))) {
             return null
         }
         return current.copy(
             queueItems = event.queueItems?.let(::queueItems) ?: current.queueItems,
             queued = event.queue?.let(::queue) ?: current.queued,
             queuePaused = event.queuePaused ?: current.queuePaused,
+            mode = if (conversationState && event.mode in setOf("build", "plan", "chat", "goal", "flow")) event.mode else current.mode,
+            inputMode = if (conversationState && event.inputMode in setOf("guide", "next")) event.inputMode else current.inputMode,
+            // Both nullable fields are always present on the scoped PC projection;
+            // two nulls authoritatively clear a completed/discarded Flow takeover.
+            flow = if (conversationState) projectedFlow(event) else current.flow,
         )
+    }
+
+    private fun projectedFlow(event: RemoteWorkEvent): RemoteFlowTakeover? = when {
+        event.flowRunning != null -> RemoteFlowTakeover(
+            running = true,
+            name = event.flowRunning.name.orEmpty(),
+            promptText = event.flowRunning.promptText.orEmpty(),
+            reason = if (event.flowRunning.waiting) "waiting" else "",
+        )
+        event.flowSuspension != null -> RemoteFlowTakeover(
+            running = true,
+            paused = event.flowSuspension.reason == "interrupted",
+            name = event.flowSuspension.workflowName.orEmpty(),
+            promptText = event.flowSuspension.input.orEmpty(),
+            message = event.flowSuspension.message.orEmpty(),
+            reason = event.flowSuspension.reason.orEmpty(),
+        )
+        else -> null
     }
 
     fun queueItem(value: RemoteQueueItem) = value.copy(

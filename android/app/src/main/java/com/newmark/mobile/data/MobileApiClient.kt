@@ -10,6 +10,7 @@ import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.InputStream
 import java.io.ByteArrayInputStream
 import java.net.URLEncoder
@@ -28,6 +29,10 @@ class MobileApiClient {
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
+
+    // A dropped response can follow a committed mutation. Do not silently
+    // replay its POST on a recovered pooled connection; GET/SSE keep recovery.
+    private val mutationClient = client.newBuilder().retryOnConnectionFailure(false).build()
 
     /** 供 SSE 长连接复用（读超时由流式消费控制） */
     val rawClient: OkHttpClient get() = client
@@ -68,7 +73,7 @@ class MobileApiClient {
      * reconnect resource use and prevents stale callbacks after a device swap.
      */
     private suspend fun executeJson(request: Request): Result<JSONObject> = suspendCancellableCoroutine { continuation ->
-        val call = client.newCall(request)
+        val call = (if (request.method == "POST") mutationClient else client).newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: okhttp3.Call, error: java.io.IOException) {
@@ -146,14 +151,26 @@ class MobileApiClient {
         requestedMode: String = "",
         goalObjective: String = "",
         inputMode: String = "",
+        clientMessageId: String = "",
+        images: List<LocalImageAttachment> = emptyList(),
     ): Result<JSONObject> {
         val body = JSONObject().apply {
-            put("message", message)
+            put("message", if (images.isEmpty()) message else JSONObject().apply {
+                put("text", message)
+                put("images", JSONArray().apply {
+                    images.forEach { image -> put(JSONObject().apply {
+                        put("name", image.name)
+                        put("type", image.mimeType)
+                        put("dataUrl", image.dataUrl)
+                    }) }
+                })
+            })
             conversationId?.let { put("conversationId", it) }
             workspaceId?.takeIf { it.isNotBlank() }?.let { put("workspaceId", it) }
             requestedMode.takeIf { it.isNotBlank() }?.let { put("requestedMode", it) }
             goalObjective.takeIf { it.isNotBlank() }?.let { put("goalObjective", it) }
             inputMode.takeIf { it.isNotBlank() }?.let { put("inputMode", it) }
+            clientMessageId.takeIf { it.isNotBlank() }?.let { put("clientMessageId", it) }
         }
         return post(pair, "/api/mobile/send", body)
     }
@@ -237,7 +254,7 @@ class MobileApiClient {
         action: String,
         id: String = "",
         text: String = "",
-        requestedMode: String = "build",
+        requestedMode: String = "",
         goalObjective: String = "",
         orderedIds: List<String> = emptyList(),
     ): Result<JSONObject> = post(pair, "/api/mobile/conversation-ui-action", JSONObject().apply {

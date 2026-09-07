@@ -64,6 +64,11 @@ class PendingMessageQueue {
     this.messages = [];
     return all;
   }
+  removeWhere(predicate: (message: AgentMessage) => boolean): number {
+    const before = this.messages.length;
+    this.messages = this.messages.filter(message => !predicate(message));
+    return before - this.messages.length;
+  }
   clear(): void { this.messages = []; }
   open(): void { this.accepting = true; }
   closeAndDrain(): AgentMessage[] {
@@ -161,6 +166,10 @@ export class Agent {
       ...this.steeringQueue.drainAll().map(message => ({ message, queueMode: 'steer' as const })),
       ...this.followUpQueue.drainAll().map(message => ({ message, queueMode: 'followUp' as const })),
     ];
+  }
+  removeQueuedMessages(predicate: (message: unknown, queueMode: 'steer' | 'followUp') => boolean): number {
+    return this.steeringQueue.removeWhere(message => predicate(message, 'steer'))
+      + this.followUpQueue.removeWhere(message => predicate(message, 'followUp'));
   }
   waitForIdle(): Promise<void> { return this.activeRun?.promise || Promise.resolve(); }
   abort(): void { this.activeRun?.abortController.abort(); }

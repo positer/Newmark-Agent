@@ -16,7 +16,9 @@ import { executeWorkspaceBash } from './core/nativeBash';
 import { currentAppVersion } from './core/installUpdate';
 import { confirmPairing, ensureMobileToken, lanIpv4, pairingStatus, tailscaleIpv4 } from './core/mobilePairing';
 import { WorkEventCoalescer } from './core/workEventCoalescer';
+import { conversationListEvent } from './core/conversationListEvent';
 import { publicSearchMcpManifest } from './core/searchMcpPool';
+import type { AgentPromptMessage } from './core/conversationKernel';
 
 const PORT = 47890;
 let agent: Agent | null = null;
@@ -45,19 +47,19 @@ export interface HostedMobileServerOptions {
   /** Desktop GUI/runtime-pool events must reach mobile SSE subscribers. */
   subscribeWorkEvents?: (listener: (event: AgentWorkEvent) => void) => (() => void);
   /** Read the GUI runtime-pool state for one exact workspace/conversation. */
-  conversationUiState?: (target: { workspaceId: string; conversationId: string }) => Promise<Record<string, unknown>>;
+  conversationUiState?: (target: { workspaceId: string; conversationId: string }, options?: { window?: number; before?: number }) => Promise<Record<string, unknown>>;
   /** Mutate Goal/Flow state owned by the GUI runtime pool for one exact target. */
   conversationUiAction?: (
     target: { workspaceId: string; conversationId: string },
-    action: 'goal_update' | 'goal_guide' | 'conversation_guide' | 'goal_toggle_pause' | 'goal_clear' | 'flow_pause' | 'flow_resume' | 'flow_guide' | 'conversation_stop' | 'input_mode' | 'queue_enqueue' | 'queue_update' | 'queue_delete' | 'queue_reorder' | 'queue_toggle_pause' | 'queue_guide',
+    action: 'goal_update' | 'goal_guide' | 'conversation_guide' | 'goal_toggle_pause' | 'goal_clear' | 'flow_pause' | 'flow_resume' | 'flow_guide' | 'conversation_stop' | 'mode' | 'input_mode' | 'queue_enqueue' | 'queue_update' | 'queue_delete' | 'queue_reorder' | 'queue_toggle_pause' | 'queue_set_pause' | 'queue_guide' | 'conversation_branch_inspect' | 'conversation_branch_activate' | 'conversation_branch_create' | 'conversation_archive',
     value?: string,
     input?: Record<string, unknown>,
   ) => Promise<Record<string, unknown>>;
   /** Send through the same GUI runtime pool used by the desktop renderer. */
   conversationPrompt?: (
     target: { workspaceId: string; conversationId: string },
-    message: string,
-    options?: { requestedMode?: string; goalObjective?: string; inputMode?: string },
+    message: string | AgentPromptMessage,
+    options?: { requestedMode?: string; goalObjective?: string; inputMode?: string; clientMessageId?: string; flowName?: string; flowStart?: number },
   ) => Promise<Record<string, unknown>>;
 }
 
@@ -122,6 +124,35 @@ function resolveMobileWorkspace(current: Agent, workspaceId: string): WorkspaceI
   const clean = String(workspaceId || '');
   return [...current.workspace.internal, ...current.workspace.external].find(workspace => workspace.id === clean)
     || (current.workspace.current?.id === clean ? current.workspace.current : null);
+}
+
+function hostedCommandTarget(current: Agent, params: Record<string, unknown>): { workspaceId: string; conversationId: string } {
+  const workspaceId = String(params.workspaceId || current.workspace.current?.id || '');
+  const workspace = workspaceId ? resolveMobileWorkspace(current, workspaceId) : null;
+  if (workspaceId && !workspace) throw new Error('Unknown workspace');
+  const explicitConversation = params.conversationId || params.conversation;
+  const conversationId = String(explicitConversation || (workspace ? current.activeConversationIdForWorkspace(workspace) : current.activeConversationId));
+  if (workspace && explicitConversation && !current.hasConversationInWorkspace(conversationId, workspace)) throw new Error('Conversation not found in workspace');
+  return { workspaceId, conversationId };
+}
+
+function promptCommandMessage(input: unknown): string | AgentPromptMessage | null {
+  if (typeof input === 'string') return input.trim() ? input : null;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const message = input as AgentPromptMessage;
+  return typeof message.text === 'string'
+    && (message.text.trim() || (Array.isArray(message.images) && message.images.length > 0)) ? message : null;
+}
+
+function hostedCommandOptions(params: Record<string, unknown>): NonNullable<Parameters<NonNullable<HostedMobileServerOptions['conversationPrompt']>>[2]> {
+  return {
+    requestedMode: String(params.requestedMode || params.mode || ''),
+    goalObjective: String(params.goalObjective || ''),
+    inputMode: String(params.inputMode || ''),
+    clientMessageId: String(params.clientMessageId || ''),
+    flowName: String(params.flowName || params.defaultFlow || ''),
+    flowStart: typeof params.flowStart === 'number' && Number.isFinite(params.flowStart) ? params.flowStart : undefined,
+  };
 }
 
 const MOBILE_EDITABLE_EXTENSIONS = new Set([
@@ -597,14 +628,22 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
             messages: s.messages.slice(-20),
           })),
           archives: agent.listArchives(),
+          ...(hostedConversationUiState ? await hostedConversationUiState(hostedCommandTarget(agent, Object.fromEntries(url.searchParams))) : {}),
         });
         return;
       }
       case '/api/send':
       case '/api/send-prompt': {
         const params = JSON.parse(body || '{}');
-        const message = params.message || '';
+        const message = promptCommandMessage(params.message);
         if (!message) { jsonResponse(res, { error: 'No message' }, 400); return; }
+        if (hostedConversationPrompt) {
+          const result = await hostedConversationPrompt(hostedCommandTarget(agent, params), message, hostedCommandOptions(params));
+          if (pathname === '/api/send-prompt' && Array.isArray(result.tokens)) {
+            jsonResponse(res, result.tokens.map((token: { text?: string }) => token.text || '').join(''));
+          } else jsonResponse(res, result);
+          return;
+        }
         if (params.conversation) agent.setConversation(String(params.conversation));
         const tokens = await agent.process(message);
         if (pathname === '/api/send-prompt') {
@@ -630,7 +669,12 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         return;
       }
       case '/api/mode': {
-        const m = JSON.parse(body || '{}').mode || 'build';
+        const params = JSON.parse(body || '{}');
+        const m = params.mode || 'build';
+        if (hostedConversationUiAction) {
+          jsonResponse(res, await hostedConversationUiAction(hostedCommandTarget(agent, params), 'mode', String(m), params));
+          return;
+        }
         agent.setMode(m as AgentMode);
         jsonResponse(res, { mode: agent.mode });
         return;
@@ -907,6 +951,17 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         });
         return;
       }
+      case '/api/input-mode': {
+        const params = JSON.parse(body || '{}');
+        const inputMode = params.inputMode === 'next' ? 'next' : 'guide';
+        if (hostedConversationUiAction) {
+          jsonResponse(res, await hostedConversationUiAction(hostedCommandTarget(agent, params), 'input_mode', inputMode, params));
+        } else {
+          agent.setInputMode(inputMode);
+          jsonResponse(res, { inputMode: agent.inputMode });
+        }
+        return;
+      }
       case '/api/mobile/web-search': {
         const input = JSON.parse(body || '{}') as { query?: unknown };
         const query = String(input.query || '').trim();
@@ -977,10 +1032,17 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           mobileJson(res, { error: 'Conversation not found in workspace' }, 404);
           return;
         }
-        // GUI conversations normally execute inside isolated runtime pools.
-        // Their durable target state can be newer than the hosted main Agent's
-        // foreground memory, so workspace-bound mobile reads must hydrate a
-        // fresh read-only target Agent from storage.
+        // The GUI owner may contain live deltas not yet persisted. Forward the
+        // requested history window to that same owner, without another slice.
+        if (hostedConversationUiState) {
+          const targetWorkspaceId = ws?.id || current.workspace.current?.id || '';
+          mobileJson(res, await hostedConversationUiState(
+            { workspaceId: targetWorkspaceId, conversationId: String(conversationId) },
+            { window: windowSize, before },
+          ));
+          return;
+        }
+        // Standalone server mode has no GUI runtime owner to delegate to.
         const snapshotAgent = ws ? mobileScopedAgent(ws, String(conversationId)) : current;
         const snapshot = snapshotAgent.getConversationSnapshot(String(conversationId), {
           window: windowSize,
@@ -1136,6 +1198,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         const ws = resolveMobileWorkspace(agent, workspaceId);
         if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
         const created = agent.createConversationInWorkspace(ws, String(params.title || ''));
+        publishServerWorkEvent(conversationListEvent(agent, ws));
         mobileJson(res, {
           ok: true,
           workspace: { id: ws.id, name: ws.name, path: ws.path, isInternal: ws.isInternal },
@@ -1166,8 +1229,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         const params = JSON.parse(body || '{}') as Record<string, unknown>;
         const workspaceId = String(params.workspaceId || '');
         const conversationId = String(params.conversationId || '');
-        const action = String(params.action || '') as 'goal_update' | 'goal_guide' | 'conversation_guide' | 'goal_toggle_pause' | 'goal_clear' | 'flow_pause' | 'flow_resume' | 'flow_guide' | 'conversation_stop' | 'input_mode' | 'queue_enqueue' | 'queue_update' | 'queue_delete' | 'queue_reorder' | 'queue_toggle_pause' | 'queue_guide';
-        const allowed = new Set(['goal_update', 'goal_guide', 'conversation_guide', 'goal_toggle_pause', 'goal_clear', 'flow_pause', 'flow_resume', 'flow_guide', 'conversation_stop', 'input_mode', 'queue_enqueue', 'queue_update', 'queue_delete', 'queue_reorder', 'queue_toggle_pause', 'queue_guide']);
+        const action = String(params.action || '') as Parameters<NonNullable<HostedMobileServerOptions['conversationUiAction']>>[1];
+        const allowed = new Set(['goal_update', 'goal_guide', 'conversation_guide', 'goal_toggle_pause', 'goal_clear', 'flow_pause', 'flow_resume', 'flow_guide', 'conversation_stop', 'mode', 'input_mode', 'queue_enqueue', 'queue_update', 'queue_delete', 'queue_reorder', 'queue_toggle_pause', 'queue_set_pause', 'queue_guide']);
         if (!workspaceId || !conversationId || !allowed.has(action)) {
           mobileJson(res, { error: 'workspaceId, conversationId, and a valid action are required' }, 400);
           return;
@@ -1199,7 +1262,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         const workspaceId = String(params.workspaceId || '');
         const conversationId = String(params.conversationId || '');
         const action = String(params.action || '');
-        const allowed = new Set(['queue_enqueue', 'queue_update', 'queue_delete', 'queue_reorder', 'queue_toggle_pause', 'queue_guide']);
+        const allowed = new Set(['queue_enqueue', 'queue_update', 'queue_delete', 'queue_reorder', 'queue_toggle_pause', 'queue_set_pause', 'queue_guide']);
         if (!workspaceId || !conversationId || !allowed.has(action)) {
           jsonResponse(res, { error: 'workspaceId, conversationId, and a valid queue action are required' }, 400);
           return;
@@ -1210,7 +1273,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         }
         jsonResponse(res, await hostedConversationUiAction(
           { workspaceId, conversationId },
-          action as 'queue_enqueue' | 'queue_update' | 'queue_delete' | 'queue_reorder' | 'queue_toggle_pause' | 'queue_guide',
+          action as 'queue_enqueue' | 'queue_update' | 'queue_delete' | 'queue_reorder' | 'queue_toggle_pause' | 'queue_set_pause' | 'queue_guide',
           String(params.value || ''),
           params,
         ));
@@ -1229,6 +1292,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
         const ok = agent.renameConversation(conversationId, title, ws);
         if (!ok) { mobileJson(res, { ok: false, error: 'Conversation rename failed' }, 404); return; }
+        publishServerWorkEvent(conversationListEvent(agent, ws));
         mobileJson(res, { ok: true, conversations: mobileWorkspaceConversationRows(agent, ws) });
         return;
       }
@@ -1245,6 +1309,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         const pinned = params.pinned === true;
         const ok = agent.setConversationPinned(conversationId, pinned, ws);
         if (!ok) { mobileJson(res, { ok: false, error: 'Conversation pin update failed' }, 404); return; }
+        publishServerWorkEvent(conversationListEvent(agent, ws));
         mobileJson(res, { ok: true, pinned, conversations: mobileWorkspaceConversationRows(agent, ws) });
         return;
       }
@@ -1276,22 +1341,20 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         }
         const ok = current.reorderWorkspaceConversationGroup(conversationIds, ws);
         if (!ok) { mobileJson(res, { ok: false, error: 'Conversation reorder failed' }, 409); return; }
+        publishServerWorkEvent(conversationListEvent(current, ws));
         mobileJson(res, { ok: true, conversations: mobileWorkspaceConversationRows(current, ws) });
         return;
       }
       case '/api/mobile/send': {
         const params = JSON.parse(body || '{}');
-        const message = String(params.message || '');
+        const message = promptCommandMessage(params.message);
         if (!message) { mobileJson(res, { error: 'No message' }, 400); return; }
-        const workspaceId = String(params.workspaceId || '');
-        let requestAgent = agent;
-        let requestWorkspace: WorkspaceInfo | null = agent.workspace.current;
+        const workspaceId = String(params.workspaceId || agent.workspace.current?.id || '');
         let resolvedWorkspace: WorkspaceInfo | null = null;
         if (workspaceId) {
           const ws = resolveMobileWorkspace(agent, workspaceId);
           if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
           resolvedWorkspace = ws;
-          requestWorkspace = ws;
         }
         const conversationId = String(params.conversationId
           || (resolvedWorkspace ? agent.activeConversationIdForWorkspace(resolvedWorkspace) : agent.activeConversationId));
@@ -1301,19 +1364,21 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
             mobileJson(res, { error: 'Conversation not found in workspace' }, 404);
             return;
           }
-          const currentWs = agent.workspace.current;
-          if (!currentWs || path.resolve(currentWs.path) !== path.resolve(ws.path)) {
-            requestAgent = mobileScopedAgent(ws, conversationId);
-          }
         }
-        if (hostedConversationPrompt && resolvedWorkspace) {
-          const result = await hostedConversationPrompt({ workspaceId, conversationId }, message, {
-            requestedMode: String(params.requestedMode || ''),
-            goalObjective: String(params.goalObjective || ''),
-            inputMode: String(params.inputMode || ''),
-          });
+        // The hosted command owns execution and queueing for both IPC and HTTP.
+        // Resolve/authenticate the target without creating a second Agent here.
+        if (hostedConversationPrompt) {
+          const result = await hostedConversationPrompt({ workspaceId, conversationId }, message, hostedCommandOptions(params));
           mobileJson(res, { ok: true, conversationId, ...result });
           return;
+        }
+        let requestAgent = agent;
+        const requestWorkspace: WorkspaceInfo | null = resolvedWorkspace || agent.workspace.current;
+        if (resolvedWorkspace) {
+          const currentWs = agent.workspace.current;
+          if (!currentWs || path.resolve(currentWs.path) !== path.resolve(resolvedWorkspace.path)) {
+            requestAgent = mobileScopedAgent(resolvedWorkspace, conversationId);
+          }
         }
         if (requestAgent === agent && params.conversationId) requestAgent.setConversation(conversationId);
         let scopedRuntimeKey = '';
@@ -1378,6 +1443,12 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           mobileJson(res, { error: 'Conversation not found in workspace' }, 404);
           return;
         }
+        if (hostedConversationUiAction) {
+          const action = pathname === '/api/mobile/conversation-branch-inspect' ? 'conversation_branch_inspect'
+            : pathname === '/api/mobile/conversation-branch-activate' ? 'conversation_branch_activate' : 'conversation_branch_create';
+          mobileJson(res, await hostedConversationUiAction({ workspaceId, conversationId }, action, '', params));
+          return;
+        }
         const scoped = mobileScopedAgent(ws, conversationId);
         if (pathname === '/api/mobile/conversation-branch-inspect') {
           const branchId = String(params.branchId || '');
@@ -1428,13 +1499,18 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           mobileJson(res, { ok: false, error: 'Conversation not found in workspace' }, 404);
           return;
         }
-        // 运行中拒绝：与移动端 running 判定一致（activeConversationId + agent.status 非 idle）
+        if (hostedConversationUiAction) {
+          mobileJson(res, await hostedConversationUiAction({ workspaceId, conversationId }, 'conversation_archive', '', params));
+          return;
+        }
+        // Standalone server fallback; GUI-hosted archive uses its shared owner above.
         if (mobileConversationRuntimeBusy(agent, ws, conversationId)) {
           mobileJson(res, { ok: false, error: 'Conversation is running' }, 423);
           return;
         }
         const filename = await agent.archiveConversationAsync(conversationId, ws);
         if (!filename) { mobileJson(res, { ok: false, error: 'Conversation archive could not be written.' }, 500); return; }
+        publishServerWorkEvent(conversationListEvent(agent, ws));
         mobileJson(res, {
           ok: true,
           fileName: filename,

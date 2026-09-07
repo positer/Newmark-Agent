@@ -1,13 +1,15 @@
 import { LLMProvider } from '../llm/provider';
-import { Agent } from './agent';
+import { Agent, type BuildProviderCache } from './agent';
+import type { SubagentSettlementReceipt } from './subagent';
 import { ProviderProtocol } from './config';
 import { StreamToken } from './types';
 import * as fs from 'fs';
 import * as path from 'path';
 import { terminalTakeoverWorkspaceId } from '../tools/terminalTakeover';
+import { classifyRouteFailure } from './autoRouter';
 import { evaluateToolPolicy, isConcurrencySafeTool } from './toolPolicy';
 import { emitPerformanceEvent, performanceTimer } from './performanceDiagnostics';
-import { emitProviderUsageDiagnostic, emitRequestContextDiagnostic } from './agentKernelDiagnostics';
+import { agentKernelDiagnosticsRequested, emitProviderUsageDiagnostic, emitRequestContextDiagnostic } from './agentKernelDiagnostics';
 import { ToolExposurePlanner, type ToolchainCore } from '../toolchain';
 import {
   MAX_EMPTY_RESPONSE_RETRIES,
@@ -182,6 +184,7 @@ interface NativeAgentInstance {
   prompt(message: KernelMessage | KernelMessage[]): Promise<void>;
   steer(message: unknown): boolean;
   followUp(message: unknown): boolean;
+  removeQueuedMessages?(predicate: (message: unknown, queueMode: 'steer' | 'followUp') => boolean): number;
   abort(): void;
 }
 
@@ -291,6 +294,7 @@ interface KernelTurnOutcome {
   errorMessage: string;
   activity?: boolean;
   thoughtOnly?: boolean;
+  requestReplaySafe?: boolean;
 }
 
 class ProviderRunError extends Error {
@@ -373,13 +377,17 @@ function throwIfKernelAborted(signal?: AbortSignal): void {
 }
 
 export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
+  agent.acknowledgeSubagentSettlementReceipts();
   const stopContextTimer = performanceTimer('context_prepare', { conversationId: agent.activeConversationId });
   const processSignal = agent.activeProcessSignal();
   if (processSignal?.aborted) {
     stopContextTimer();
     throwIfKernelAborted(processSignal);
   }
-  if (!agent.engineModel()) {
+  // One configuration-checked provider slot per Build: retain compatibility
+  // learning and connection pools without sharing them with another Build.
+  const buildProviderCache: BuildProviderCache = {};
+  if (!agent.engineModel(buildProviderCache)) {
     const message = 'No LLM configured. Add provider in Settings > Models.';
     agent.status = 'error';
     agent.saveWorkspaceConversationState();
@@ -426,15 +434,24 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   const initialToolSurface = refreshToolSurface(true);
   const assembledContext = agent.assembleContextV2(initialToolSurface.systemPromptNotice);
   const systemPrompt = assembledContext.text;
+  const peerCacheIdentity = agent.peerRequestCacheIdentity(systemPrompt, agent.cachedToolDefinitions());
+  const peerRequestCache = agent.readPeerRequestCache(peerCacheIdentity);
+  if (peerRequestCache) toolProvisioning.restore(peerRequestCache.initialTools, peerRequestCache.provisionedTools);
   throwIfKernelAborted(processSignal);
-  let providerRequestCount = 0;
-  let bootstrappedCompressionAt = agent.lastCompression?.at || '';
+  // Capture request-only metadata once for this Build. Removing it after the
+  // first tool call rewrites the system prefix before all retained messages.
+  let buildTaskFocusSnapshot: string | undefined = peerRequestCache?.taskFocus;
+  let peerInputCheckpointed = false;
+  let lastRequestReplaySafe = true;
+  // A completed useful provider turn starts a new request recovery budget.
+  // Empty/thinking-only replies and failures never reset that budget.
+  let requestProgressGeneration = 0;
   stopContextTimer();
   const kernel = new NativeAgent({
     streamFn: streamWithNewmarkProvider(agent, KernelStreamCompat),
     toolExecution: 'parallel',
     convertToLlm: (messages: KernelMessage[]) => messages.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'toolResult'),
-    transformContext: async (messages: KernelMessage[], signal?: AbortSignal) => transformContext(agent, messages, signal),
+    transformContext: async (messages: KernelMessage[], signal?: AbortSignal) => transformContext(agent, messages, signal, buildProviderCache),
     resolveTools: () => {
       const definitions = refreshToolSurface().definitions;
       prepareAssistantToolVisibility(agent, definitions);
@@ -445,9 +462,10 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
 
   kernel.state.systemPrompt = systemPrompt;
   kernel.state.model = toKernelModel(agent);
-  kernel.state.tools = toKernelTools(agent, initialToolSurface.definitions, toolProvisioning);
+  kernel.state.tools = toKernelTools(agent, refreshToolSurface().definitions, toolProvisioning);
   kernel.state.messages = toKernelMessages(agent);
   agent.attachAgentKernelRuntime(kernel);
+  agent.flushDirectRootInbox();
   let detachProcessAbort = () => {};
   if (processSignal) {
     const abortKernel = () => kernel.abort();
@@ -475,6 +493,13 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
     let observedActivity = false;
     let observedThought = false;
     const unsubscribe = kernel.subscribe(async event => {
+      if (event.type === 'message_start' && event.message.role === 'assistant') {
+        // A single kernel.prompt can execute several tools before its final
+        // provider reply. Earlier tool progress cannot hide a later empty one.
+        observedActivity = false;
+        observedThought = false;
+        lastAssistant = null;
+      }
       await handleKernelEvent(agent, event, tokens);
       if (event.type === 'message_update') {
         const delta = event.assistantMessageEvent;
@@ -505,15 +530,17 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       const assistant = lastAssistant as Extract<KernelMessage, { role: 'assistant' }> | null;
       const text = assistant ? KernelMessageText(assistant) : '';
       const hasToolCall = !!assistant?.content?.some(content => content.type === 'toolCall');
+      const usableText = !!text.trim() && !agent.isLlmErrorText(text);
       const emptyResponse = !assistant
         || (!text.trim() && !hasToolCall && !observedActivity && String(assistant?.stopReason || '') !== 'aborted');
       return {
         text: emptyResponse ? '[Error] Provider returned an empty response.' : text,
         stopReason: String(assistant?.stopReason || ''),
         errorMessage: String(assistant?.errorMessage || (emptyResponse ? 'Provider returned an empty response.' : '')),
-        activity: observedActivity || !!text.trim() || hasToolCall,
+        activity: observedActivity || usableText || hasToolCall,
         thoughtOnly: observedThought && !text.trim() && !hasToolCall
           && !['error', 'aborted'].includes(String(assistant?.stopReason || '')),
+        requestReplaySafe: lastRequestReplaySafe,
       };
     } finally {
       unsubscribe();
@@ -566,27 +593,80 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       });
     }
     let consecutiveEmptyResponses = 0;
+    let noProgressGeneration = requestProgressGeneration;
+    let routeRetries = 0;
+    const transientRetries = new Set<string>();
     for (;;) {
-      const emptyResponseState = observeEmptyResponseOutcome(consecutiveEmptyResponses, providerTurnIsEmpty(lastTurn));
-      consecutiveEmptyResponses = emptyResponseState.consecutiveEmptyResponses;
-      if (lastTurn.thoughtOnly) {
-        removeTrailingThoughtOnlyAssistant(kernel.state.messages);
+      throwIfKernelAborted(processSignal);
+      if (noProgressGeneration !== requestProgressGeneration) {
+        consecutiveEmptyResponses = 0;
+        noProgressGeneration = requestProgressGeneration;
+      }
+      // Every outcome, including one produced by a route retry, passes through
+      // the same bounded no-progress recovery. Alternating empty/thought-only
+      // responses cannot reset the five-retry allowance.
+      if (providerTurnIsEmpty(lastTurn) || lastTurn.thoughtOnly) {
+        const emptyResponseState = observeEmptyResponseOutcome(consecutiveEmptyResponses, true);
+        consecutiveEmptyResponses = emptyResponseState.consecutiveEmptyResponses;
+        if (!emptyResponseState.retry) {
+          throw new ProviderRunError(`Provider returned an empty response or only hidden reasoning for ${consecutiveEmptyResponses} consecutive requests; the recovery limit was reached.`);
+        }
+        if (lastTurn.thoughtOnly) removeTrailingThoughtOnlyAssistant(kernel.state.messages);
+        else removeTrailingFailedAssistant(agent, kernel.state.messages);
+        const retryNumber = consecutiveEmptyResponses;
+        const reason = lastTurn.thoughtOnly ? 'only hidden reasoning without an answer or tool call' : 'an empty response';
+        const notice = `[Model retry] Provider returned ${reason}; retrying the same deployment (${retryNumber}/${MAX_EMPTY_RESPONSE_RETRIES}) after ${emptyResponseRetryDelayMs(consecutiveEmptyResponses)}ms.`;
+        tokens.push({ type: 'text', text: notice });
+        agent.recordWorkStatus(notice);
+        await agent.waitForPlannedRouteRetry(emptyResponseRetryDelayMs(consecutiveEmptyResponses));
         lastTurn = await runWithCompressionResume([], false);
         continue;
       }
-      if (!emptyResponseState.retry) break;
-      removeTrailingFailedAssistant(agent, kernel.state.messages);
-      const retryNumber = consecutiveEmptyResponses;
-      const notice = `[Model retry] Provider returned an empty response; retrying the same deployment (${retryNumber}/${MAX_EMPTY_RESPONSE_RETRIES}) after ${emptyResponseRetryDelayMs(consecutiveEmptyResponses)}ms.`;
-      tokens.push({ type: 'text', text: notice });
-      agent.recordWorkStatus(notice);
-      await agent.waitForPlannedRouteRetry(emptyResponseRetryDelayMs(consecutiveEmptyResponses));
-      lastTurn = await runWithCompressionResume([], false);
-    }
-    let routeRetries = 0;
-    while (kernelTurnFailed(agent, lastTurn) && routeRetries < 2) {
-      const previous = agent.switchToFallbackModel(lastTurn.errorMessage || lastTurn.text);
-      if (!previous) break;
+      if (!kernelTurnFailed(agent, lastTurn) || lastTurn.requestReplaySafe === false) break;
+
+      const failureText = lastTurn.errorMessage || lastTurn.text;
+      const failure = classifyRouteFailure(failureText);
+      const deployment = agent.activeDeployment();
+      const retryKey = `${requestProgressGeneration}:${deployment?.providerId || ''}:${deployment?.modelId || agent.activeModelName()}`;
+      // Retry-After applies to 503/408 as well as 429; the routing classifier
+      // currently retains it only for rate limits. Never shorten the server's
+      // requested wait to fit our automatic retry budget.
+      const retryAfter = failureText.match(/retry[- ]after\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(ms|s|seconds?)?/i);
+      const retryAfterMs = failure.retryAfterMs ?? (retryAfter
+        ? Number(retryAfter[1]) * ((retryAfter[2] || 's').toLowerCase() === 'ms' ? 1 : 1000) : undefined);
+      const retryDelayMs = retryAfterMs ?? 250;
+      const retryBudgetMs = Math.max(0, Math.min(5000, agent.lastRouteDecision?.retryBudgetMs ?? 5000));
+      const transientFailure = failure.retryable && ['transport', 'timeout', 'server_error', 'rate_limited'].includes(failure.type);
+      if (transientFailure && retryAfterMs !== undefined && retryAfterMs > retryBudgetMs) break;
+      const safeTransient = transientFailure
+        && lastTurn.requestReplaySafe === true && retryDelayMs <= retryBudgetMs;
+      const retryCurrentRequest = async (): Promise<void> => {
+        transientRetries.add(retryKey);
+        removeTrailingFailedAssistant(agent, kernel.state.messages);
+        const notice = `[Model retry] Temporary provider failure; retrying the current request once on the same deployment after ${retryDelayMs}ms.`;
+        tokens.push({ type: 'text', text: notice });
+        agent.recordWorkStatus(notice);
+        await agent.waitForPlannedRouteRetry(retryDelayMs);
+        lastTurn = await runWithCompressionResume([], false);
+      };
+      // Fixed selections have no Auto retry planner. A completed tool from an
+      // earlier subturn does not make the *next*, still-uncommitted request
+      // unsafe to retry; its exact existing messages/results remain in place.
+      if (agent.model !== 'auto' && safeTransient && !transientRetries.has(retryKey)) {
+        await retryCurrentRequest();
+        continue;
+      }
+      const previous = routeRetries < 2 ? agent.switchToFallbackModel(failureText) : null;
+      if (!previous) {
+        if (agent.model === 'auto' && safeTransient && !transientRetries.has(retryKey)) {
+          await retryCurrentRequest();
+          continue;
+        }
+        break;
+      }
+      // The existing Auto same-deployment attempt consumes the same allowance;
+      // our local recovery must not add a second retry after it is exhausted.
+      if (agent.routeTransitionKind() === 'retry_same_deployment') transientRetries.add(retryKey);
       removeTrailingFailedAssistant(agent, kernel.state.messages);
       routeRetries += 1;
       const notice = routeTransitionNotice(agent, previous);
@@ -598,8 +678,14 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         fallback: { from: previous, to: agent.model, providerId: agent.activeDeployment()?.providerId },
       });
       kernel.state.model = toKernelModel(agent);
-      const fallbackToolSurface = refreshToolSurface(true);
-      kernel.state.systemPrompt = [agent.buildSystemPrompt(), fallbackToolSurface.systemPromptNotice].filter(Boolean).join('\n\n');
+      const toolSurfaceChanged = toolSurfaceIdentityForAgent(agent) !== activeToolSurfaceIdentity;
+      const fallbackToolSurface = refreshToolSurface();
+      // A same-deployment retry must retain the original Build system and
+      // provisioned schema sequence, even if a Guide changed the latest task.
+      // Actual deployment or capability transitions still refresh the surface.
+      if (toolSurfaceChanged) {
+        kernel.state.systemPrompt = [agent.buildSystemPrompt(), fallbackToolSurface.systemPromptNotice].filter(Boolean).join('\n\n');
+      }
       kernel.state.tools = toKernelTools(agent, fallbackToolSurface.definitions, toolProvisioning);
       await agent.waitForPlannedRouteRetry();
       lastTurn = await runWithCompressionResume([], false);
@@ -656,45 +742,57 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         const tools = context.tools || [];
         const brokerOnlySurface = tools.length > 0 && tools.every(tool => tool.name === TOOL_PROVISION_NAME || tool.name === 'skill' || ALWAYS_AVAILABLE_AGENT_TOOL_NAMES.has(tool.name));
         currentAgent.beginRouteAttempt();
+        lastRequestReplaySafe = true;
         try {
-          const currentProvider = currentAgent.engineModel();
+          const currentProvider = currentAgent.engineModel(buildProviderCache);
           const currentModelName = currentAgent.activeModelName();
           if (!currentProvider || !currentModelName) throw new Error('No resolved model deployment is available.');
+          if (!peerInputCheckpointed) {
+            currentAgent.checkpointPeerInput();
+            peerInputCheckpointed = true;
+          }
           const { temperature, maxTokens, reasoningEffort } = currentProvider.intelligenceConfig(currentAgent.intelligence);
-          const newmarkMessages = fromKernelMessages(context.messages);
-          const currentCompressionAt = currentAgent.lastCompression?.at || '';
-          const compressionCompleted = !!currentCompressionAt && currentCompressionAt !== bootstrappedCompressionAt;
-          const includeBootstrap = providerRequestCount === 0 || compressionCompleted;
-          // Keep the stable base prompt identical across tool sub-turns. The
-          // request-scoped ledger/bootstrap is needed on the first request
-          // (and once after compression), but re-injecting it on every round
-          // makes otherwise cacheable prompt prefixes look like new prompts.
+          const newmarkMessages = fromKernelMessages(context.messages).map(message => message.role === 'assistant'
+            // Use the same public-content boundary on its first provider
+            // submission and after persistence. Trimming only the durable
+            // copy changes earlier tool-call envelopes on mailbox recovery.
+            ? { ...message, content: currentAgent.sanitizeAssistantOutput(String(message.content || '')) }
+            : message);
+          // Tool results and Guides append to messages; neither mutable task
+          // status nor a growing tool catalog may regenerate this snapshot.
+          // Compression replaces messages explicitly, not the stable system.
+          buildTaskFocusSnapshot ??= buildRequestTaskFocus(currentAgent, context.messages, {
+            activeTools: context.tools || [],
+            toolCatalog: currentAgent.cachedToolDefinitions(),
+          });
+          if (peerCacheIdentity) currentAgent.persistPeerRequestCache({
+            version: 1, identity: peerCacheIdentity, taskFocus: buildTaskFocusSnapshot,
+            ...toolProvisioning.snapshot(),
+          });
           const requestSystemPrompt = [
             context.systemPrompt || '',
-            includeBootstrap || compressionCompleted
-              ? buildRequestTaskFocus(currentAgent, context.messages, {
-                includeBootstrap,
-                compressionCompleted,
-                activeTools: context.tools || [],
-                toolCatalog: currentAgent.cachedToolDefinitions(),
-              })
-              : '',
+            buildTaskFocusSnapshot,
           ].filter(Boolean).join('\n\n');
-          providerRequestCount += 1;
-          if (compressionCompleted) bootstrappedCompressionAt = currentCompressionAt;
-          emitRequestContextDiagnostic({
-            conversationId: currentAgent.activeConversationId,
-            systemPrompt: requestSystemPrompt,
-            messages: newmarkMessages,
-            tools: context.tools || [],
-          });
+          const providerTools = toProviderToolDefinitions(context.tools || []);
+          const usageRequest = currentAgent.beginProviderUsageRequest();
+          currentAgent.recordRequestContext(usageRequest, newmarkMessages, requestSystemPrompt, providerTools, currentModelName);
+          // Sorting/serializing the complete history is diagnostic work, not
+          // required request preparation. A sink can still opt in mid-Build.
+          if (agentKernelDiagnosticsRequested()) {
+            emitRequestContextDiagnostic({
+              conversationId: currentAgent.activeConversationId,
+              systemPrompt: requestSystemPrompt,
+              messages: newmarkMessages,
+              tools: context.tools || [],
+            });
+          }
           for await (const token of currentProvider.chatStreamWithTools(
             currentModelName,
             newmarkMessages,
             requestSystemPrompt,
             temperature,
             maxTokens,
-            toProviderToolDefinitions(context.tools || []),
+            providerTools,
             options?.signal,
             reasoningEffort,
             currentAgent.config.getBool('context', 'provider_session_id')
@@ -706,14 +804,8 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
               emitPerformanceEvent({ stage: 'first_token', durationMs: Date.now() - requestStartedAt, conversationId: currentAgent.activeConversationId });
             }
             if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error(`[NewmarkKernel] provider-token type=${token.type}`);
-            if (options?.signal?.aborted) break;
             if (token.type === 'usage' && token.usage) {
-              currentAgent.recordProviderUsage({
-                input: token.usage.input,
-                output: token.usage.output,
-                cacheRead: token.usage.cacheRead,
-                cacheWrite: token.usage.cacheWrite,
-              });
+              currentAgent.recordProviderUsage(token.usage, usageRequest);
               emitProviderUsageDiagnostic({
                 conversationId: currentAgent.activeConversationId,
                 inputTokens: token.usage.input,
@@ -721,8 +813,12 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
                 cacheReadTokens: token.usage.cacheRead,
                 cacheWriteTokens: token.usage.cacheWrite,
               });
+              if (options?.signal?.aborted) break;
               continue;
             }
+            if (options?.signal?.aborted) break;
+            if ((token.type === 'text' && token.text && !currentAgent.isLlmErrorText(token.text))
+              || (token.type === 'tool_call' && token.toolCall)) lastRequestReplaySafe = false;
             if (token.reasoningContent) {
               const delta = token.reasoningContent.slice(thinking.length);
               thinking = token.reasoningContent;
@@ -796,6 +892,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
           }
           const final = assistantMessage(model, finalContent, finalContent.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop');
           if (!currentAgent.isLlmErrorText(text)) {
+            if (finalContent.some(content => content.type === 'toolCall' || (content.type === 'text' && typeof content.text === 'string' && content.text.trim()))) requestProgressGeneration++;
             if (brokerOnlySurface && !finalContent.some(content => content.type === 'toolCall') && text) currentAgent.markRouteStreamCommitted();
             const durationMs = Math.max(1, Date.now() - requestStartedAt);
             emitPerformanceEvent({ stage: 'provider_request', durationMs, conversationId: currentAgent.activeConversationId });
@@ -824,7 +921,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   }
 }
 
-async function transformContext(agent: Agent, messages: KernelMessage[], signal?: AbortSignal): Promise<KernelMessage[] | { messages: KernelMessage[]; replacementMessages: KernelMessage[] }> {
+async function transformContext(agent: Agent, messages: KernelMessage[], signal?: AbortSignal, providerCache?: BuildProviderCache): Promise<KernelMessage[] | { messages: KernelMessage[]; replacementMessages: KernelMessage[] }> {
   const processSignal = agent.activeProcessSignal();
   if (processSignal?.aborted) return messages;
   if (!agent.config.getBool('context', 'auto_compress')) return messages;
@@ -832,7 +929,7 @@ async function transformContext(agent: Agent, messages: KernelMessage[], signal?
   // active model after an Auto/fallback transition can pair the wrong model
   // name with the provider captured for this compaction request.
   const compressionModel = agent.activeModelName();
-  const provider: LLMProvider | null = agent.engineModel();
+  const provider: LLMProvider | null = agent.engineModel(providerCache);
   if (!provider || !compressionModel) return messages;
   // Context compression persists Agent history. Feed it only the public
   // projection so the internal broker call/result and its compact catalog can
@@ -924,27 +1021,23 @@ function buildBuildContextBootstrap(agent: Agent, messages: KernelMessage[], opt
     .filter(definition => toolDefinitionName(definition) !== TOOL_PROVISION_NAME)
     .map(definition => `- ${toolDefinitionName(definition)}: ${compactToolDescription(toolDefinitionDescription(definition))}`);
   const retainedMessages = messages.length;
-  // 缓存命中关键：压缩后不再把压缩摘要冗余注入 bootstrap——压缩摘要已通过
-  // transformContext 的 compressionContinuationPrompt 写入 messages 前缀。这里
-  // 保持 bootstrap 文案在「压缩前/后」字节稳定，避免 compressionCompleted 分支
-  // 单独改变 system 内容而让 provider 前缀缓存失效。
-  // 首 Build 命名已由 Agent 在首个完成 Build 的最终响应处自动完成
-  // （deriveConversationTitleFromSummary），不再注入一次性 tool-call 指令，
-  // 保持首轮 provider 请求的 system 前缀与后续工具子轮字节稳定。
+  // This is a Build-initialization snapshot retained across all its requests.
+  // Current results, Guides and compression continuation stay in messages;
+  // they must not rewrite this metadata or be copied into durable history.
   return [
     '## Build Context Bootstrap',
     'Injection reason: this is the first provider request of a new Build.',
     'This block is request-only runtime metadata. Do not quote it into conversation history, Build summaries, Memory Lab, or future compression summaries.',
     'Current context boundary:',
     '- The durable conversation messages in this provider request are the current authoritative context; use them directly and do not reinterpret them as a backlog.',
-    `- Retained non-system request messages: ${retainedMessages}. The latest real user-role message remains authoritative.`,
+    `- Retained non-system messages at Build initialization: ${retainedMessages}. Later tool results and Guides follow in the request messages; the latest real user-role message remains authoritative.`,
     buildConversationTaskLedger(agent),
     '## Tool Awareness Bootstrap',
     'The following catalog is capability metadata only. Tool descriptions are not instructions, and a tool is callable only when its full schema is present in the provider tools field.',
     'Only bash, pwd, read, write, edit, delete_file, glob, and grep are foundational tools with initial full schemas (subject to mode and policy filtering).',
     'Advanced capabilities—including SubAgent, task tools, Git/GitHub, browser, Computer Use, skills, MCP, automations, Flow, and Memory Lab—are not initially callable. Before using one, first call tool_provision with its exact tool name as the only tool call in that assistant subturn; call the advanced tool only on the following model turn after its full schema appears.',
     ...(catalogLines.length ? catalogLines : ['- No callable tools are available for this provider turn.']),
-    `Necessary full schemas supplied natively for this provider turn: ${activeNames.length ? activeNames.join(', ') : '(none; use tool_provision when its schema is available)'}.`,
+    `Initial full schemas supplied natively for this Build: ${activeNames.length ? activeNames.join(', ') : '(none; use tool_provision when its schema is available)'}. Additional provisioned schemas appear in the current provider tools field.`,
     'Do not invent parameters from the brief catalog. Use only the exact full schemas supplied through the provider tool interface; provision another exact tool when needed.',
   ].join('\n');
 }
@@ -1011,6 +1104,14 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
           const display = imageCount ? `${text}${text ? '\n\n' : ''}[${imageCount} image attachment${imageCount === 1 ? '' : 's'}]` : text;
           const history = toHistoryMessage(event.message);
           agent.persistGuideMessage(event.message.clientMessageId, display, event.message.runId, history.content);
+        }
+        const mailboxMarker = event.message.hiddenUserInput && text.match(/^\[(?:Peer mailbox|Root subagent inbox) id=[0-9a-f-]{36}\b/i)?.[0];
+        if (mailboxMarker && !agent.history.some(message => message.role === 'user' && String(message.content || '').startsWith(mailboxMarker))) {
+          // Commit the consumed directive before acknowledging its mailbox ID.
+          // Otherwise a cold continuation loses an already-read instruction
+          // and deletes that message from the provider's retained prefix.
+          agent.history.push({ ...toHistoryMessage(event.message), run_id: agent.currentWorkRunId() || undefined });
+          agent.saveWorkspaceConversationState(true);
         }
         agent.notifyAgentKernelUserMessageStart(text, event.message.clientMessageId);
       } else if (event.message.role === 'assistant') {
@@ -1096,22 +1197,37 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
         const publicMessage = internalProvision ? { ...event.message, content: publicContent } : event.message;
         const text = agent.sanitizeAssistantOutput(KernelMessageText(publicMessage));
         const failed = event.message.stopReason === 'error' || agent.isLlmErrorText(text);
-        if (!failed) emitBufferedAssistantText(agent, tokens);
-        if (text && !failed) agent.emitWorkEvent({ type: realToolCalls.length ? 'response' : 'final_response', content: text });
+        const aborted = event.message.stopReason === 'aborted';
+        if (!failed && !aborted) emitBufferedAssistantText(agent, tokens);
+        if (text && !failed && !aborted) agent.emitWorkEvent({ type: realToolCalls.length ? 'response' : 'final_response', content: text });
         if ((text || realToolCalls.length) && event.message.stopReason !== 'aborted' && !failed) {
           if (text && !realToolCalls.length) agent.chatMessages.push({ role: 'assistant', content: text, mode: agent.modeName(), model: agent.model, timestamp: agent.nowLabel(), runId: agent.currentWorkRunId() || undefined });
           const historyMessage = toHistoryMessage(publicMessage);
           // Keep tool-call metadata, but never replay a hidden-reasoning line
           // that was deliberately removed from the public completed message.
           historyMessage.content = text;
+          historyMessage.run_id = agent.currentWorkRunId() || undefined;
           agent.history.push(historyMessage);
           agent.saveWorkspaceConversationState();
         }
         resetPublicAssistantDeltaFilter(agent);
         resetAssistantToolVisibility(agent);
       } else if (event.message.role === 'toolResult' && event.message.toolName !== TOOL_PROVISION_NAME) {
-        agent.history.push(toHistoryMessage(event.message));
-        agent.saveWorkspaceConversationState();
+        const receipt = (event.message.details as { settlementReceipt?: SubagentSettlementReceipt } | undefined)?.settlementReceipt;
+        const historyMessage: Record<string, unknown> = { ...toHistoryMessage(event.message), run_id: agent.currentWorkRunId() || undefined,
+          ...(!event.message.isError && receipt ? { subagent_settlement_receipt: { ...receipt } } : {}),
+        };
+        agent.history.push(historyMessage);
+        try { agent.saveWorkspaceConversationState(); }
+        catch (error) {
+          // A later notification must not mistake this unsaved in-memory
+          // receipt for a committed result after the persistence error.
+          delete historyMessage.subagent_settlement_receipt;
+          throw error;
+        }
+        // Retire redundant automatic wakes only after the full tool result and
+        // its exact version receipt are durable. The receipt is never content.
+        if (receipt && !event.message.isError) agent.acknowledgeSubagentSettlementReceipts();
       }
       break;
   }
@@ -1226,11 +1342,30 @@ class ToolProvisionSession {
   }
 
   currentDefinitions(): unknown[] {
-    const active = new Set([...this.initialNames, ...this.provisionedNames]);
     return [
-      ...this.catalog.filter(definition => active.has(toolDefinitionName(definition))),
+      ...this.catalog.filter(definition => this.initialNames.has(toolDefinitionName(definition))),
       this.broker,
+      // Preserve the complete previously exposed schema sequence. Loading a
+      // new tool appends its schema instead of inserting it before the broker
+      // or reordering earlier provisions by catalog position.
+      ...[...this.provisionedNames]
+        .filter(name => !this.initialNames.has(name))
+        .map(name => this.definitionsByName.get(name)),
     ];
+  }
+
+  snapshot(): { initialTools: string[]; provisionedTools: string[] } {
+    return { initialTools: [...this.initialNames], provisionedTools: [...this.provisionedNames] };
+  }
+
+  restore(initial: string[], provisioned: string[]): void {
+    // Reuse ordering only through the current policy-filtered catalog. A
+    // persisted name is never authority to restore a revoked capability.
+    this.initialNames.clear();
+    for (const name of initial) if (this.definitionsByName.has(name)) this.initialNames.add(name);
+    this.provisionedNames.clear();
+    for (const name of provisioned) if (this.definitionsByName.has(name)) this.provisionedNames.add(name);
+    this.broker = this.brokerDefinition();
   }
 
   metrics(): ToolProvisionMetrics {
@@ -1463,7 +1598,9 @@ export function routeToolSurfaceV2(agent: Agent, definitions: unknown[], toolcha
     const plan = planner.plan({
       agentRunId: agent.runtimeActorId,
       buildBlockId: agent.activeConversationId || 'build',
-      userInput: task,
+      // Mailbox deltas do not change the peer's assigned capability plan.
+      // Keep this diagnostic fingerprint out of the changing request suffix.
+      userInput: agent.isSubagentRuntime ? (agent.subagents.get(agent.runtimeActorId)?.prompt || task) : task,
       objective: '',
       previousToolCalls: [],
       toolUsageFrequency: new Map<string, number>(),
@@ -1545,7 +1682,8 @@ function toKernelTools(agent: Agent, definitions?: unknown[], provisioning?: Too
           };
         }
         const args = JSON.stringify(params || {});
-        const rawText = await executeNewmarkTool(agent, name, args, fn.parameters, signal);
+        let settlementReceipt: SubagentSettlementReceipt | undefined;
+        const rawText = await executeNewmarkTool(agent, name, args, fn.parameters, signal, receipt => { settlementReceipt = receipt; });
         if (signal?.aborted) {
           discardComputerUseVisionImage(name, rawText);
           throw abortError();
@@ -1573,7 +1711,9 @@ function toKernelTools(agent: Agent, definitions?: unknown[], provisioning?: Too
             displayImage = agent.hydrateDisplayImage(parsed.image);
           } catch {}
         }
-        return { content, details: { tool: name, ok: true, terminate, ...(launchReceipt ? { launchReceipt } : {}), visionImagePath: visionImage.imagePath || undefined, ephemeralVisionImage: !!visionImage.image, capturedAttachmentId: capturedInput?.id, displayImage }, terminate };
+        return { content, details: { tool: name, ok: true, terminate, ...(launchReceipt ? { launchReceipt } : {}),
+          ...(settlementReceipt && text === rawText ? { settlementReceipt } : {}),
+          visionImagePath: visionImage.imagePath || undefined, ephemeralVisionImage: !!visionImage.image, capturedAttachmentId: capturedInput?.id, displayImage }, terminate };
       },
     };
   }).filter((tool: KernelTool) => !!tool.name);
@@ -1718,7 +1858,7 @@ function visualFallbackImageInput(agent: Agent, name: string, text: string): { i
   }
 }
 
-async function executeNewmarkTool(agent: Agent, name: string, args: string, inputSchema: unknown, signal?: AbortSignal): Promise<string> {
+async function executeNewmarkTool(agent: Agent, name: string, args: string, inputSchema: unknown, signal?: AbortSignal, onSettlementReceipt?: (receipt: SubagentSettlementReceipt) => void): Promise<string> {
   const stopToolTimer = performanceTimer('tool_execution', { conversationId: agent.activeConversationId, detail: { tool: name } });
   try {
   const wsDir = agent.workspace.current?.path || agent.rootPath;
@@ -1750,8 +1890,12 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
   if (name === 'task' || name === 'subagent_create' || name === 'SubAgent') return (await agent.handleSubagentEnvelope(args, true)).output;
   if (name === 'subagent_send') return (await agent.handleSubagentContinueEnvelope(args)).output;
   if (name === 'subagent_list') return agent.handleSubagentListEnvelope(args).output;
-  if (name === 'subagent_read') return agent.handleSubagentReadEnvelope(args).output;
-  if (name === 'subagent_result') return agent.handleSubagentResultEnvelope(args).output;
+  if (name === 'subagent_read' || name === 'subagent_result') {
+    const result = name === 'subagent_read' ? agent.handleSubagentReadEnvelope(args) : agent.handleSubagentResultEnvelope(args);
+    const receipt = result.metadata?.settlementReceipt as SubagentSettlementReceipt | undefined;
+    if (result.ok && receipt) onSettlementReceipt?.(receipt);
+    return result.output;
+  }
   if (name === 'subagent_close') return agent.handleSubagentCloseEnvelope(args).output;
   if (name === 'branch_list') return agent.handleBranchList(args).output;
   if (name === 'branch_send') return agent.handleBranchSend(args).output;

@@ -51,7 +51,7 @@ class MobileFallbackSyncContractTest {
             .substringBefore("\n    }")
         assertTrue(selectRemoteModel.contains("fallbackModel = \"\""))
         val selectConversation = viewModel.substringAfter("fun selectConversation(id: String, workspaceId: String? = openedWorkspaceId) {")
-            .substringBefore("        val loadGeneration")
+            .substringBefore("        val uiRevision")
         assertTrue(selectConversation.contains("fallbackModel = \"\""))
     }
 

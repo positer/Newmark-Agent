@@ -12,13 +12,14 @@ class ModelMenuGlassSchedulingContractTest {
         val glass = File("src/main/java/com/newmark/mobile/ui/components/LiquidGlass.kt").readText()
 
         assertTrue(chat.contains("private class LiquidMenuFlightScheduler(initialIndex: Int)"))
-        assertTrue(chat.contains("var activeIndex: Int = initialIndex"))
+        assertFalse(chat.contains("directOptionInteraction("))
         assertFalse(chat.contains("mutableStateOf<kotlinx.coroutines.Job?>"))
+        assertTrue(chat.contains("var job: kotlinx.coroutines.Job? = null"))
         assertFalse(chat.contains("mutableIntStateOf(selectedIndex)"))
         assertTrue(chat.contains("it >= 0 && it != flightScheduler.activeIndex"))
         assertTrue(chat.contains("liquidMotionDeformationDeferred("))
         assertTrue(chat.contains("velocityY = { activeOffsetPx.velocity }"))
-        assertTrue(glass.contains("val scale = liquidMotionScale(velocityX(), velocityY(), density)"))
+        assertTrue(glass.contains("fun Modifier.directOptionInteraction("))
     }
 
     @Test

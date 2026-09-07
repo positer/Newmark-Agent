@@ -1151,9 +1151,9 @@ export class ElectronUtilityAgentClient {
     return await this.request('prompt', { ...params, target: this.checkedTarget(params.target) }, 0) as UtilityAgentPromptResult;
   }
 
-  async snapshot(): Promise<UtilityAgentSnapshotResult> {
+  async snapshot(options: { window?: number; before?: number } = {}): Promise<UtilityAgentSnapshotResult> {
     await this.start();
-    return await this.requestTargetSnapshot();
+    return await this.requestTargetSnapshot(options);
   }
 
   async rewind(messageIndex: number): Promise<UtilityConversationRewindResult> {
@@ -1370,8 +1370,8 @@ export class ElectronUtilityAgentClient {
     return confirmed || this.child !== child;
   }
 
-  private async requestTargetSnapshot(): Promise<UtilityAgentSnapshotResult> {
-    const snapshot = await this.request('snapshot', { target: this.target }, 15_000) as UtilityAgentSnapshotResult;
+  private async requestTargetSnapshot(options: { window?: number; before?: number } = {}): Promise<UtilityAgentSnapshotResult> {
+    const snapshot = await this.request('snapshot', { target: this.target, options }, 15_000) as UtilityAgentSnapshotResult;
     if (snapshot?.target?.runtimeKey !== this.target.runtimeKey) {
       throw new Error('Electron utility runtime snapshot target mismatch');
     }

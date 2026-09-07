@@ -121,11 +121,14 @@ function inferProtocol(baseUrl, name) {
 
 function classifyFailure(error) {
   const text = String(error && (error.stack || error.message || error) || '');
+  if (error && error.failureClass) return error.failureClass;
+  if (/conversation title generation failed|first Agent request was not started/i.test(text)) return 'conversation-title-failed';
   if (/rate.?limit|quota|balance|insufficient|429|too many requests/i.test(text)) return 'provider-limit';
+  if (/\b(?:HTTP|status(?: code)?)\s*[:=]?\s*(?:401|403|5\d\d)\b|service unavailable|bad gateway/i.test(text)) return 'provider-http-error';
   if (/timed out|timeout|CDP timeout|waiting for/i.test(text)) return 'app-timeout-or-provider-timeout';
-  if (/conversation|leak|串/i.test(text)) return 'conversation-leak';
-  if (/UTF-8|UTF8|encoding|中文|真实/i.test(text)) return 'encoding-error';
-  if (/process|running|left a packaged/i.test(text)) return 'process-leak';
+  if (/conversation [AB] (?:response contained [AB] marker|state leaked [AB] marker|response id mismatch)|backend send conversation mismatch|conversation[- ]leak|串话/i.test(text)) return 'conversation-leak';
+  if (/UTF-8|UTF8|encoding/i.test(text)) return 'encoding-error';
+  if (/process[- ]leak|left a packaged|remaining (?:packaged )?process/i.test(text)) return 'process-leak';
   if (activeSecretValues.some(secret => secret && text.includes(secret))
     || /\b(?:api[ _-]?key|secret(?:[ _-]?(?:key|value))?|access[ _-]?token|bearer|token[ _-]?leak(?:ed)?|key[ _-]?leak(?:ed)?)\b/i.test(text)) return 'secret-leak';
   return 'app-or-provider-error';
@@ -359,10 +362,21 @@ async function waitFor(cdp, expression, waitTimeoutMs, label, pollIntervalMs = 5
   while (Date.now() < deadline) {
     try {
       lastValue = await evaluate(cdp, expression, 10000);
-      if (lastValue) return lastValue;
     } catch (error) {
       lastValue = error.message;
+      await sleep(Math.max(10, Number(pollIntervalMs) || 500));
+      continue;
     }
+    // Keep terminal application errors outside the transient CDP retry catch.
+    if (lastValue && lastValue.__newmarkStressTerminal) {
+      const failure = lastValue.__newmarkStressTerminal;
+      const error = new Error(`Tested run ${failure.runId} terminated (${failure.status}) before ${label}: ${failure.message}`);
+      error.failureClass = classifyFailure(new Error(failure.message));
+      if (error.failureClass === 'app-or-provider-error') error.failureClass = failure.status === 'error' ? 'run-terminal-error' : 'run-interrupted';
+      error.terminalRun = failure;
+      throw error;
+    }
+    if (lastValue) return lastValue;
     await sleep(Math.max(10, Number(pollIntervalMs) || 500));
   }
   throw new Error(`Timed out waiting for ${label}; last=${redact(JSON.stringify(lastValue)).slice(0, 1000)}`);
@@ -372,9 +386,48 @@ function jsString(value) {
   return JSON.stringify(String(value));
 }
 
-function assistantMarkerExpression(marker, conversationId = '') {
+function capturePromptAttempt(state, requestedTarget, prompt) {
+  const target = {
+    workspaceId: String(requestedTarget?.workspaceId || state?.target?.workspaceId || state?.workspaceId || state?.workspaces?.current?.id || ''),
+    conversationId: String(requestedTarget?.conversationId || state?.conversationId || state?.target?.conversationId || ''),
+  };
+  if (!target.workspaceId || !target.conversationId) throw new Error('Cannot capture the tested prompt target');
+  return {
+    target,
+    prompt: String(prompt),
+    previousRunIds: [...new Set([...(state?.workRuns || []), ...(state?.chatMessages || []), state?.runtime].map(item => item?.runId).filter(Boolean))],
+  };
+}
+
+// This pure function also runs in the renderer expression below. Never infer a
+// failure from an old run, another target, or a transient error while still busy.
+function terminalPromptFailure(state, attempt) {
+  if (!state || !attempt || state.runtime?.running !== false) return null;
+  const workspaceId = String(state.target?.workspaceId || state.workspaceId || state.workspaces?.current?.id || '');
+  const conversationId = String(state.conversationId || state.target?.conversationId || '');
+  if (workspaceId !== attempt.target.workspaceId || conversationId !== attempt.target.conversationId) return null;
+  const previous = new Set(attempt.previousRunIds || []);
+  const run = (state.workRuns || []).find(item => {
+    if (!item?.runId || previous.has(item.runId) || state.runtime.runId !== item.runId) return false;
+    if (item.target && (item.target.workspaceId !== workspaceId || item.target.conversationId !== conversationId)) return false;
+    const promptMatches = String(item.primaryPrompt || '') === attempt.prompt
+      || (state.chatMessages || []).some(message => message?.role === 'user' && message.runId === item.runId && String(message.content || '') === attempt.prompt);
+    return promptMatches && ['error', 'interrupted', 'force_interrupted'].includes(item.status);
+  });
+  if (!run) return null;
+  const errors = (run.events || []).filter(event => event?.type === 'error').map(event => String(event.content || '')).filter(Boolean);
+  return { runId: run.runId, target: attempt.target, status: run.status, message: errors.join('\n').slice(-6000) || `Run ended with status ${run.status}` };
+}
+
+function terminalAttemptExpression(attempt) {
+  return attempt ? `const terminal = (${terminalPromptFailure.toString()})(s, ${JSON.stringify(attempt)});
+    if (terminal) return { __newmarkStressTerminal: terminal };` : '';
+}
+
+function assistantMarkerExpression(marker, conversationId = '', attempt = null) {
   const conv = conversationId ? jsString(conversationId) : 'null';
-  return `window.api.getState().then(async s => {
+  return `window.api.getState(${attempt ? JSON.stringify(attempt.target) : ''}).then(async s => {
+    ${terminalAttemptExpression(attempt)}
     const target = ${conv};
     if (target && s && s.conversationId !== target && window.api.setConversation) {
       await window.api.setConversation(target);
@@ -387,9 +440,10 @@ function assistantMarkerExpression(marker, conversationId = '') {
   })`;
 }
 
-function stateIdleExpression(conversationId = '') {
+function stateIdleExpression(conversationId = '', attempt = null) {
   const conv = conversationId ? jsString(conversationId) : 'null';
-  return `window.api.getState().then(async s => {
+  return `window.api.getState(${attempt ? JSON.stringify(attempt.target) : ''}).then(async s => {
+    ${terminalAttemptExpression(attempt)}
     const target = ${conv};
     if (target && s && s.conversationId !== target && window.api.setConversation) {
       await window.api.setConversation(target);
@@ -424,17 +478,27 @@ async function launchUi(root) {
 }
 
 async function sendUiPrompt(cdp, prompt, marker, waitTimeoutMs = timeoutMs, conversationId = '') {
-  await evaluate(cdp, `(() => {
+  const attempt = await evaluate(cdp, `(async () => {
+    const target = typeof currentConversationTarget === 'function' ? currentConversationTarget() : null;
+    const before = await window.api.getState(target || undefined);
+    const attempt = (${capturePromptAttempt.toString()})(before, target, ${jsString(prompt)});
+    if (${jsString(conversationId)} && attempt.target.conversationId !== ${jsString(conversationId)}) throw new Error('backend send conversation mismatch before UI prompt');
     const prompt = document.querySelector('#prompt');
     if (!prompt) throw new Error('missing #prompt');
     prompt.focus();
     prompt.value = ${jsString(prompt)};
     prompt.dispatchEvent(new Event('input', { bubbles: true }));
     window.sendMessage();
-    return true;
+    return attempt;
   })()`, 30000);
   try {
-    await waitFor(cdp, assistantMarkerExpression(marker, conversationId), waitTimeoutMs, `assistant marker ${marker}`);
+    await waitFor(cdp, assistantMarkerExpression(marker, conversationId, attempt), waitTimeoutMs, `assistant marker ${marker}`);
+    // A rendered prompt may already contain the marker. Continue monitoring the
+    // same run for a terminal error while retaining the existing idle check.
+    const state = await waitFor(cdp, stateIdleExpression(conversationId, attempt), 60000, `idle after ${marker}`);
+    const stateText = JSON.stringify(state || {});
+    if (stateText.includes(activeSecretValues[0])) throw new Error('renderer state leaked API key');
+    return state;
   } catch (error) {
     const debug = await evaluate(cdp, `(async () => {
       const state = window.state || {};
@@ -471,12 +535,11 @@ async function sendUiPrompt(cdp, prompt, marker, waitTimeoutMs = timeoutMs, conv
         childDiagnostics: ${jsString(childDiagnostics.slice(-8000))},
       };
     })()`, 30000).catch(debugError => ({ debugError: debugError.message }));
-    throw new Error(`${error.message}; uiDebug=${redact(JSON.stringify(debug)).slice(0, 5000)}`);
+    const detailedError = new Error(`${error.message}; uiDebug=${redact(JSON.stringify(debug)).slice(0, 5000)}`);
+    detailedError.failureClass = classifyFailure(error);
+    if (error.terminalRun) detailedError.terminalRun = error.terminalRun;
+    throw detailedError;
   }
-  const state = await waitFor(cdp, stateIdleExpression(conversationId), 60000, `idle after ${marker}`);
-  const stateText = JSON.stringify(state || {});
-  if (stateText.includes(activeSecretValues[0])) throw new Error('renderer state leaked API key');
-  return state;
 }
 
 async function sendBackendPrompt(cdp, prompt, marker, conversationId, waitTimeoutMs = timeoutMs) {
@@ -1017,7 +1080,7 @@ ${scenarioRows}
 
 ## Failure Classification
 
-Failures are classified as provider-limit, app-timeout-or-provider-timeout, conversation-leak, encoding-error, process-leak, secret-leak, or app-or-provider-error. Error text is redacted before it is written here.
+Failures are classified as conversation-title-failed, provider-limit, provider-http-error, run-terminal-error, run-interrupted, app-timeout-or-provider-timeout, conversation-leak, encoding-error, process-leak, secret-leak, or app-or-provider-error. A title-gate failure does not establish conversation leakage or identify an upstream HTTP status unless that status was observed separately. UI marker/idle waits stop on a new matching run's terminal error; old runs and other targets cannot trigger this check. Error text is redacted before it is written here.
 
 ## Final Verdict
 
@@ -1034,7 +1097,7 @@ Failures are classified as provider-limit, app-timeout-or-provider-timeout, conv
   return { reportPath, verdict, failCount, passCount, skipped };
 }
 
-(async () => {
+async function main() {
   if (process.platform !== 'win32') {
     log('skipped: packaged Windows real provider stress only runs on win32');
     writeReport(null, '', 'non-win32');
@@ -1091,7 +1154,11 @@ Failures are classified as provider-limit, app-timeout-or-provider-timeout, conv
     const report = writeReport(provider, root);
     if (report.failCount > 0) process.exitCode = 1;
   }
-})().catch(error => {
+}
+
+module.exports = { classifyFailure, capturePromptAttempt, terminalPromptFailure, assistantMarkerExpression, stateIdleExpression, waitFor, sendUiPrompt };
+
+if (require.main === module) main().catch(error => {
   results.push({
     name: 'real-provider-stress-harness',
     status: 'fail',

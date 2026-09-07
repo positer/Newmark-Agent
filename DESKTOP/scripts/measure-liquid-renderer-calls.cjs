@@ -106,6 +106,8 @@ for (let interaction = 0; interaction < 10; interaction += 1) {
   const float = {
     dataset: {}, style: {}, isConnected: true,
     appendChild(canvas) { canvas.parentNode = this; this.canvas = canvas; },
+    insertBefore(canvas) { canvas.parentNode = this; this.canvas = canvas; },
+    get firstChild() { return this.canvas || null; },
     getBoundingClientRect() { return { left: 100, top: 100, width: 180, height: 54 }; },
   };
   context.attachKyantLiquidRenderer(float, { id: `frame-${interaction}`, bitmap: {} });

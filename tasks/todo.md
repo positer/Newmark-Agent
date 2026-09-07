@@ -1,3 +1,103 @@
+## 2026-09-07 dev-0.5.15 全平台发布
+
+- [x] 确认版本 0.5.15／515、远端 release/tag 尚不存在、六资产平台矩阵与既有签名边界。
+- [ ] 完整 Desktop `test:full-release` 与 Windows 打包后门禁。
+- [ ] Android 隔离构建、测试/lint、包内身份/签名/对齐检查。
+- [ ] Linux 原生构建及三个实际发行资产验证。
+- [ ] 记录可复核源码提交、英文后中文 release notes 和六资产 SHA256。
+- [ ] push 源码/标签，发布 GitHub Release，远端重新下载六资产并核对。
+
+## 2026-09-06 双端正常流程稳定性校准
+
+### 追加：共同队列与远程 Flow
+
+- [x] Build 连续性与协议头兼容：统一有界恢复与协议完成性，修复请求/响应头、旧回包覆盖及中断片段丢失；最终编译、39组相关门禁（综合1706/1706）、实际HTTP Build18/18、真实Electron18/18和冷启动留存通过，源码/编译身份与条件WSL检查边界见 `archive/20260906-223658-build-response-continuity/FINAL-EVIDENCE.json`；未重新打包安装。
+
+- [x] GUI 上下文真实计量：修复缺失/零值、累计回包去重、辅助调用用量、Build 历史归属和晚回包保存；最终编译、25 组相关门禁（含综合 1706/1706）、实际 HTTP 请求链路 26/26、标题门 8/8 及真实 Electron 25/25 通过，身份和边界见 `archive/20260906-214235-context-inspector-accounting/FINAL-EVIDENCE.json`；未重新打包安装。
+
+- [x] 长对话基线：1,200 条正文/身份/时间戳在切换与冷加载后保留；复现 usage 格式漏读、读写误分类、跨会话计数污染和重启归零。
+- [x] 修复计量映射、会话计量持久化及前端历史/上下文过期回包；Agent 18/18、UI 18/18，相关构建门禁通过。
+- [x] Build 内保留完整首轮系统与旧消息前缀，新缓存 gate 39/39；动态工具只追加 schema，真实 API 两个 Build 验证前缀一致。
+- [x] 按用户最新要求调整缓存验收：关注客户端前缀与复用效率，服务端零缓存不再阻塞；保留原始计量，不伪造或重放调用。
+- [x] 本轮 Build 缓存性能：完成诊断短路、同部署重试前缀和 provider 局部复用；正式编译、17 组相关门禁及真实 Agent/本地 HTTP 两次 Build 的 12 项验证通过，证据归档于 `archive/20260906-211514-build-cache-performance/`。
+- [x] 修复并复验 owner 历史重复分页及 Flow 启动立即停止竞态；最终 95F391A6 历史/HTTP/重启 21/21、即时旧回包补充 15/15、Flow 快速取消 36/36。
+- [x] 此前 95F391A6 unpack 长历史实际 UI/IPC/HTTP/重启 21/21；压缩续接 CLI 退出 0。真实 APInebula 零缓存观测保留，按最新用户要求不再作为阻塞项；该 unpack 不包含本轮缓存性能增量。
+- [x] 复现 PC/移动端命令分叉、Flow owner 错位及同文队列身份缺陷。
+- [x] 实现共同目标命令、可持久化队列/模式/暂停状态及接受边界保护。
+- [x] 修复实包跨目标旧行索引、工作区目录通知和 Flow 预启动快照竞态，并保留失败证据。
+- [x] 修复移动端编辑等待真实接受、完整 ID 重排、目标草稿隔离和工作区目录同步，完成聚焦回归。
+- [x] 旧候选实包完成实际 APInebula Sol 首轮与队列错误后继续验证；明确不替代最新包验收。
+- [x] PC 队列/弹窗锚定版完整发布门禁返回 0，冻结 unpack 全量核对通过（320A71F2…，708 个包内文件与构建一致）；后续 4px 增量单独验收。
+- [x] C026AFE9… APK 构建/签名/设备回读通过（354 项 JVM、56 项设备测试，Release 三个底部按钮导航无崩溃）；此包已由 peer 隔离版替代。
+- [x] 最新 peer 隔离 APK 9C0241ED… 构建与包检查通过，363 项 JVM、最新 debug 56 项设备测试通过。
+- [x] 最新 9C0241ED… Release 安装回读和实际跨 peer/重连复核；8D03 PC 配对真实 Sol 5 次调用、双端继续队列及新 token 隔离通过。
+- [x] 最终 95F391A6 + 已安装 9C0241ED Release 的实际队列显示/手机编辑/单次继续、Flow 运行/暂停/退出增量通过；0 付费调用，包身份复核和自有进程清理通过。重启/重连/跨 peer 的先前完整矩阵保留各自历史包身份。
+- [ ] 排查用户观察到的无响应，保留持续监控和原生栈证据，不能以重启恢复判定已修复。
+- [x] 修复用户在本次测试窗口看到的 list 弹窗静止色块缺失和首次点击从外部飞入；仅修显示后初始几何，保留已确认的移动交互。源码实际 Electron 16/16 场景、1318 条动画采样及三处改动范围核对通过（采样条数不等同独立显示帧数）。
+- [x] 320A71F2… unpack 重复弹窗 16 项实际渲染校准通过，运行前后包身份一致。
+- [x] PC 弹窗预算收紧至 4px，仅修改一个生产常量和两处注释；构建及弹窗/Select/外观/预热回归通过。
+- [x] 中间 4px/300ms unpack 源到包核对、16 项菜单回归通过（13FB3F7D…），保留为中间证据。
+- [x] PC 80ms 激活参数及 8D03 unpack 的 16 菜单/6 方向/4 时序校准通过；后续圆角与方向要求单独验证。
+- [x] PC 三类 list 圆角 25px 统一，暗亮真实样式 44/44，通过时未改交互 JavaScript。
+- [x] 最新要求：4px 外拉朝受力方向延展、反侧固定；95F391A6 新包 16 菜单、16 可信受限拖动、36 受控方向材料与 4 组/64 项长按时序通过，夹具参考面失败及专项复核独立保留。
+- [x] 汇总 `FINAL-CONTEXT-RADIUS-REPORT.md`、最终 unpack/现有 Release APK 身份和各专项证据；README/OVERVIEW/taste 更新，自有测试进程已清理。每轮真实缓存命中及17:40旧无响应仍是上述未解决项。
+
+以下保留原阶段检查表；该阶段的实测结果见 `archive/20260906-124619-user-flow-stability/report.md`，不表示上述追加工作已完成。
+
+- [x] 读取项目约束、建立独立归档与用户流程验收矩阵。
+- [ ] 供应商/流式通信故障复现、最小修复及回归。
+- [ ] Android 生命周期、重连/取消与主线程稳定性排查修复。
+- [ ] 桌面渲染实测优化与现有视觉交互回归。
+- [ ] 完整源码门禁、独立 unpack 与最终 APK 构建。
+- [ ] 打包 GUI/CLI 流程、模拟器网络/导航/硬件渲染校准。
+- [ ] 最终包身份与源冻结核验、文档与证据归档、测试进程清理。
+
+## 2026-09-05 全面接手与证据修复
+
+旧记录中“已经解决”“UAC 未确认”的结论不能作为当前状态：已复现原 APK 形状异常，并查明 MSI 参数拆分及错误重装标记。当前需求逐项状态、执行证据、产物与安装结果统一见 [修复记录](../archive/20260905-171101-glass-recovery/recovery-report.md) 和 [需求对照](../archive/20260905-171101-glass-recovery/requirements.md)。以下保留历史计划，不再据此判定本轮交付完成。
+
+## 2026-09-04 弹窗选中色块层级复核增量
+
+- [x] 复核 `.liquid-glass-popup > :not(.liquid-popup-optical-canvas)` 对选中色块的层级副作用。
+- [x] 恢复 `.liquid-menu-color-block` 的 `position:absolute; z-index:0`，与底层 optical canvas 同层。
+- [x] 增加 `pcGlassMigrationVerify` 层级门禁。
+- [x] Desktop build、PC glass verify、Newmark Select verify、Electron renderer smoke 通过。
+- [ ] 重新打包包含本次 PC 增量的 MSI/APK。
+- [ ] 设备逐帧视觉验收。
+
+## 2026-09-04 APK 交付
+
+- [x] 隔离目录 clean Release 构建成功。
+- [x] APK 复制到 `android/APK/Newmark-Agent-0.5.15-interaction-glow-surface-20260904.apk`。
+- [x] 源/交付副本 SHA-256 一致，版本/包名/SDK/签名核验通过。
+- [ ] 真机安装与逐帧视觉验收。
+
+## 2026-09-04 dev-0.5.15 移动会话恢复与双端液态弹窗
+
+- [x] 移动端持久化最近本地对话 ID，冷启动/新建/切换/归档均写入。
+- [x] 本地 Agent 运行中根返回转后台，不销毁活动状态。
+- [x] 左侧栏浮块抬起右移 3dp，模型/供应商浮块边带增加 2dp。
+- [x] 双端弹窗统一强化液态玻璃，内层选项取消顶层玻璃浮块、选项内容保持静态，色块负责点击移动/长按跟踪并在到位后立即提交；弹窗承载玻璃随拖动微量弹性缩放。
+- [x] PC Settings 等大弹窗内嵌套选项统一挂 `.liquid-glass-popup`。
+- [x] 双端所有液态弹窗关闭先收缩回发起位置/0.62 再移除，不闪现退出。
+- [x] 普通非玻璃底按钮/菜单保留原有玻璃浮块组件。
+- [x] 提交/停止/Guide 图标改用主题语义色。
+- [x] Android 273/273、Vital Lint、R8、Release assembly；PC build + test:desktop:built（verify.js 1708/1708 + pcGlassMigrationVerify）。
+- [x] Windows 0.5.15 MSI/ZIP 打包、packaged smoke、MSI 管理映像 22+12、per-user 安装与版本/app.asar 校验。
+- [ ] 以管理员完成 `C:\Program Files\Newmark Agent` 的机器级 0.5.15 升级；当前 UAC 未确认。
+- [ ] 真机/模拟器视觉截图、安装态冒烟、完整 `test:full-release` 与发布资产矩阵。
+
+## 2026-09-04 交互泛光压入承载玻璃层
+
+- [x] Android `liquidGlassModifier`/`glassButtonSurface` 将指针泛光改为 `drawBackdrop` `onDrawSurface`，移除玻璃节点后的 `drawWithContent` 泛光。
+- [x] Android 弹窗继续通过 `layerBlock` 让受限拖动/点击变形与泛光共享承载 RenderNode。
+- [x] PC 弹窗 optical canvas 固定在承载玻璃 z-index 0、普通混合模式并随弹窗形状裁剪。
+- [x] PC 初始与动态创建弹窗均由统一挂载逻辑接入 optical canvas。
+- [x] Desktop build + `pcGlassMigrationVerify`、Android 273 项 JVM 契约测试通过。
+- [x] PC 活动浮块 Canvas 首子节点化、内容层 z-index 1、明确弹窗 radius token；泛光位置纳入 surface 重绘缓存并通过真实 Electron smoke。
+- [ ] 重新打包包含本轮 PC 泛光重绘缓存修复的 0.5.15 MSI/APK（按用户后续发行请求执行）。
+- [ ] Android 真机/模拟器逐帧视觉验收仍待执行。
+
 ## 2026-09-01 dev-0.5.13 移动端设置返回按钮玻璃画布
 
 - [x] 确认设置主页和全部子页复用同一个顶栏返回按钮。

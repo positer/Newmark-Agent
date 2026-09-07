@@ -167,7 +167,7 @@ import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.components.NewmarkShapeSmall
 import com.newmark.mobile.ui.components.glassButtonSurface
 import com.newmark.mobile.ui.components.GlassButtonCanvas
-import com.newmark.mobile.ui.components.liquidGlassModifier
+import com.newmark.mobile.ui.components.liquidPopupShell
 import com.newmark.mobile.ui.components.liquidHoldDragGesture
 import com.newmark.mobile.ui.components.liquidMotionDeformationDeferred
 import com.newmark.mobile.ui.components.liquidSelectionMorph
@@ -344,6 +344,73 @@ data class QueueMessageUi(
     val goalObjective: String = "",
 )
 
+internal typealias RemoteImageGuideSender = (String, List<LocalImageAttachment>, (Boolean) -> Unit) -> Unit
+internal typealias RemoteQueueEditSender = (String, String, (Boolean) -> Unit) -> Unit
+internal typealias RemoteQueueOrderSender = (List<String>, (Boolean) -> Unit) -> Unit
+
+/** A target owns its draft; an old acknowledgement cannot erase later input. */
+internal class ConversationComposerDraft {
+    private var revision = 0L
+    private val input = mutableStateOf(TextFieldValue())
+    private val image = mutableStateOf<LocalImageAttachment?>(null)
+    private val edit = mutableStateOf<QueueMessageUi?>(null)
+    private val goal = mutableStateOf(false)
+    var inputValue: TextFieldValue
+        get() = input.value
+        set(value) {
+            if (input.value.text != value.text) revision++
+            input.value = value
+        }
+    var pendingImage: LocalImageAttachment?
+        get() = image.value
+        set(value) { if (image.value != value) { image.value = value; revision++ } }
+    var queueEdit: QueueMessageUi?
+        get() = edit.value
+        set(value) { if (edit.value != value) { edit.value = value; revision++ } }
+    var goalEdit: Boolean
+        get() = goal.value
+        set(value) { if (goal.value != value) { goal.value = value; revision++ } }
+    fun acceptance(): (Boolean) -> Unit {
+        val submittedRevision = revision
+        return { accepted ->
+            if (accepted && revision == submittedRevision) {
+                inputValue = TextFieldValue()
+                pendingImage = null
+                queueEdit = null
+                goalEdit = false
+            }
+        }
+    }
+}
+
+/** Move only the dragged id relative to a still-current anchor; retain every current id. */
+internal fun queueOrderAfterDrag(current: List<QueueMessageUi>, displayed: List<QueueMessageUi>, movingId: String?, target: Int): List<QueueMessageUi> {
+    val source = displayed.indexOfFirst { it.id == movingId }
+    val anchor = displayed.getOrNull(target)?.id ?: return current
+    val moved = current.firstOrNull { it.id == movingId } ?: return current
+    if (source < 0 || source == target || current.none { it.id == anchor }) return current
+    val reordered = current.filterNot { it.id == movingId }.toMutableList()
+    val anchorIndex = reordered.indexOfFirst { it.id == anchor }
+    reordered.add(anchorIndex + if (target > source) 1 else 0, moved)
+    return reordered
+}
+
+internal fun remoteInputHasContent(remoteMode: Boolean, text: String, pendingImage: LocalImageAttachment?): Boolean =
+    text.isNotBlank() || (remoteMode && pendingImage != null)
+
+/** Returns whether this remote image path handled the input, not whether its async request was accepted. */
+internal fun dispatchRemoteImageGuide(
+    remoteMode: Boolean,
+    text: String,
+    pendingImage: LocalImageAttachment?,
+    send: RemoteImageGuideSender?,
+    onAccepted: () -> Unit,
+): Boolean {
+    if (!remoteMode || pendingImage == null || send == null) return false
+    send(text, listOf(pendingImage.copy())) { accepted -> if (accepted) onAccepted() }
+    return true
+}
+
 @Composable
 fun ChatScreen(
     title: String,
@@ -351,6 +418,7 @@ fun ChatScreen(
     isSending: Boolean,
     showMenuButton: Boolean,
     remoteMode: Boolean = false,
+    composerTargetKey: String = "",
     modelOptions: List<ModelOption> = emptyList(),
     selectedModel: String = "",
     selectedProviderId: String = "",
@@ -365,6 +433,8 @@ fun ChatScreen(
     onSend: (String) -> Unit,
     onSendWithImages: (String, List<LocalImageAttachment>) -> Unit = { text, _ -> onSend(text) },
     onGuide: (String) -> Boolean = { false },
+    onGuideWithImages: ((String, List<LocalImageAttachment>, (Boolean) -> Unit) -> Unit)? = null,
+    onSendAccepted: RemoteImageGuideSender? = null,
     onStop: () -> Unit = {},
     escalating: Boolean = false,
     showConnectRemote: Boolean = false,
@@ -382,6 +452,9 @@ fun ChatScreen(
     onDeleteQueueItem: (String) -> Unit = {},
     onReorderQueueItems: (List<String>) -> Unit = {},
     onGuideQueueItem: (String) -> Unit = {},
+    onGuideEditedQueueItem: RemoteQueueEditSender? = null,
+    onUpdateQueueItemAccepted: RemoteQueueEditSender? = null,
+    onReorderQueueItemsAccepted: RemoteQueueOrderSender? = null,
     onInspectBranch: (String, Int) -> Unit = { _, _ -> },
     onEditUserMessage: (Int, String) -> Unit = { _, _ -> },
     onOpenWebLink: (String) -> Unit = {},
@@ -397,11 +470,18 @@ fun ChatScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     var inputBounds by remember { mutableStateOf<Rect?>(null) }
     // Preserve selection and IME composition while the cursor moves.
-    var inputValue by remember { mutableStateOf(TextFieldValue()) }
-    var goalEditPending by remember { mutableStateOf(false) }
-    var queueEditPending by remember { mutableStateOf<QueueMessageUi?>(null) }
+    val drafts = remember { mutableMapOf<String, ConversationComposerDraft>() }
+    val draft = drafts.getOrPut(composerTargetKey) { ConversationComposerDraft() }
+    var inputValue by draft::inputValue
+    var goalEditPending by draft::goalEdit
+    var queueEditPending by draft::queueEdit
     val inputFocusRequester = remember { FocusRequester() }
     var inputMenu by remember { mutableStateOf<InputCompositeMenu?>(null) }
+    var inputMenuClosing by remember { mutableStateOf(false) }
+    var retainedInputMenu by remember { mutableStateOf<InputCompositeMenu?>(null) }
+    LaunchedEffect(inputMenu) {
+        if (inputMenu != null) retainedInputMenu = inputMenu
+    }
     val inputOverlayBounds = remember { mutableStateOf<Rect?>(null) }
     val plusMenuAnchor = remember { mutableStateOf<Rect?>(null) }
     val modelMenuAnchor = remember { mutableStateOf<Rect?>(null) }
@@ -461,7 +541,16 @@ fun ChatScreen(
             )
         }
     }
-    var pendingImage by remember { mutableStateOf<LocalImageAttachment?>(null) }
+    var pendingImage by draft::pendingImage
+    fun dismissInputMenu() {
+        if (inputMenu == null || inputMenuClosing) return
+        inputMenuClosing = true
+        scope.launch {
+            delay(220)
+            inputMenu = null
+            inputMenuClosing = false
+        }
+    }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         scope.launch {
@@ -497,11 +586,11 @@ fun ChatScreen(
             )
         }
     }
-    BackHandler(enabled = inputMenu != null) { inputMenu = null }
+    BackHandler(enabled = inputMenu != null && !inputMenuClosing) { dismissInputMenu() }
     LaunchedEffect(remoteMode) {
         // The paired desktop and this device own separate model catalogues.
         // Drop any retained remote popup page before rendering local options.
-        inputMenu = null
+        dismissInputMenu()
     }
     LaunchedEffect(goalEditPending, queueEditPending?.id) {
         if (goalEditPending || queueEditPending != null) {
@@ -574,22 +663,39 @@ fun ChatScreen(
                 onSelectMode = onSelectMode,
                 onSend = { value ->
                     val images = pendingImage?.let(::listOf).orEmpty()
-                    pendingImage = null
                     val queueEdit = queueEditPending
-                    if (queueEdit != null) {
+                    if (remoteMode && queueEdit != null && onUpdateQueueItemAccepted != null) {
+                        onUpdateQueueItemAccepted(queueEdit.id, value, draft.acceptance())
+                    } else if (remoteMode && queueEdit == null && !goalEditPending && onSendAccepted != null) {
+                        onSendAccepted(value, images, draft.acceptance())
+                    } else if (queueEdit != null) {
                         onUpdateQueueItem(queueEdit.id, value)
                         queueEditPending = null
                     } else if (goalEditPending) {
                         onEditGoal(value)
                         goalEditPending = false
+                        inputValue = TextFieldValue()
                     } else if (images.isNotEmpty()) onSendWithImages(value, images) else onSend(value)
+                    if (!remoteMode) pendingImage = null
                 },
                 onGuide = { value ->
-                    val accepted = onGuide(value)
-                    if (accepted) inputValue = TextFieldValue()
+                    val queueEdit = queueEditPending
+                    val submittedImage = pendingImage
+                    val accepted = if (queueEdit != null && onGuideEditedQueueItem != null) {
+                        onGuideEditedQueueItem(queueEdit.id, value, draft.acceptance())
+                        false
+                    } else if (remoteMode && queueEdit == null && onGuideWithImages != null) {
+                        onGuideWithImages(value, submittedImage?.let(::listOf).orEmpty(), draft.acceptance())
+                        false
+                    } else onGuide(value)
+                    if (accepted) {
+                        inputValue = TextFieldValue()
+                        if (queueEdit != null && onGuideEditedQueueItem != null) queueEditPending = null
+                    }
                     accepted
                 },
                 onStop = onStop,
+                clearOnSend = !remoteMode,
                 escalating = escalating,
                 onInputBoundsChanged = { inputBounds = it },
                 onPlusAnchorBoundsChanged = { plusMenuAnchor.value = it },
@@ -615,10 +721,10 @@ fun ChatScreen(
                 flow?.takeIf { it.running }?.let {
                     FlowTakeoverBubble(flow = it, onToggle = onToggleFlow)
                 }
-                InputStack(
+                key(composerTargetKey) { InputStack(
                     goal = goal.takeUnless { goalEditPending },
                     flow = flow,
-                    queueItems = queueItems.filterNot { it.id == queueEditPending?.id },
+                    queueItems = queueItems,
                     queuePaused = queuePaused,
                     onEditGoal = {
                         inputValue = TextFieldValue(it, TextRange(it.length))
@@ -634,16 +740,18 @@ fun ChatScreen(
                     onEditQueueItem = {
                         inputValue = TextFieldValue(it.text, TextRange(it.text.length))
                         queueEditPending = it
-                        onSelectMode(it.requestedMode.ifBlank { "build" }.replaceFirstChar(Char::titlecase))
+                        if (!remoteMode) onSelectMode(it.requestedMode.ifBlank { "build" }.replaceFirstChar(Char::titlecase))
                     },
                     onReorderQueueItems = onReorderQueueItems,
+                    onReorderQueueItemsAccepted = onReorderQueueItemsAccepted,
                     onGuideQueueItem = onGuideQueueItem,
-                )
+                ) }
             }
             }
             key(remoteMode) {
                 InputCompositeMenuOverlay(
-                    menu = inputMenu,
+                    menu = if (inputMenuClosing) retainedInputMenu else inputMenu,
+                    closing = inputMenuClosing,
                     containerBounds = inputOverlayBounds,
                     plusAnchor = plusMenuAnchor,
                     modelAnchor = modelMenuAnchor,
@@ -656,7 +764,7 @@ fun ChatScreen(
                     options = modelOptions,
                     backdrop = inputMenuBackdrop,
                     onMenuChange = { inputMenu = it },
-                    onDismiss = { inputMenu = null },
+                    onDismiss = ::dismissInputMenu,
                     onMode = onSelectMode,
                     onSelectModel = onSelectModel,
                     onSelectIntelligence = onSelectIntelligence,
@@ -665,7 +773,7 @@ fun ChatScreen(
                         filePicker.launch("*/*")
                     },
                     onChooseImage = {
-                        inputMenu = null
+                        dismissInputMenu()
                         imagePicker.launch("image/*")
                     },
                 )
@@ -914,8 +1022,8 @@ private data class PcColors(
 )
 
 private val PcColorsDark = PcColors(
-    text = Color(0xFFC8D0E8),
-    textDim = Color(0xFF7880A0),
+    text = Color(0xFFCECECE),
+    textDim = Color(0xFF949494),
     accent = Color(0xFF5B78FF),
     accent2 = Color(0xFF38D4A0),
     border = Color(0x14FFFFFF), // rgba(255,255,255,.08)
@@ -2097,6 +2205,7 @@ private fun InputStack(
     onDeleteQueueItem: (String) -> Unit,
     onEditQueueItem: (QueueMessageUi) -> Unit,
     onReorderQueueItems: (List<String>) -> Unit,
+    onReorderQueueItemsAccepted: RemoteQueueOrderSender?,
     onGuideQueueItem: (String) -> Unit,
 ) {
     Column(
@@ -2110,6 +2219,7 @@ private fun InputStack(
             onDelete = onDeleteQueueItem,
             onEdit = onEditQueueItem,
             onReorder = onReorderQueueItems,
+            onReorderAccepted = onReorderQueueItemsAccepted,
             onGuide = onGuideQueueItem,
         )
         flow?.promptText?.takeIf { it.isNotBlank() }?.let {
@@ -2141,8 +2251,8 @@ private fun StackCard(
             .padding(horizontal = 20.dp)
             .clip(shape)
             .background(backgroundBrush ?: Brush.linearGradient(listOf(
-                if (light) Color.White.copy(alpha = 0.72f) else Color(0xEB121422),
-                if (light) Color.White.copy(alpha = 0.72f) else Color(0xEB121422),
+                if (light) Color.White.copy(alpha = 0.72f) else Color(0xEB181818),
+                if (light) Color.White.copy(alpha = 0.72f) else Color(0xEB181818),
             )))
             .border(1.dp, pc.border, shape),
     ) { content() }
@@ -2175,7 +2285,7 @@ private fun FlowTakeoverBubble(flow: RemoteFlowTakeover, onToggle: () -> Unit) {
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(999.dp))
-                .background(if (pc == PcColorsLight) Color.White.copy(alpha = 0.9f) else Color(0xE0121422))
+                .background(if (pc == PcColorsLight) Color.White.copy(alpha = 0.9f) else Color(0xE0181818))
                 .border(1.dp, accent.copy(alpha = 0.48f), RoundedCornerShape(999.dp))
                 .clickable(onClick = onToggle)
                 .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -2204,16 +2314,19 @@ private fun QueuePanel(
     onDelete: (String) -> Unit,
     onEdit: (QueueMessageUi) -> Unit,
     onReorder: (List<String>) -> Unit,
+    onReorderAccepted: RemoteQueueOrderSender?,
     onGuide: (String) -> Unit,
 ) {
     val pc = LocalPcColors.current
     val density = LocalDensity.current
     var collapsed by remember { mutableStateOf(true) }
     var visualItems by remember { mutableStateOf(items) }
+    val currentItems by rememberUpdatedState(items)
     var draggingId by remember { mutableStateOf<String?>(null) }
     var dragOffsetPx by remember { mutableFloatStateOf(0f) }
     var dragSourceIndex by remember { mutableIntStateOf(-1) }
     var dragTargetIndex by remember { mutableIntStateOf(-1) }
+    var dragRevision by remember { mutableIntStateOf(0) }
     val headerInteractionSource = remember { MutableInteractionSource() }
     val rowStepPx = with(density) { 44.dp.toPx() }
     LaunchedEffect(items) {
@@ -2290,6 +2403,7 @@ private fun QueuePanel(
                                     rowStepPx = rowStepPx,
                                 ),
                                 onDragStart = {
+                                    dragRevision++
                                     draggingId = item.id
                                     dragOffsetPx = 0f
                                     dragSourceIndex = index
@@ -2308,14 +2422,15 @@ private fun QueuePanel(
                                     )
                                 },
                                 onDragEnd = {
-                                    val source = dragSourceIndex
-                                    val target = dragTargetIndex
-                                    if (source in visualItems.indices && target in visualItems.indices && source != target) {
-                                        val reordered = visualItems.toMutableList()
-                                        val moved = reordered.removeAt(source)
-                                        reordered.add(target, moved)
+                                    val reordered = queueOrderAfterDrag(currentItems, visualItems, draggingId, dragTargetIndex)
+                                    if (reordered.map { it.id } != currentItems.map { it.id }) {
                                         visualItems = reordered
-                                        onReorder(reordered.map { it.id })
+                                        val submittedRevision = dragRevision
+                                        if (onReorderAccepted != null) onReorderAccepted(reordered.map { it.id }) { accepted ->
+                                            if (!accepted && submittedRevision == dragRevision) visualItems = currentItems
+                                        } else onReorder(reordered.map { it.id })
+                                    } else {
+                                        visualItems = currentItems
                                     }
                                     draggingId = null
                                     dragOffsetPx = 0f
@@ -2323,6 +2438,7 @@ private fun QueuePanel(
                                     dragTargetIndex = -1
                                 },
                                 onDragCancel = {
+                                    visualItems = currentItems
                                     draggingId = null
                                     dragOffsetPx = 0f
                                     dragSourceIndex = -1
@@ -2485,7 +2601,7 @@ private fun RemoteGoalBar(goal: RemoteGoal, onEdit: () -> Unit, onTogglePause: (
     val dotColor = if (paused) Color(0xFFF4C95D) else pc.accent
     val haloColor = if (paused) Color(0x1FF4C95D) else Color(0x1F5B78FF)
     val bg = if (isDark) {
-        Brush.horizontalGradient(listOf(Color(0x1A5B78FF), Color(0xF0121422)))
+        Brush.horizontalGradient(listOf(Color(0x1A5B78FF), Color(0xF0181818)))
     } else {
         Brush.horizontalGradient(listOf(Color(0x215B78FF), Color(0xD1FFFFFF)))
     }
@@ -2528,6 +2644,7 @@ private fun InputArea(
     onSend: (String) -> Unit,
     onGuide: (String) -> Boolean,
     onStop: () -> Unit,
+    clearOnSend: Boolean = true,
     escalating: Boolean = false,
     onInputBoundsChanged: (Rect) -> Unit = {},
     onPlusAnchorBoundsChanged: (Rect) -> Unit,
@@ -2705,10 +2822,10 @@ private fun InputArea(
             Box(Modifier.offset(x = InputComposerHorizontalCenterCompensation)) {
                 SubmitButton(
                     running = running,
-                    hasText = value.text.isNotBlank(),
+                    hasText = remoteInputHasContent(remoteMode, value.text, pendingImage),
                     onClick = {
                         onSend(value.text)
-                        onValueChange(TextFieldValue())
+                        if (clearOnSend) onValueChange(TextFieldValue())
                     },
                     onGuide = {
                         val accepted = onGuide(value.text)
@@ -2725,6 +2842,7 @@ private fun InputArea(
 @Composable
 private fun InputCompositeMenuOverlay(
     menu: InputCompositeMenu?,
+    closing: Boolean = false,
     containerBounds: State<Rect?>,
     plusAnchor: State<Rect?>,
     modelAnchor: State<Rect?>,
@@ -2756,6 +2874,12 @@ private fun InputCompositeMenuOverlay(
     LaunchedEffect(Unit) {
         launch { popupScale.animateTo(1f, tween(260, easing = PcQueueEase)) }
         popupAlpha.animateTo(1f, tween(180, easing = PcQueueEase))
+    }
+    LaunchedEffect(closing) {
+        if (closing) {
+            launch { popupScale.animateTo(0.62f, tween(210, easing = PcQueueEase)) }
+            popupAlpha.animateTo(0f, tween(190, easing = PcQueueEase))
+        }
     }
     val activeWindowAnchor = when (visibleMenu) {
         InputCompositeMenu.PlusMain, InputCompositeMenu.PlusModes -> plusAnchor.value
@@ -2797,6 +2921,20 @@ private fun InputCompositeMenuOverlay(
     val currentOnChooseImage = rememberUpdatedState(onChooseImage)
     val updateInteractionOrigin = remember { { origin: Float -> pageOriginY = origin } }
     val menuShape = MobilePopupShape
+    var popupDragOffset by remember { mutableStateOf(Offset.Zero) }
+    var popupDragForce by remember { mutableFloatStateOf(0f) }
+    var popupPressed by remember { mutableStateOf(false) }
+    val updatePopupDrag = remember {
+        { delta: Offset? ->
+            if (delta == null) {
+                popupDragOffset = Offset.Zero
+                popupDragForce = 0f
+            } else {
+                popupDragOffset = delta
+                popupDragForce = (delta.getDistance() / with(density) { 90.dp.toPx() }).coerceIn(0f, 1f)
+            }
+        }
+    }
 
     Box(
         Modifier
@@ -2820,20 +2958,24 @@ private fun InputCompositeMenuOverlay(
                     .heightIn(max = 320.dp)
                     .graphicsLayer {
                         alpha = popupAlpha.value
+                        // Popup drag deformation is owned by the carrier glass
+                        // RenderNode below. Keep this layer for lifecycle
+                        // alpha/entrance only so content and glass cannot
+                        // diverge during a constrained gesture.
                         scaleX = popupScale.value
                         scaleY = popupScale.value
                         transformOrigin = TransformOrigin(0.5f, 1f)
                     }
-                    .liquidGlassModifier(
+                    .liquidPopupShell(
                         backdrop = backdrop,
                         shape = menuShape,
-                        alpha = 0.72f,
-                        blurRadius = 14.dp,
+                        alpha = 0.78f,
+                        blurRadius = 16.dp,
                         refractionHeight = MobileInteractionGlassEdge,
-                        refractionAmount = 14.dp,
-                        saturation = 1.25f,
+                        refractionAmount = 24.dp,
                         surfaceColor = p.bgTertiary,
-                        ambientHighlight = true,
+                        externalDragOffset = popupDragOffset,
+                        externalPressed = popupPressed,
                     )
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
@@ -2943,6 +3085,8 @@ private fun InputCompositeMenuOverlay(
                         LiquidMenuList(
                             entrySet = entrySet,
                             onInteractionOrigin = updateInteractionOrigin,
+                            onShellDrag = updatePopupDrag,
+                            onShellPress = { popupPressed = it },
                         )
                     }
                 }
@@ -2984,6 +3128,8 @@ private class LiquidMenuFlightScheduler(initialIndex: Int) {
 private fun LiquidMenuList(
     entrySet: LiquidMenuEntries,
     onInteractionOrigin: (Float) -> Unit,
+    onShellDrag: (Offset?) -> Unit,
+    onShellPress: (Boolean) -> Unit,
 ) {
     val entries = entrySet.values
     val p = LocalNewmarkColors.current
@@ -3006,7 +3152,6 @@ private fun LiquidMenuList(
     val offsets = geometry.offsets
     val totalHeight = geometry.totalHeight
     val selectedIndex = geometry.selectedIndex
-    val selectionBackdrop = rememberLiquidBackdrop()
     val interactionScope = rememberCoroutineScope()
     val density = LocalDensity.current
     val flightScheduler = remember(entrySet) { LiquidMenuFlightScheduler(selectedIndex) }
@@ -3014,9 +3159,8 @@ private fun LiquidMenuList(
         onDispose { flightScheduler.cancel() }
     }
     var moving by remember(entrySet) { mutableStateOf(false) }
-    var lifting by remember(entrySet) { mutableStateOf(false) }
-    var landing by remember(entrySet) { mutableStateOf(false) }
     var heldBoundaryOffsetPx by remember(entrySet) { mutableFloatStateOf(0f) }
+    var holdStartPoint by remember(entrySet) { mutableStateOf(Offset.Zero) }
     val activeOffsetPx = remember { Animatable(0f) }
     LaunchedEffect(selectedIndex, offsets, density.density) {
         if (!moving && selectedIndex >= 0) {
@@ -3024,11 +3168,6 @@ private fun LiquidMenuList(
             activeOffsetPx.snapTo(with(density) { offsets[selectedIndex].toPx() })
         }
     }
-    val glassProgress by animateFloatAsState(
-        targetValue = if (landing || lifting) 0f else if (moving) 1f else 0f,
-        animationSpec = tween(durationMillis = if (landing) 240 else 100, easing = PcQueueEase),
-        label = "liquidMenuSelectionMaterial",
-    )
 
     fun interactiveIndexAt(yPx: Float, density: Float): Int {
         val yDp = yPx / density
@@ -3052,11 +3191,15 @@ private fun LiquidMenuList(
             heldBoundaryOffsetPx = 0f
             runOverlappedLiquidFlight(
                 lift = {},
-                move = { activeOffsetPx.animateTo(with(density) { offsets.getOrElse(index) { 0.dp }.toPx() }, tween(durationMillis = 120, easing = PcQueueEase)) },
-                onLandingStarted = { landing = true },
-                land = { delay(240L) },
+                move = {
+                    activeOffsetPx.animateTo(
+                        with(density) { offsets.getOrElse(index) { 0.dp }.toPx() },
+                        tween(durationMillis = 120, easing = PcQueueEase),
+                    )
+                },
+                onLandingStarted = {},
+                land = {},
             )
-            landing = false
             moving = false
             commitSelection(index)
         }
@@ -3069,24 +3212,28 @@ private fun LiquidMenuList(
         val sourceIndex = selectedIndex.takeIf { it >= 0 } ?: index
         if (!redirecting) {
             flightScheduler.activeIndex = sourceIndex
-            lifting = true
             moving = true
         }
         flightScheduler.job = interactionScope.launch {
             if (!redirecting) {
                 activeOffsetPx.snapTo(with(density) { offsets[sourceIndex].toPx() })
                 kotlinx.coroutines.yield()
-                lifting = false
             }
             flightScheduler.activeIndex = index
             val targetOffset = with(density) { offsets[index].toPx() }
             runOverlappedLiquidFlight(
-                lift = { lifting = false; delay(100L) },
-                move = { if (kotlin.math.abs(activeOffsetPx.value - targetOffset) >= 0.5f) activeOffsetPx.animateTo(targetOffset, tween(durationMillis = 240, easing = PcQueueEase)) },
-                onLandingStarted = { landing = true },
-                land = { delay(240L) },
+                lift = {},
+                move = {
+                    if (kotlin.math.abs(activeOffsetPx.value - targetOffset) >= 0.5f) {
+                        activeOffsetPx.animateTo(
+                            targetOffset,
+                            tween(durationMillis = 240, easing = PcQueueEase),
+                        )
+                    }
+                },
+                onLandingStarted = {},
+                land = {},
             )
-            landing = false
             moving = false
             commitSelection(index)
         }
@@ -3099,7 +3246,6 @@ private fun LiquidMenuList(
         val sourceIndex = selectedIndex.takeIf { it >= 0 } ?: index
         if (!redirecting) {
             flightScheduler.activeIndex = sourceIndex
-            lifting = true
             moving = true
         }
         flightScheduler.job = interactionScope.launch {
@@ -3109,9 +3255,15 @@ private fun LiquidMenuList(
             flightScheduler.activeIndex = index
             runOverlappedLiquidFlight(
                 holdKeepsLifted = true,
-                lift = { kotlinx.coroutines.yield(); lifting = false; delay(100L) },
-                move = { activeOffsetPx.animateTo(with(density) { offsets[index].toPx() }, tween(durationMillis = 240, easing = PcQueueEase)) },
-                onLandingStarted = {}, land = {},
+                lift = {},
+                move = {
+                    activeOffsetPx.animateTo(
+                        with(density) { offsets[index].toPx() },
+                        tween(durationMillis = 240, easing = PcQueueEase),
+                    )
+                },
+                onLandingStarted = {},
+                land = {},
             )
         }
     }
@@ -3123,13 +3275,17 @@ private fun LiquidMenuList(
             .liquidHoldDragGesture(
                 geometry.gestureKeys,
                 holdMillis = 300L,
+                onCandidateStart = { onShellPress(true) },
+                onCandidateEnd = { onShellPress(false) },
                 onTap = { position ->
                     flySelectionTo(interactiveIndexAt(position.y, density.density))
                 },
                 onHoldStart = { position ->
+                    holdStartPoint = position
                     beginHeldSelection(interactiveIndexAt(position.y, density.density))
                 },
                 onDrag = { position, _ ->
+                    onShellDrag(position - holdStartPoint)
                     val firstInteractive = entries.indices.firstOrNull { !entries[it].header }
                     val lastInteractive = entries.indices.lastOrNull { !entries[it].header }
                     if (firstInteractive != null && lastInteractive != null) {
@@ -3161,48 +3317,19 @@ private fun LiquidMenuList(
                         .takeIf { it >= 0 }
                         ?: flightScheduler.activeIndex
                     flightScheduler.activeIndex = releasedIndex
+                    onShellDrag(null)
                     landSelection(releasedIndex)
                 },
                 onCancel = {
                     flightScheduler.cancel()
                     heldBoundaryOffsetPx = 0f
                     moving = false
-                    lifting = false
-                    landing = false
+                    onShellDrag(null)
                 },
             ),
     ) {
-        if ((moving || landing) && flightScheduler.activeIndex >= 0) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight)
-                    .graphicsLayer {
-                        translationY = activeOffsetPx.value + heldBoundaryOffsetPx
-                    }
-                    .liquidMotionDeformationDeferred(
-                        velocityX = { 0f },
-                        velocityY = { activeOffsetPx.velocity },
-                        density = density.density,
-                    )
-                    .zIndex(4f)
-                    .liquidSelectionMorph(
-                        backdrop = selectionBackdrop,
-                        shape = RoundedCornerShape(22.dp),
-                        fillColor = p.accentSoft,
-                        glassProgress = glassProgress,
-                        glassAlpha = 0.10f,
-                        blurRadius = 2.dp,
-                        refractionHeight = MobileInteractionGlassEdge,
-                        refractionAmount = 24.dp,
-                        saturation = 1.2f,
-                    ),
-            )
-        }
         Column(
-            Modifier
-                .fillMaxWidth()
-                .then(if (moving || landing) Modifier.layerBackdrop(selectionBackdrop) else Modifier),
+            Modifier.fillMaxWidth(),
         ) {
             entries.forEachIndexed { index, entry ->
                 if (entry.header) {
@@ -3223,8 +3350,7 @@ private fun LiquidMenuList(
                             .fillMaxWidth()
                             .height(rowHeight)
                             .background(
-                                if (entry.selected && !(moving || landing)) p.accentSoft
-                                else Color.Transparent,
+                                if (entry.selected && !moving) p.accentSoft else Color.Transparent,
                                 RoundedCornerShape(22.dp),
                             )
                             .padding(horizontal = 12.dp),
@@ -3252,6 +3378,22 @@ private fun LiquidMenuList(
                     }
                 }
             }
+        }
+        if (moving && flightScheduler.activeIndex >= 0) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(rowHeight)
+                    .graphicsLayer {
+                        translationY = activeOffsetPx.value + heldBoundaryOffsetPx
+                    }
+                    .liquidMotionDeformationDeferred(
+                        velocityX = { 0f },
+                        velocityY = { activeOffsetPx.velocity },
+                        density = density.density,
+                    )
+                    .background(p.accentSoft, RoundedCornerShape(22.dp)),
+            )
         }
     }
 }
@@ -3341,7 +3483,7 @@ private fun SubmitButton(
         GlassButtonCanvas(
             visualSize = InputComposerEdgeControlSize,
             shape = shape,
-            surfaceColor = if (isDark) Color(0xFF0E1018) else Color.White,
+            surfaceColor = if (isDark) Color(0xFF141414) else Color.White,
             alpha = if (isDark) 0.88f else 0.72f,
             onClick = onStop,
             interactionSource = interaction,
@@ -3358,7 +3500,7 @@ private fun SubmitButton(
                 Icon(
                     imageVector = if (escalating) LucideIcons.OctagonX else LucideIcons.Square,
                     contentDescription = if (escalating) "强制停止" else "停止",
-                    tint = if (isDark) Color.White else Color(0xFF0A0A1A),
+                    tint = p.textPrimary,
                     modifier = Modifier.size(14.dp),
                 )
             }
@@ -3392,7 +3534,7 @@ private fun SubmitButton(
                     Icon(
                         imageVector = Icons.Filled.KeyboardArrowUp,
                         contentDescription = "松开发送 Guide",
-                        tint = if (isDark) Color.White else Color(0xFF0A0A1A),
+                        tint = p.textPrimary,
                         modifier = Modifier.size(19.dp),
                     )
                 }
@@ -3400,7 +3542,7 @@ private fun SubmitButton(
             GlassButtonCanvas(
                 visualSize = InputComposerEdgeControlSize,
                 shape = shape,
-                surfaceColor = if (isDark) Color(0xFF0E1018) else Color.White,
+                surfaceColor = if (isDark) Color(0xFF141414) else Color.White,
                 alpha = if (isDark) 0.88f else 0.72f,
                 onClick = onClick,
                 interactionSource = interaction,
@@ -3444,7 +3586,7 @@ private fun SubmitButton(
                     Icon(
                         imageVector = LucideIcons.Send,
                         contentDescription = "发送下一条；长按上滑发送 Guide",
-                        tint = if (isDark) Color.White else Color(0xFF0A0A1A),
+                        tint = p.textPrimary,
                         modifier = Modifier.size(14.dp),
                     )
                 }
@@ -3454,7 +3596,6 @@ private fun SubmitButton(
     SubmitButtonMode.IdleSend -> {
         // idle（对齐 PC #submit-btn）：暗色 = 135deg 渐变 #5b78ff→#7b93ff + 白图标；
         // 亮色 = PC [data-theme=light] 白色 0.72 底 + 深色图标
-        val iconTint = if (isDark) Color.White else Color(0xFF0A0A1A)
         GlassButtonCanvas(
             visualSize = InputComposerEdgeControlSize,
             shape = shape,
@@ -3477,7 +3618,7 @@ private fun SubmitButton(
             Icon(
                 imageVector = LucideIcons.Send,
                 contentDescription = "发送",
-                tint = iconTint,
+                tint = p.textPrimary,
                 modifier = Modifier.size(14.dp),
             )
         }

@@ -4,6 +4,35 @@ import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.OutputStream
+import java.util.concurrent.CancellationException
+
+internal const val CONVERSATION_SAVE_FAILURE_MESSAGE = "本地对话保存失败，请检查可用存储空间后重试。"
+
+/** Same-directory rename is atomic on Android; never delete the previous snapshot to retry it. */
+internal fun writeConversationSnapshotAtomically(file: File, write: (OutputStream) -> Unit): Result<Unit> {
+    var staging: File? = null
+    return try {
+        val parent = file.absoluteFile.parentFile ?: throw IOException("Missing snapshot directory")
+        if (!parent.isDirectory && !parent.mkdirs()) throw IOException("Snapshot directory is unavailable")
+        staging = File.createTempFile(".${file.name}-", ".tmp", parent)
+        FileOutputStream(staging).use { output ->
+            write(output)
+            output.flush()
+            output.fd.sync()
+        }
+        if (!staging.renameTo(file)) throw IOException("Snapshot replacement failed")
+        Result.success(Unit)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        Result.failure(failure)
+    } finally {
+        staging?.delete()
+    }
+}
 
 /** 本地对话持久化：filesDir/newmark/conversations.json（活跃）；归档移入 archived.json 保留数据 */
 class ConversationStore(context: Context) {
@@ -12,6 +41,20 @@ class ConversationStore(context: Context) {
     private val dir = File(context.filesDir, "newmark")
     private val file = File(dir, "conversations.json")
     private val archivedFile = File(dir, "archived.json")
+    private val prefs = context.applicationContext
+        .getSharedPreferences("newmark_state", Context.MODE_PRIVATE)
+
+    /** 最近打开的本地对话；进程/Activity 重建后仍可找回当前追踪目标。 */
+    fun loadActiveId(): String? =
+        prefs.getString("active_local_conversation_id", null)
+            ?.takeIf { it.isNotBlank() }
+
+    fun saveActiveId(id: String?) {
+        prefs.edit().apply {
+            if (id.isNullOrBlank()) remove("active_local_conversation_id")
+            else putString("active_local_conversation_id", id)
+        }.apply()
+    }
 
     fun load(): List<LocalConversation> {
         if (!file.exists()) return emptyList()
@@ -21,11 +64,10 @@ class ConversationStore(context: Context) {
         }.getOrDefault(emptyList())
     }
 
-    fun save(conversations: List<LocalConversation>) {
-        runCatching {
-            dir.mkdirs()
-            file.writeText(gson.toJson(conversations))
-        }
+    @Synchronized
+    fun save(conversations: List<LocalConversation>): Result<Unit> = runCatching {
+        val json = gson.toJson(conversations).toByteArray(Charsets.UTF_8)
+        writeConversationSnapshotAtomically(file) { it.write(json) }.getOrThrow()
     }
 
     fun loadArchived(): List<LocalConversation> {

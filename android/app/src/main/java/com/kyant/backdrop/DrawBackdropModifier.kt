@@ -11,9 +11,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
@@ -27,6 +30,7 @@ import androidx.compose.ui.node.LayoutModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.ObserverModifierNode
 import androidx.compose.ui.node.observeReads
+import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.node.requireGraphicsContext
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Constraints
@@ -331,18 +335,34 @@ private class DrawBackdropNode(
         }
 
         onDrawBehind?.invoke(this)
-        drawBackdropLayer()
-        onDrawSurface?.invoke(this)
+        drawClippedOptics {
+            drawBackdropLayer()
+            onDrawSurface?.invoke(this)
+        }
         drawContent()
-        onDrawFront?.invoke(this)
+        drawClippedOptics { onDrawFront?.invoke(this) }
 
         exportedBackdrop?.graphicsLayer?.let { layer ->
             recordLayer(this@DrawBackdropNode, layer) {
                 onDrawBehind?.invoke(this)
-                drawBackdropLayer()
-                onDrawSurface?.invoke(this)
-                onDrawFront?.invoke(this)
+                drawClippedOptics {
+                    drawBackdropLayer()
+                    onDrawSurface?.invoke(this)
+                    onDrawFront?.invoke(this)
+                }
             }
+        }
+    }
+
+    // placeWithLayer clips the child content, not this modifier's own draw
+    // callbacks. Clip the optical passes explicitly: a glow must never paint
+    // outside the glass just because it is registered as onDrawSurface.
+    private fun DrawScope.drawClippedOptics(block: DrawScope.() -> Unit) {
+        if (clipToShape) {
+            val outline = shapeProvider.shape.createOutline(size, layoutDirection, this)
+            clipPath(Path().apply { addOutline(outline) }) { block() }
+        } else {
+            block()
         }
     }
 
@@ -365,6 +385,7 @@ private class DrawBackdropNode(
 
     fun invalidateDrawCache() {
         observeEffects()
+        invalidateDraw()
     }
 
     private fun observeEffects() {

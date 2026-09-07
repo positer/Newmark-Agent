@@ -162,7 +162,7 @@ function makeHarness(): Harness {
   return harness;
 }
 
-async function main(): Promise<void> {
+export async function verifyQueueUnifyStress(): Promise<void> {
   console.log('queueUnifyStressVerify');
   const source = uiScriptSource();
 
@@ -200,6 +200,37 @@ async function main(): Promise<void> {
     check(result.count === 2, 'queueItemsForTarget returns the stored backend queue items');
     check(result.id1 === 'mobile-1' && result.id2 === 'mobile-2', 'queueItemIdForText resolves stable kernel ids by text');
     check(result.idMissing === '', 'queueItemIdForText returns empty for unknown text');
+  }
+
+  // Repeated text cannot replace the row identity supplied by the kernel.
+  // backendOccurrence is its follow-up position, not an index among matches.
+  {
+    const h = makeHarness();
+    const w = await h.run(`
+      ${queueItemsForTargetSource}
+      ${setQueueItemsForTargetSource}
+      ${queueItemIdForTextSource}
+      var target = { workspaceId: 'ws1', conversationId: 'conv1' };
+      setQueueItemsForTarget([
+        { id: 'first', text: 'same', queueMode: 'followUp' },
+        { id: 'middle', text: 'different', queueMode: 'followUp' },
+        { id: 'second', text: 'same', queueMode: 'followUp' }
+      ], target);
+      window.duplicateAtPosition = queueItemIdForText('same', target, { backendOccurrence: 2 });
+      window.noFallbackAtWrongPosition = queueItemIdForText('same', target, { backendOccurrence: 1 });
+      var selected = { queueItemId: 'second', backendOccurrence: 2 };
+      setQueueItemsForTarget([
+        { id: 'second', text: 'edited', queueMode: 'followUp' },
+        { id: 'first', text: 'same', queueMode: 'followUp' }
+      ], target);
+      window.identityAfterReorder = queueItemIdForText('same', target, selected);
+      setQueueItemsForTarget([{ id: 'first', text: 'same', queueMode: 'followUp' }], target);
+      window.removedIdentity = queueItemIdForText('same', target, selected);
+    `);
+    check(w.duplicateAtPosition === 'second', 'nonadjacent duplicate resolves the selected backend occurrence');
+    check(w.noFallbackAtWrongPosition === '', 'mismatched occurrence never falls back to the first equal text');
+    check(w.identityAfterReorder === 'second', 'captured queue identity survives remote text and order changes');
+    check(w.removedIdentity === '', 'removed captured identity cannot redirect to another equal-text row');
   }
 
   // ---- 2. deleteQueueItem forwards queue_delete for backend-managed rows ----
@@ -326,7 +357,7 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ ok: true }));
 }
 
-main().catch(error => {
+if (require.main === module) verifyQueueUnifyStress().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });

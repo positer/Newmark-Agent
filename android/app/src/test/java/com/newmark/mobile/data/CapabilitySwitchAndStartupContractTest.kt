@@ -31,7 +31,15 @@ class CapabilitySwitchAndStartupContractTest {
     @Test
     fun coldStartRestoresTheLastLocalConversation() {
         val app = File("src/main/java/com/newmark/mobile/ui/NewmarkApp.kt").readText()
+        val store = File("src/main/java/com/newmark/mobile/data/ConversationStore.kt").readText()
+        val vm = File("src/main/java/com/newmark/mobile/vm/ChatViewModel.kt").readText()
         assertTrue(app.contains("var preferLocal by remember { mutableStateOf(true) }"))
         assertTrue(app.contains("local:${'$'}{vm.currentId.orEmpty()}"))
+        assertTrue(store.contains("fun loadActiveId(): String?"))
+        assertTrue(store.contains("fun saveActiveId(id: String?)"))
+        assertTrue(store.contains("active_local_conversation_id"))
+        assertTrue(vm.contains("conversationStore.loadActiveId()"))
+        assertTrue(vm.contains("conversationStore.saveActiveId(currentId)"))
+        assertTrue(app.contains("moveTaskToBack(true)"))
     }
 }

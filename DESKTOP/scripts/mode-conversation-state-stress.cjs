@@ -12,11 +12,15 @@ const { JSDOM } = require('jsdom');
 const INDEX_HTML = path.join(__dirname, '..', 'src', 'ui', 'index.html');
 const source = fs.readFileSync(INDEX_HTML, 'utf8');
 
-// Extract the flow takeover / pause / stop block (self-contained helpers).
+// Extract the real Flow block and its shared command-snapshot dependency.
 const blockStart = source.indexOf('window.renderFlowTakeover = function(');
 const blockEnd = source.indexOf('window.normalizeFlowWork = function(work)');
 if (blockStart < 0 || blockEnd < 0) throw new Error('flow takeover/pause block not found in index.html');
 const block = source.slice(blockStart, blockEnd);
+const snapshotStart = source.indexOf('function applyConversationCommandSnapshot(snapshot, target) {');
+const snapshotEnd = source.indexOf('\nwindow.queueAction = function(', snapshotStart);
+if (snapshotStart < 0 || snapshotEnd < 0) throw new Error('shared command snapshot helper not found in index.html');
+const snapshotBlock = source.slice(snapshotStart, snapshotEnd);
 
 const failures = [];
 function ok(msg) { console.log('ok: ' + msg); }
@@ -27,6 +31,8 @@ const dom = new JSDOM('<!DOCTYPE html><html><body>'
   + '<div id="chat-area"></div>'
   + '<div id="flow-takeover"></div>'
   + '<textarea id="prompt"></textarea>'
+  + '<select id="mode-select"><option>build</option><option>chat</option><option>plan</option><option>goal</option><option>flow</option></select>'
+  + '<select id="flow-select"></select>'
   + '</body></html>', { runScripts: 'dangerously', pretendToBeVisual: true });
 const { window } = dom;
 const tick = () => new Promise(resolve => setTimeout(resolve, 5));
@@ -87,9 +93,13 @@ window.api = {
   },
 };
 
-window.els = { prompt: window.document.getElementById('prompt') };
+window.els = { prompt: window.document.getElementById('prompt'), 'mode-select': window.document.getElementById('mode-select') };
 window.currentConversationTarget = function() { return { ...currentTarget }; };
 window.activeConversationId = function() { return currentTarget.conversationId; };
+window.normalizeQueuedConversationTarget = function(target) { return target && { workspaceId: target.workspaceId, conversationId: target.conversationId }; };
+window.isActiveConversationTarget = function(target) { return runtimeKeyFor(target.workspaceId, target.conversationId) === currentRuntimeKey(); };
+window.syncNewmarkSelect = function() {};
+window.setInputMode = function(mode) { window.state.inputMode = mode; };
 window.runtimeKeyFor = runtimeKeyFor;
 window.currentRuntimeKey = currentRuntimeKey;
 window.queueRuntimeKey = function(target) { return runtimeKeyFor(target.workspaceId, target.conversationId); };
@@ -134,6 +144,7 @@ window.conversationDraftKey = function(target) {
 };
 
 window.eval(block);
+window.eval(snapshotBlock);
 
 function flowRecordFor(target) {
   target = target || currentTarget;
@@ -254,14 +265,48 @@ function flowRecord(target) {
   flowRecord(currentTarget).running = true;
   flowRecord(currentTarget).paused = false;
   window.renderFlowTakeover(true, 'stress-flow-a', { target: { ...currentTarget } });
-  stopFlowResults = [{ action: 'stopping' }];
+  stopFlowResults = [{ action: 'stopping', queuePaused: true, flowRunning: { name: 'stress-flow-a' } }];
   await window.stopFlowRun();
   assert(flowRecord(currentTarget).running === true, 'S7: first Stop is cooperative (keeps running)');
+  assert(window.state.queuePausedByTarget[currentRuntimeKey()] === true, 'S7: cooperative Stop projects authoritative queue pause');
   window.renderFlowTakeover(true, 'stress-flow-a', { interrupted: true, message: 'paused', target: { ...currentTarget } });
   resumeCalls = 0;
   await window.resumeInterruptedFlow();
   await tick();
   assert(resumeCalls === 1, 'S7: paused Flow resumes via whole-bubble click');
+
+  // ---- Scenario 8: a delayed Stop reply belongs to its original conversation ----
+  // Exercise the real shared snapshot helper, rather than a no-op dependency
+  // that could conceal mode/queue/Flow leakage after switching conversations.
+  const targetA = { conversationId: 'conv-a', workspaceId: WORKSPACE };
+  const targetB = { conversationId: 'conv-b', workspaceId: WORKSPACE };
+  currentTarget = targetA;
+  window.renderFlowTakeover(true, 'stress-flow-a', { target: targetA });
+  let resolveStop;
+  let stoppedTarget;
+  const originalStop = window.api.stopFlow;
+  window.api.stopFlow = target => { stoppedTarget = target; return new Promise(resolve => { resolveStop = resolve; }); };
+  const pendingStop = window.stopFlowRun();
+  currentTarget = targetB;
+  window.state.mode = 'chat';
+  window.state.inputMode = 'next';
+  window.els['mode-select'].value = 'chat';
+  window.state.queuePausedByTarget[runtimeKeyFor(WORKSPACE, 'conv-b')] = false;
+  window.reconcileFlowTakeoverForActive();
+  const pausedSnapshot = { action: 'stopping', mode: 'flow', inputMode: 'guide', queuePaused: true,
+    flowRunning: null, flowSuspension: { reason: 'interrupted', workflowName: 'stress-flow-a', input: 'preserved input' } };
+  resolveStop(pausedSnapshot);
+  await pendingStop;
+  window.api.stopFlow = originalStop;
+  assert(stoppedTarget.workspaceId === targetA.workspaceId && stoppedTarget.conversationId === targetA.conversationId, 'S8: Stop request freezes original target');
+  assert(flowRecord(targetA).running && flowRecord(targetA).paused && flowRecord(targetA).promptText === 'preserved input', 'S8: delayed Stop suspension updates only its owning Flow');
+  assert(window.state.queuePausedByTarget[runtimeKeyFor(WORKSPACE, 'conv-a')] === true && window.state.queuePausedByTarget[runtimeKeyFor(WORKSPACE, 'conv-b')] === false, 'S8: delayed Stop keeps per-target queue pause independent');
+  assert(window.state.mode === 'chat' && window.state.inputMode === 'next' && window.els['mode-select'].value === 'chat', 'S8: background Stop reply cannot change viewed mode controls');
+  assert(!window.document.getElementById('flow-takeover').classList.contains('active'), 'S8: background suspension cannot reveal another conversation takeover');
+  currentTarget = targetA;
+  window.applyConversationCommandSnapshot(pausedSnapshot, targetA);
+  assert(window.state.mode === 'flow' && window.els['mode-select'].value === 'flow' && window.state.inputMode === 'guide', 'S8: selecting owning conversation projects authoritative controls');
+  assert(window.document.getElementById('flow-takeover').classList.contains('paused'), 'S8: owning conversation shows the resumable Flow bubble');
 
   if (failures.length) {
     console.error('mode-conversation-state-stress FAILED (' + failures.length + ')');

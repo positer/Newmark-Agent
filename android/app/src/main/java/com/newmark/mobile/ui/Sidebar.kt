@@ -44,6 +44,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -108,6 +109,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -139,8 +141,11 @@ import com.newmark.mobile.ui.components.glassButtonSurface
 import com.newmark.mobile.ui.components.GlassButtonCanvas
 import com.newmark.mobile.ui.components.liquidHoldDragGesture
 import com.newmark.mobile.ui.components.liquidGlassModifier
-import com.newmark.mobile.ui.components.liquidMotionDeformation
+import com.newmark.mobile.ui.components.liquidMotionDeformationDeferred
 import com.newmark.mobile.ui.components.liquidSelectionMorph
+import com.newmark.mobile.ui.components.LiquidContactState
+import com.newmark.mobile.ui.components.rememberLiquidContactState
+import com.newmark.mobile.ui.components.rememberLiquidDragFollower
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
 import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
 import com.newmark.mobile.ui.components.resistedLiquidBoundaryPosition
@@ -171,6 +176,9 @@ sealed interface SidebarPage {
 
 private val PcEaseOutExpo = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
 private enum class ConversationMenuTrigger { MoreButton, LongPress }
+
+/** 左侧栏浮块抬起期间向右的轻微偏移；起终点仍落在色块上。 */
+private val LeftSidebarUtilityFloatRightOffset = 3.dp
 
 @Composable
 fun SidebarContent(
@@ -326,6 +334,8 @@ private fun MainSidebar(
     val localConversationGlassScaleX = remember { Animatable(1f) }
     val localConversationGlassScaleY = remember { Animatable(1f) }
     val localConversationBackdrop = rememberLiquidBackdrop()
+    val localConversationContact = rememberLiquidContactState()
+    val localDragFollower = rememberLiquidDragFollower()
     var localConversationGlassVisible by remember { mutableStateOf(false) }
     var localConversationGlassX by remember { mutableStateOf(0f) }
     var localConversationGlassWidth by remember { mutableStateOf(0f) }
@@ -386,6 +396,7 @@ private fun MainSidebar(
     }
     fun beginLocalConversationDrag(targetId: String) {
         val target = localConversationBounds[targetId] ?: return
+        localDragFollower.startFrom(0f)
         localConversationFlightJob?.cancel()
         localConversationGlassX = target.left
         localConversationGlassWidth = target.width
@@ -406,6 +417,7 @@ private fun MainSidebar(
         }
     }
     fun clearLocalDrag() {
+        localDragFollower.cancel()
         localConversationFlightJob?.cancel()
         localConversationFlightJob = null
         localConversationGlassVisible = false
@@ -442,9 +454,9 @@ private fun MainSidebar(
             }
         }
         if (sourceId == null) return clearLocalDrag()
-        val releasedTop = localConversationGlassY.value + localDragPointerY - localDragOriginY
         localConversationFlightJob?.cancel()
         localConversationFlightJob = localConversationScope.launch {
+            val releasedTop = localConversationGlassY.value + localDragFollower.stopAndRead()
             localConversationGlassY.snapTo(releasedTop)
             draggingLocalId = null
             localDragPointerY = 0f
@@ -455,7 +467,7 @@ private fun MainSidebar(
             localDragItemHeight = 0f
             val landingTop = localConversationBounds[sourceId]?.top ?: localConversationGlassY.value
             runOverlappedLiquidFlight(
-                lift = {},
+                lift = { coroutineScope { launch { localConversationGlassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }; launch { localConversationGlassScaleX.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }; launch { localConversationGlassScaleY.animateTo(1f, tween(100, easing = PcEaseOutExpo)) } } },
                 move = { localConversationGlassY.animateTo(landingTop, tween(120, easing = PcEaseOutExpo)) },
                 onLandingStarted = { localGlassLanding = true },
                 land = { coroutineScope { launch { localConversationGlassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }; launch { localConversationGlassScaleX.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }; launch { localConversationGlassScaleY.animateTo(0f, tween(240, easing = PcEaseOutExpo)) } } },
@@ -569,6 +581,7 @@ private fun MainSidebar(
                                             ?: coordinates.boundsInParent()
                                     },
                                     conversation = conv,
+                                    contact = localConversationContact,
                                     selected = !localConversationGlassVisible && conv.id == localVisualSelectedId,
                                     reordering = draggingLocalId != null,
                                     glassCovered = localConversationGlassVisible && !localGlassLanding &&
@@ -614,6 +627,7 @@ private fun MainSidebar(
                                                 itemCount = groupSize,
                                             ) + localDragOriginY
                                             localDragPointerY = nextPointerY
+                                            localDragFollower.updateTarget(nextPointerY - localDragOriginY)
                                             localDragVelocityY = (nextPointerY - previousPointerY) * 60f
                                             localDragDestinationGroupIndex = conversationDragDestinationIndex(
                                                 sourceIndex = localDragSourceGroupIndex,
@@ -634,20 +648,24 @@ private fun MainSidebar(
                             val travelCenterCorrectionPx = with(localDensity) { 2.dp.toPx() } * localConversationGlassLift.value
                             Box(
                                 Modifier
+                                    // An oversized requiredWidth otherwise receives an implicit
+                                    // negative centering offset from the rail's constraints.
+                                    // Keep the source anchor explicit and grow the lens rightward.
+                                    .wrapContentSize(Alignment.TopStart, unbounded = true)
                                     .requiredWidth(with(localDensity) { (localConversationGlassWidth + horizontalEdgePx * 2f * localConversationGlassScaleX.value).toDp() })
                                     .requiredHeight(with(localDensity) { (localConversationGlassHeight + edgePx * 2f * localConversationGlassScaleY.value).toDp() })
                                     .graphicsLayer {
-                                        translationX = localConversationGlassX - horizontalEdgePx * localConversationGlassScaleX.value +
-                                            travelCenterCorrectionPx
+                                        translationX = localConversationGlassX + travelCenterCorrectionPx
                                         translationY = localConversationGlassY.value - edgePx * localConversationGlassScaleY.value +
-                                            if (draggingLocalId == localGlassArrivedId) localDragPointerY - localDragOriginY else 0f
+                                            if (draggingLocalId == localGlassArrivedId) localDragFollower.value else 0f
                                     }
-                                    .liquidMotionDeformation(
-                                        velocityX = 0f,
-                                        velocityY = if (draggingLocalId != null) localDragVelocityY else localConversationGlassY.velocity,
+                                    .liquidMotionDeformationDeferred(
+                                        velocityX = { 0f },
+                                        velocityY = { if (draggingLocalId != null) localDragFollower.velocity else localConversationGlassY.velocity },
                                         density = localDensity.density,
                                     )
                                     .zIndex(8f)
+                                    .testTag("local-conversation-glass")
                                     .liquidSelectionMorph(
                                         backdrop = localConversationBackdrop,
                                         shape = RoundedCornerShape(50),
@@ -657,6 +675,14 @@ private fun MainSidebar(
                                         blurRadius = 2.dp,
                                         refractionHeight = MobileInteractionGlassEdge,
                                         refractionAmount = 20.dp,
+                                        contact = localConversationContact,
+                                        contactGeometry = {
+                                            localConversationGlassX; localConversationGlassY.value
+                                            localConversationGlassWidth; localConversationGlassHeight
+                                            localConversationGlassScaleX.value; localConversationGlassScaleY.value
+                                            localConversationGlassLift.value; localConversationGlassY.velocity
+                                            draggingLocalId; localDragFollower.value; localDragFollower.velocity
+                                        },
                                     ),
                             )
                         }
@@ -984,6 +1010,7 @@ private fun WorkspaceThumb(workspace: Workspace) {
 private fun LocalConversationRow(
     modifier: Modifier = Modifier,
     conversation: LocalConversation,
+    contact: LiquidContactState,
     selected: Boolean,
     reordering: Boolean,
     glassCovered: Boolean,
@@ -1028,6 +1055,7 @@ private fun LocalConversationRow(
     )
     Box(
         modifier
+            .testTag("local-conversation-row-${conversation.id}")
             .graphicsLayer {
                 translationY = dragTranslationY + previewTranslation
                 alpha = archiveProgress.value
@@ -1072,6 +1100,7 @@ private fun LocalConversationRow(
                         .liquidHoldDragGesture(
                             conversation.id,
                             renaming,
+                            contact = contact,
                             onCandidateStart = { setSidebarGestureLock("local-conversation-candidate", true) },
                             onCandidateEnd = { setSidebarGestureLock("local-conversation-candidate", false) },
                             onTap = { if (!renaming) onClick() },
@@ -1200,6 +1229,9 @@ private fun CollapsedUtilityButtons(
     val icons = listOf(Icons.Filled.Terminal, Icons.Filled.Psychology, Icons.Filled.Settings)
     val labels = listOf("命令行", "Memory Lab", "设置")
     val utilityBackdrop = rememberLiquidBackdrop()
+    val glassContact = rememberLiquidContactState()
+    val dragFollower = rememberLiquidDragFollower()
+    var draggingGlass by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val itemHeight = 46.dp
     val density = LocalDensity.current
@@ -1208,43 +1240,50 @@ private fun CollapsedUtilityButtons(
     val halfFloatPx = with(density) { 20.dp.toPx() }
     val bottomInsetPx = with(density) { 43.dp.toPx() }
     var moving by remember { mutableStateOf(false) }
-    var lifting by remember { mutableStateOf(false) }
-    var landing by remember { mutableStateOf(false) }
     var activeIndex by remember { mutableStateOf(0) }
     var selectedIndex by remember { mutableStateOf(0) }
     var glassTopPx by remember { mutableStateOf(0f) }
     var glassVelocityY by remember { mutableStateOf(0f) }
     var flightJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    val glassProgress by animateFloatAsState(
-        targetValue = if (landing || lifting) 0f else 1f,
-        animationSpec = tween(if (landing) 240 else 100, easing = PcEaseOutExpo),
-        label = "collapsedUtilityGlassMaterial",
-    )
+    val glassLift = remember { Animatable(0f) }
+    val glassProgress = glassLift.value
+    DisposableEffect(Unit) {
+        onDispose {
+            flightJob?.cancel()
+            setSidebarGestureLock("collapsed-utility", false)
+            setSidebarGestureLock("collapsed-utility-candidate", false)
+            dragFollower.cancel()
+        }
+    }
     Box(
         Modifier
             .fillMaxWidth()
             .height(itemHeight * actions.size)
+            .testTag("collapsed-utility-rail")
             .liquidHoldDragGesture(
                 actions.size,
+                contact = glassContact,
                 onCandidateStart = { setSidebarGestureLock("collapsed-utility-candidate", true) },
                 onCandidateEnd = { setSidebarGestureLock("collapsed-utility-candidate", false) },
                 onTap = { position ->
                     val target = (position.y / itemPx).toInt().coerceIn(actions.indices)
-                    val start = if (moving) glassTopPx else selectedIndex * itemPx + topInsetPx
+                    val start = if (draggingGlass) dragFollower.value else if (moving) glassTopPx else selectedIndex * itemPx + topInsetPx
                     flightJob?.cancel()
+                    dragFollower.cancel()
+                    draggingGlass = false
+                    glassTopPx = start
                     activeIndex = target
                     setSidebarGestureLock("collapsed-utility", true)
-                    if (!moving) lifting = true
                     moving = true
                     flightJob = scope.launch {
                         glassTopPx = start
                         val targetTop = target * itemPx + topInsetPx
                         runOverlappedLiquidFlight(
-                            lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) },
+                            lift = { glassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) },
                             move = { if (kotlin.math.abs(start - targetTop) >= 0.5f) animate(start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } },
-                            onLandingStarted = { landing = true }, land = { delay(240) },
+                            onLandingStarted = {}, land = { glassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) },
                         )
-                        landing = false
+
                         moving = false
                         selectedIndex = target
                         setSidebarGestureLock("collapsed-utility", false)
@@ -1253,38 +1292,51 @@ private fun CollapsedUtilityButtons(
                 },
                 onHoldStart = { position ->
                     val target = (position.y / itemPx).toInt().coerceIn(actions.indices)
-                    val start = if (moving) glassTopPx else selectedIndex * itemPx + topInsetPx
+                    val start = if (draggingGlass) dragFollower.value else if (moving) glassTopPx else selectedIndex * itemPx + topInsetPx
                     flightJob?.cancel()
+                    dragFollower.cancel()
+                    draggingGlass = false
+                    glassTopPx = start
                     activeIndex = target
                     setSidebarGestureLock("collapsed-utility", true)
-                    if (!moving) lifting = true
                     moving = true
                     flightJob = scope.launch {
                         glassTopPx = start
                         val targetTop = target * itemPx + topInsetPx
-                        runOverlappedLiquidFlight(holdKeepsLifted = true, lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) }, move = { animate(start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = {}, land = {})
+                        runOverlappedLiquidFlight(holdKeepsLifted = true, lift = { glassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }, move = { animate(start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = {}, land = {})
                     }
                 },
                 onDrag = { position, delta ->
-                    flightJob?.cancel()
+                    if (!draggingGlass) {
+                        flightJob?.cancel()
+                        dragFollower.startFrom(glassTopPx)
+                        draggingGlass = true
+                        flightJob = scope.launch { glassLift.animateTo(1f, tween(100)) }
+                    }
                     moving = true
-                    lifting = false
+
                     activeIndex = (position.y / itemPx).toInt().coerceIn(actions.indices)
-                    glassTopPx = resistedLiquidBoundaryPosition(
+                    dragFollower.updateTarget(resistedLiquidBoundaryPosition(
                         raw = position.y - halfFloatPx,
                         minimum = topInsetPx,
-                        maximum = itemPx * actions.size - bottomInsetPx,
-                        maxDisplacement = with(density) { 4.dp.toPx() },
-                    )
+                        maximum = (itemPx * actions.size - bottomInsetPx).coerceAtLeast(topInsetPx),
+                        maxDisplacement = 0f,
+                    ))
                     glassVelocityY = delta.y * 60f
                 },
                 onHoldEnd = { _, _ ->
                     val commit = activeIndex
+                    val interruptedFlight = flightJob
+                    interruptedFlight?.cancel()
                     flightJob = scope.launch {
-                        lifting = false
+                        interruptedFlight?.join()
+                        if (draggingGlass) {
+                            glassTopPx = dragFollower.stopAndRead()
+                            draggingGlass = false
+                        }
                         val targetTop = commit * itemPx + topInsetPx
-                        runOverlappedLiquidFlight(lift = {}, move = { animate(initialValue = glassTopPx, targetValue = targetTop, animationSpec = tween(120, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = { landing = true }, land = { delay(240) })
-                        landing = false
+                        runOverlappedLiquidFlight(lift = { glassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }, move = { animate(initialValue = glassTopPx, targetValue = targetTop, animationSpec = tween(120, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = {}, land = { glassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) })
+
                         moving = false
                         glassVelocityY = 0f
                         selectedIndex = commit
@@ -1293,9 +1345,13 @@ private fun CollapsedUtilityButtons(
                     }
                 },
                 onCancel = {
+                    dragFollower.cancel()
+                    draggingGlass = false
+                    flightJob?.cancel()
+                    flightJob = scope.launch { glassLift.snapTo(0f) }
                     moving = false
-                    lifting = false
-                    landing = false
+
+
                     glassVelocityY = 0f
                     setSidebarGestureLock("collapsed-utility", false)
                 },
@@ -1304,7 +1360,9 @@ private fun CollapsedUtilityButtons(
         Column(
             Modifier
                 .fillMaxSize()
-                .then(if (moving) Modifier.layerBackdrop(utilityBackdrop) else Modifier),
+                // Record only the static rows. The refractive float is a sibling,
+                // so the recorder never contains its own consumer.
+                .layerBackdrop(utilityBackdrop),
         ) {
             actions.indices.forEach { index ->
                 Box(
@@ -1333,11 +1391,20 @@ private fun CollapsedUtilityButtons(
                     .align(Alignment.TopCenter)
                     .size(collapsedTargetSize + collapsedExpansion)
                     .graphicsLayer {
-                        translationY = glassTopPx + with(density) { ((4.dp - collapsedExpansion) / 2f).toPx() }
+                        translationY = (if (draggingGlass) dragFollower.value else glassTopPx) + with(density) { ((4.dp - collapsedExpansion) / 2f).toPx() }
+                        translationX = with(density) {
+                            LeftSidebarUtilityFloatRightOffset.toPx() * glassProgress
+                        }
                     }
-                    .liquidMotionDeformation(0f, glassVelocityY, density.density)
+                    .liquidMotionDeformationDeferred({ 0f }, { if (draggingGlass) dragFollower.velocity else glassVelocityY }, density.density)
                     .zIndex(4f)
+                    .testTag("collapsed-utility-float")
                     .liquidSelectionMorph(
+                        contact = glassContact,
+                        contactGeometry = {
+                            glassTopPx; glassLift.value; draggingGlass
+                            dragFollower.value; dragFollower.velocity; glassVelocityY
+                        },
                         backdrop = utilityBackdrop,
                         shape = CircleShape,
                         fillColor = pc.activeSurface,
@@ -1369,44 +1436,54 @@ private fun ExpandedUtilityButtons(
     val icons = listOf(Icons.Filled.Terminal, Icons.Filled.Psychology, Icons.Filled.Settings)
     val labels = listOf("命令行", "Memory Lab", "设置")
     val utilityBackdrop = rememberLiquidBackdrop()
+    val glassContact = rememberLiquidContactState()
+    val dragFollower = rememberLiquidDragFollower()
+    var draggingGlass by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val itemHeight = 46.dp
     val density = LocalDensity.current
     val itemPx = with(density) { itemHeight.toPx() }
     var moving by remember { mutableStateOf(false) }
-    var lifting by remember { mutableStateOf(false) }
-    var landing by remember { mutableStateOf(false) }
     var activeIndex by remember { mutableStateOf(0) }
     var selectedIndex by remember { mutableStateOf(0) }
     var glassTopPx by remember { mutableStateOf(0f) }
     var glassVelocityY by remember { mutableStateOf(0f) }
     var flightJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    val glassProgress by animateFloatAsState(
-        targetValue = if (landing || lifting) 0f else if (moving) 1f else 0f,
-        animationSpec = tween(if (landing) 240 else 100, easing = PcEaseOutExpo),
-        label = "expandedUtilityGlassMaterial",
-    )
+    val glassLift = remember { Animatable(0f) }
+    val glassProgress = glassLift.value
+    DisposableEffect(Unit) {
+        onDispose {
+            flightJob?.cancel()
+            setSidebarGestureLock("expanded-utility", false)
+            setSidebarGestureLock("expanded-utility-candidate", false)
+            dragFollower.cancel()
+        }
+    }
     Box(
         Modifier
             .fillMaxWidth()
             .height(itemHeight * actions.size)
+            .testTag("expanded-utility-rail")
             .liquidHoldDragGesture(
                 actions.size,
+                contact = glassContact,
                 onCandidateStart = { setSidebarGestureLock("expanded-utility-candidate", true) },
                 onCandidateEnd = { setSidebarGestureLock("expanded-utility-candidate", false) },
                 onTap = { position ->
                     val target = (position.y / itemPx).toInt().coerceIn(actions.indices)
-                    val start = if (moving) glassTopPx else selectedIndex * itemPx
+                    val start = if (draggingGlass) dragFollower.value else if (moving) glassTopPx else selectedIndex * itemPx
                     flightJob?.cancel()
+                    dragFollower.cancel()
+                    draggingGlass = false
+                    glassTopPx = start
                     activeIndex = target
                     setSidebarGestureLock("expanded-utility", true)
-                    if (!moving) lifting = true
                     moving = true
                     flightJob = scope.launch {
                         glassTopPx = start
                         val targetTop = target * itemPx
-                        runOverlappedLiquidFlight(lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) }, move = { if (kotlin.math.abs(start - targetTop) >= 0.5f) animate(start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = { landing = true }, land = { delay(240) })
-                        landing = false
+                        runOverlappedLiquidFlight(lift = { glassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }, move = { if (kotlin.math.abs(start - targetTop) >= 0.5f) animate(start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = {}, land = { glassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) })
+
                         moving = false
                         selectedIndex = target
                         setSidebarGestureLock("expanded-utility", false)
@@ -1415,38 +1492,51 @@ private fun ExpandedUtilityButtons(
                 },
                 onHoldStart = { position ->
                     val target = (position.y / itemPx).toInt().coerceIn(actions.indices)
-                    val start = if (moving) glassTopPx else selectedIndex * itemPx
+                    val start = if (draggingGlass) dragFollower.value else if (moving) glassTopPx else selectedIndex * itemPx
                     flightJob?.cancel()
+                    dragFollower.cancel()
+                    draggingGlass = false
+                    glassTopPx = start
                     activeIndex = target
                     setSidebarGestureLock("expanded-utility", true)
-                    if (!moving) lifting = true
                     moving = true
                     flightJob = scope.launch {
                         glassTopPx = start
                         val targetTop = target * itemPx
-                        runOverlappedLiquidFlight(holdKeepsLifted = true, lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) }, move = { animate(start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = {}, land = {})
+                        runOverlappedLiquidFlight(holdKeepsLifted = true, lift = { glassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }, move = { animate(start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = {}, land = {})
                     }
                 },
                 onDrag = { position, delta ->
-                    flightJob?.cancel()
+                    if (!draggingGlass) {
+                        flightJob?.cancel()
+                        dragFollower.startFrom(glassTopPx)
+                        draggingGlass = true
+                        flightJob = scope.launch { glassLift.animateTo(1f, tween(100)) }
+                    }
                     moving = true
-                    lifting = false
+
                     activeIndex = (position.y / itemPx).toInt().coerceIn(actions.indices)
-                    glassTopPx = resistedLiquidBoundaryPosition(
+                    dragFollower.updateTarget(resistedLiquidBoundaryPosition(
                         raw = position.y - itemPx / 2f,
                         minimum = 0f,
-                        maximum = itemPx * (actions.size - 1),
-                        maxDisplacement = with(density) { 4.dp.toPx() },
-                    )
+                        maximum = (itemPx * (actions.size - 1)).coerceAtLeast(0f),
+                        maxDisplacement = 0f,
+                    ))
                     glassVelocityY = delta.y * 60f
                 },
                 onHoldEnd = { _, _ ->
                     val commit = activeIndex
+                    val interruptedFlight = flightJob
+                    interruptedFlight?.cancel()
                     flightJob = scope.launch {
-                        lifting = false
+                        interruptedFlight?.join()
+                        if (draggingGlass) {
+                            glassTopPx = dragFollower.stopAndRead()
+                            draggingGlass = false
+                        }
                         val targetTop = commit * itemPx
-                        runOverlappedLiquidFlight(lift = {}, move = { animate(initialValue = glassTopPx, targetValue = targetTop, animationSpec = tween(120, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = { landing = true }, land = { delay(240) })
-                        landing = false
+                        runOverlappedLiquidFlight(lift = { glassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }, move = { animate(initialValue = glassTopPx, targetValue = targetTop, animationSpec = tween(120, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = {}, land = { glassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) })
+
                         moving = false
                         glassVelocityY = 0f
                         selectedIndex = commit
@@ -1455,9 +1545,13 @@ private fun ExpandedUtilityButtons(
                     }
                 },
                 onCancel = {
+                    dragFollower.cancel()
+                    draggingGlass = false
+                    flightJob?.cancel()
+                    flightJob = scope.launch { glassLift.snapTo(0f) }
                     moving = false
-                    lifting = false
-                    landing = false
+
+
                     glassVelocityY = 0f
                     setSidebarGestureLock("expanded-utility", false)
                 },
@@ -1466,7 +1560,8 @@ private fun ExpandedUtilityButtons(
         Column(
             Modifier
                 .fillMaxSize()
-                .then(if (moving) Modifier.layerBackdrop(utilityBackdrop) else Modifier),
+                // Only plain rows are recorded; the animated glass is a sibling.
+                .layerBackdrop(utilityBackdrop),
         ) {
             actions.indices.forEach { index ->
                 Row(
@@ -1492,11 +1587,20 @@ private fun ExpandedUtilityButtons(
                     .height(itemHeight)
                     .padding(horizontal = expandedTargetInset, vertical = expandedTargetInset)
                     .graphicsLayer {
-                        translationY = glassTopPx
+                        translationY = if (draggingGlass) dragFollower.value else glassTopPx
+                        translationX = with(density) {
+                            LeftSidebarUtilityFloatRightOffset.toPx() * glassProgress
+                        }
                     }
-                    .liquidMotionDeformation(0f, glassVelocityY, density.density)
+                    .liquidMotionDeformationDeferred({ 0f }, { if (draggingGlass) dragFollower.velocity else glassVelocityY }, density.density)
                     .zIndex(4f)
+                    .testTag("expanded-utility-float")
                     .liquidSelectionMorph(
+                        contact = glassContact,
+                        contactGeometry = {
+                            glassTopPx; glassLift.value; draggingGlass
+                            dragFollower.value; dragFollower.velocity; glassVelocityY
+                        },
                         backdrop = utilityBackdrop,
                         shape = RoundedCornerShape(50),
                         fillColor = pc.activeSurface,
@@ -1623,14 +1727,14 @@ private data class PcSecondaryPalette(
 )
 
 private val PcSecondaryDark = PcSecondaryPalette(
-    canvas = Color(0xFF0A0A1A),      // --app-bg
-    panel = Color(0xB81A1A38),       // --glass-bg-3: rgb(26 26 56 / .7225)
-    control = Color(0xA30A0A1A),     // --glass-bg-1: rgb(10 10 26 / .6375)
-    raised = Color(0xAD11112A),      // --glass-bg-2: rgb(17 17 42 / .68)
-    modal = Color(0xE611112A),       // --modal-surface: alpha floor .9
-    text = Color(0xFFC8D0E8),
-    textDim = Color(0xFF7880A0),
-    textBright = Color(0xFFE4ECFF),
+    canvas = Color(0xFF101010),      // --app-bg
+    panel = Color(0xB8222222),       // --glass-bg-3: rgb(34 34 34 / .7225)
+    control = Color(0xA3101010),     // --glass-bg-1: rgb(16 16 16 / .6375)
+    raised = Color(0xAD181818),      // --glass-bg-2: rgb(24 24 24 / .68)
+    modal = Color(0xE6181818),       // --modal-surface: alpha floor .9
+    text = Color(0xFFCECECE),
+    textDim = Color(0xFF949494),
+    textBright = Color(0xFFF2F2F2),
     textAccent = Color(0xFFA0B8FF),
     accent = Color(0xFF5B78FF),
     accent2 = Color(0xFF38D4A0),
@@ -1722,6 +1826,8 @@ fun WorkspaceConversationsSidebar(
     val flyingGlassScaleX = remember { Animatable(1f) }
     val flyingGlassScaleY = remember { Animatable(1f) }
     val conversationBackdrop = rememberLiquidBackdrop()
+    val conversationContact = rememberLiquidContactState()
+    val dragFollower = rememberLiquidDragFollower()
     val conversationBounds = remember { mutableStateMapOf<String, Rect>() }
     var conversationHostCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val scope = rememberCoroutineScope()
@@ -1768,6 +1874,7 @@ fun WorkspaceConversationsSidebar(
 
     fun beginConversationDrag(targetId: String) {
         val target = conversationBounds[targetId] ?: return
+        dragFollower.startFrom(0f)
         conversationFlightJob?.cancel()
         flyingGlassX = target.left
         flyingGlassWidth = target.width
@@ -1789,6 +1896,7 @@ fun WorkspaceConversationsSidebar(
     }
 
     fun clearDrag() {
+        dragFollower.cancel()
         conversationFlightJob?.cancel()
         conversationFlightJob = null
         flyingConversationGlass = false
@@ -1826,9 +1934,9 @@ fun WorkspaceConversationsSidebar(
             }
         }
         if (sourceId == null) return clearDrag()
-        val releasedTop = flyingGlassY.value + dragPointerY - dragOriginY
         conversationFlightJob?.cancel()
         conversationFlightJob = scope.launch {
+            val releasedTop = flyingGlassY.value + dragFollower.stopAndRead()
             flyingGlassY.snapTo(releasedTop)
             draggingConversationId = null
             dragPointerY = 0f
@@ -1839,7 +1947,7 @@ fun WorkspaceConversationsSidebar(
             dragItemHeight = 0f
             val landingTop = conversationBounds[sourceId]?.top ?: flyingGlassY.value
             runOverlappedLiquidFlight(
-                lift = {},
+                lift = { coroutineScope { launch { flyingGlassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }; launch { flyingGlassScaleX.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }; launch { flyingGlassScaleY.animateTo(1f, tween(100, easing = PcEaseOutExpo)) } } },
                 move = { flyingGlassY.animateTo(landingTop, tween(120, easing = PcEaseOutExpo)) },
                 onLandingStarted = { conversationGlassLanding = true },
                 land = { coroutineScope { launch { flyingGlassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }; launch { flyingGlassScaleX.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }; launch { flyingGlassScaleY.animateTo(0f, tween(240, easing = PcEaseOutExpo)) } } },
@@ -1953,6 +2061,7 @@ fun WorkspaceConversationsSidebar(
                             ?: coordinates.boundsInParent()
                     },
                     conversation = conv,
+                    contact = conversationContact,
                     displaySummary = displaySummary,
                     active = !flyingConversationGlass && conv.id == visualActiveConversationId,
                     reordering = draggingConversationId != null,
@@ -2005,6 +2114,7 @@ fun WorkspaceConversationsSidebar(
                                 itemCount = groupSize,
                             ) + dragOriginY
                             dragPointerY = nextPointerY
+                            dragFollower.updateTarget(nextPointerY - dragOriginY)
                             dragVelocityY = (nextPointerY - previousPointerY) * 60f
                             dragDestinationGroupIndex = conversationDragDestinationIndex(
                                 sourceIndex = dragSourceGroupIndex,
@@ -2025,20 +2135,23 @@ fun WorkspaceConversationsSidebar(
             val travelCenterCorrectionPx = with(density) { 2.dp.toPx() } * flyingGlassLift.value
             Box(
                 Modifier
+                    // Match local conversations: no implicit overflow centering.
+                    // Both expansion and rightward lift vanish before landing.
+                    .wrapContentSize(Alignment.TopStart, unbounded = true)
                     .requiredWidth(with(density) { (flyingGlassWidth + horizontalEdgePx * 2f * flyingGlassScaleX.value).toDp() })
                     .requiredHeight(with(density) { (flyingGlassHeight + edgePx * 2f * flyingGlassScaleY.value).toDp() })
                     .graphicsLayer {
-                        translationX = flyingGlassX - horizontalEdgePx * flyingGlassScaleX.value +
-                            travelCenterCorrectionPx
+                        translationX = flyingGlassX + travelCenterCorrectionPx
                         translationY = flyingGlassY.value - edgePx * flyingGlassScaleY.value +
-                            if (draggingConversationId == glassArrivedConversationId) dragPointerY - dragOriginY else 0f
+                            if (draggingConversationId == glassArrivedConversationId) dragFollower.value else 0f
                     }
-                    .liquidMotionDeformation(
-                        velocityX = 0f,
-                        velocityY = if (draggingConversationId != null) dragVelocityY else flyingGlassY.velocity,
+                    .liquidMotionDeformationDeferred(
+                        velocityX = { 0f },
+                        velocityY = { if (draggingConversationId != null) dragFollower.velocity else flyingGlassY.velocity },
                         density = density.density,
                     )
                     .zIndex(8f)
+                    .testTag("remote-conversation-glass")
                     .liquidSelectionMorph(
                         backdrop = conversationBackdrop,
                         shape = RoundedCornerShape(50),
@@ -2048,6 +2161,13 @@ fun WorkspaceConversationsSidebar(
                         blurRadius = 2.dp,
                         refractionHeight = MobileInteractionGlassEdge,
                         refractionAmount = 20.dp,
+                        contact = conversationContact,
+                        contactGeometry = {
+                            flyingGlassX; flyingGlassY.value; flyingGlassWidth; flyingGlassHeight
+                            flyingGlassScaleX.value; flyingGlassScaleY.value; flyingGlassLift.value
+                            flyingGlassY.velocity; draggingConversationId
+                            dragFollower.value; dragFollower.velocity
+                        },
                     ),
             )
         }
@@ -2123,6 +2243,7 @@ private fun PcSecondaryButton(
 private fun PcRemoteConversationRow(
     modifier: Modifier = Modifier,
     conversation: RemoteConversation,
+    contact: LiquidContactState,
     displaySummary: String,
     active: Boolean,
     reordering: Boolean,
@@ -2210,6 +2331,7 @@ private fun PcRemoteConversationRow(
                         .liquidHoldDragGesture(
                             conversation.id,
                             renaming,
+                            contact = contact,
                             onCandidateStart = { setSidebarGestureLock("remote-conversation-candidate", true) },
                             onCandidateEnd = { setSidebarGestureLock("remote-conversation-candidate", false) },
                             onTap = { if (!renaming) onClick() },
@@ -2313,6 +2435,7 @@ private fun PcRemoteConversationRow(
     }
     Box(
         modifier = modifier
+            .testTag("remote-conversation-row-${conversation.id}")
             .graphicsLayer {
                 translationY = dragTranslationY + previewTranslation
                 alpha = archiveProgress.value
@@ -2555,24 +2678,15 @@ private fun PcConversationActionMenuItem(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val shape = RoundedCornerShape(50)
-    val pressGlass = if (pressed) {
-        Modifier.liquidGlassModifier(
-            shape = shape,
-            alpha = 0.06f,
-            blurRadius = 2.dp,
-            refractionHeight = MobileInteractionGlassEdge,
-            refractionAmount = 20.dp,
-            surfaceColor = Color.Transparent,
-            ambientHighlight = true,
-        )
-    } else Modifier
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 32.dp)
             .alpha(if (enabled) 1f else 0.55f)
-            .then(pressGlass)
-            .clip(shape)
+            .background(
+                if (pressed && enabled) palette.control else Color.Transparent,
+                shape,
+            )
             .clickable(
                 interactionSource = interaction,
                 indication = androidx.compose.foundation.LocalIndication.current,

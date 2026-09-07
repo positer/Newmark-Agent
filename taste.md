@@ -4,6 +4,8 @@
 
 - Bind release assets to the verified source commit and version, retaining separate byte hashes for locally built and CI artifacts. Fresh CI Android runners generate a different default debug keystore unless an existing signing identity is restored; never replace an upgrade-compatible local APK with a CI APK merely because its version matches.
 - A dev tag also triggers the existing npm publishing workflow. Candidate workflow dispatches build platform artifacts without a public release; final tag/release publication is a separate verified operation. Preserve already published assets, and compare all six remote downloads with the approved local asset set.
+- When a packaged gate enforces an obsolete contract, retain the failed run and prove current behavior against the exact artifact before changing the fixture. Explicit mailbox reactivation must pass `wakeup:true`; public correlation IDs must be paired and scoped rather than blanket-banned. Test-only/notes commits may follow the build commit only with a complete production-input delta and asset-hash binding.
+- Keep isolated Windows fixture paths short enough for MSI and Chromium. Preserve previous screenshots; redirect new evidence into the current run's owned archive. Promote the owned renderer before demanding foreground readiness, without weakening the readiness predicate. Preserve unknown failure causes instead of treating a successful rerun as proof of diagnosis.
 
 ## 2026-09-07 Peer continuity and communication cache
 

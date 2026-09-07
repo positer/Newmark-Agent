@@ -20,6 +20,7 @@
 
 ### Release validation
 
+- The separate [npm package `newmark-agent@0.5.15`](https://www.npmjs.com/package/newmark-agent/v/0.5.15) is published as `latest`. Its actual registry tarball, final-tag commit and GitHub workflow provenance passed integrity and cryptographic signature verification, followed by **26 package audit checks and 8/8 CLI/ConPTY checks**. Registry tarball SHA-256: `d053ecec9c9341db0af197ea2fdb8069de9461c05f3e69bde90f327286ab549b`.
 - Windows MSI administrative extraction and the complete portable ZIP smoke both passed actual CLI/UI and packaged feature checks. Coverage includes parallel peers, explicit wakeup and default-silent delivery, Guide failure recovery, target-scoped two-stage stop, browser/editor/PDF rendering and package security checks. All 745 packaged dist files match the frozen local build. MSI extraction is not an installed-product update test.
 - The fresh `npm run test:full-release` command exited successfully. Its main verification phase reported **1707 passed, 0 failed**; subsequent phases include real SSH/WSL TUI checks and 18 concurrent isolated conversations across the GUI/TUI/CLI backend. Two conditionally unentered WSL-host checks passed **2/2** in a separate exact-build run, including actual host startup, isolated conversation snapshots and normal shutdown; they are not added to the main phase's count.
 - All three native Ubuntu CI Linux assets passed packaged version and GUI checks under WSL/Xvfb with isolated runtime roots. Android passed **365 JVM tests**, release lint, signature and archive checks, and retained the previous local APK's signing certificate. This run did not install the APK on a device.
@@ -61,6 +62,7 @@
 
 ### 本次发行验证
 
+- 独立分发的 [npm 包 `newmark-agent@0.5.15`](https://www.npmjs.com/package/newmark-agent/v/0.5.15) 已发布为 `latest`。实际公开 tarball、最终标签提交及 GitHub 工作流来源证明通过完整性和密码学签名验证，随后通过 **26 项包审计及 8／8 项 CLI／ConPTY 检查**。公开 tarball SHA-256：`d053ecec9c9341db0af197ea2fdb8069de9461c05f3e69bde90f327286ab549b`。
 - Windows MSI 行政解包与完整便携 ZIP 验证均通过实际 CLI／UI 及包内功能检查，覆盖并行子代理、显式唤醒与默认静默投递、Guide 失败恢复、按目标隔离的双阶段停止、浏览器／编辑器／PDF 渲染及包内安全检查。745 个包内 dist 文件均与冻结的本地构建一致。MSI 解包不代表已安装产品更新验收。
 - 本次重新执行 `npm run test:full-release` 成功退出。其中主验证阶段为 **1707 项通过、0 项失败**；后续阶段包含真实 SSH／WSL TUI，以及 GUI／TUI／CLI 共同后端中的 18 个并发隔离对话。主阶段未进入的两项条件 WSL 宿主检查以相同构建单独补测 **2／2 通过**，覆盖真实宿主启动、双会话快照隔离与正常停止，不并入主阶段计数。
 - 原生 Ubuntu CI 构建的三种 Linux 制品均在 WSL／Xvfb 和隔离运行根目录中通过包内版本及 GUI 检查。Android 通过 **365 项 JVM 测试**、发行 lint、签名与归档检查，并保留此前本地 APK 的签名证书；本次未将 APK 安装到设备。

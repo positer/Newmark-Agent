@@ -4,6 +4,20 @@
 
 `VERSION`、`DESKTOP/package.json`／lock 与 `android/app/build.gradle.kts` 绑定 0.5.15／515。`.github/workflows/release-linux.yml` 提供 Windows／Linux／Android 原生 runner 构建；手工 dispatch 只构建，dev 标签触发预发布；`publish.yml` 同标签触发 npm。`DESKTOP/scripts/dist-portable.cjs` 与 `dist-linux.cjs` 生成桌面资产；`verify-github-release-assets.cjs` 重新下载六资产并校验。当前发布计划与检查表位于 `tasks/`，每项执行日志、候选和最终身份在 `archive/20260907-113605-dev-0.5.15-release/`。
 
+`dev-0.5.15` 标签绑定 `ec2e67642421545dd1f0de220b7edd09becf7304`，六资产实际构建提交为 `6210c9c118791aea4a9336f942ec667f2c5a845f`；差异仅为三个发行测试与说明，生产输入相同。标签平台 CI `34083419351` 四项成功并保留已验证资产，npm CI `34083419355` 成功，公开 npm 包通过来源签名与实际入口验证。GitHub 六资产全部重新下载，大小与 SHA256 逐件一致。GitHub Release 与 npm 为独立验收对象。
+
+| 本次归档路径 | 构造与作用 |
+| --- | --- |
+| `REPORT.md`、`asset-manifest.json`、`SHA256SUMS.txt`、`tag-source-binding.json` | 发布状态、六资产身份、构建来源及生产输入未变证明。 |
+| `assets/`、`downloaded-assets/` | 选定的六个本地发行资产与独立重新下载的远端字节，逐件核对。 |
+| `windows/`、`windows-package-smoke-final.json`、`windows-payload-identity.json` | Windows MSI／ZIP／unpack、实际包门禁与全部 dist 文件身份。 |
+| `android/` | 隔离 Gradle 输出、365 项测试/lint、APK 版本/签名/对齐和源码输入身份。 |
+| `ci-artifacts/`、`linux/` | 原生 Linux 候选构建和 AppImage／deb／ZIP 实包验证、截图与缓存等价证据。 |
+| `wsl-client-supplement/` | 完整测试中未进入的两个条件检查的实际补测，不改写主阶段 1707 计数。 |
+| `dev008-wakeup-regression/`、`dev009-tool-identity-regression/`、`before-smoke-harness/`、`after-smoke-harness/` | 过时门禁的原始失败、当前合同、精确实包复验及测试修订。 |
+| `npm/`、`npm/published/` | 区分 Windows 本地候选与公开 Ubuntu tarball；公开元数据、SLSA/Sigstore 验证和真实 CLI／ConPTY 日志。 |
+| `final-tag-ci-*.json`、`github-*.json`／`.log` | 最终 CI、资产保留回执、发行说明与发布/下载校验过程。 |
+
 ## SubAgent 连续工作、mailbox 与缓存（2026-09-07）
 
 | 路径 | 构造与作用 |

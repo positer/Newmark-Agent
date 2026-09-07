@@ -1,11 +1,12 @@
 ## 2026-09-07 dev-0.5.15 全平台发布
 
 - [x] 确认版本 0.5.15／515、远端 release/tag 尚不存在、六资产平台矩阵与既有签名边界。
-- [ ] 完整 Desktop `test:full-release` 与 Windows 打包后门禁。
-- [ ] Android 隔离构建、测试/lint、包内身份/签名/对齐检查。
-- [ ] Linux 原生构建及三个实际发行资产验证。
-- [ ] 记录可复核源码提交、英文后中文 release notes 和六资产 SHA256。
-- [ ] push 源码/标签，发布 GitHub Release，远端重新下载六资产并核对。
+- [x] 完整 Desktop `test:full-release`（主阶段1707/0、独立WSL补测2/2）与 Windows MSI/ZIP完整实包门禁。
+- [x] Android 隔离构建、365项测试/lint、包内身份/签名/对齐检查。
+- [x] Linux 原生构建及三个实际发行资产验证。
+- [x] 记录构建6210c9c／标签ec2e676，生产输入未变证明、英文后中文 release notes 和六资产 SHA256。
+- [x] 最终标签平台 CI 四项成功、保留原资产；npm 0.5.15 已发布，公开包完整性/来源签名与26项审计、8项入口验收通过。
+- [x] push 源码/标签，发布 GitHub Release；六个远端资产已全部重新下载，大小和SHA256逐件一致，完整验证命令exit 0。
 
 ## 2026-09-06 双端正常流程稳定性校准
 

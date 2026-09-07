@@ -2,6 +2,8 @@
 
 从当前累计 Desktop／Android 源码统一发布 `dev-0.5.15`（Android 515）。执行完整 Desktop 发布门禁、Windows MSI/ZIP 与打包验证、Linux 原生构建的 AppImage/deb/ZIP、Android 测试/lint/Release APK，并核对六个资产的版本、签名边界、大小与 SHA256。推送经核对的源码与标签，发布英文后中文的 GitHub Release；下载远端六个资产再次校验。发布归档为 `archive/20260907-113605-dev-0.5.15-release/`。当前主机不构建 macOS，也不把开发证书 APK 描述为商店签名。
 
+已完成：构建提交 `6210c9c`、标签提交 `ec2e676`，其间仅修订三个发行测试和说明，生产输入未变。Desktop 完整发布命令exit 0（主阶段1707/0，WSL独立补测2/2）、Windows MSI/ZIP实包门禁、三种Linux实包门禁、Android365项测试/lint/包检查通过。GitHub六资产已发布并全部重新下载核对大小与SHA256；最终标签CI四项成功，未替换已验证资产。npm 0.5.15/latest亦已公开发布，来源签名、26项包审计与8项真实入口检查通过。完整证据见本轮`REPORT.md`；未替换现有桌面或手机安装。
+
 ## 2026-09-06 双端正常流程稳定性校准
 
 最新 Build 连续性与协议头兼容见[本轮计划](../archive/20260906-223658-build-response-continuity/plan.md)：统一有界恢复、原请求重试边界、协议完成性、请求/响应头及GUI流事件身份保护；保留此前上下文计量、缓存、玻璃交互和生产安装状态。

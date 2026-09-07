@@ -2,7 +2,7 @@
 
 Newmark Agent 将桌面、命令行与原生 Android 客户端连接到同一套会话和工作区能力，面向需要本地工具执行、多模型协作及跨设备工作连续性的开发者。
 
-本次开发预发布版本为 **dev-0.5.15**，统一 Desktop 0.5.15 与 Android 515，交付 Windows x64 MSI／便携 ZIP、Linux x64 AppImage／deb／便携 ZIP 和 Android APK。版本说明与最终资产以 [GitHub Release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.5.15) 为准。Windows 包未进行代码签名；Android APK 沿用开发证书，面向开发测试分发。
+当前开发预发布版本 **dev-0.5.15** 已发布，统一 Desktop 0.5.15 与 Android 515，提供 Windows x64 MSI／便携 ZIP、Linux x64 AppImage／deb／便携 ZIP 和 Android APK。完整版本说明与六个资产见 [GitHub Release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.5.15)，CLI／TUI 也可通过 [npm `newmark-agent@0.5.15`](https://www.npmjs.com/package/newmark-agent/v/0.5.15) 获取。Windows 包未进行代码签名；Android APK 沿用开发证书，面向开发测试分发。
 
 ### SubAgent 连续工作与通信缓存（2026-09-07）
 

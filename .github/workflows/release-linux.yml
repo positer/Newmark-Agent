@@ -98,6 +98,16 @@ jobs:
       - name: Verify bound release version
         run: npm run release:version-check
         working-directory: DESKTOP
+      - name: Restore stable Android development signing key
+        env:
+          ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_DEBUG_KEYSTORE_BASE64"
+          mkdir -p "$HOME/.android"
+          printf '%s' "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
       - run: chmod +x android/gradlew
       - name: Test, lint, and build Android APK
         run: ./android/gradlew -p android testDebugUnitTest lintVitalRelease assembleRelease

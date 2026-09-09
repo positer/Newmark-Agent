@@ -8,6 +8,11 @@ android {
     namespace = "com.newmark.mobile"
     compileSdk = 36
 
+    // CI must not resolve a different Android user-home debug keystore.
+    System.getenv("NEWMARK_ANDROID_KEYSTORE")?.takeIf { it.isNotBlank() }?.let { keyPath ->
+        signingConfigs.getByName("debug").storeFile = file(keyPath)
+    }
+
     defaultConfig {
         applicationId = "com.newmark.mobile"
         minSdk = 24

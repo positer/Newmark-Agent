@@ -1,5 +1,11 @@
 # Newmark Agent Overview
 
+## 2026-09-09 dev-0.6.2 发布完成
+
+- `dev-0.6.2` 标签绑定 `781307e`；GitHub Actions 已完成 Windows MSI/便携包、Linux AppImage/deb/便携包、Android APK 六个资产的发布，npm `newmark-agent@0.6.2` 同步发布。
+- `archive/20260909-dev062-release/`：本地完整检查日志、SSH 超时后的独立重跑、Android Release 构建、CI 结果和发布资产 SHA256 记录；发布包与本机安装状态分别记录。
+- 发布页：https://github.com/positer/Newmark-Agent/releases/tag/dev-0.6.2
+
 ## 2026-09-09 移动端输出预算续写
 
 - `android/app/src/main/java/com/newmark/mobile/data/ApiClient.kt`、`MobileResponseRecovery.kt`：区分供应商预算结束、完成及错误，保护未完成工具调用。

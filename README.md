@@ -10,6 +10,8 @@ PC 与 Android 修复“底部显示的模型不等于实际发送的 provider/m
 
 Windows MSI 已在本机完成一次 UAC 静默安装并独立复核：注册表 `0.6.3.0`、安装目录 CLI `0.6.3`、`resources/app.asar` SHA-256 `799E1753…A0C5D3`、安装器校验 292 个 payload 文件。安装后未自动启动 GUI，`GuiRuntimeVerified=false` 仍作为独立边界保留。
 
+`dev-0.6.3` 已通过 tag 驱动的 GitHub Actions 完成全平台发布：[Release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.6.3) 包含 Windows MSI/便携 ZIP、Linux AppImage/deb/便携 ZIP、Android APK 六个资产；`newmark-agent@0.6.3` 已同步发布到 npm。`master` 为 `fa3174b`，tag `dev-0.6.3` 指向同一提交。
+
 ## dev-0.6.2 移动端输出预算续写
 
 修复本地 Agent 在标题已完成后因 `max_output_tokens` 直接失败的问题：供应商明确报告预算耗尽时保留进度、提高预算并有限次续写，截断工具参数不执行；断网、取消及未知不完整状态仍分别处理。见 [记录](archive/20260909-mobile-output-budget/REPORT.md)。

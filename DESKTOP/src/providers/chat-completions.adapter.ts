@@ -59,8 +59,13 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
       model: request.model,
       messages,
       temperature: request.temperature,
-      max_tokens: request.maxOutputTokens,
     };
+    // Omit the cap entirely for provider-owned output. Only auxiliary
+    // requests that explicitly need a bounded completion send a positive
+    // max_tokens value.
+    if (Number.isFinite(request.maxOutputTokens) && request.maxOutputTokens > 0) {
+      body.max_tokens = request.maxOutputTokens;
+    }
     if (tools.length) {
       body.tools = tools;
       body.tool_choice = 'auto';

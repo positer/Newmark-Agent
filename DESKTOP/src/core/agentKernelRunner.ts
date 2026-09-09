@@ -49,6 +49,24 @@ const HIDDEN_LINE_PREFIXES = [
   'analysis：',
 ];
 
+/**
+ * Optional provider-side session cache identity. A remote session is mutable
+ * state, so it must never be shared by two branches of the same conversation:
+ * a fork that reuses the root conversation id can read the other branch's
+ * history. Keep the id stable within one branch (normal sequential turns still
+ * cache-hit) and change it the moment the runtime branch changes.
+ */
+function providerSessionIdentity(agent: Agent): string {
+  const conversationId = String(agent.activeConversationId || 'default');
+  try {
+    const snapshot = agent.getConversationSnapshot(conversationId);
+    const branchId = String(snapshot.runtimeBranchId || snapshot.activeBranchId || '');
+    return branchId ? `${conversationId}::branch:${branchId}` : conversationId;
+  } catch {
+    return conversationId;
+  }
+}
+
 function partialMarkerSuffix(value: string, marker: string): string {
   const lower = value.toLowerCase();
   const target = marker.toLowerCase();
@@ -747,7 +765,11 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
             currentAgent.checkpointPeerInput();
             peerInputCheckpointed = true;
           }
-          const { temperature, maxTokens, reasoningEffort } = currentProvider.intelligenceConfig(currentAgent.intelligence);
+          const { temperature, reasoningEffort } = currentProvider.intelligenceConfig(currentAgent.intelligence);
+          // A normal Agent reply has no client-side output cap. The provider
+          // endpoint owns its real limit; protocols that require a positive
+          // max_tokens resolve one internally.
+          const maxTokens = 0;
           const newmarkMessages = fromKernelMessages(context.messages).map(message => message.role === 'assistant'
             // Use the same public-content boundary on its first provider
             // submission and after persistence. Trimming only the durable
@@ -792,7 +814,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
             options?.signal,
             reasoningEffort,
             currentAgent.config.getBool('context', 'provider_session_id')
-              ? currentAgent.activeConversationId
+              ? providerSessionIdentity(currentAgent)
               : undefined,
           )) {
             if (!firstTokenRecorded && ((token.type === 'text' && token.text) || (token.type === 'tool_call' && token.toolCall))) {

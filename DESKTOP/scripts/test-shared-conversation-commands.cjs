@@ -129,13 +129,22 @@ async function run(options = {}) {
     for(const [id,mode] of [['first','plan'],['second','chat']]) await c.submitConversationCommand('same',a,{requestedMode:mode,inputMode:'next',clientMessageId:id});
     check('Active canonical Next returns immediately with two stable same-text ids', JSON.stringify(poolKernel.queueItems(a).map(r=>r.id))===JSON.stringify(['first','second']));
     await c.applyConversationAction(a,'queue_update','',{id:'second',text:'edited',requestedMode:'chat'});
-    await c.applyConversationAction(a,'queue_reorder','',{orderedIds:['second','first']});
+    let admittedReorderRejected = false;
+    try {
+      await c.applyConversationAction(a,'queue_reorder','',{orderedIds:['second','first']});
+    } catch (error) {
+      admittedReorderRejected = String(error && error.message || error).includes('fixed parents');
+    }
+    check('Admitted queue reorder is rejected instead of silently changing fixed parents', admittedReorderRejected);
     await c.applyConversationAction(a,'queue_set_pause','',{paused:true});
     holds.get('hold ordinary')(); await held; await replay;
     check('Shared paused queue survives active work settlement', poolKernel.queueItems(a).length===2 && poolKernel.snapshot(a).queuePaused);
     await c.applyConversationAction(a,'queue_set_pause','',{paused:false});
     await new Promise(r=>setImmediate(r)); await poolKernel.waitForIdle(a);
-    check('Reordered items drain once with their own modes', JSON.stringify(rows.slice(-2).map(r=>[r.mode,typeof r.message==='string'?r.message:r.message.text.replace(/^\[Next queued while current turn is running\]\n/, '')]))===JSON.stringify([['chat','edited'],['plan','same']]),rows.slice(-2));
+    for (let wait = 0; wait < 200 && poolKernel.queueItems(a).length > 0; wait += 1) {
+      await new Promise(r => setTimeout(r, 5));
+    }
+    check('Admitted items drain once in fixed-parent order with their own modes', JSON.stringify(rows.slice(-2).map(r=>[r.mode,typeof r.message==='string'?r.message:r.message.text.replace(/^\[Next queued while current turn is running\]\n/, '')]))===JSON.stringify([['plan','same'],['chat','edited']]),rows.slice(-2));
     const flow = c.submitConversationCommand('flow input',a,{requestedMode:'flow',inputMode:'next',flowName:'test-flow'});
     await until(()=>flowCalls.length===1);
     const flowOwner=flowCalls[0].owner;
@@ -199,6 +208,9 @@ async function run(options = {}) {
     check('Cold queue preserves edited Goal, attachment, original timestamp and id', cold?.id==='goal-image' && cold.requestedMode==='goal' && cold.goalObjective==='edited objective' && cold.images?.[0]?.name==='sample.png' && cold.createdAt==='2026-09-06T00:00:00.000Z',cold);
     await c.applyConversationAction(b,'queue_set_pause','',{paused:false});
     await new Promise(r=>setImmediate(r)); await flowKernel.waitForIdle(b);
+    for (let wait = 0; wait < 200 && flowKernel.queueItems(b).length > 0; wait += 1) {
+      await new Promise(r => setTimeout(r, 5));
+    }
     check('Goal queue drain activates the saved objective and carries attachment once', rows.at(-1).mode==='goal' && rows.at(-1).message.goalObjective==='edited objective' && rows.at(-1).message.images?.length===1 && flowKernel.queueItems(b).length===0, rows.at(-1));
     const branchTarget=target('branch-owner');
     const branchOwner=flowKernel.beginExternalRun(branchTarget,{mode:'build',model:'fixture',intelligence:'medium',inputMode:'next',engine:'builtin'},()=>createOwner(branchTarget));

@@ -1,5 +1,20 @@
 # Newmark Agent Project Taste
 
+## 2026-09-09 Conversation identity, queue ownership and cache isolation
+
+- A queued user turn owns its exact `targetRuntimeKey`, `workspaceKey`, `branchNodeId`, `branchPath` and `modelSelection` from the moment it is accepted. Persist them with the continuation; never resolve the target or branch from the current view at drain time. A mismatch pauses the queue and keeps the row; it never reroutes into the foreground conversation.
+- A Next item is a new user Build in the same conversation: after the previous Build fully settles it starts a new runId, restores the captured branch, and appends a normal user turn. A Guide is an intervention in the current Build and stays inline. Do not inline-drain Next into the previous run, and never carry the completed runId into the new turn.
+- Provider-side session caches are mutable remote state. When `provider_session_id` is enabled, the identity is branch-scoped (`conversationId::branch:<branchId>`); sibling branches must not share a remote session. Retry/attempt-level session epochs remain a separate Gate until the storage fence exists.
+- Every model request records its owning `branchId` and a SHA-256 `contextHash` of the actual submitted model/system/messages/tools payload. The hash is diagnostic evidence, not an ACL or a substitute for the parent-chain context resolver.
+- Normal replies carry no client-side output cap. Omit `max_tokens`/`max_output_tokens` unless an auxiliary request explicitly needs a short completion; protocols that require a positive value resolve one internally. A provider-owned budget exhaustion is resumable progress, never a silent success; preserve the partial answer and mark the run incomplete.
+- The first-turn title/model-availability gate must publish a visible status immediately and fail fast on deterministic 4xx provider rejections. Include the actual provider/model in the error. Do not turn a wrong-provider binding into five identical retries.
+- Conversation model binding is provider-qualified end to end: activation snapshots restore the conversation's remembered deployment, explicit renderer changes carry a monotonic revision, and the send binds the visible model to the exact target after activation. A bare or ambiguous model name must never guess another provider's credentials.
+- All continuation admission goes through `GuardedContinuationStore`. The in-memory `pendingNextTurn` list is only a projection of the workspace ledger; a command is accepted only after the CAS/idempotency transaction commits. Never mutate the projection first and repair the ledger later.
+- Admitted builds have immutable `parentBuildId`. Reordering admitted queue rows is rejected (`ANCHOR_NOT_COMMITTED`); changing the order requires explicit cancel plus new commands. Do not silently rebase successors to the previous successful node.
+- Branch fences are monotonic high-water marks. Lease recovery, completion and cancellation release the active attempt without resetting the fence; the next claim increments it. Old attempts' heartbeat/final writes must be rejected as `STALE_EXECUTION`, not applied.
+- PC GUI and the hosted mobile API share the same command/kernel/store path. Android local conversations still use `LocalQueueContract`, which is per-conversation FIFO and starts a new run per Next; it is not yet a ledger participant and must not be described as one.
+- A Flow or any external owner run must be represented by a ledger build/attempt before it can act as a parent. Do not let an external run advance only in-memory history while a queued Goal/Next build points at a parent that never commits; that produces a permanently blocked authoritative queue. The remaining Flow/Goal external-build wiring is a release blocker until `test-shared-conversation-commands.cjs` passes.
+
 ## 2026-09-09 Explicit provider output exhaustion
 
 - A Responses incomplete status with reason max_output_tokens is resumable partial progress, never a successful completion or generic network retry. Retain text/reasoning, discard incomplete tool calls, and preserve all other terminal error rules.

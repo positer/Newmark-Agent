@@ -93,7 +93,7 @@ function main(): void {
     'conversation switching never clears readable history pre-emptively');
   assert.match(switchConversation, /restoredReadableHistory\s*\?\s*null\s*:\s*addMsg/,
     'loading chrome is inserted only when the target has no readable cache');
-  assert.match(newConversation, /applyConversationSnapshot\(s, id, \{ preserveReadableHistory: true \}\)/,
+  assert.match(newConversation, /applyConversationSnapshot\(s, id, \{ preserveReadableHistory: true, modelRevision: modelRevisionAtActivation \}\)/,
     'new-conversation activation cannot erase an immediate send or error transcript');
   assert.match(newConversation, /if \(!conversationHasReadableHistory\(target\)\)/,
     'the empty new-conversation welcome is rendered only when no send/history arrived during activation');

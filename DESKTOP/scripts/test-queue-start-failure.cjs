@@ -17,6 +17,16 @@ async function run(options = {}) {
     fs.mkdirSync(target.workspace.path, { recursive: true });
     let runner, kernel, release, failed = false, failEnabled = true, notifications = 0;
     const calls = [], events = [];
+    const ledgerState = () => {
+      try {
+        const ledger = JSON.parse(fs.readFileSync(path.join(target.workspace.path, 'conversations', 'continuation-ledger.json'), 'utf-8'));
+        return {
+          branches: Object.values(ledger.branches || {}).map(b => ({ id: b.branchId, head: b.headBuildId, tail: b.tailBuildId, rev: b.queueRevision, paused: b.paused })),
+          builds: Object.values(ledger.builds || {}).map(b => ({ id: b.buildId, parent: b.parentBuildId, status: b.status, seq: b.queueSequence, waiting: b.waitingReason })),
+          guards: Object.values(ledger.guards || {}).map(g => ({ id: g.branchId, active: g.activeBuildId, attempt: g.activeAttemptId, fence: g.fence, lease: g.leaseUntil })),
+        };
+      } catch (error) { return { error: String(error) }; }
+    };
     class Probe extends Agent {
       setMode(mode) { if (failure === 'mode-start' && mode === 'chat' && failEnabled) { failed = true; throw Error('fixture pre-process mode setup failed'); } return super.setMode(mode); }
       async process(message) {
@@ -54,11 +64,25 @@ async function run(options = {}) {
       check(`${label}: target queue event publishes the recoverable state`, events.some(e => e.queuePaused && JSON.stringify(e.queueItems?.map(x => x.id)) === JSON.stringify(expectedIds)), events.at(-1));
       check(`${label}: acceptance observers are released`, runner.agentKernelUserMessageStartSubscribers.length === subscribers);
       if (failure !== 'after-accept') check(`${label}: failed row retains attachment, mode and submission time`, rows[0]?.images?.[0]?.name === 'fixture.png' && rows[0]?.requestedMode === (failure === 'mode-start' ? 'chat' : 'build') && rows[0]?.createdAt === '2026-09-06T00:00:01Z', rows[0]);
-      report.captures.push({ label, rows, durable, paused: snapshot.queuePaused, calls: [...calls], notifications });
+      report.captures.push({ label, rows, durable, paused: snapshot.queuePaused, calls: [...calls], notifications, ledgerBeforeResume: ledgerState() });
       failEnabled = false;
       kernel.queueAction(target, 'set_pause', { paused: false });
       await new Promise(r => setImmediate(r)); await kernel.waitForIdle(target);
-      check(`${label}: explicit resume processes only unaccepted rows once`, notifications === 2 && kernel.queueItems(target).length === 0 && runner.conversationContinuations().length === 0, { notifications, calls, rows: kernel.queueItems(target), durable: runner.conversationContinuations() });
+      for (let wait = 0; wait < 200 && kernel.queueItems(target).length > 0; wait += 1) {
+        await new Promise(r => setTimeout(r, 5));
+      }
+      const resumeRows = kernel.queueItems(target);
+      const resumeLedger = ledgerState();
+      if (failure === 'after-accept') {
+        const blocked = resumeLedger.builds?.find(build => build.id === resumeRows[0]?.buildId);
+        check(`${label}: a failed accepted predecessor blocks its successor with DEPENDENCY_FAILED instead of silently skipping it`,
+          notifications === 1 && resumeRows.length === 1 && blocked?.waiting === 'DEPENDENCY_FAILED',
+          { notifications, calls, rows: resumeRows, ledger: resumeLedger });
+      } else {
+        check(`${label}: explicit resume processes only unaccepted rows once`,
+          notifications === 2 && resumeRows.length === 0 && runner.conversationContinuations().length === 0,
+          { notifications, calls, rows: resumeRows, durable: runner.conversationContinuations(), ledger: resumeLedger });
+      }
     } finally { release?.(); kernel?.flushPersistence(); fs.rmSync(root, { recursive: true, force: true }); }
   }
   report.checksPassed = report.checks.filter(x => x.passed).length; report.checksFailed = report.checks.length - report.checksPassed; report.passed = !report.checksFailed;

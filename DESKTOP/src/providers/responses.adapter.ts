@@ -93,8 +93,11 @@ export class ResponsesAdapter implements ModelProviderAdapter {
       model: request.model,
       input: input.length ? input : [{ role: 'user', content: '' }],
       temperature: request.temperature,
-      max_output_tokens: request.maxOutputTokens,
     };
+    // Omit the cap entirely for provider-owned output.
+    if (Number.isFinite(request.maxOutputTokens) && request.maxOutputTokens > 0) {
+      body.max_output_tokens = request.maxOutputTokens;
+    }
     if (request.reasoningEffort) body.reasoning = { effort: request.reasoningEffort, summary: 'auto' };
     if (request.systemPrompt) body.instructions = request.systemPrompt;
     const tools = this.serializeTools(request.tools);

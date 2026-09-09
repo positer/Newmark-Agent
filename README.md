@@ -1,5 +1,15 @@
 # Newmark Agent
 
+## dev-0.6.3 对话接续身份、分支绑定与缓存隔离
+
+PC 与 Android 修复“底部显示的模型不等于实际发送的 provider/model”、新对话首轮长时间无反馈、排队 Next 被误接到上一个 Build、排队项落到错误分支，以及正常回复被客户端输出上限截断的问题。队列项在受理时固定 `targetRuntimeKey`、`workspaceKey`、`branchNodeId`、`branchPath` 与 `modelSelection`；Next 在上一 Build 完整结束后以新 runId 启动为同会话新用户轮次，Guide 仍内联干预当前 Build；跨会话队列项进入暂停而不是改投当前对话。受理、抢占、心跳与最终提交现在经过工作区级 `GuardedContinuationStore`：CAS/幂等回执、固定 parent、BranchGuard/fence、唯一 final、head/tail 分离、失败/取消阻断后继、分叉 lineage 校验与 append-only 事件；受理后重排被显式拒绝，必须取消后缀后以新命令重新提交。可选的 provider session 身份按分支隔离，每次模型请求记录 `branchId` 与实际 payload 的 `contextHash`。正常回复不再发送客户端 `max_tokens`/`max_output_tokens` 上限，只有明确短输出的辅助请求才传正值；移动端预算耗尽保留部分答案并标记未完成。PC 远程对话与 hosted mobile 命令共用同一 kernel/ledger；Android 本地对话仍使用独立的 `LocalQueueContract` 持久队列。验证记录见 [报告](archive/20260909-continuation-identity/REPORT.md)。
+
+版本号已同步为 `0.6.3`／Android `versionCode 603`。`release:version-check`、主验证套件 `1717/1717`、共享命令/Flow handoff `51/51` 以及缓存/动态多级压缩专项全部通过。`beginExternalRun` 接管前会从工作区持久状态重载并按 clientMessageId 合并队列投影，Flow 完成后的 `waiting-b`/Goal 行不再丢失。
+
+本地已生成并核对：`release/Newmark-Agent-0.6.3-x64.msi`（SHA-256 `E739B6…60E3`）、`release/Newmark-Agent-0.6.3-win-unpacked-x64.zip`（SHA-256 `EF9973…EA67`）、`APK/Newmark-Agent-0.6.3-release.apk`（SHA-256 `DD9559…A3260`，`com.newmark.mobile` 0.6.3/603）。完整 `test:full-release` 仍被既有 `test-subagent-settlement-receipts.cjs` 挂起阻塞；打包时 SSH TUI stress 按显式 CI 边界跳过，Linux/macOS 未在本机生成。记录见 [打包报告](archive/20260909-dev063-package/REPORT.md)。
+
+Windows MSI 已在本机完成一次 UAC 静默安装并独立复核：注册表 `0.6.3.0`、安装目录 CLI `0.6.3`、`resources/app.asar` SHA-256 `799E1753…A0C5D3`、安装器校验 292 个 payload 文件。安装后未自动启动 GUI，`GuiRuntimeVerified=false` 仍作为独立边界保留。
+
 ## dev-0.6.2 移动端输出预算续写
 
 修复本地 Agent 在标题已完成后因 `max_output_tokens` 直接失败的问题：供应商明确报告预算耗尽时保留进度、提高预算并有限次续写，截断工具参数不执行；断网、取消及未知不完整状态仍分别处理。见 [记录](archive/20260909-mobile-output-budget/REPORT.md)。

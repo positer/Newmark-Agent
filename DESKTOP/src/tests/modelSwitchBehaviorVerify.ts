@@ -128,20 +128,25 @@ async function main(): Promise<void> {
       && g.probe.processModels[1] === 'm2',
       'Guide dequeued after a mid-block switch re-enters the block with the newly selected model');
 
-    // 3. A queued follow-up carries no send-time model: its dequeue follows the
-    //    current conversation selection (m2), not the model supplied on send.
+    // 3. A queued follow-up freezes the provider-qualified model selected when
+    //    it was accepted. A later conversation switch (m2) must not rewrite the
+    //    already-visible send-time selection (m3).
     const q = makeHarness(root, 'switch-queue');
     q.probe.delayMs = 30;
     const queueRun = q.kernel.prompt('build-one', q.target, runOptions('m1'), 'steer');
     await wait(5);
     q.kernel.setModel(q.target, 'm2');
-    // Send-time model is deliberately m3; the queued message must ignore it.
+    // Send-time model is deliberately m3; the queued message must retain it.
     await q.kernel.prompt('queued-next', q.target, runOptions('m3'), 'followUp');
     await queueRun;
+    for (let spin = 0; spin < 100 && q.probe.processModels.length < 2; spin += 1) {
+      await wait(10);
+    }
     assertOk(q.probe.processModels.length === 2
       && q.probe.processModels[0] === 'm1'
-      && q.probe.processModels[1] === 'm2',
-      'queued follow-up dequeues on the current selection, ignoring the send-time model');
+      && q.probe.processModels[1] === 'm3',
+      'queued follow-up retains the model selected when it was accepted',
+      JSON.stringify(q.probe.processModels));
 
     console.log(`\nmodelSwitchBehaviorVerify: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

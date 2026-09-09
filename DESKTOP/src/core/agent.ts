@@ -415,8 +415,15 @@ export interface ConversationBranchGroupSnapshot {
 export interface ConversationContinuation {
   content: string;
   queueMode: 'steer' | 'followUp';
+  buildId?: string;
   clientMessageId?: string;
   runId?: string;
+  branchNodeId?: string;
+  branchPath?: string[];
+  ledgerBranchId?: string;
+  targetRuntimeKey?: string;
+  workspaceKey?: string;
+  modelSelection?: string;
   images?: Array<{ dataUrl: string; name?: string; type?: string }>;
   attachments?: ConversationImageAttachment[];
   hiddenUserInput?: boolean;
@@ -3077,8 +3084,15 @@ export class Agent {
       deduped.set(key, {
         content,
         queueMode,
+        buildId: String(raw.buildId || '').trim() || undefined,
         clientMessageId,
         runId: String(raw.runId || '').trim() || undefined,
+        branchNodeId: String(raw.branchNodeId || '').trim() || undefined,
+        branchPath: Array.isArray(raw.branchPath) ? raw.branchPath.map(id => String(id || '')).filter(Boolean) : undefined,
+        ledgerBranchId: String(raw.ledgerBranchId || '').trim() || undefined,
+        targetRuntimeKey: String(raw.targetRuntimeKey || '').trim() || undefined,
+        workspaceKey: String(raw.workspaceKey || '').trim() || undefined,
+        modelSelection: String(raw.modelSelection || '').trim() || undefined,
         images: images.length ? images : undefined,
         attachments: attachments.length ? attachments : undefined,
         hiddenUserInput: raw.hiddenUserInput === true,
@@ -4242,6 +4256,19 @@ export class Agent {
     return 'provider request failed';
   }
 
+  /**
+   * Deterministic provider rejections (bad key, forbidden endpoint, unknown
+   * model, invalid request, payment required) cannot succeed by retrying the
+   * identical title probe. Only transient transport, timeout, rate-limit and
+   * provider-internal failures enter the bounded 5-stage backoff.
+   */
+  private conversationTitleFailureIsRetryable(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : '';
+    const status = message.match(/^\[LLM Error:\s*([1-5]\d{2})\]/)?.[1];
+    if (!status) return true;
+    return status === '408' || status === '429' || status.startsWith('5');
+  }
+
   private async waitForConversationTitleRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
     if (signal?.aborted || delayMs <= 0) return;
     await new Promise<void>(resolve => {
@@ -4280,17 +4307,20 @@ export class Agent {
     // Failure state belongs to this title attempt sequence, not the Agent or
     // another conversation. A later empty title replaces an earlier HTTP error.
     let lastFailure = 'provider returned an empty or unusable title';
+    let terminalFailure = false;
     const requestTitle = async (): Promise<string> => {
       lastFailure = 'provider returned an empty or unusable title';
+      terminalFailure = false;
       try {
         return await this.deriveConversationTitleFromProvider(firstUserInput, provider, modelName, intelligence, signal);
       } catch (error) {
         lastFailure = this.conversationTitleFailureCause(error, provider);
+        terminalFailure = !this.conversationTitleFailureIsRetryable(error);
         return '';
       }
     };
     const exhaustedFailure = (): Error => new Error(
-      `Conversation title generation failed; ${lastFailure}. The first Agent request was not started. Retry the first input.`,
+      `Conversation title generation failed for ${provider.name}/${modelName}; ${lastFailure}. The first Agent request was not started. Retry the first input or switch the model.`,
     );
     if (!stateKey) {
       // Pure Agent/CLI mode has no workspace conversation file to rename, but
@@ -4298,6 +4328,7 @@ export class Agent {
       // probe before starting the formal response.
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         if (await requestTitle()) return true;
+        if (terminalFailure) break;
         if (signal?.aborted) return false;
         if (attempt < maxAttempts - 1) await this.waitForConversationTitleRetry(retryDelaysMs[attempt], signal);
       }
@@ -4328,6 +4359,7 @@ export class Agent {
         this.publishConversationTitle(title, conversationId);
         return true;
       }
+      if (terminalFailure) break;
       if (signal?.aborted) return false;
       if (attempt < maxAttempts - 1) await this.waitForConversationTitleRetry(retryDelaysMs[attempt], signal);
     }
@@ -6264,7 +6296,7 @@ export class Agent {
     let requestContext: RequestContextEstimate | null = null;
     const context = saved?.version === 1 ? saved.requestContext : null;
     if (context && typeof context.requestId === 'string' && typeof context.runId === 'string' && typeof context.at === 'string') {
-      requestContext = { requestId: context.requestId, runId: context.runId, model: String(context.model || ''), at: context.at,
+      requestContext = { requestId: context.requestId, runId: context.runId, branchId: String(context.branchId || ''), contextHash: String(context.contextHash || ''), model: String(context.model || ''), at: context.at,
         estimatedTokens: 0, longHistoryTokens: 0, buildBlockTokens: 0, systemPromptTokens: 0, toolSchemaTokens: 0, messageCount: 0, hasImages: context.hasImages === true };
       for (const key of ['estimatedTokens', 'longHistoryTokens', 'buildBlockTokens', 'systemPromptTokens', 'toolSchemaTokens', 'messageCount', 'inputTokens', 'cacheReadTokens'] as const) {
         const value = context[key];
@@ -6329,9 +6361,16 @@ export class Agent {
   }
 
   recordRequestContext(request: ConversationUsageRequest, messages: Array<Record<string, unknown>>, system: string, tools: unknown[], model: string): void {
+    const contextHash = crypto.createHash('sha256').update(JSON.stringify({
+      model,
+      system,
+      tools,
+      messages,
+    })).digest('hex').slice(0, 24);
     const context: RequestContextEstimate = {
       ...estimateSubmittedContext(messages, system, tools, this.compressionBuildBlockStart(messages)),
-      requestId: request.id, runId: this.currentWorkRunId(), model, at: new Date().toISOString(),
+      requestId: request.id, runId: this.currentWorkRunId(), branchId: this.currentBranchNodeId(),
+      contextHash, model, at: new Date().toISOString(),
     };
     this.mutateRequestUsage(request, usage => { usage.requestContext = context; });
   }
@@ -8452,6 +8491,13 @@ export class Agent {
         if (!titleProvider || !titleModelName) {
           throw new Error('Conversation title generation failed; no resolved model deployment is available. No LLM configured. Add provider in Settings > Models.');
         }
+        // The title probe is a hard gate before the first formal request. Show
+        // the exact deployment being checked immediately so a slow or failing
+        // first turn never looks like an unexplained freeze.
+        this.emitWorkEvent({
+          type: 'status',
+          content: `Preparing the first response: checking ${titleProvider.name}/${titleModelName} and generating the conversation title.`,
+        });
         const titled = await this.startFirstInputConversationTitle(
           firstResponseTitleInput.messageId,
           firstResponseTitleInput.input,

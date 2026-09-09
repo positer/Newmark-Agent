@@ -1,5 +1,25 @@
 # Newmark Agent Overview
 
+## 2026-09-09 dev-0.6.3 对话接续身份、分支绑定与缓存隔离
+
+| 文件/目录 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/core/conversationKernel.ts` | 队列项新增 `targetRuntimeKey/workspaceKey/branchNodeId/branchPath/modelSelection`；`enqueueNext`/`enqueueSameSession` 受理时冻结身份；`run` 只内联抽取 Guide，Next 留给延迟调度器；`schedulePendingRuntimeContinuation` 为 Next 分配新 runId、恢复捕获分支并核验目标；`bindQueuedTurnBranch` 在分支缺失时进入暂停/重试。 |
+| `DESKTOP/src/core/continuation/contracts.ts` | continuation-v1 品牌身份、`CommandReceipt`、`ExecutionScope`、`BranchGuardSnapshot`、`QueueSnapshot`、错误码与稳定请求哈希。 |
+| `DESKTOP/src/core/continuation/store.ts` | `GuardedContinuationStore`：锁文件 + 原子替换的受控写入网关；`enqueueBuild` CAS/幂等/固定 parent、`claimBuild` BranchGuard/fence/lease、`heartbeat`、`commitFinal` 唯一 final/head 推进、`failBuild`、`cancelBuild`、`retryBuild`、`forkBranch`、`recoverExpiredLeases`、`snapshot`、`events`。 |
+| `DESKTOP/src/tests/continuationStoreVerify.ts` | 23 项真实负面/并发测试：CAS 冲突、幂等键换目标、跨 root 拒绝、双抢占、租约过期旧 fence 拒绝、fence 单调、head/tail、final 唯一、取消阻塞、分叉锚点 lineage、重启持久、事件 cursor。 |
+| `DESKTOP/src/core/agent.ts` | `ConversationContinuation` 持久化目标/分支/模型身份；`recordRequestContext` 记录 `branchId` 与 `contextHash`；标题探测对确定性 4xx 快速失败并在门禁前发布可见状态；`process` 不再让首轮看起来像无反馈冻结。 |
+| `DESKTOP/src/core/agentKernelRunner.ts` | `providerSessionIdentity` 将可选远端会话身份改为 `conversationId::branch:<branchId>`；主循环不再给正常回复传客户端输出上限。 |
+| `DESKTOP/src/providers/chat-completions.adapter.ts`、`responses.adapter.ts` | `maxOutputTokens <= 0` 时省略 `max_tokens`/`max_output_tokens`；Anthropic/GitHub 等必须正数的协议由 `provider.ts` 用档位预算兜底。 |
+| `DESKTOP/src/ui/index.html` | `applyConversationModelSelection` + `modelSelectionRevision` 在进入对话时恢复该对话记忆的 provider-qualified 模型；发送在 `await activationBeforeSend` 之后把可见模型绑定到目标；Next 入队携带分支身份。 |
+| `DESKTOP/src/main.ts`、`DESKTOP/src/server.ts` | `ConversationCommandOptions.model` 与 `hostedCommandOptions.model` 把渲染端可见模型带入发送；`queue_enqueue` 传递分支身份与模型选择。 |
+| `android/.../ApiClient.kt`、`ChatViewModel.kt` | 正常回复省略输出上限；预算耗尽保留部分答案并标记 `interrupted`，不再丢弃进度。 |
+| `DESKTOP/scripts/test-queue-continuation-identity.cjs` | 60 项断言：每个 Next 新开 Build、每次 process 都在目标 conversation、跨会话队列项绝不执行并保持暂停。 |
+| `archive/20260909-continuation-identity/REPORT.md` | 本轮规范接入、验证记录与尚未实现的 SQLite GuardedStore/fence/Attempt 边界。 |
+| `archive/20260909-dev063-package/REPORT.md` | dev-0.6.3 本地打包资产、SHA-256、Android 包信息、门禁结果与未执行边界。 |
+
+版本：`VERSION`、`DESKTOP/package.json`、`DESKTOP/package-lock.json` 与 Android `versionName 0.6.3`／`versionCode 603` 已同步。`release:version-check`、`verify.js`（1717/1717）、`test-shared-conversation-commands.cjs`（51/51）以及缓存/动态多级压缩专项全部通过；`beginExternalRun` 接管前通过 `reconcilePendingContinuations` 重载并合并持久队列，修复 pool→flow owner handoff。当前正在执行 `test:desktop:built` 发布门禁全链。
+
 ## 2026-09-09 dev-0.6.2 发布完成
 
 - `dev-0.6.2` 标签绑定 `781307e`；GitHub Actions 已完成 Windows MSI/便携包、Linux AppImage/deb/便携包、Android APK 六个资产的发布，npm `newmark-agent@0.6.2` 同步发布。

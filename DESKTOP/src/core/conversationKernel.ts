@@ -1,4 +1,6 @@
 import { Agent, AutoRouteRatingResult } from './agent';
+import { GuardedContinuationStore } from './continuation/store';
+import { ContinuationError, type ExecutionScope } from './continuation/contracts';
 import {
   AgentMode,
   AgentWorkEvent,
@@ -20,6 +22,8 @@ import {
 export type ConversationQueueMode = 'steer' | 'followUp';
 export interface ConversationQueueItemSnapshot {
   id: string;
+  /** Authoritative continuation-v1 build id (null for legacy/in-memory rows). */
+  buildId?: string;
   text: string;
   queueMode: ConversationQueueMode;
   requestedMode?: string;
@@ -27,6 +31,11 @@ export interface ConversationQueueItemSnapshot {
   runId?: string;
   createdAt: string;
   images?: AgentPromptMessage['images'];
+  branchNodeId?: string;
+  branchPath?: string[];
+  /** Exact workspace ledger branch id used when this row was admitted. */
+  ledgerBranchId?: string;
+  modelSelection?: string;
 }
 export type ConversationQueueAction = 'enqueue' | 'update' | 'delete' | 'reorder' | 'toggle_pause' | 'set_pause' | 'guide';
 export interface ConversationQueueActionInput {
@@ -36,11 +45,22 @@ export interface ConversationQueueActionInput {
   goalObjective?: string;
   createdAt?: string;
   images?: AgentPromptMessage['images'];
+  /** Runtime branch node that owns this queued user turn. */
+  branchNodeId?: string;
+  /** Full runtime branch path captured when the item was enqueued. */
+  branchPath?: string[];
+  /** Exact conversation runtime identity captured at enqueue time. */
+  targetRuntimeKey?: string;
+  workspaceKey?: string;
+  /** Provider-qualified model selected when the user enqueued this turn. */
+  modelSelection?: string;
   orderedIds?: string[];
   paused?: boolean;
 }
 export interface AgentPromptMessage {
   text: string;
+  /** Authoritative continuation-v1 build id for a queued user turn. */
+  buildId?: string;
   /** Public transcript text when the execution prompt contains hidden orchestration instructions. */
   visibleUserInput?: string;
   /** Public semantic mode label; execution policy still follows the runner mode. */
@@ -56,6 +76,13 @@ export interface AgentPromptMessage {
   createdAt?: string;
   guideId?: string;
   runId?: string;
+  /** Stable conversation/branch ownership for queued user turns. */
+  branchNodeId?: string;
+  branchPath?: string[];
+  ledgerBranchId?: string;
+  targetRuntimeKey?: string;
+  workspaceKey?: string;
+  modelSelection?: string;
   /**
    * dev-0.4.3: 同一 Build block 内连续到达的多个 Guide 会被 conversation
    * kernel 合并为一次 provider 续接，而不是每来一个 Guide 就响应一次。
@@ -175,6 +202,11 @@ interface ConversationRuntime {
   pendingContinuationRunId?: string;
   lastAutomaticAssistantFingerprint?: string;
   externalOwner?: { active: boolean; wasPaused: boolean };
+  /** continuation-v1 attempt/fence owned by an external Flow run. */
+  externalScope?: ExecutionScope;
+  /** Durable build id admitted for an external Flow run. */
+  externalBuildId?: string;
+  externalFinalText?: string;
   preparingArchive?: boolean;
 }
 
@@ -250,18 +282,143 @@ export class ConversationKernel {
   }
 
   /** A Flow and its queue share one Agent; no second history writer is created. */
-  beginExternalRun(targetInput: ConversationTargetInput, options: ConversationKernelRunOptions, createOwner: () => Agent, previousQueuePaused?: boolean): Agent {
+  beginExternalRun(
+    targetInput: ConversationTargetInput,
+    options: ConversationKernelRunOptions,
+    createOwner: () => Agent,
+    previousQueuePaused?: boolean,
+    buildInput?: {
+      commandId?: string; text: string; requestedMode?: string; goalObjective?: string;
+      modelSelection?: string; branchNodeId?: string; branchPath?: string[]; resume?: boolean;
+      existingBuildId?: string;
+    },
+  ): Agent {
     const target = this.normalizeTarget(targetInput);
     const existing = this.findRuntime(target);
     if (existing?.activePromise || existing?.externalOwner?.active) throw new Error('Target conversation is already running');
     const runtime = existing || this.runtime(target, options, createOwner());
+    this.reconcilePendingContinuations(runtime);
     runtime.options = { ...options };
     runtime.externalOwner = { active: true, wasPaused: runtime.externalOwner?.wasPaused ?? previousQueuePaused ?? runtime.queuePaused };
     runtime.queuePaused = true;
     runtime.runId ||= randomUUID();
     runtime.stopRequestedRunId = '';
+    if (buildInput) {
+      const continuation = this.continuationStore(runtime);
+      if (continuation) {
+        if (buildInput.existingBuildId) {
+          runtime.externalBuildId = buildInput.existingBuildId;
+          runtime.externalScope = continuation.store.claimExternalBuild({
+            workspaceId: continuation.workspaceId,
+            rootId: continuation.rootId,
+            branchId: continuation.branchId,
+            buildId: buildInput.existingBuildId,
+            workerCapability: 'flow-external',
+          });
+        } else if (buildInput.resume && runtime.externalBuildId) {
+          runtime.externalScope = continuation.store.claimExternalBuild({
+            workspaceId: continuation.workspaceId,
+            rootId: continuation.rootId,
+            branchId: continuation.branchId,
+            buildId: runtime.externalBuildId,
+            workerCapability: 'flow-external',
+          });
+        } else {
+          const authoritative = continuation.store.snapshot({
+            workspaceId: continuation.workspaceId,
+            rootId: continuation.rootId,
+            branchId: continuation.branchId,
+          });
+          const receipt = continuation.store.enqueueBuild({
+            schemaVersion: 1,
+            type: 'ENQUEUE_BUILD',
+            commandId: buildInput.commandId || randomUUID(),
+            actorId: 'flow',
+            target: {
+              workspaceId: continuation.workspaceId,
+              expectedRootId: continuation.rootId,
+              branchId: continuation.branchId,
+            },
+            expectedTailBuildId: authoritative.tailBuildId,
+            expectedQueueRevision: authoritative.queueRevision,
+            input: {
+              text: buildInput.text,
+              requestedMode: buildInput.requestedMode || 'flow',
+              goalObjective: buildInput.goalObjective,
+              modelSelection: buildInput.modelSelection || runtime.options.model,
+              branchNodeId: buildInput.branchNodeId,
+              branchPath: buildInput.branchPath,
+            },
+            recipeSnapshotId: `${continuation.rootId}:${continuation.branchId}:flow`,
+            createdAt: new Date().toISOString(),
+          });
+          runtime.externalBuildId = receipt.buildId;
+          runtime.externalScope = continuation.store.claimExternalBuild({
+            workspaceId: continuation.workspaceId,
+            rootId: continuation.rootId,
+            branchId: continuation.branchId,
+            buildId: receipt.buildId,
+            workerCapability: 'flow-external',
+          });
+        }
+      }
+    }
     this.emitQueueUpdate(runtime);
     return runtime.runner;
+  }
+
+  /**
+   * Admit a Flow build at command-acceptance time. The Flow may wait behind a
+   * running Build, but its queue position (and therefore the parent of every
+   * later Next item) is fixed now, not when the Flow finally starts.
+   */
+  admitExternalBuild(
+    targetInput: ConversationTargetInput,
+    buildInput: {
+      commandId: string; text: string; requestedMode?: string; goalObjective?: string;
+      modelSelection?: string; branchNodeId?: string; branchPath?: string[];
+    },
+  ): string | null {
+    const target = this.normalizeTarget(targetInput);
+    const existing = this.findRuntime(target);
+    const runtime = existing || this.runtime(target, {
+      mode: 'flow',
+      model: buildInput.modelSelection || this.host.modelSelectionValue(),
+      intelligence: this.host.intelligence,
+      inputMode: this.host.inputMode,
+      engine: this.host.engine,
+    }, this.createRunner(target));
+    const continuation = this.continuationStore(runtime);
+    if (!continuation) return null;
+    const authoritative = continuation.store.snapshot({
+      workspaceId: continuation.workspaceId,
+      rootId: continuation.rootId,
+      branchId: continuation.branchId,
+    });
+    const receipt = continuation.store.enqueueBuild({
+      schemaVersion: 1,
+      type: 'ENQUEUE_BUILD',
+      commandId: buildInput.commandId,
+      actorId: 'flow',
+      target: {
+        workspaceId: continuation.workspaceId,
+        expectedRootId: continuation.rootId,
+        branchId: continuation.branchId,
+      },
+      expectedTailBuildId: authoritative.tailBuildId,
+      expectedQueueRevision: authoritative.queueRevision,
+      input: {
+        text: buildInput.text,
+        requestedMode: buildInput.requestedMode || 'flow',
+        goalObjective: buildInput.goalObjective,
+        modelSelection: buildInput.modelSelection || runtime.options.model,
+        branchNodeId: buildInput.branchNodeId,
+        branchPath: buildInput.branchPath,
+      },
+      recipeSnapshotId: `${continuation.rootId}:${continuation.branchId}:flow`,
+      createdAt: new Date().toISOString(),
+    });
+    return receipt.buildId;
   }
 
   settleExternalRun(target: ConversationTargetInput, completed: boolean): void {
@@ -270,6 +427,43 @@ export class ConversationKernel {
     const wasPaused = runtime.externalOwner.wasPaused;
     if (completed) runtime.externalOwner = undefined;
     else runtime.externalOwner.active = false;
+    if (runtime.externalBuildId) {
+      const continuation = this.continuationStore(runtime);
+      if (continuation) {
+        if (completed) {
+          if (runtime.externalScope) {
+            continuation.store.commitFinal({
+              scope: runtime.externalScope,
+              text: runtime.externalFinalText || '',
+            });
+          } else {
+            continuation.store.commitExternalBuild({
+              workspaceId: continuation.workspaceId,
+              rootId: continuation.rootId,
+              branchId: continuation.branchId,
+              buildId: runtime.externalBuildId,
+              text: runtime.externalFinalText || '',
+            });
+          }
+          runtime.externalBuildId = undefined;
+          runtime.externalScope = undefined;
+          runtime.externalFinalText = undefined;
+        } else {
+          // Suspend/resume keeps the same durable build identity. Release the
+          // current attempt back to QUEUED so the resume can claim a new
+          // attempt/fence without creating a second Flow build.
+          try {
+            continuation.store.requeueBuild({
+              workspaceId: continuation.workspaceId,
+              rootId: continuation.rootId,
+              branchId: continuation.branchId,
+              buildId: runtime.externalBuildId,
+            });
+          } catch { /* an external failure may already have terminated the build */ }
+          runtime.externalScope = undefined;
+        }
+      }
+    }
     runtime.queuePaused = completed && !runtime.preparingArchive ? wasPaused : true;
     runtime.runner.saveWorkspaceConversationState(true);
     this.emitQueueUpdate(runtime);
@@ -280,6 +474,26 @@ export class ConversationKernel {
     const runtime = this.findRuntime(target);
     if (!runtime) return;
     if (runtime.externalOwner?.active) throw new Error('Wait for the Flow to stop before releasing its queue');
+    if (runtime.externalBuildId) {
+      const continuation = this.continuationStore(runtime);
+      if (continuation) {
+        // The user explicitly exited the paused Flow and resumed the queue.
+        // Record that decision as the Flow build's final instead of leaving a
+        // cancelled parent that would permanently block its queued successor.
+        try {
+          continuation.store.commitExternalBuild({
+            workspaceId: continuation.workspaceId,
+            rootId: continuation.rootId,
+            branchId: continuation.branchId,
+            buildId: runtime.externalBuildId,
+            text: 'Flow exited by the user; the conversation queue resumed.',
+          });
+        } catch { /* the Flow build may already be committed or explicitly cancelled */ }
+      }
+      runtime.externalBuildId = undefined;
+      runtime.externalScope = undefined;
+      runtime.externalFinalText = undefined;
+    }
     runtime.externalOwner = undefined;
     this.setQueuePaused(target, paused);
   }
@@ -382,6 +596,7 @@ export class ConversationKernel {
       if (!id) return [];
       return [{
         id,
+        buildId: item.message.buildId,
         text: String(item.message.visibleUserInput || item.message.text || '').replace(/^\[Next queued while current turn is running\]\n/, ''),
         queueMode: item.queueMode,
         requestedMode: item.message.visibleMode,
@@ -389,13 +604,70 @@ export class ConversationKernel {
         runId: item.message.runId,
         createdAt: String((item.message as AgentPromptMessage & { createdAt?: string }).createdAt || ''),
         images: item.message.images?.map(image => ({ ...image })),
+        branchNodeId: item.message.branchNodeId,
+        branchPath: item.message.branchPath?.slice(),
+        modelSelection: item.message.modelSelection,
       }];
     });
   }
 
+  /**
+   * Capture the exact runtime branch that owns a queued user turn. A queued
+   * Next is a new user turn, but it must still land on the branch the user was
+   * viewing when they enqueued it, not on whatever branch happens to be active
+   * when the previous Build settles.
+   */
+  private runtimeBranchIdentity(runtime: ConversationRuntime): { branchNodeId: string; branchPath: string[] } {
+    try {
+      const snapshot = runtime.runner.getConversationSnapshot(runtime.id);
+      const path = Array.isArray(snapshot.runtimeBranchNodePath)
+        ? snapshot.runtimeBranchNodePath.map(id => String(id || '')).filter(Boolean)
+        : [];
+      const branchNodeId = String(snapshot.runtimeBranchId || snapshot.activeBranchId || path[path.length - 1] || '');
+      return {
+        branchNodeId,
+        branchPath: path.length ? path : (branchNodeId ? [branchNodeId] : []),
+      };
+    } catch {
+      return { branchNodeId: '', branchPath: [] };
+    }
+  }
+
+  /**
+   * Map the current conversation/branch model onto the continuation-v1
+   * Root/Branch identity. The ledger is workspace-scoped and shared by the
+   * PC GUI, hosted mobile API and isolated runtimes.
+   */
+  private continuationStore(runtime: ConversationRuntime, branchNodeIdOverride = ''): {
+    store: GuardedContinuationStore;
+    workspaceId: string;
+    rootId: string;
+    branchId: string;
+  } | null {
+    const workspace = runtime.target.workspace;
+    if (!workspace?.path) return null;
+    const workspaceId = String(workspace.id || workspace.path);
+    const branchIdentity = this.runtimeBranchIdentity(runtime);
+    const rootId = runtime.target.conversationId;
+    // Ledger branch ids are workspace-global, while a runtime branch node id
+    // is only unique inside its conversation/root. Namespace it by root so two
+    // conversations cannot share one authoritative branch record.
+    const branchId = branchNodeIdOverride.includes('::')
+      ? branchNodeIdOverride
+      : `${rootId}::${branchNodeIdOverride || branchIdentity.branchNodeId || 'main'}`;
+    const store = new GuardedContinuationStore(workspace.path, workspaceId);
+    store.ensureRoot(rootId, branchId);
+    return { store, workspaceId, rootId, branchId };
+  }
+
   enqueueNext(
     target: ConversationTargetInput,
-    input: { id: string; text: string; requestedMode?: string; goalObjective?: string; createdAt?: string; images?: AgentPromptMessage['images'] },
+    input: {
+      id: string; text: string; requestedMode?: string; goalObjective?: string; createdAt?: string;
+      images?: AgentPromptMessage['images']; branchNodeId?: string; branchPath?: string[];
+      modelSelection?: string;
+      targetRuntimeKey?: string;
+    },
   ): ConversationQueueItemSnapshot {
     const runtime = this.findRuntime(target);
     if (!runtime) throw new Error('Target conversation runtime is unavailable');
@@ -407,8 +679,54 @@ export class ConversationKernel {
     if (existing) return existing;
     const prompt = `[Next queued while current turn is running]\n${text}`;
     const createdAt = String(input.createdAt || new Date().toISOString());
+    const capturedBranch = this.runtimeBranchIdentity(runtime);
+    const branchPath = Array.isArray(input.branchPath) && input.branchPath.length
+      ? input.branchPath.map(id => String(id || '')).filter(Boolean)
+      : capturedBranch.branchPath;
+    const branchNodeId = String(input.branchNodeId || branchPath[branchPath.length - 1] || capturedBranch.branchNodeId || '');
+    const targetRuntimeKey = String(input.targetRuntimeKey || runtime.target.runtimeKey).trim() || runtime.target.runtimeKey;
+    const workspaceKey = runtime.target.workspaceKey;
+    const modelSelection = String(input.modelSelection || runtime.options.model || '').trim() || undefined;
+    // Gate B/C: admission is an authoritative CAS transaction. The in-memory
+    // pendingNextTurn list is only a projection of this durable build.
+    const continuation = this.continuationStore(runtime, branchNodeId);
+    const ledgerBranchId = continuation?.branchId;
+    let buildId = '';
+    if (continuation) {
+      const authoritative = continuation.store.snapshot({
+        workspaceId: continuation.workspaceId,
+        rootId: continuation.rootId,
+        branchId: continuation.branchId,
+      });
+      const receipt = continuation.store.enqueueBuild({
+        schemaVersion: 1,
+        type: 'ENQUEUE_BUILD',
+        commandId: id,
+        actorId: 'kernel',
+        target: {
+          workspaceId: continuation.workspaceId,
+          expectedRootId: continuation.rootId,
+          branchId: continuation.branchId,
+        },
+        expectedTailBuildId: authoritative.tailBuildId,
+        expectedQueueRevision: authoritative.queueRevision,
+        input: {
+          text,
+          images: input.images,
+          requestedMode: input.requestedMode,
+          goalObjective: input.goalObjective,
+          modelSelection,
+          branchNodeId: branchNodeId || undefined,
+          branchPath: branchPath.length ? branchPath : undefined,
+        },
+        recipeSnapshotId: `${continuation.rootId}:${continuation.branchId}:${modelSelection || 'auto'}`,
+        createdAt,
+      });
+      buildId = receipt.buildId;
+    }
     runtime.pendingNextTurn.push({
       message: {
+        buildId: buildId || undefined,
         text: prompt,
         visibleUserInput: text,
         visibleMode: String(input.requestedMode || 'build'),
@@ -416,11 +734,18 @@ export class ConversationKernel {
         images: Array.isArray(input.images) ? input.images.slice(0, 6).map(image => ({ ...image })) : undefined,
         clientMessageId: id,
         runId: runtime.runId,
+        branchNodeId: branchNodeId || undefined,
+        branchPath: branchPath.length ? branchPath : undefined,
+        ledgerBranchId,
+        targetRuntimeKey,
+        workspaceKey,
+        modelSelection,
         createdAt,
       } as AgentPromptMessage & { createdAt: string },
       queueMode: 'followUp',
     });
     runtime.runner.retainConversationContinuations([{
+      buildId: buildId || undefined,
       content: prompt,
       queueMode: 'followUp',
       clientMessageId: id,
@@ -430,6 +755,12 @@ export class ConversationKernel {
       visibleUserInput: text,
       visibleMode: String(input.requestedMode || 'build'),
       goalObjective: input.goalObjective,
+      branchNodeId: branchNodeId || undefined,
+      branchPath: branchPath.length ? branchPath : undefined,
+      ledgerBranchId,
+      targetRuntimeKey,
+      workspaceKey,
+      modelSelection,
     }]);
     this.trackQueuedMessage(runtime, prompt, 'followUp');
     this.emitQueueUpdate(runtime);
@@ -446,11 +777,35 @@ export class ConversationKernel {
     const pending = runtime.pendingNextTurn.find(item => typeof item.message !== 'string' && item.message.clientMessageId === id);
     if (!pending || typeof pending.message === 'string') throw new Error('Queue item is no longer editable');
     const previous = runtime.runner.conversationContinuations().find(item => item.clientMessageId === id);
-    pending.message.text = `[Next queued while current turn is running]\n${text}`;
+    const nextText = `[Next queued while current turn is running]\n${text}`;
+    const nextVisibleMode = input.requestedMode !== undefined ? input.requestedMode : pending.message.visibleMode;
+    const nextGoalObjective = input.goalObjective !== undefined ? input.goalObjective : pending.message.goalObjective;
+    const nextImages = input.images !== undefined
+      ? input.images.map(image => ({ ...image }))
+      : pending.message.images?.map(image => ({ ...image }));
+    const continuation = this.continuationStore(runtime, pending.message.ledgerBranchId || pending.message.branchNodeId);
+    if (continuation && pending.message.buildId) {
+      continuation.store.updateQueuedBuild({
+        workspaceId: continuation.workspaceId,
+        rootId: continuation.rootId,
+        branchId: continuation.branchId,
+        buildId: pending.message.buildId,
+        input: {
+          text,
+          images: nextImages,
+          requestedMode: nextVisibleMode,
+          goalObjective: nextGoalObjective,
+          modelSelection: pending.message.modelSelection,
+          branchNodeId: pending.message.branchNodeId,
+          branchPath: pending.message.branchPath,
+        },
+      });
+    }
+    pending.message.text = nextText;
     pending.message.visibleUserInput = text;
-    if (input.requestedMode !== undefined) pending.message.visibleMode = input.requestedMode;
-    if (input.goalObjective !== undefined) pending.message.goalObjective = input.goalObjective;
-    if (input.images !== undefined) pending.message.images = input.images.map(image => ({ ...image }));
+    pending.message.visibleMode = nextVisibleMode;
+    pending.message.goalObjective = nextGoalObjective;
+    pending.message.images = nextImages;
     runtime.runner.retainConversationContinuations([{
       ...previous,
       content: pending.message.text,
@@ -461,6 +816,11 @@ export class ConversationKernel {
       visibleUserInput: text,
       visibleMode: pending.message.visibleMode,
       goalObjective: pending.message.goalObjective,
+      branchNodeId: pending.message.branchNodeId,
+      branchPath: pending.message.branchPath,
+      targetRuntimeKey: pending.message.targetRuntimeKey,
+      workspaceKey: pending.message.workspaceKey,
+      modelSelection: pending.message.modelSelection,
     }]);
     this.emitQueueUpdate(runtime);
     return this.queueItems(runtime.target).find(item => item.id === id)!;
@@ -472,7 +832,19 @@ export class ConversationKernel {
     const id = String(idInput || '').trim();
     const index = runtime.pendingNextTurn.findIndex(item => typeof item.message !== 'string' && item.message.clientMessageId === id);
     if (index < 0) return false;
-    const [removed] = runtime.pendingNextTurn.splice(index, 1);
+    const removed = runtime.pendingNextTurn[index];
+    if (typeof removed.message !== 'string') {
+      const continuation = this.continuationStore(runtime, removed.message.ledgerBranchId || removed.message.branchNodeId);
+      if (continuation && removed.message.buildId) {
+        continuation.store.deleteQueuedBuild({
+          workspaceId: continuation.workspaceId,
+          rootId: continuation.rootId,
+          branchId: continuation.branchId,
+          buildId: removed.message.buildId,
+        });
+      }
+    }
+    runtime.pendingNextTurn.splice(index, 1);
     if (typeof removed.message !== 'string') {
       runtime.runner.consumeConversationContinuation({ content: removed.message.text, queueMode: removed.queueMode, clientMessageId: id });
     }
@@ -506,6 +878,30 @@ export class ConversationKernel {
       if (item.queueMode !== 'followUp' || typeof item.message === 'string' || !item.message.clientMessageId) return [];
       return [[String(item.message.clientMessageId), item] as const];
     }));
+    const firstOrdered = pendingById.get(orderedIds[0] || '');
+    const continuation = this.continuationStore(
+      runtime,
+      firstOrdered && typeof firstOrdered.message !== 'string'
+        ? (firstOrdered.message.ledgerBranchId || firstOrdered.message.branchNodeId || '')
+        : '',
+    );
+    if (continuation) {
+      const orderedBuildIds = orderedIds
+        .map(id => {
+          const item = pendingById.get(id);
+          return item && typeof item.message !== 'string' ? item.message.buildId : undefined;
+        })
+        .filter((id): id is string => !!id);
+      if (orderedBuildIds.length !== orderedIds.length) {
+        throw new Error('A queued build id is missing from the authoritative ledger projection');
+      }
+      continuation.store.reorderQueuedBuilds({
+        workspaceId: continuation.workspaceId,
+        rootId: continuation.rootId,
+        branchId: continuation.branchId,
+        orderedBuildIds,
+      });
+    }
     const reorderedPending = orderedIds.map(id => pendingById.get(id)!);
     let nextIndex = 0;
     runtime.pendingNextTurn = runtime.pendingNextTurn.map(item => {
@@ -557,6 +953,10 @@ export class ConversationKernel {
         goalObjective: input.goalObjective,
         createdAt: input.createdAt,
         images: input.images,
+        branchNodeId: input.branchNodeId,
+        branchPath: input.branchPath,
+        modelSelection: input.modelSelection,
+        targetRuntimeKey: input.targetRuntimeKey,
       });
     } else if (action === 'update') {
       this.updateQueueItem(runtime.target, String(input.id || ''), String(input.text || ''), input);
@@ -1128,7 +1528,7 @@ export class ConversationKernel {
       // carry no send-time model/mode; the running block keeps its settings and
       // the next dequeue follows the current conversation selection (which
       // setModel/setMode already recorded on runtime.options).
-      this.enqueueSameSession(active, message, queueMode);
+      this.enqueueSameSession(active, message, queueMode, options.model);
       this.activateAcceptedGoal(active, typeof message === 'string' ? '' : message.goalObjective);
       return active.activePromise;
     }
@@ -1256,10 +1656,15 @@ export class ConversationKernel {
       return this.result(runtime, lastTokens);
     }
     for (;;) {
-      while (!runtime.queuePaused && runtime.pendingNextTurn.length > 0) {
+      while (!runtime.queuePaused) {
         if (runtime.stopRequestedRunId === runtime.runId) return this.result(runtime, lastTokens);
-        const next = runtime.pendingNextTurn.shift()!;
-        if (next.queueMode === 'steer' && typeof next.message !== 'string' && !!next.message.clientMessageId) {
+        // Only intervening Guides run inside the current Build. A Next item
+        // is a new user turn and stays exactly where the user placed it; the
+        // run finalizer starts a fresh Build for it after this one settles.
+        const steerIndex = runtime.pendingNextTurn.findIndex(item => item.queueMode === 'steer');
+        if (steerIndex < 0) break;
+        const next = runtime.pendingNextTurn.splice(steerIndex, 1)[0];
+        if (typeof next.message !== 'string' && !!next.message.clientMessageId) {
           const batchGuides: NonNullable<AgentPromptMessage['batchGuides']> = [];
           const pushGuide = (message: AgentPromptMessage): void => {
             batchGuides.push({
@@ -1271,11 +1676,13 @@ export class ConversationKernel {
             });
           };
           pushGuide(next.message);
-          while (runtime.pendingNextTurn.length > 0
-            && runtime.pendingNextTurn[0].queueMode === 'steer'
-            && typeof runtime.pendingNextTurn[0].message !== 'string'
-            && !!runtime.pendingNextTurn[0].message.clientMessageId) {
-            const guide = runtime.pendingNextTurn.shift()!;
+          while (true) {
+            const guideIndex = runtime.pendingNextTurn.findIndex(item =>
+              item.queueMode === 'steer'
+              && typeof item.message !== 'string'
+              && !!item.message.clientMessageId);
+            if (guideIndex < 0) break;
+            const guide = runtime.pendingNextTurn.splice(guideIndex, 1)[0];
             pushGuide(guide.message as AgentPromptMessage);
           }
           if (batchGuides.length === 1) {
@@ -1291,18 +1698,10 @@ export class ConversationKernel {
           };
           lastTokens = await this.runSingle(runtime, batchMessage, 'steer');
           if (this.repeatedAutomaticAssistant(runtime, batchMessage, 'steer')) break;
-    } else {
-          const drained = this.drainQueuedFollowUpMessage(next.message);
-          lastTokens = await this.runPendingQueueItem(runtime, next, async () => {
-            if (typeof drained !== 'string' && drained.visibleMode && ['build', 'chat', 'plan', 'goal'].includes(drained.visibleMode)) {
-              runtime.runner.setMode(drained.visibleMode as AgentMode);
-              runtime.options.mode = drained.visibleMode as AgentMode;
-            }
-            this.activateAcceptedGoal(runtime, typeof drained === 'string' ? '' : drained.goalObjective);
-            return this.runSingle(runtime, drained, next.queueMode,
-              typeof next.message === 'string' ? undefined : next.message.clientMessageId);
-          });
-          if (this.repeatedAutomaticAssistant(runtime, drained, next.queueMode)) break;
+        } else {
+          lastTokens = await this.runSingle(runtime, next.message, next.queueMode);
+          if (this.repeatedAutomaticAssistant(runtime, next.message, next.queueMode)) break;
+          continue;
         }
       }
       const rootMessage = runtime.runner.subagents.readRootInbox()[0];
@@ -1325,7 +1724,7 @@ export class ConversationKernel {
         if (runtime.runId === completedRunId
           && runtime.stopRequestedRunId !== completedRunId
           && !runtime.queuePaused
-          && runtime.pendingNextTurn.length > 0) {
+          && runtime.pendingNextTurn.some(item => item.queueMode === 'steer')) {
           runtime.guideAcceptanceClosedRunId = '';
           if (!runtime.runner.resumeConversationWorkRun(completedRunId)) {
             throw new Error(`Unable to resume deferred Guide work run ${completedRunId}`);
@@ -1523,6 +1922,12 @@ export class ConversationKernel {
               visibleUserInput: continuation.visibleUserInput,
               visibleMode: continuation.visibleMode,
               goalObjective: continuation.goalObjective,
+              buildId: continuation.buildId,
+              modelSelection: continuation.modelSelection,
+              branchNodeId: continuation.branchNodeId,
+              branchPath: continuation.branchPath?.slice(),
+              targetRuntimeKey: continuation.targetRuntimeKey,
+              workspaceKey: continuation.workspaceKey,
               createdAt: continuation.createdAt,
               hiddenUserInput: continuation.hiddenUserInput,
             }
@@ -1622,12 +2027,104 @@ export class ConversationKernel {
     setImmediate(() => {
       runtime.pendingContinuationRunId = undefined;
       if (runtime.preparingArchive || runtime.runId !== runId || runtime.activePromise || runtime.externalOwner || runtime.stopRequestedRunId === runId || runtime.queuePaused) return;
-      const next = runtime.pendingNextTurn.shift();
+      const next = runtime.pendingNextTurn[0];
       if (!next) return;
-      const delivery = next.queueMode === 'followUp' ? this.drainQueuedFollowUpMessage(next.message) : next.message;
-      const message: AgentPromptMessage = typeof delivery === 'string'
-        ? { text: delivery, runId }
-        : { ...delivery, runId: delivery.runId || runId };
+      const queued = typeof next.message === 'string' ? null : next.message;
+      if (queued?.targetRuntimeKey && queued.targetRuntimeKey !== runtime.target.runtimeKey) {
+        runtime.queuePaused = true;
+        runtime.runner.recordWorkStatus('Queued turn target mismatch; the queue is paused instead of running in another conversation.');
+        this.emitQueueUpdate(runtime);
+        return;
+      }
+      runtime.pendingNextTurn.shift();
+      if (next.queueMode === 'followUp') {
+        // A Next item is a fresh user turn. It must start a new Build in this
+        // exact conversation after the previous one has fully settled, and it
+        // must land on the branch that owned it when the user enqueued it.
+        // Never carry the completed runId into the new turn.
+        const delivery = this.drainQueuedFollowUpMessage(next.message);
+        const message: AgentPromptMessage = typeof delivery === 'string'
+          ? { text: delivery }
+          : { ...delivery, runId: undefined };
+        const continuation = this.continuationStore(runtime);
+        let scope: ExecutionScope | null = null;
+        void this.runPendingQueueItem(runtime, next, async () => {
+          this.bindQueuedTurnBranch(runtime, queued);
+          if (queued?.modelSelection) runtime.options.model = queued.modelSelection;
+          if (message.visibleMode && ['build', 'chat', 'plan', 'goal'].includes(message.visibleMode)) {
+            this.setMode(runtime.target, message.visibleMode as AgentMode);
+          }
+          this.activateAcceptedGoal(runtime, message.goalObjective || '');
+          if (continuation && queued?.buildId) {
+            const authoritative = continuation.store.snapshot({
+              workspaceId: continuation.workspaceId,
+              rootId: continuation.rootId,
+              branchId: continuation.branchId,
+            });
+            const ready = authoritative.builds
+              .filter(build => build.status === 'QUEUED')
+              .sort((a, b) => a.queueSequence - b.queueSequence)[0];
+            if (ready && ready.buildId !== queued.buildId) {
+              // The in-memory projection is not the authoritative next build.
+              // Keep this row queued instead of executing out of order.
+              runtime.pendingNextTurn.unshift(next);
+              runtime.runner.recordWorkStatus('Queued turn is waiting for the authoritative predecessor.');
+              this.emitQueueUpdate(runtime);
+              return this.result(runtime, []);
+            }
+            scope = continuation.store.claimBuild({
+              workspaceId: continuation.workspaceId,
+              rootId: continuation.rootId,
+              branchId: continuation.branchId,
+              workerCapability: `kernel:${process.pid}`,
+            });
+            if (scope && scope.buildId !== queued.buildId) {
+              continuation.store.failBuild({ scope, reason: 'Authoritative build mismatch during claim' });
+              scope = null;
+            }
+            if (!scope) {
+              runtime.pendingNextTurn.unshift(next);
+              runtime.runner.recordWorkStatus('Queued turn is not ready for execution yet.');
+              this.emitQueueUpdate(runtime);
+              return this.result(runtime, []);
+            }
+          }
+          const result = await this.prompt(message, runtime.target, runtime.options, 'followUp');
+          if (continuation && scope) {
+            continuation.store.commitFinal({
+              scope,
+              text: result.tokens.map(token => token.text || '').join(''),
+            });
+          }
+          return result;
+        }, (accepted, error) => {
+          if (!continuation || !scope) return;
+          const reason = error instanceof Error ? error.message : String(error);
+          if (accepted) {
+            try {
+              continuation.store.failBuild({ scope, reason });
+            } catch { /* stop/archive may have already released the guard */ }
+          } else {
+            // The input was never accepted. Stop/archive may already have
+            // released the guard, so use the idempotent requeue path: the same
+            // durable build id stays available for an explicit resume.
+            try {
+              continuation.store.requeueBuild({
+                workspaceId: continuation.workspaceId,
+                rootId: continuation.rootId,
+                branchId: continuation.branchId,
+                buildId: scope.buildId,
+              });
+            } catch { /* the build may already be committed or explicitly cancelled */ }
+          }
+        }).catch(() => {
+          // Agent.process and the work-run finalizer already publish the error.
+        });
+        return;
+      }
+      const message: AgentPromptMessage = typeof next.message === 'string'
+        ? { text: next.message, runId }
+        : { ...next.message, runId: next.message.runId || runId };
       void this.runPendingQueueItem(runtime, next, async () => {
         if (message.visibleMode && ['build', 'chat', 'plan', 'goal'].includes(message.visibleMode)) {
           this.setMode(runtime.target, message.visibleMode as AgentMode);
@@ -1639,10 +2136,29 @@ export class ConversationKernel {
     });
   }
 
+  /**
+   * Restore the runtime branch captured by a queued user turn. If the branch
+   * disappeared (manual deletion/rewind), fail the queued item into the
+   * existing pause/retry path instead of appending it to a different branch.
+   */
+  private bindQueuedTurnBranch(runtime: ConversationRuntime, message: AgentPromptMessage | null): void {
+    const branchNodeId = String(message?.branchNodeId || '').trim();
+    if (!branchNodeId) return;
+    const snapshot = runtime.runner.getConversationSnapshot(runtime.id);
+    const currentBranch = String(snapshot.runtimeBranchId || snapshot.activeBranchId || '');
+    if (currentBranch === branchNodeId) return;
+    try {
+      runtime.runner.switchConversationBranch(runtime.id, branchNodeId);
+    } catch (error) {
+      throw new Error(`Queued turn branch ${branchNodeId} is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   private async runPendingQueueItem<T>(
     runtime: ConversationRuntime,
     next: ConversationRuntime['pendingNextTurn'][number],
     execute: () => Promise<T>,
+    onFailure?: (accepted: boolean, error: unknown) => void,
   ): Promise<T> {
     const queuedMessage = typeof next.message === 'string' ? undefined : next.message;
     const id = queuedMessage?.clientMessageId;
@@ -1660,6 +2176,7 @@ export class ConversationKernel {
       // the same row manageable. A provider failure after acceptance must
       // never replay the already submitted user input after restart/resume.
       runtime.queuePaused = true;
+      try { onFailure?.(accepted, error); } catch { /* the original failure is authoritative */ }
       throw error;
     } finally {
       unsubscribe();
@@ -1843,13 +2360,33 @@ export class ConversationKernel {
     }));
   }
 
-  private enqueueSameSession(runtime: ConversationRuntime, message: string | AgentPromptMessage, queueMode: ConversationQueueMode): void {
+  private enqueueSameSession(
+    runtime: ConversationRuntime,
+    message: string | AgentPromptMessage,
+    queueMode: ConversationQueueMode,
+    requestedModel = '',
+  ): void {
     const isSteer = queueMode === 'steer';
     const text = typeof message === 'string' ? message : message.text;
     const prompt = isSteer ? text : `[Next queued while current turn is running]\n${text}`;
     if (!isSteer) {
       const structured = typeof message === 'string' ? null : message;
+      const requestedRuntimeKey = String(structured?.targetRuntimeKey || '').trim();
+      if (requestedRuntimeKey && requestedRuntimeKey !== runtime.target.runtimeKey) {
+        throw new Error(`Queued message target mismatch: expected ${requestedRuntimeKey}, received ${runtime.target.runtimeKey}`);
+      }
       const clientMessageId = String(structured?.clientMessageId || randomUUID());
+      const capturedBranch = this.runtimeBranchIdentity(runtime);
+      const branchPath = Array.isArray(structured?.branchPath) && structured!.branchPath!.length
+        ? structured!.branchPath!.map(id => String(id || '')).filter(Boolean)
+        : capturedBranch.branchPath;
+      const branchNodeId = String(structured?.branchNodeId || branchPath[branchPath.length - 1] || capturedBranch.branchNodeId || '');
+      const targetRuntimeKey = runtime.target.runtimeKey;
+      const workspaceKey = runtime.target.workspaceKey;
+      const modelSelection = String(
+        (structured?.modelSelection) || requestedModel || runtime.options.model || '',
+      ).trim() || undefined;
+      const ledgerBranchId = this.continuationStore(runtime, branchNodeId)?.branchId;
       const queuedMessage: AgentPromptMessage & { createdAt: string } = {
         ...(structured || {}),
         text: prompt,
@@ -1857,6 +2394,12 @@ export class ConversationKernel {
         visibleMode: structured?.visibleMode || runtime.options.mode,
         clientMessageId,
         runId: structured?.runId || runtime.runId,
+        branchNodeId: branchNodeId || undefined,
+        branchPath: branchPath.length ? branchPath : undefined,
+        ledgerBranchId,
+        targetRuntimeKey,
+        workspaceKey,
+        modelSelection,
         createdAt: String((structured as (AgentPromptMessage & { createdAt?: string }) | null)?.createdAt || new Date().toISOString()),
       };
       if (!runtime.pendingNextTurn.some(item =>
@@ -1874,6 +2417,12 @@ export class ConversationKernel {
         visibleUserInput: queuedMessage.visibleUserInput,
         visibleMode: queuedMessage.visibleMode,
         goalObjective: queuedMessage.goalObjective,
+        branchNodeId: queuedMessage.branchNodeId,
+        branchPath: queuedMessage.branchPath,
+        ledgerBranchId: queuedMessage.ledgerBranchId,
+        targetRuntimeKey,
+        workspaceKey,
+        modelSelection,
       }]);
       this.trackQueuedMessage(runtime, prompt, 'followUp');
       runtime.runner.recordWorkStatus(runtime.stopRequestedRunId === runtime.runId
@@ -1970,6 +2519,57 @@ export class ConversationKernel {
         || item.message.hiddenUserInput !== true || !!item.message.clientMessageId))
       .map(item => typeof item.message === 'string' ? item.message : item.message.text);
     return runtime;
+  }
+
+  /**
+   * Merge queue continuations persisted by another owner/kernel into this
+   * runtime's in-memory projection. Flow takeover, cold restore and a pool
+   * hand-off must not lose an already-admitted Next row. Deduplication is by
+   * the stable clientMessageId, never by text.
+   */
+  private reconcilePendingContinuations(runtime: ConversationRuntime): void {
+    // The other owner (pool/flow/cold restore) commits queue continuations to
+    // the workspace state file. Reload this runner's durable view before
+    // merging so a takeover cannot miss a row persisted after the runner was
+    // first created.
+    runtime.runner.setConversationFromStorage(runtime.id);
+    const persisted = runtime.runner.conversationContinuations();
+    const existingIds = new Set<string>();
+    for (const item of runtime.pendingNextTurn) {
+      if (typeof item.message === 'string') continue;
+      const id = String(item.message.clientMessageId || '').trim();
+      if (id) existingIds.add(id);
+    }
+    let changed = false;
+    for (const continuation of persisted) {
+      if (continuation.queueMode !== 'followUp' || !continuation.clientMessageId) continue;
+      if (existingIds.has(continuation.clientMessageId)) continue;
+      runtime.pendingNextTurn.push({
+        message: {
+          text: continuation.content,
+          visibleUserInput: continuation.visibleUserInput,
+          visibleMode: continuation.visibleMode,
+          goalObjective: continuation.goalObjective,
+          images: continuation.images?.map(image => ({ ...image })),
+          attachments: continuation.attachments?.map(attachment => ({ ...attachment })),
+          clientMessageId: continuation.clientMessageId,
+          buildId: continuation.buildId,
+          branchNodeId: continuation.branchNodeId,
+          branchPath: continuation.branchPath?.slice(),
+          targetRuntimeKey: continuation.targetRuntimeKey,
+          workspaceKey: continuation.workspaceKey,
+          modelSelection: continuation.modelSelection,
+          createdAt: continuation.createdAt,
+        },
+        queueMode: 'followUp',
+      });
+      existingIds.add(continuation.clientMessageId);
+      changed = true;
+    }
+    if (changed) {
+      this.queueState(runtime);
+      this.emitQueueUpdate(runtime);
+    }
   }
 
   private normalizeTarget(input: ConversationTargetInput): NormalizedConversationTarget {

@@ -982,6 +982,12 @@ async function main() {
   const duringFallbackQueue = kernel.queued(target('parallel-fallback'));
   assert(duringFallbackQueue.followUp.some(item => item.includes('fallback-second')), 'kernel: queued snapshot records pending next-turn follow-up messages');
   await Promise.all([fallbackPrompt, fallbackSame]);
+  // A Next row now starts a fresh Build after the previous one settles, so
+  // wait for the deferred scheduler instead of assuming the first prompt
+  // promise owns the whole queue drain.
+  for (let wait = 0; wait < 50 && (kernel.queued(target('parallel-fallback')).followUp.length > 0 || fallbackProbe.processCalls.length < 2); wait += 1) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
   assert(kernel.queued(target('parallel-fallback')).followUp.length === 0 && fallbackProbe.processCalls.length === 2, 'kernel: queued snapshot clears after fallback next-turn follow-up drains');
   const parallelProbeA = new QueueProbeAgent(TEST_DIR, { agentOnly: true });
   const parallelProbeB = new QueueProbeAgent(TEST_DIR, { agentOnly: true });
@@ -1000,6 +1006,12 @@ async function main() {
     && uiHtml.includes('state.pendingConversationActivations[activationKey] = activationReady')
     && uiHtml.includes('var activationBeforeSend = pendingConversationActivation(lockedTarget)')
     && uiHtml.includes('if (activationBeforeSend) await activationBeforeSend'), 'ui html: new conversations render immediately while activation is tracked and sends await the target activation');
+  assert(uiHtml.includes('function applyConversationModelSelection(snapshot)')
+    && uiHtml.includes('state._syncedModel = nextModel')
+    && uiHtml.includes('state.modelSelectionRevision = Number(state.modelSelectionRevision || 0) + 1')
+    && uiHtml.includes('modelRevision: modelRevisionAtActivation')
+    && uiHtml.indexOf('if (activationBeforeSend) await activationBeforeSend') < uiHtml.indexOf('var selectedModelResult = await api.setModel(state.model);'),
+  'conversation model binding: the activation snapshot restores the remembered provider deployment and the visible composer model is bound to the exact target after activation');
   assert(uiHtml.includes('applyBackendConversations(r.conversations || [], stillActive ? lockedConversationId : activeConversationId(), lockedTarget.workspaceId)') && uiHtml.includes('applyBackendConversations(s.conversations || [], stillActiveAfterRefresh ? lockedConversationId : activeConversationId(), lockedTarget.workspaceId)') && uiHtml.includes('var stillActiveAfterRefresh = isActiveConversationTarget(lockedTarget)')
     && uiHtml.includes('var completedContextRequest = captureContextWindowSnapshotRequest(lockedTarget);')
     && uiHtml.includes('if (stillActiveAfterRefresh) applyContextWindowSnapshot(s, completedContextRequest);')
@@ -1120,6 +1132,13 @@ async function main() {
   assert(providerTs.includes('const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS = 0') && providerTs.includes('effectiveTimeout > 0') && providerTs.includes("'$params = @{ Uri = $uri; Method = $method; Headers = $headers; UseBasicParsing = $true }'") && !providerTs.includes('Math.max(1, Math.ceil(effectiveTimeout / 1000))'), 'provider transport: normal PC responses have no deadline, including the PowerShell fallback path');
   const providerChatMessagesTs = fs.readFileSync(path.join(process.cwd(), 'src', 'providers', 'chat-messages.ts'), 'utf-8');
   const agentKernelRunnerTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
+  assert(agentKernelRunnerTs.includes('function providerSessionIdentity(agent: Agent): string')
+    && agentKernelRunnerTs.includes('::branch:${branchId}')
+    && agentKernelRunnerTs.includes('providerSessionIdentity(currentAgent)'),
+  'provider session cache: optional remote session identity is branch-scoped and never shared by sibling branches');
+  assert(agentTs.includes("contextHash = crypto.createHash('sha256')")
+    && agentTs.includes('branchId: this.currentBranchNodeId()'),
+  'request context manifest: every model request records its owning branch and actual payload hash');
   const workspaceTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'workspace.ts'), 'utf-8');
   const memoryLabTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'memoryLab.ts'), 'utf-8');
   const installUpdateTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'installUpdate.ts'), 'utf-8');
@@ -1695,7 +1714,7 @@ async function main() {
     && uiHtml.includes("esc(t('settings.remoteConnectDesc'))"), 'mobile remote-touch UI: both action rows use one bold short-title and light gray description hierarchy');
   assert(mainTs.includes("ipcMain.handle('skills:refresh'") && mainTs.includes('agent.refreshSkills();') && mainTs.includes("ipcMain.handle('skills:addMarketSource'") && mainTs.includes("ipcMain.handle('memoryLab:read'") && mainTs.includes("ipcMain.handle('memoryLab:visualization'") && mainTs.includes('agent.memoryLab.visualizationSnapshot()') && mainTs.includes('agent.updateMemoryLab') && mainTs.includes('input.tagPaths') && mainTs.includes('pathValue.map(String)') && mainTs.includes('agent.reindexMemoryLab') && mainTs.includes('terminalInterruptTimeoutMs'), 'main ipc: refreshes skills runtime, manages market sources, exposes one-shot Memory Lab visualization, preserves tag hierarchy paths, and returns terminal timeout state');
   assert(mainTs.includes("ipcMain.handle('agent:getConversationPlan', async (_event, conversationId?: string)") && mainTs.includes("ipcMain.handle('agent:updateConversationPlan', async (_event, plan: Record<string, unknown>, conversationId?: string)") && mainTs.includes("return agent.getConversationPlan(conversationId || agent.activeConversationId || 'default')"), 'main ipc: exposes and returns conversation-bound plan state');
-  assert(mainTs.includes("ipcMain.handle('flow:run'") && mainTs.includes('chatMessages: flowAgent.chatMessages') && mainTs.includes('conversations: flowAgent.listConversationStates()') && mainTs.includes('const flowAgent = ensureConversationKernel(root)!.beginExternalRun(flowTarget, {') && mainTs.includes('}, () => isolatedConversationAgent(flowTarget), previousQueuePaused);'), 'main ipc: Flow run leases the target isolated agent into its shared queue owner and returns rendered conversation state');
+  assert(mainTs.includes("ipcMain.handle('flow:run'") && mainTs.includes('chatMessages: flowAgent.chatMessages') && mainTs.includes('conversations: flowAgent.listConversationStates()') && mainTs.includes('const flowAgent = ensureConversationKernel(root)!.beginExternalRun(flowTarget, {') && mainTs.includes('}, () => isolatedConversationAgent(flowTarget), previousQueuePaused, {') && mainTs.includes('const flowCommandId = `flow-${flowKey}-${randomUUID()}`;') && mainTs.includes('existingBuildId: flowBuildId || undefined,') && mainTs.includes('resume: true,'), 'main ipc: Flow run leases the target isolated agent into its shared queue owner, admits an authoritative external build, and returns rendered conversation state');
   assert(mainTs.includes("ipcMain.handle('pty:kill'") && mainTs.includes('waitMs === 0') && mainTs.includes("session.proc.kill('SIGINT')") && mainTs.includes("kind: 'native-bash'") && mainTs.includes('spawnTakeoverPty(shell'), 'main ipc: bottom terminal uses native Bash sessions and real host PTYs with interrupt support');
   assert(mainTs.includes("ipcMain.handle('agentTerminal:takeoverState'") && mainTs.includes("ipcMain.handle('agentTerminal:takeoverWrite'") && mainTs.includes("ipcMain.handle('agentTerminal:takeoverStop'") && mainTs.includes("ipcMain.handle('agentTerminal:takeoverDetach'") && mainTs.includes("webContents.send('agentTerminal:takeover'"), 'main ipc: routes owner-scoped Agent terminal controls and broadcasts takeover events to every desktop window');
   assert(mainTs.includes('function defaultTerminalShell()') && mainTs.includes("process.platform === 'win32' ? 'powershell' : 'bash'") && mainTs.includes('function resolveTerminalShell') && mainTs.includes('executeWorkspaceBash(command, cwd') && mainTs.includes('terminalShells: availableTerminalShells()') && mainTs.includes('await runShellCommand(String(cmd || \'\')') && !mainTs.includes('const SHELL_MAP: Record<string, string>'), 'main ipc: executeBash routes Bash through the native workspace runtime while retaining platform shell choices');

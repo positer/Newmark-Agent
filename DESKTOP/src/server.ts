@@ -59,7 +59,7 @@ export interface HostedMobileServerOptions {
   conversationPrompt?: (
     target: { workspaceId: string; conversationId: string },
     message: string | AgentPromptMessage,
-    options?: { requestedMode?: string; goalObjective?: string; inputMode?: string; clientMessageId?: string; flowName?: string; flowStart?: number },
+    options?: { requestedMode?: string; goalObjective?: string; inputMode?: string; clientMessageId?: string; flowName?: string; flowStart?: number; model?: string },
   ) => Promise<Record<string, unknown>>;
 }
 
@@ -152,6 +152,7 @@ function hostedCommandOptions(params: Record<string, unknown>): NonNullable<Para
     clientMessageId: String(params.clientMessageId || ''),
     flowName: String(params.flowName || params.defaultFlow || ''),
     flowStart: typeof params.flowStart === 'number' && Number.isFinite(params.flowStart) ? params.flowStart : undefined,
+    model: String(params.model || ''),
   };
 }
 

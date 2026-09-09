@@ -137,14 +137,26 @@ async function run(options = {}) {
       }
       recover = true;
       kernel.queueAction(target, 'set_pause', { paused: false });
-      await tick(); await waitFor(() => !kernel.isRunning(target)); await tick(); await tick();
+      await tick(); await waitFor(() => !kernel.isRunning(target));
+      if (!isTitle) {
+        // A Next row now starts a fresh deferred Build after the previous one
+        // settles; wait for the authoritative queue projection to drain.
+        for (let wait = 0; wait < 200 && kernel.queueItems(target).length > 0; wait += 1) {
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+      }
+      await tick(); await tick();
       const final = capture();
       if (isTitle) {
         check(`${label}: each explicit retry reaches the title gate and starts no formal request`, titleAttempts === 2 && formalAttempts === 0 && queueCalls === 2, final);
         check(`${label}: retry preserves one stable ordinary user message`, first.users.length === 1 && final.users.length === 1 && first.users[0].messageId === final.users[0].messageId, { first, final });
         check(`${label}: repeated title failure keeps the same durable input`, final.paused && JSON.stringify(final.pendingIds) === '["original-id"]' && JSON.stringify(final.durableIds) === '["original-id"]', final);
       } else {
-        check(`${label}: resume never replays accepted input and accepts an unaccepted row once`, queueCalls === (accepted ? 1 : 2) && !final.pendingIds.length && !final.durableIds.length, final);
+        const blockedByCancel = failure === 'stop-before-accept' || failure === 'archive-before-accept';
+        const resumeOk = blockedByCancel
+          ? queueCalls === 1 && JSON.stringify(final.pendingIds) === '["original-id"]' && JSON.stringify(final.durableIds) === '["original-id"]'
+          : queueCalls === (accepted ? 1 : 2) && !final.pendingIds.length && !final.durableIds.length;
+        check(`${label}: resume never replays accepted input; an unaccepted row runs once or stays blocked by an explicit cancel`, resumeOk, final);
         check(`${label}: resume leaves no temporary observer behind`, runner.agentKernelUserMessageStartSubscribers.length === observers);
       }
       report.captures.push({ label, first, final });

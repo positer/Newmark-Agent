@@ -1377,12 +1377,19 @@ export class LLMProvider {
     sessionId?: string,
   ): AsyncGenerator<StreamToken> {
     if (signal?.aborted) throw abortFailure(signal);
+    // A non-positive value means "provider owns the output limit". Protocols
+    // whose wire format requires a positive max_tokens (Anthropic, GitHub
+    // Models) fall back to the selected reasoning tier's budget; OpenAI-style
+    // adapters omit the field entirely so the endpoint decides.
+    const requiredMaxTokens = maxTokens > 0
+      ? maxTokens
+      : this.intelligenceConfig(reasoningTier || 'medium').maxTokens;
     if (this.protocol() === 'anthropic') {
-      yield* this.anthropicChatWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal);
+      yield* this.anthropicChatWithTools(model, messages, systemPrompt, temperature, requiredMaxTokens, tools, signal);
       return;
     }
     if (this.protocol() === 'github_models') {
-      yield* this.githubModelsChatStreamWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal);
+      yield* this.githubModelsChatStreamWithTools(model, messages, systemPrompt, temperature, requiredMaxTokens, tools, signal);
       return;
     }
     if (this.useProviderAdaptersV2) {

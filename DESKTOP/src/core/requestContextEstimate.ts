@@ -2,6 +2,10 @@
 export interface RequestContextEstimate {
   requestId: string;
   runId: string;
+  /** Immutable runtime branch that owned this model request. */
+  branchId: string;
+  /** Content hash of the actual submitted system/messages/tools payload. */
+  contextHash: string;
   model: string;
   at: string;
   estimatedTokens: number;
@@ -25,7 +29,7 @@ export function estimateSubmittedContext(
   systemPrompt: string,
   tools: unknown[],
   buildBlockStart: number,
-): Omit<RequestContextEstimate, 'requestId' | 'runId' | 'model' | 'at'> {
+): Omit<RequestContextEstimate, 'requestId' | 'runId' | 'model' | 'at' | 'branchId' | 'contextHash'> {
   let longHistoryTokens = 0;
   let buildBlockTokens = 0;
   let hasImages = false;

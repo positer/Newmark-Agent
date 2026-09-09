@@ -1877,6 +1877,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     tools,
                     intelligence,
                     thinkingTierMap,
+                    // Null means the provider owns its real output limit.
                     maxOutputTokens = outputBudget,
                     onThoughtDelta = deltaPublisher::offerThought,
                     onTextDelta = deltaPublisher::offerText,
@@ -1888,9 +1889,33 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     deltaPublisher.cancel()
                 }
             }
-            val checkedResponse = if (responseResult.getOrNull()?.let { modelRequestedContinuation(it.finishReason) } == true && budgetContinuations >= 3) {
-                Result.failure(IllegalStateException("模型连续耗尽输出预算，已保留生成进度；请缩小任务范围后继续。"))
-            } else responseResult
+            if (responseResult.getOrNull()?.let { modelRequestedContinuation(it.finishReason) } == true && budgetContinuations >= 3) {
+                // Never discard a usable partial answer just because the
+                // provider exhausted its output budget repeatedly. Preserve
+                // the draft as an interrupted (not completed) result so the
+                // user can continue or narrow the task.
+                val partial = partialAnswer.toString() + responseResult.getOrNull()?.content.orEmpty()
+                val endedAt = System.currentTimeMillis()
+                thoughtContinuation.finish(endedAt)?.let { publish(it) }
+                val notice = "模型连续耗尽输出预算；已保留生成进度，可继续追问或缩小任务范围。"
+                publish(
+                    event(type = "status", content = notice, durationMs = endedAt - t0),
+                    status = "interrupted",
+                    endedAt = endedAt,
+                    text = partial,
+                )
+                return AgentLoopResult(
+                    run = LocalWorkRun(
+                        runId = runId, status = "interrupted",
+                        startedAt = startedAt, endedAt = endedAt,
+                        events = events, text = partial,
+                        anchorMessageId = anchorMessageId,
+                        branchNodeId = branchNodeId,
+                    ),
+                    modelContext = messages,
+                )
+            }
+            val checkedResponse = responseResult
             var resp = checkedResponse.getOrElse { e ->
                 finalLocalImageFallback(messages, e)?.let { return@getOrElse it }
                 val msg = if (e is EmptyResponseLimitException) {
@@ -1923,7 +1948,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 budgetContinuations++
                 partialAnswer.append(resp.content)
                 thoughtRequestContinuation.recordRound(resolvedRoundReasoning)
-                outputBudget = ((outputBudget ?: apiClient.outputTokenBudget(intelligence)) * 2).coerceAtMost(131072)
+                // Do not invent a client-side cap. If the provider explicitly
+                // reports truncation again, the continuation below carries the
+                // checkpoint; otherwise the next request also leaves the
+                // output limit to the provider.
+                outputBudget = null
                 outputContinuation = ChatMessage(role = "user", content =
                     "[Output budget continuation] The previous generation hit its output token limit. " +
                     "Continue the same task from the checkpoint below. Do not restart or repeat the draft. " +

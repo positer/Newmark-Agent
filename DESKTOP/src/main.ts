@@ -2961,7 +2961,7 @@ if (isViewerArg) {
 
     interface ConversationCommandOptions {
       requestedMode?: string; inputMode?: string; goalObjective?: string; clientMessageId?: string;
-      flowName?: string; flowStart?: number;
+      flowName?: string; flowStart?: number; model?: string;
     }
     const selectConversationMode = async (target: ConversationRuntimeTarget, raw: string): Promise<AgentMode> => {
       const mode = (['build', 'plan', 'chat', 'goal', 'flow'].includes(raw) ? raw : 'build') as AgentMode;
@@ -3159,6 +3159,10 @@ if (isViewerArg) {
         // Other conversations' paused Flows are never touched by this send.
         const flow = activeFlowStateFor(target);
         const snapshot = await runtimeSnapshotForTarget(target);
+        // The renderer's visible composer selection is authoritative for this
+        // send. It is provider-qualified (deployment:providerId:modelId), so it
+        // can never fall back to a same-named model on another provider.
+        const requestedModelSelection = String(requested.model || '').trim();
         const structured = typeof message === 'string' ? { text: message } : { ...message };
         const requestedMode = String(requested.requestedMode || structured.visibleMode || snapshot.mode || 'build') as AgentMode;
         const inputMode = String(requested.inputMode || snapshot.inputMode || 'guide') === 'next' ? 'next' : 'guide';
@@ -3185,9 +3189,20 @@ if (isViewerArg) {
             });
             return { ok: receipt.status !== 'rejected', accepted: receipt.status !== 'rejected', receipt, ...await runtimeSnapshotForTarget(target) };
           }
+          const requestedBranchPath = Array.isArray((structured as { branchPath?: unknown }).branchPath)
+            ? ((structured as { branchPath?: unknown[] }).branchPath || []).map(id => String(id || '')).filter(Boolean)
+            : String((structured as { branchPath?: unknown }).branchPath || '').split('>').map(id => id.trim()).filter(Boolean);
+          const requestedBranchNodeId = String(
+            (structured as { branchNodeId?: unknown }).branchNodeId
+            || requestedBranchPath[requestedBranchPath.length - 1]
+            || '',
+          );
           return await applyConversationAction(target, 'queue_enqueue', '', {
             id, text: structured.visibleUserInput || structured.text, requestedMode: requestedMode === 'flow' ? 'build' : requestedMode,
             goalObjective: objective, images: structured.images, createdAt: new Date().toISOString(),
+            branchNodeId: requestedBranchNodeId || undefined,
+            branchPath: requestedBranchPath.length ? requestedBranchPath : undefined,
+            modelSelection: requestedModelSelection || undefined,
           });
         }
         await selectConversationMode(target, requestedMode);
@@ -3201,10 +3216,10 @@ if (isViewerArg) {
         // 发送命令时锁定输入框选择的模型：接受命令后的整个运行过程都以该
         // 模型为准（唯一例外是显式的不可用回退，且回退会以结构化事件同步
         // 到前端输入框下方的选择区，而不是隐藏的参数回退）。
-        const requestedModel = String(snapshot.model || agent.model);
+        const requestedModel = String(requestedModelSelection || snapshot.model || agent.model);
         const options = {
           mode: requestedMode === 'goal' ? 'goal' as AgentMode : requestedMode,
-          model: String(snapshot.model || agent.ensureUsableModelSelection()),
+          model: String(requestedModelSelection || snapshot.model || agent.ensureUsableModelSelection()),
           intelligence: String(snapshot.intelligence || agent.intelligence),
           inputMode: inputMode as 'guide' | 'next',
           engine: agent.engine,
@@ -3313,6 +3328,16 @@ if (isViewerArg) {
         settlement: new Promise<void>(resolve => { resolvePendingSettlement = resolve; }),
       };
       pendingFlowStarts.set(flowKey, pending);
+      // Admit the Flow build at command-acceptance time. It may wait behind a
+      // running Build, but its queue position fixes the parent of every later
+      // Next item; the actual Flow start only claims this existing build.
+      const flowCommandId = `flow-${flowKey}-${randomUUID()}`;
+      const flowBuildId = ensureConversationKernel(root)!.admitExternalBuild(flowTarget, {
+        commandId: flowCommandId,
+        text: String(input || ''),
+        requestedMode: 'flow',
+        modelSelection: agent.modelSelectionValue(),
+      });
       let previousQueuePaused = false;
       try {
         let state = await runtimeSnapshotForTarget(flowTarget);
@@ -3332,7 +3357,13 @@ if (isViewerArg) {
       }
       const flowAgent = ensureConversationKernel(root)!.beginExternalRun(flowTarget, {
         mode: 'flow', model: agent.model, intelligence: agent.intelligence, inputMode: agent.inputMode, engine: agent.engine,
-      }, () => isolatedConversationAgent(flowTarget), previousQueuePaused);
+      }, () => isolatedConversationAgent(flowTarget), previousQueuePaused, {
+        commandId: flowCommandId,
+        text: String(input || ''),
+        requestedMode: 'flow',
+        modelSelection: agent.modelSelectionValue(),
+        existingBuildId: flowBuildId || undefined,
+      });
       mainConversationOwners.add(flowKey);
       conversationSelections.set(flowKey, { ...conversationSelections.get(flowKey), mode: 'flow' });
       const previousMode = flowAgent.mode;
@@ -3498,7 +3529,13 @@ if (isViewerArg) {
       const flowAgent = ensureConversationKernel(root)!.beginExternalRun(flowTarget, {
         mode: 'flow', model: suspension.flowAgent?.model || agent.model, intelligence: suspension.flowAgent?.intelligence || agent.intelligence,
         inputMode: suspension.flowAgent?.inputMode || agent.inputMode, engine: agent.engine,
-      }, () => suspension.flowAgent || isolatedConversationAgent(flowTarget), suspension.queueWasPaused ?? true);
+      }, () => suspension.flowAgent || isolatedConversationAgent(flowTarget), suspension.queueWasPaused ?? true, {
+        commandId: `flow-resume-${flowKey}-${randomUUID()}`,
+        text: String(response || ''),
+        requestedMode: 'flow',
+        modelSelection: agent.modelSelectionValue(),
+        resume: true,
+      });
       mainConversationOwners.add(flowKey);
       suspension.flowAgent = flowAgent;
       // A previous Flow may have been interrupted just before its isolated

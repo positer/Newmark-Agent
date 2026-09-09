@@ -625,6 +625,11 @@ async function verifyKernelCompositeRuntimeAndStop(): Promise<void> {
     probes.get(alphaState!.runtimeKey)!.finish('alpha done');
     probes.get(betaState!.runtimeKey)!.finish('beta done');
     await new Promise<void>(resolve => setImmediate(resolve));
+    // A Next row now starts a fresh deferred Build after the current one
+    // settles; wait for that scheduler boundary instead of one event-loop tick.
+    for (let wait = 0; wait < 100 && probes.get(betaState!.runtimeKey)!.processInputs.length < 2; wait += 1) {
+      await new Promise<void>(resolve => setTimeout(resolve, 10));
+    }
     assert.equal(probes.get(betaState!.runtimeKey)!.processInputs.length, 2, 'the unaffected conversation starts its queued continuation after the other target is force stopped');
     const betaNext = probes.get(betaState!.runtimeKey)!.processInputs[1];
     assert.match(typeof betaNext === 'string' ? betaNext : betaNext.text, /beta keeps working/);
@@ -678,17 +683,20 @@ async function verifyAuthoritativeEditablePausedQueue(): Promise<void> {
     kernel.queueAction(queueTarget, 'enqueue', {
       id: 'mobile-next-2', text: 'second queued value', requestedMode: 'plan', createdAt: '2026-08-18T12:00:01.000Z',
     });
-    const reordered = kernel.queueAction(queueTarget, 'reorder', {
-      orderedIds: ['mobile-next-2', 'mobile-next-1'],
-    });
-    assert.deepEqual(reordered.queueItems.map(item => item.id), ['mobile-next-2', 'mobile-next-1'],
-      'reorder changes the authoritative runtime execution order by stable id');
+    let admittedReorderRejected = false;
+    try {
+      kernel.queueAction(queueTarget, 'reorder', { orderedIds: ['mobile-next-2', 'mobile-next-1'] });
+    } catch (error) {
+      admittedReorderRejected = /fixed parents/.test(error instanceof Error ? error.message : String(error));
+    }
+    assert.ok(admittedReorderRejected,
+      'admitted queue reorder is rejected because it would silently change fixed parents');
     assert.deepEqual(kernel.snapshot(queueTarget).continuations.map(item => item.clientMessageId),
-      ['mobile-next-2', 'mobile-next-1'],
-      'reorder persists the same order in durable conversation continuations');
+      ['mobile-next-1', 'mobile-next-2'],
+      'reorder rejection preserves the authoritative admission order in durable continuations');
     assert.throws(() => kernel.queueAction(queueTarget, 'reorder', {
       orderedIds: ['mobile-next-1', 'mobile-next-1'],
-    }), /complete queue order/,
+    }), /fixed parents|complete queue order/,
     'partial, duplicate, or stale mobile orders must not corrupt the authoritative queue');
 
     const paused = kernel.queueAction(queueTarget, 'toggle_pause');
@@ -697,24 +705,27 @@ async function verifyAuthoritativeEditablePausedQueue(): Promise<void> {
     await running;
     assert.equal(kernel.runtimeState(queueTarget)?.running, false,
       'a paused follow-up does not hold the current Build open at its final-drain barrier');
-    assert.deepEqual(kernel.snapshot(queueTarget).queueItems.map(item => item.text), ['second queued value', 'edited queued value'],
+    assert.deepEqual(kernel.snapshot(queueTarget).queueItems.map(item => item.text), ['edited queued value', 'second queued value'],
       'paused authoritative queue survives current Build completion');
 
     kernel.queueAction(queueTarget, 'toggle_pause');
     await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(runner.processInputs.length, 2, 'resume drains one and only one queued continuation');
     const resumedInput = runner.processInputs[1] as Exclude<Parameters<Agent['process']>[0], string>;
-    assert.equal(resumedInput.text, '[Next queued while current turn is running]\nsecond queued value');
-    assert.equal(resumedInput.visibleUserInput, 'second queued value');
-    assert.equal(resumedInput.userMessageId, 'mobile-next-2',
+    assert.equal(resumedInput.text, '[Next queued while current turn is running]\nedited queued value');
+    assert.equal(resumedInput.visibleUserInput, 'edited queued value');
+    assert.equal(resumedInput.userMessageId, 'mobile-next-1',
       'resume preserves the PC continuation identity instead of degrading the queue item to a renderer string');
     assert.equal(resumedInput.clientMessageId, undefined, 'ordinary Next does not carry Guide-only identity');
-    assert.equal(resumedInput.runId, kernel.runtimeState(queueTarget)?.runId,
-      'scheduled ordinary Next is bound to its current execution run');
-    assert.equal(resumedInput.runId, runId,
-      'resuming the paused ordinary continuation retains its supervisor-owned work chain');
+    assert.equal(resumedInput.runId, undefined,
+      'ordinary Next payload never carries the completed run id into the new Build');
+    const resumedRunId = kernel.runtimeState(queueTarget)?.runId || '';
+    assert.ok(resumedRunId && resumedRunId !== runId,
+      'resuming the paused ordinary continuation starts a fresh Build run in the same conversation');
     runner.finish('queued complete');
-    await new Promise<void>(resolve => setImmediate(resolve));
+    for (let wait = 0; wait < 100 && runner.processInputs.length < 3; wait += 1) {
+      await new Promise<void>(resolve => setTimeout(resolve, 10));
+    }
     assert.equal(runner.processInputs.length, 3, 'the next queued input starts before the held runtime can become idle');
     runner.finish('remaining queued complete');
     await kernel.waitForIdle(queueTarget);

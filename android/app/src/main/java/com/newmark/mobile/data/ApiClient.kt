@@ -343,9 +343,12 @@ class ApiClient(
                 put("model", config.model)
                 put("stream", true)
                 // 智能档位真正生效（对齐 PC intelligenceConfig / applyChatReasoningEffort）
-                val (temp, maxTokens, _) = intelligenceConfig(intelligence)
+                val (temp, _, _) = intelligenceConfig(intelligence)
                 put("temperature", temp)
-                put("max_tokens", maxOutputTokens?.coerceAtLeast(1) ?: maxTokens)
+                // No self-imposed output cap for an ordinary reply. Omit the
+                // field entirely unless an auxiliary request explicitly asks
+                // for a bounded completion; the provider owns its real limit.
+                maxOutputTokens?.takeIf { it > 0 }?.let { put("max_tokens", it) }
                 reasoningEffort(config.model, base, intelligence, thinkingTierMap)?.let { put("reasoning_effort", it) }
                 put("messages", JSONArray().apply {
                     messages.forEach { m ->
@@ -541,12 +544,13 @@ class ApiClient(
     ): ChatResponse {
         val url = responsesEndpoint(base)
         val endpointBase = url.removeSuffix("/responses")
-        val (temperature, defaultMaxTokens, _) = intelligenceConfig(intelligence)
+        val (temperature, _, _) = intelligenceConfig(intelligence)
         val body = JSONObject().apply {
             put("model", config.model)
             put("stream", true)
             put("temperature", temperature)
-            put("max_output_tokens", maxOutputTokens?.coerceAtLeast(1) ?: defaultMaxTokens)
+            // No self-imposed output cap for an ordinary reply.
+            maxOutputTokens?.takeIf { it > 0 }?.let { put("max_output_tokens", it) }
             reasoningEffort(config.model, endpointBase, intelligence, thinkingTierMap)?.let { effort ->
                 put("reasoning", JSONObject().put("effort", effort).put("summary", "auto"))
             }

@@ -6699,6 +6699,10 @@ var state = {
   _conversationLoadingMsgEl: null,
   _syncedMode: null,
   _syncedModel: null,
+  // Monotonic revision for explicit renderer model changes. Activation
+  // snapshots may restore the conversation's remembered model only when no
+  // newer local selection was made while the snapshot was in flight.
+  modelSelectionRevision: 0,
   _syncedInputMode: null,
   _editingQueueIndex: -1,
   _editingGoalText: '',
@@ -8909,7 +8913,7 @@ var api = window.api || {
         conversationId: target.conversationId,
         action: action
       };
-      ['id', 'text', 'value', 'requestedMode', 'goalObjective', 'createdAt', 'images', 'paused', 'orderedIds'].forEach(function(field) {
+      ['id', 'text', 'value', 'requestedMode', 'goalObjective', 'createdAt', 'images', 'paused', 'orderedIds', 'branchNodeId', 'branchPath'].forEach(function(field) {
         if (input && Object.prototype.hasOwnProperty.call(input, field)) body[field] = input[field];
       });
       var r = await fetch('/api/queue-action', {
@@ -12843,6 +12847,35 @@ function hydrateConversationBranchState(snapshot) {
   rememberRuntimeConversationBranchPath(currentConversationTarget(s.conversationId || activeConversationId()));
 }
 
+// Apply the conversation's remembered provider-qualified model to the
+// composer selector. The backend snapshot is authoritative; a newer explicit
+// user selection made while the snapshot was in flight wins via the revision
+// guard passed by the activation caller.
+function applyConversationModelSelection(snapshot) {
+  var nextModel = String(snapshot && snapshot.model || '').trim();
+  if (!nextModel) return;
+  state.model = nextModel;
+  if (typeof snapshot.modelLabel === 'string' && snapshot.modelLabel) state.modelLabel = snapshot.modelLabel;
+  state._syncedModel = nextModel;
+  var sel = els['model-select'] || document.getElementById('model-select');
+  if (!sel) {
+    if (window.syncModelSelectSurface) window.syncModelSelectSurface();
+    return;
+  }
+  var hasOption = Array.prototype.some.call(sel.options, function(option) {
+    return String(option.value || '') === nextModel;
+  });
+  if (hasOption) {
+    sel.value = nextModel;
+    window.syncModelSelectSurface();
+  } else if (window.refreshModelSelect) {
+    // The remembered deployment is not in the current enabled catalog (for
+    // example its provider was explicitly disabled). Reuse the existing
+    // visibility fallback instead of displaying a model that cannot run.
+    window.refreshModelSelect();
+  }
+}
+
 function applyConversationSnapshot(s, requestedConversationId, options) {
   if (!s) return;
   if (s.computerUse) {
@@ -12865,6 +12898,11 @@ function applyConversationSnapshot(s, requestedConversationId, options) {
     if (s && s.runtimeKey) registerRuntimeKey(snapshotTarget, s.runtimeKey);
     hydrateConversationDraftSnapshot(s, snapshotTarget);
     hydrateConversationBranchState(s);
+    var modelRevisionMatches = !options || options.modelRevision === undefined
+      || Number(state.modelSelectionRevision || 0) === Number(options.modelRevision || 0);
+    if (modelRevisionMatches && isActiveConversationTarget(snapshotTarget)) {
+      applyConversationModelSelection(s);
+    }
     rebindQueueToRuntimeBranch(snapshotTarget);
     if (s && Array.isArray(s.workRuns) && !preserveReadableHistory) {
       var viewedBranchIdForSync = Array.isArray(s.viewedBranchNodePath) && s.viewedBranchNodePath.length
@@ -13999,6 +14037,7 @@ function applyModelFallbackToInputSurface(event) {
   var nextValue = modelDeploymentValueForName(f.to, f.providerId || '');
   if (!nextValue || String(state.model || '') === nextValue) return;
   state.model = nextValue;
+  state.modelSelectionRevision = Number(state.modelSelectionRevision || 0) + 1;
   state.modelLabel = '';
   // 不预置 _syncedModel：下一次发送前的 syncConversationExecutionState 会把
   // 回退模型正式同步到后端 host agent（并持久化为该对话的首选模型）。
@@ -16764,6 +16803,11 @@ function bindBackendQueuedRequestToTarget(text, target, occurrence) {
     request.createdAt = queueItem.createdAt;
     request.runId = queueItem.runId;
     request.images = (queueItem.images || []).map(function(image) { return Object.assign({}, image); });
+    if (Array.isArray(queueItem.branchPath) && queueItem.branchPath.length) {
+      request.branchPath = queueItem.branchPath.join('>');
+    } else if (queueItem.branchNodeId) {
+      request.branchPath = String(queueItem.branchNodeId);
+    }
   }
   return request;
 }
@@ -17476,7 +17520,15 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       queuedModeRequest.goalDeclaration = true;
       queuedModeRequest.goalObjective = rawText;
     }
-    var queueResult = await api.sendMessage({ text: rawText, images: queuedModeRequest.images }, lockedTarget, {
+    var queuedBranchPath = Array.isArray(queuedModeRequest.branchPath)
+      ? queuedModeRequest.branchPath
+      : String(queuedModeRequest.branchPath || '').split('>').filter(Boolean);
+    var queueResult = await api.sendMessage({
+      text: rawText,
+      images: queuedModeRequest.images,
+      branchPath: queuedBranchPath,
+      branchNodeId: String(queuedBranchPath[queuedBranchPath.length - 1] || '')
+    }, lockedTarget, {
       clientMessageId: queuedModeRequest.clientMessageId,
       inputMode: 'next',
       requestedMode: requestedMode,
@@ -17673,12 +17725,6 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   updateSubmitButtonState();
   var executionMode = opts.goalDeclaration || requestedMode === 'goal' ? 'build'
     : ((opts.forceBuild || idleBuildNextImmediate) && requestedMode === 'build' ? 'build' : requestedMode);
-  // The command freezes its mode and delivery policy; selector persistence
-  // must not rewrite the mode of an already running target before acceptance.
-  if (api.setModel && state.model !== state._syncedModel) {
-    var selectedModelResult = await api.setModel(state.model);
-    if (selectedModelResult != null) state._syncedModel = state.model;
-  }
   if (consumeProvisionalStop(lockedTarget, localRunId)) {
     // Stop/Escape won before the backend accepted the prompt. Do not send the
     // provider request after the user has already cancelled it.
@@ -17722,10 +17768,20 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   try {
     var activationBeforeSend = pendingConversationActivation(lockedTarget);
     if (activationBeforeSend) await activationBeforeSend;
+    // Bind the model actually shown in the composer to the exact target
+    // conversation after its activation snapshot restored the remembered
+    // selection. This makes the visible provider/model authoritative for the
+    // send and prevents a stale renderer selection from reaching another
+    // conversation's remembered deployment.
+    if (api.setModel && state.model && state.model !== state._syncedModel) {
+      var selectedModelResult = await api.setModel(state.model);
+      if (selectedModelResult != null) state._syncedModel = state.model;
+    }
     var sendPromise = api.sendMessage(requestMessage, lockedTarget, {
       requestedMode: requestedMode, inputMode: effectiveInputMode,
       goalObjective: opts.goalObjective || '',
-      clientMessageId: String(requestMessage && requestMessage.clientMessageId || localRunId)
+      clientMessageId: String(requestMessage && requestMessage.clientMessageId || localRunId),
+      model: state.model
     });
     if (requestedMode === 'goal') activateSubmittedGoal(opts.goalObjective || rawText);
     var r = await sendPromise;
@@ -23521,6 +23577,7 @@ function syncBackendConversation() {
   }
   if (conv && api.ensureConversation) {
     var requestedTarget = currentConversationTarget(conv.id);
+    var modelRevisionAtActivation = Number(state.modelSelectionRevision || 0);
     state.activeBackendConversationId = conv.id;
     var historyPromise = loadActiveConversationMessages(conv.id);
     requestedLoadGeneration = state.conversationLoadGeneration;
@@ -23529,7 +23586,7 @@ function syncBackendConversation() {
       var id = (s && s.conversationId) || conv.id;
       if (!requestIsCurrent() || String(id) !== requestedConversationId) return;
       state.activeBackendConversationId = id;
-      applyConversationSnapshot(s, id, { preserveReadableHistory: true });
+      applyConversationSnapshot(s, id, { preserveReadableHistory: true, modelRevision: modelRevisionAtActivation });
     }).catch(function(error) {
       if (!requestIsCurrent()) return;
       showUiNotice(
@@ -24061,12 +24118,13 @@ window.newConversation = function(workspaceReference, branchCommunication) {
   renderConversations();
   els['chat-area'].innerHTML = '';
   var target = currentConversationTarget(id);
+  var modelRevisionAtActivation = Number(state.modelSelectionRevision || 0);
   var activation = api.activateConversation ? api.activateConversation(target) : (api.ensureConversation ? api.ensureConversation(target) : Promise.resolve(null));
   var activationKey = runtimeKeyFor(target.workspaceId, target.conversationId);
   var activationReady = activation.then(function(s) {
     if (createdWorkspaceKey !== currentWorkspaceKey() || id !== String(activeConversationId() || 'default')) return;
     state.activeBackendConversationId = String((s && s.conversationId) || id);
-    if (s) applyConversationSnapshot(s, id, { preserveReadableHistory: true });
+    if (s) applyConversationSnapshot(s, id, { preserveReadableHistory: true, modelRevision: modelRevisionAtActivation });
     if (branchCommunication && api.setConversationBranchCommunication) {
       api.setConversationBranchCommunication(target, true).then(function() {
         var convsNow = currentWorkspaceConversations();
@@ -27863,6 +27921,7 @@ function schedulePostStartupUiRendering() {
       var selectedContextGeneration = state.conversationLoadGeneration;
       var selectedContextModel = this.value;
       state.model = selectedContextModel;
+      state.modelSelectionRevision = Number(state.modelSelectionRevision || 0) + 1;
       window.syncModelSelectSurface();
       if (state.model !== state._syncedModel) {
         var modelResult = await api.setModel(selectedContextModel);

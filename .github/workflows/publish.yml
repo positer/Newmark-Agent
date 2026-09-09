@@ -47,6 +47,20 @@ jobs:
         run: npm pack --dry-run
         working-directory: DESKTOP
 
+      - name: Check whether this version is already published
+        id: published
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./DESKTOP/package.json').version")"
+          if npm view "newmark-agent@${version}" version >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "newmark-agent@${version} is already published; skipping duplicate publish."
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm (trusted publishing / OIDC)
+        if: steps.published.outputs.already != 'true'
         run: npm publish --provenance --access public
         working-directory: DESKTOP

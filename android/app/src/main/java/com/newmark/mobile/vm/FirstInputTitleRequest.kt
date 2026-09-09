@@ -38,7 +38,10 @@ internal suspend fun requestAndApplyFirstInputTitle(
         tools = emptyList(),
         intelligence = turnIntelligence,
         thinkingTierMap = turnThinkingTierMap,
-        // Reasoning shares the output budget; use the same tier budget as the formal turn.
+        // Title generation is an auxiliary request: keep the frozen tier's
+        // normal output budget so reasoning tokens cannot truncate the title.
+        // Ordinary replies leave max_tokens to the provider.
+        maxOutputTokens = apiClient.outputTokenBudget(turnIntelligence),
     )
     currentCoroutineContext().ensureActive()
     (responseResult.exceptionOrNull() as? CancellationException)?.let { throw it }
@@ -58,6 +61,7 @@ internal suspend fun requestAndApplyFirstInputTitle(
             intelligence = "low",
             thinkingTierMap = emptyMap(),
             // Even the metadata retry needs the normal low-tier reasoning budget.
+            maxOutputTokens = apiClient.outputTokenBudget("low"),
         )
         currentCoroutineContext().ensureActive()
         (responseResult.exceptionOrNull() as? CancellationException)?.let { throw it }

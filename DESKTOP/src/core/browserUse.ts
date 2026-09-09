@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto';
+import { isAbsolute } from 'path';
+import { pathToFileURL } from 'url';
 import { BrowserControl } from './browserControl';
 
 /**
@@ -76,6 +78,9 @@ export interface BrowserUseRequest extends BrowserUseScope {
   maxChars?: number;
   maxRefs?: number;
   attribute?: string;
+  viewport?: { width: number; height: number };
+  visualMode?: "auto" | "vision";
+  pdfPage?: number;
 }
 
 export interface BrowserUseRect {
@@ -122,6 +127,7 @@ export interface BrowserUseRef {
 }
 
 export interface BrowserUseAdapterObservation {
+  document?: { source: string; pages?: number; visualPage?: number; visualScope?: string; error?: string };
   /** Opaque document identity supplied and rechecked by the page adapter. */
   pageToken: string;
   url: string;
@@ -135,6 +141,7 @@ export interface BrowserUseAdapterObservation {
 }
 
 export interface BrowserUseObservation {
+  document?: BrowserUseAdapterObservation["document"];
   url: string;
   title: string;
   viewport?: BrowserUseViewport;
@@ -157,6 +164,9 @@ export interface BrowserUseAdapterActionRequest {
   durationMs?: number;
   maxChars?: number;
   attribute?: string;
+  viewport?: { width: number; height: number };
+  visualMode?: "auto" | "vision";
+  pdfPage?: number;
 }
 
 export interface BrowserUseEffects {
@@ -167,6 +177,7 @@ export interface BrowserUseEffects {
 }
 
 export interface BrowserUseAdapterActionResult {
+  visionImageDataUrl?: string;
   ok: boolean;
   pageToken?: string;
   pageChanged?: boolean;
@@ -180,7 +191,7 @@ export interface BrowserUseAdapterActionResult {
 }
 
 export interface BrowserUsePageAdapter {
-  observe(scope: BrowserUseScope, options: { maxChars: number; maxRefs: number }, signal?: AbortSignal): Promise<BrowserUseAdapterObservation>;
+  observe(scope: BrowserUseScope, options: { maxChars: number; maxRefs: number; viewport?: { width: number; height: number }; visualMode?: "auto" | "vision"; pdfPage?: number }, signal?: AbortSignal): Promise<BrowserUseAdapterObservation>;
   act(scope: BrowserUseScope, request: BrowserUseAdapterActionRequest, signal?: AbortSignal): Promise<BrowserUseAdapterActionResult>;
 }
 
@@ -337,14 +348,16 @@ export function sanitizeBrowserUsePublicData(value: unknown, depth = 0, seen = n
 }
 
 export function normalizeBrowserUseUrl(raw: unknown): string {
-  const trimmed = String(raw || '').trim();
+  const trimmed = String(raw || '').trim().replace(/^files:\/\//i, 'file://');
   if (!trimmed) return '';
   if (trimmed === 'about:blank') return trimmed;
+  if (isAbsolute(trimmed)) return pathToFileURL(trimmed).href;
   const withProtocol = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
   try {
     const url = new URL(withProtocol);
     if (url.username || url.password) return '';
-    if (!['http:', 'https:'].includes(url.protocol.toLowerCase())) return '';
+    if (!['http:', 'https:', 'file:'].includes(url.protocol.toLowerCase())) return '';
+    if (url.protocol === 'file:' && url.hostname && url.hostname !== 'localhost') return '';
     return url.toString();
   } catch {
     return '';
@@ -385,6 +398,9 @@ export function bindBrowserUseRequest(
   if (raw.maxChars !== undefined || raw.max_chars !== undefined) request.maxChars = Number(raw.maxChars ?? raw.max_chars);
   if (raw.maxRefs !== undefined || raw.max_refs !== undefined) request.maxRefs = Number(raw.maxRefs ?? raw.max_refs);
   if (raw.attribute !== undefined) request.attribute = String(raw.attribute);
+  if (raw.pdfPage !== undefined || raw.pdf_page !== undefined) request.pdfPage = Number(raw.pdfPage ?? raw.pdf_page);
+  if (raw.viewport !== undefined) request.viewport = raw.viewport as BrowserUseRequest['viewport'];
+  if (raw.visualMode !== undefined || raw.visual_mode !== undefined) request.visualMode = String(raw.visualMode ?? raw.visual_mode) as BrowserUseRequest['visualMode'];
   return request;
 }
 
@@ -508,6 +524,18 @@ export class BrowserUseEngine implements BrowserUseBackend {
       return this.standaloneFailure({ owner, runtimeKey, visible, action, actionId, startedAt }, 'invalid_request', `Unsupported Browser-Use action: ${rawAction || '(missing)'}`);
     }
 
+    if (input.viewport !== undefined && (!input.viewport || !['observe', 'navigate'].includes(action)
+      || !Number.isInteger(input.viewport.width) || !Number.isInteger(input.viewport.height)
+      || input.viewport.width < 320 || input.viewport.width > 2560 || input.viewport.height < 240 || input.viewport.height > 2560
+      || input.viewport.width * input.viewport.height > 4_000_000)) {
+      return this.standaloneFailure({ owner, runtimeKey, visible, action, actionId, startedAt }, 'invalid_viewport', 'viewport requires integer CSS width 320..2560 and height 240..2560, at most 4 million pixels; use observe or navigate.');
+    }
+    if (input.visualMode !== undefined && !['auto', 'vision'].includes(input.visualMode)) {
+      return this.standaloneFailure({ owner, runtimeKey, visible, action, actionId, startedAt }, 'invalid_request', 'visual_mode must be auto or vision.');
+    }
+    if (input.pdfPage !== undefined && (!['observe', 'extract'].includes(action) || !Number.isInteger(input.pdfPage) || input.pdfPage < 1 || input.pdfPage > 100000)) {
+      return this.standaloneFailure({ owner, runtimeKey, visible, action, actionId, startedAt }, 'invalid_pdf_page', 'pdf_page must be a positive page number for observe.');
+    }
     const scope = { owner, runtimeKey, visible };
     const session = this.ensureSession(scope);
     const cached = session.receipts.get(actionId);
@@ -518,7 +546,7 @@ export class BrowserUseEngine implements BrowserUseBackend {
       try {
         const maxChars = boundedInteger(input.maxChars, 12_000, 500, 50_000);
         const maxRefs = boundedInteger(input.maxRefs, 160, 1, 300);
-        const raw = await this.adapter.observe(scope, { maxChars, maxRefs }, signal);
+        const raw = await this.adapter.observe(scope, { maxChars, maxRefs, viewport: input.viewport, visualMode: input.visualMode, pdfPage: input.pdfPage }, signal);
         throwIfBrowserUseAborted(signal);
         if (!raw || !cleanScopePart(raw.pageToken)) {
           return this.cache(session, this.failure(scope, action, actionId, sequence, session.generation, startedAt, 'observe_failed', 'Page adapter returned no document identity.'));
@@ -542,6 +570,7 @@ export class BrowserUseEngine implements BrowserUseBackend {
           title: publicString(raw.title, 1000),
           viewport: raw.viewport ? sanitizeBrowserUsePublicData(raw.viewport) as BrowserUseViewport : undefined,
           text: publicString(raw.text, maxChars),
+          ...(raw.document ? { document: sanitizeBrowserUsePublicData(raw.document) as BrowserUseAdapterObservation["document"] } : {}),
           ...(raw.contentSource ? { contentSource: raw.contentSource } : {}),
           refs,
           truncated: (Array.isArray(raw.elements) && raw.elements.length > elements.length) || String(raw.text || '').length > maxChars,
@@ -568,9 +597,9 @@ export class BrowserUseEngine implements BrowserUseBackend {
     if (action === 'navigate') {
       const url = normalizeBrowserUseUrl(input.url);
       if (!url) {
-        return this.cache(session, this.failure(scope, action, actionId, sequence, session.generation, startedAt, 'unsafe_navigation', 'Browser-Use navigation only accepts safe HTTP, HTTPS, or about:blank URLs without embedded credentials.'));
+        return this.cache(session, this.failure(scope, action, actionId, sequence, session.generation, startedAt, 'unsafe_navigation', 'Browser-Use navigation only accepts safe HTTP, HTTPS, local file, or about:blank URLs without embedded credentials.'));
       }
-      return await this.executeAdapter(scope, session, { action, expectedPageToken: session.pageToken, url }, input, actionId, sequence, startedAt, signal);
+      return await this.executeAdapter(scope, session, { action, expectedPageToken: session.pageToken, url, viewport: input.viewport }, input, actionId, sequence, startedAt, signal);
     }
 
     if (!session.observationId) {
@@ -606,6 +635,8 @@ export class BrowserUseEngine implements BrowserUseBackend {
     const adapterRequest: BrowserUseAdapterActionRequest = {
       action,
       expectedPageToken: session.pageToken,
+      pdfPage: input.pdfPage,
+      visualMode: input.visualMode,
       ...(element ? { element } : {}),
     };
     if (action === 'type') {
@@ -699,6 +730,7 @@ export class BrowserUseEngine implements BrowserUseBackend {
         ...(session.observationId ? { observationId: session.observationId } : {}),
         ...(result.url ? { url: publicString(result.url, 4000) } : {}),
         ...(result.title ? { title: publicString(result.title, 1000) } : {}),
+        ...(!changed && result.visionImageDataUrl ? { vision_image_data_url: result.visionImageDataUrl } : {}),
         ...(result.data !== undefined ? { data: sanitizeBrowserUsePublicData(result.data) } : {}),
         ...(Object.keys(effects || {}).length ? { effects } : {}),
       }));

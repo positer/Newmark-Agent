@@ -164,10 +164,9 @@ const mobileServerWorkEventSubscribers = new Set<(event: AgentWorkEvent) => void
 const browserGuestContentsByHost = new Map<number, number>();
 const browserGuestBindingsByRuntime = new Map<string, { hostId: number; guestId: number; workspaceId: string; conversationId: string }>();
 const browserGuestKeyboardBridgeIds = new Set<number>();
-// visible=false Browser-Use sessions are never attached to a BrowserWindow or
-// renderer DOM. Each runtime gets one main-process-owned WebContentsView whose
-// WebContents preserves observe/action continuity until the run is cleared.
-const backgroundBrowserViewsByRuntime = new Map<string, Electron.WebContentsView>();
+// Background pages own a hidden compositor window, never the right-sidebar DOM.
+// A detached WebContentsView cannot produce screenshots on Windows.
+const backgroundBrowserViewsByRuntime = new Map<string, Electron.BrowserWindow>();
 
 function backgroundBrowserPartition(runtimeKey: string): string {
   const digest = createHash('sha256').update(String(runtimeKey || 'default')).digest('hex').slice(0, 24);
@@ -182,6 +181,7 @@ function releaseBackgroundBrowserWebContents(runtimeKey: string, expectedContent
   backgroundBrowserViewsByRuntime.delete(trustedRuntimeKey);
   const contents = view.webContents;
   if (!contents.isDestroyed()) contents.close({ waitForBeforeUnload: false });
+  if (!view.isDestroyed()) view.destroy();
 }
 
 function releaseAllBackgroundBrowserWebContents(): void {
@@ -1071,7 +1071,8 @@ async function ensureBackgroundBrowserWebContents(boundContentsId?: number, runt
   if (existing && !existing.webContents.isDestroyed()) return existing.webContents;
   if (existing) backgroundBrowserViewsByRuntime.delete(trustedRuntimeKey);
 
-  const view = new WebContentsView({
+  const view = new BrowserWindow({
+    show: false, skipTaskbar: true, focusable: false, width: 1280, height: 720,
     webPreferences: {
       partition: backgroundBrowserPartition(trustedRuntimeKey),
       contextIsolation: true,
@@ -1082,6 +1083,7 @@ async function ensureBackgroundBrowserWebContents(boundContentsId?: number, runt
       backgroundThrottling: false,
     },
   });
+
   const contents = view.webContents;
   backgroundBrowserViewsByRuntime.set(trustedRuntimeKey, view);
   contents.on('will-prevent-unload', event => event.preventDefault());
@@ -1101,6 +1103,14 @@ function ensureElectronBrowserUseHost(): ElectronBrowserUseHost {
       resolveContents: async (scope, boundContentsId) => scope.visible === false
         ? await ensureBackgroundBrowserWebContents(boundContentsId, scope.runtimeKey)
         : await ensureBrowserWebContents(boundContentsId, scope.runtimeKey),
+      resizeContents: async (contents, viewport) => {
+        const background = [...backgroundBrowserViewsByRuntime.values()].find(view => view.webContents.id === contents.id);
+        if (background) { background.setContentSize(viewport.width, viewport.height); return; }
+        const host = contents.hostWebContents;
+        if (!host) throw new Error('Visible browser host unavailable');
+        const changed = await host.executeJavaScript(`window.setBrowserViewport(${contents.id}, ${JSON.stringify(viewport)})`);
+        if (!changed) throw new Error('Visible browser canvas unavailable');
+      },
       releaseContents: (scope, contents) => {
         if (scope.visible === false) releaseBackgroundBrowserWebContents(scope.runtimeKey, contents.id);
       },

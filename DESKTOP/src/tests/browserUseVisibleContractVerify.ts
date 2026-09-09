@@ -40,12 +40,12 @@ function main(): void {
   'visible=true retains the registered right-sidebar guest path');
 
   const backgroundResolver = section(mainSource, 'async function ensureBackgroundBrowserWebContents', 'function ensureElectronBrowserUseHost');
-  ok(backgroundResolver.includes('new WebContentsView({')
+  ok(backgroundResolver.includes('new BrowserWindow({')
     && backgroundResolver.includes('backgroundBrowserViewsByRuntime')
     && backgroundResolver.includes("await contents.loadURL('about:blank')")
     && !backgroundResolver.includes("browser:ensureGuest")
-    && !backgroundResolver.includes('BrowserWindow'),
-  'visible=false uses a main-process-only background WebContents and never sends sidebar IPC or creates a window');
+    && backgroundResolver.includes('show: false, skipTaskbar: true, focusable: false'),
+  'visible=false owns a hidden compositor for screenshots and never sends sidebar IPC or shows a window');
 
   const hostFactory = section(mainSource, 'function ensureElectronBrowserUseHost', 'function ensureBrowserUseEngine');
   ok(hostFactory.includes('scope.visible === false')

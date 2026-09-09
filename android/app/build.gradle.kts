@@ -12,8 +12,8 @@ android {
         applicationId = "com.newmark.mobile"
         minSdk = 24
         targetSdk = 36
-        versionCode = 601
-        versionName = "0.6.1"
+        versionCode = 602
+        versionName = "0.6.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -76,6 +76,7 @@ androidComponents {
 }
 
 dependencies {
+    implementation("io.github.erweixin:ratex-android:0.1.14")
     // Bundled, offline Markdown AST/parser support; the Compose renderer keeps
     // the Newmark visual language while using the library for broader CommonMark
     // token coverage on mobile.

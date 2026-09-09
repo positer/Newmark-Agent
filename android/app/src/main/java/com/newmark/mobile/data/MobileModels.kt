@@ -139,8 +139,16 @@ data class WorkEvent(
     val displayText: String get() = content.ifBlank { text }
 }
 
+data class RemoteWorkDelta(
+    val id: String = "",
+    val sequence: Long = 0,
+    val content: String = "",
+    val timestamp: String = "",
+)
+
 /** 桌面端 work run 事件（AgentWorkEvent，SSE 与快照同构） */
 data class RemoteWorkEvent(
+    val coalescedDeltas: List<RemoteWorkDelta> = emptyList(),
     val id: String = "",
     val conversationId: String = "",
     val type: String = "",
@@ -346,7 +354,7 @@ object RemotePayloadNormalizer {
         status = value.status.orEmpty(),
         startedAt = value.startedAt.orEmpty(),
         endedAt = value.endedAt.orEmpty(),
-        events = value.events.orEmpty().map(::workEvent),
+        events = RemoteTrackingContract.mergeEvents(emptyList(), value.events.orEmpty().map(::workEvent)),
         guides = value.guides.orEmpty().map(::workGuide),
         primaryPrompt = value.primaryPrompt.orEmpty(),
         branchNodeId = value.branchNodeId.orEmpty(),
@@ -354,6 +362,9 @@ object RemotePayloadNormalizer {
     )
 
     fun workEvent(value: RemoteWorkEvent): RemoteWorkEvent = value.copy(
+        coalescedDeltas = value.coalescedDeltas.orEmpty().map { delta ->
+            delta.copy(id = delta.id.orEmpty(), content = delta.content.orEmpty(), timestamp = delta.timestamp.orEmpty())
+        },
         id = value.id.orEmpty(),
         conversationId = value.conversationId.orEmpty(),
         type = value.type.orEmpty(),

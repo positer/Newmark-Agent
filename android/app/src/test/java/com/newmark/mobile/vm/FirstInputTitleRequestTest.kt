@@ -29,6 +29,86 @@ import kotlin.concurrent.thread
 
 /** Real title requests prove the first-turn gate and its cancellation ownership. */
 class FirstInputTitleRequestTest {
+    @Test fun reasoningModelCanFinishTitleWithTheFormalTurnBudget() = runBlocking {
+        val server = MockWebServer()
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse {
+                val body = JSONObject(request.body.readUtf8())
+                return if (body.getInt("max_tokens") < 4096) response("") else response("推理模型标题预算")
+            }
+        }
+        server.start()
+        try {
+            var title = ""
+            assertTrue(requestAndApplyFirstInputTitle(ApiClient(), "分析当前标题总结失败的原因",
+                ApiConfig(server.url("/v1").toString(), "fixture", "deepseek-v4-flash-vision"),
+                "high", emptyMap(), applyTitle = { title = it; Result.success(true) }))
+            assertEquals("推理模型标题预算", title)
+            assertEquals(1, server.requestCount)
+        } finally { server.shutdown() }
+    }
+
+    @Test fun stopDuringImageTextFallbackDoesNotApplyNeutralTitle() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(response(""))
+        server.enqueue(MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE))
+        server.start()
+        val applied = AtomicBoolean(false)
+        val pending = async(Dispatchers.IO) {
+            requestAndApplyFirstInputTitle(ApiClient(), "查看图片", ApiConfig(server.url("/v1").toString(), "fixture", "gpt-5"),
+                "high", emptyMap(), imageAttachmentCount = 1,
+                applyTitle = { applied.set(true); Result.success(true) })
+        }
+        try {
+            repeat(2) { assertNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+            pending.cancel()
+            pending.join()
+            assertTrue(pending.isCancelled)
+            assertFalse(applied.get())
+        } finally { pending.cancel(); server.shutdown() }
+    }
+
+    @Test fun imageTitleRetriesFromTextMetadataWithoutSendingPixels() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(response(""))
+        server.enqueue(response("潮汐图片解读"))
+        server.start()
+        try {
+            var applied = ""
+            assertTrue(requestAndApplyFirstInputTitle(ApiClient(), "解释潮汐图", ApiConfig(server.url("/v1").toString(), "fixture", "gpt-5"),
+                "high", mapOf("high" to "high"), imageAttachmentCount = 2,
+                applyTitle = { applied = it; Result.success(true) }))
+            assertEquals("潮汐图片解读", applied)
+            val first = JSONObject(server.takeRequest().body.readUtf8())
+            val fallback = JSONObject(server.takeRequest().body.readUtf8())
+            assertEquals(16384, first.getInt("max_tokens"))
+            assertEquals(2048, fallback.getInt("max_tokens"))
+            assertEquals("low", fallback.getString("reasoning_effort"))
+            val content = fallback.getJSONArray("messages").getJSONObject(0).getString("content")
+            assertTrue(content.contains("2 image attachments"))
+            assertTrue(content.contains("解释潮汐图"))
+            assertFalse(fallback.toString().contains("image_url"))
+            assertFalse(fallback.toString().contains("data:image"))
+        } finally { server.shutdown() }
+    }
+
+    @Test fun unavailableImageTitleUsesNeutralNameButStillRequiresPersistence() = runBlocking {
+        for (saveSucceeds in listOf(true, false)) {
+            val server = MockWebServer()
+            repeat(2) { server.enqueue(MockResponse().setResponseCode(503).setBody("unavailable")) }
+            server.start()
+            try {
+                var applied = ""
+                val ready = requestAndApplyFirstInputTitle(ApiClient(), "用户提交了 1 个图片附件",
+                    ApiConfig(server.url("/v1").toString(), "fixture", "gpt-5"), "high", emptyMap(), imageAttachmentCount = 1,
+                    applyTitle = { applied = it; if (saveSucceeds) Result.success(true) else Result.failure(java.io.IOException("disk")) })
+                assertEquals(saveSucceeds, ready)
+                assertEquals("图片内容分析", applied)
+                assertEquals(2, server.requestCount)
+            } finally { server.shutdown() }
+        }
+    }
+
     private val firstInput = "Explain how lunar tides change over a month"
 
     private fun response(title: String): MockResponse = MockResponse()
@@ -176,7 +256,7 @@ class FirstInputTitleRequestTest {
             assertEquals("/v1/chat/completions", recorded.path)
             assertEquals("gpt-5", body.getString("model"))
             assertEquals("high", body.getString("reasoning_effort"))
-            assertEquals(64, body.getInt("max_tokens"))
+            assertEquals(16384, body.getInt("max_tokens"))
             assertFalse(body.has("tools"))
             val messages = body.getJSONArray("messages")
             assertEquals(1, messages.length())

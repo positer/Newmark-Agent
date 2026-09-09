@@ -27,6 +27,8 @@ const get=url=>new Promise((resolve,reject)=>http.get(url,r=>{let b='';r.on('dat
   await cdp.ready;
   await waitForPromotedMainUi(cdp);
   console.log('Main UI ready');
+  await call('Page.bringToFront');
+  await call('Emulation.setFocusEmulationEnabled',{enabled:true});
   await call('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
   for(let i=0;i<60;i++){if(await evaluate('typeof state !== "undefined" && state.providers.length > 0'))break;await sleep(250);}
   await evaluate("window.openSettings('models')");await sleep(400);

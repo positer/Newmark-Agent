@@ -5,6 +5,7 @@ import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.Typography
@@ -34,6 +35,7 @@ val NewmarkTextSecondary = Color(0xFFCECECE)
 val NewmarkTextTertiary = Color(0xFF949494)
 
 val NewmarkAccent = Color(0xFF5B78FF)
+val NewmarkLightAccent = Color(0xFF405BD2)
 val NewmarkAccentSoft = Color(0x1F5B78FF)
 val NewmarkAccentBorder = Color(0x665B78FF)
 
@@ -58,9 +60,10 @@ val NewmarkLightBgPrimary = Color(0xFFF0F2F8)
 val NewmarkLightBgSecondary = Color(0xF2FFFFFF)
 val NewmarkLightBgTertiary = Color(0xF8F8FAFF)
 val NewmarkLightBgQuaternary = Color(0xEEFFFFFF)
-val NewmarkLightTextPrimary = Color(0xE0000000)
-val NewmarkLightTextSecondary = Color(0x85000000)
-val NewmarkLightTextTertiary = Color(0x52000000)
+// Match PC --text-bright / --text / --text-dim without alpha-dependent fading.
+val NewmarkLightTextPrimary = Color(0xFF0A0A1A)
+val NewmarkLightTextSecondary = Color(0xFF1A1A2E)
+val NewmarkLightTextTertiary = Color(0xFF6A7090)
 val NewmarkLightBorder = Color(0x1F1A2A52)
 val NewmarkLightBorder2 = Color(0x3D1A2A52)
 
@@ -73,8 +76,9 @@ val MarqueeColors = listOf(
 )
 
 // 状态语义色
-val NewmarkGreen = Color(0xFF34C759)
-val NewmarkRed = Color(0xFFFF3B30)
+val NewmarkGreen = Color(0xFF38D4A0)
+val NewmarkRed = Color(0xFFFF7785)
+val NewmarkWarning = Color(0xFFF4C95D)
 
 /**
  * 固定的深色/浅色语义主题色。
@@ -103,6 +107,7 @@ data class NewmarkThemeColors(
     val codeNumber: Color,
     val codeType: Color,
     val codeTag: Color,
+    val warning: Color = NewmarkWarning,
 )
 
 val NewmarkDarkThemeColors = NewmarkThemeColors(
@@ -136,13 +141,14 @@ val NewmarkLightThemeColors = NewmarkThemeColors(
     textPrimary = NewmarkLightTextPrimary,
     textSecondary = NewmarkLightTextSecondary,
     textTertiary = NewmarkLightTextTertiary,
-    accent = NewmarkAccent,
+    accent = NewmarkLightAccent,
     accentSoft = NewmarkAccentSoft,
     accentBorder = NewmarkAccentBorder,
     border = NewmarkLightBorder,
     border2 = NewmarkLightBorder2,
-    green = NewmarkGreen,
-    red = NewmarkRed,
+    green = Color(0xFF147D59),
+    red = Color(0xFFC73545),
+    warning = Color(0xFF8A5B00),
     codeKeyword = Color(0xFF7A4BBF),
     codeString = Color(0xFF1B7F3B),
     codeComment = Color(0xFF5B6678),
@@ -242,19 +248,37 @@ private val NewmarkDarkColors = darkColorScheme(
 )
 
 private val NewmarkLightColors = lightColorScheme(
-    primary = NewmarkAccent,
+    primary = NewmarkLightAccent,
     onPrimary = Color.White,
     primaryContainer = NewmarkAccentSoft,
-    onPrimaryContainer = NewmarkAccent,
+    onPrimaryContainer = NewmarkLightAccent,
     background = NewmarkLightBgPrimary,
     onBackground = NewmarkLightTextPrimary,
     surface = NewmarkLightBgSecondary,
     onSurface = NewmarkLightTextPrimary,
     surfaceVariant = NewmarkLightBgTertiary,
     onSurfaceVariant = NewmarkLightTextSecondary,
+    surfaceTint = Color.Transparent,
+    surfaceDim = Color(0xFFE3E6EF),
+    surfaceBright = Color.White,
+    surfaceContainerLowest = Color.White,
+    surfaceContainerLow = Color(0xFFF7F8FC),
+    surfaceContainer = Color(0xFFF0F2F8),
+    surfaceContainerHigh = Color(0xFFE9ECF4),
+    surfaceContainerHighest = Color(0xFFE3E6EF),
+    secondary = NewmarkLightTextSecondary,
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFE9ECF4),
+    onSecondaryContainer = NewmarkLightTextPrimary,
+    tertiary = NewmarkLightTextSecondary,
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFE3E6EF),
+    onTertiaryContainer = NewmarkLightTextPrimary,
+    inverseSurface = NewmarkBgOverlay.copy(alpha = 1f),
+    inverseOnSurface = NewmarkTextPrimary,
     outline = NewmarkLightBorder2,
     outlineVariant = NewmarkLightBorder,
-    error = NewmarkRed,
+    error = NewmarkLightThemeColors.red,
 )
 
 private val NewmarkTypography = Typography(
@@ -310,7 +334,13 @@ fun NewmarkTheme(
         MaterialTheme(
             colorScheme = if (darkTheme) NewmarkDarkColors else NewmarkLightColors,
             typography = NewmarkTypography,
-            content = content,
-        )
+        ) {
+            // MaterialTheme does not supply LocalContentColor. Bare icons and
+            // IconButtons must inherit the selected app theme, too.
+            CompositionLocalProvider(
+                LocalContentColor provides MaterialTheme.colorScheme.onSurface,
+                content = content,
+            )
+        }
     }
 }

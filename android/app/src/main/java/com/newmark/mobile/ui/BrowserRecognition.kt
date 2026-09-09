@@ -38,6 +38,8 @@ private val RepairPrompt = listOf(
 class BrowserRecognition(
     private val context: Context,
     private val webView: WebView,
+    private val inspectImage: suspend (String) -> String = { "" },
+    private val isPdf: () -> Boolean = { false },
 ) : AutoCloseable {
     private val latin = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     private val chinese = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
@@ -47,14 +49,15 @@ class BrowserRecognition(
         .followRedirects(true)
         .build()
 
-    suspend fun recognize(url: String, maxChars: Int): JSONObject = runCatching {
-        if (url.substringBefore('#').substringBefore('?').endsWith(".pdf", ignoreCase = true)) {
-            recognizePdf(url, maxChars)
+    suspend fun recognize(url: String, maxChars: Int, forceVision: Boolean = false, pdfPage: Int? = null): JSONObject = runCatching {
+        if (isPdf() || url.substringBefore('#').substringBefore('?').endsWith(".pdf", ignoreCase = true)) {
+            recognizePdf(url, maxChars, forceVision, pdfPage)
         } else {
             val bitmap = captureWebView()
-            ocrReceipt(bitmap, maxChars, "webview_screenshot", "sparse-ui")
+            visualReceipt(bitmap, maxChars, "webview_screenshot", "sparse-ui")
         }
     }.getOrElse { error ->
+        if (error is kotlinx.coroutines.CancellationException) throw error
         JSONObject()
             .put("ok", false)
             .put("source", "local_ocr")
@@ -63,20 +66,31 @@ class BrowserRecognition(
             .put("agent_repair_prompt", RepairPrompt)
     }
 
-    private suspend fun recognizePdf(url: String, maxChars: Int): JSONObject {
+    private suspend fun recognizePdf(url: String, maxChars: Int, forceVision: Boolean, pdfPage: Int?): JSONObject {
         val pdf = downloadPdf(url)
         try {
-            val text = extractPdfTextLayer(pdf.readBytes()).take(maxChars)
-            if (text.count { it.isLetterOrDigit() } >= 20) {
+            var pageCount = 0
+            val text = try { withContext(Dispatchers.IO) {
+                com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(context)
+                com.tom_roush.pdfbox.pdmodel.PDDocument.load(pdf).use { document ->
+                    pageCount = document.numberOfPages
+                    com.tom_roush.pdfbox.text.PDFTextStripper().apply {
+                        if (pdfPage != null) { require(pdfPage <= document.numberOfPages); startPage = pdfPage; endPage = pdfPage }
+                    }.getText(document).trim().take(maxChars)
+                }
+            } } catch (error: kotlinx.coroutines.CancellationException) { throw error } catch (_: Exception) { "" }
+            if (!forceVision && text.count { it.isLetterOrDigit() } >= 20) {
                 return JSONObject()
                     .put("ok", true)
                     .put("source", "pdf_text_layer")
+                    .put("engine", "pdfbox_binary").put("pages", pageCount)
+                    .put("page", pdfPage).put("scope", if (pdfPage == null) "document_text" else "selected_page_only")
                     .put("recognition_order", RecognitionOrder)
                     .put("text", text)
                     .put("truncated", text.length >= maxChars)
             }
-            return ocrReceipt(renderPdfFirstPage(pdf), maxChars, "pdf_rendered_page", "academic-document")
-                .put("page", 1)
+            return visualReceipt(renderPdfPage(pdf, pdfPage ?: 1), maxChars, "pdf_rendered_page", "academic-document")
+                .put("pages", pageCount).put("page", pdfPage ?: 1).put("scope", if (pdfPage == null) "first_page_only" else "selected_page_only").put("engine_pdf", "pdfbox_binary+PdfRenderer")
         } finally {
             pdf.delete()
         }
@@ -90,6 +104,25 @@ class BrowserRecognition(
             bitmap.eraseColor(Color.WHITE)
             webView.draw(Canvas(bitmap))
         }
+    }
+
+    private suspend fun visualReceipt(bitmap: Bitmap, maxChars: Int, source: String, profile: String): JSONObject {
+        val dataUrl = java.io.ByteArrayOutputStream().use { output ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 82, output)
+            "data:image/jpeg;base64," + android.util.Base64.encodeToString(output.toByteArray(), android.util.Base64.NO_WRAP)
+        }
+        val text = try { inspectImage(dataUrl) } catch (error: kotlinx.coroutines.CancellationException) {
+            bitmap.recycle()
+            throw error
+        } catch (_: Exception) { "" }
+        if (text.isNotBlank()) {
+            bitmap.recycle()
+            return JSONObject().put("ok", true).put("source", "vision_model")
+                .put("recognition_order", RecognitionOrder).put("approximate", true)
+                .put("text", text.take(maxChars)).put("truncated", text.length > maxChars)
+        }
+        return ocrReceipt(bitmap, maxChars, source, profile)
+            .put("visual_model_error", "Visual collaborator unavailable or failed; using local OCR")
     }
 
     private suspend fun ocrReceipt(bitmap: Bitmap, maxChars: Int, source: String, profile: String): JSONObject {
@@ -121,29 +154,65 @@ class BrowserRecognition(
     }
 
     private suspend fun downloadPdf(url: String): File = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url(url.substringBefore('#')).apply {
-            CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let { header("Cookie", it) }
-        }.build()
         val target = File.createTempFile("browser-", ".pdf", context.cacheDir)
+        fun copyBounded(input: java.io.InputStream) {
+            input.use { stream -> target.outputStream().use { output ->
+                val buffer = ByteArray(64 * 1024)
+                var total = 0L
+                while (true) {
+                    val count = stream.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    require(total <= MaxPdfBytes) { "PDF must be smaller than 250 MiB" }
+                    output.write(buffer, 0, count)
+                }
+            } }
+        }
         try {
-            http.newCall(request).execute().use { response ->
-                require(response.isSuccessful) { "PDF 下载失败：HTTP ${response.code}" }
-                val body = requireNotNull(response.body) { "PDF 响应为空" }
-                val length = body.contentLength()
-                require(length in -1L..MaxPdfBytes) { "PDF 必须小于 250 MiB" }
-                body.byteStream().use { input ->
-                    target.outputStream().use { output ->
-                        val buffer = ByteArray(64 * 1024)
-                        var total = 0L
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            total += count
-                            require(total <= MaxPdfBytes) { "PDF 必须小于 250 MiB" }
-                            output.write(buffer, 0, count)
+            val uri = android.net.Uri.parse(url.substringBefore('#'))
+            when (uri.scheme?.lowercase()) {
+                "file", "content" -> copyBounded(requireNotNull(context.contentResolver.openInputStream(uri)))
+                "blob" -> {
+                    val encoded = withContext(Dispatchers.Main.immediate) {
+                        kotlinx.coroutines.suspendCancellableCoroutine<String> { continuation ->
+                            val quoted = JSONObject.quote(url)
+                            // evaluateJavascript does not await promises: poll a private temporary result.
+                            val key = "__newmarkPdf" + java.util.UUID.randomUUID().toString().replace("-", "")
+                            webView.evaluateJavascript("(function(){fetch(" + quoted + ").then(r=>r.blob()).then(b=>{if(b.size>" + MaxPdfBytes + ")throw Error('PDF too large');const f=new FileReader();f.onload=()=>window['" + key + "']=f.result;f.readAsDataURL(b)}).catch(()=>window['" + key + "']='error');})()", null)
+                            val poll = object : Runnable {
+                                var attempts = 0
+                                override fun run() {
+                                    if (!continuation.isActive) { webView.evaluateJavascript("delete window['" + key + "']", null); return }
+                                    webView.evaluateJavascript("window['" + key + "'] || ''") { value ->
+                                        val result = runCatching { org.json.JSONArray("[$value]").getString(0) }.getOrDefault("")
+                                        if (result.isNotBlank() || ++attempts >= 150) {
+                                            webView.evaluateJavascript("delete window['" + key + "']", null)
+                                            continuation.resumeWith(Result.success(result))
+                                        } else webView.postDelayed(this, 100)
+                                    }
+                                }
+                            }
+                            webView.post(poll)
                         }
                     }
+                    require(encoded.startsWith("data:")) { "Unable to read PDF blob" }
+                    copyBounded(android.util.Base64.decode(encoded.substringAfter(','), android.util.Base64.DEFAULT).inputStream())
                 }
+                "http", "https" -> {
+                    val cookies = withContext(Dispatchers.Main.immediate) { CookieManager.getInstance().getCookie(url) }
+                    val request = Request.Builder().url(url.substringBefore('#')).apply {
+                        cookies?.takeIf { it.isNotBlank() }?.let { header("Cookie", it) }
+                    }.build()
+                    val client = if (uri.host in setOf("localhost", "127.0.0.1", "::1", "[::1]"))
+                        http.newBuilder().proxy(java.net.Proxy.NO_PROXY).build() else http
+                    client.newCall(request).execute().use { response ->
+                        require(response.isSuccessful) { "PDF HTTP ${response.code}" }
+                        val body = requireNotNull(response.body)
+                        require(body.contentLength() in -1L..MaxPdfBytes) { "PDF must be smaller than 250 MiB" }
+                        copyBounded(body.byteStream())
+                    }
+                }
+                else -> error("Unsupported PDF URL")
             }
             require(target.inputStream().use { input -> String(input.readNBytes(5), Charsets.US_ASCII) } == "%PDF-") {
                 "目标不是有效 PDF"
@@ -155,11 +224,11 @@ class BrowserRecognition(
         }
     }
 
-    private fun renderPdfFirstPage(file: File): Bitmap {
+    private fun renderPdfPage(file: File, pageNumber: Int): Bitmap {
         val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         PdfRenderer(descriptor).use { renderer ->
             require(renderer.pageCount > 0) { "PDF 没有可渲染页面" }
-            renderer.openPage(0).use { page ->
+            renderer.openPage(pageNumber - 1).use { page ->
                 val scale = (1800f / page.width.coerceAtLeast(1)).coerceIn(1f, 3f)
                 val bitmap = Bitmap.createBitmap((page.width * scale).toInt(), (page.height * scale).toInt(), Bitmap.Config.ARGB_8888)
                 bitmap.eraseColor(Color.WHITE)

@@ -62,23 +62,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Computer
-import androidx.compose.material.icons.filled.Dangerous
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -804,7 +787,7 @@ private fun ChatTopBar(
         if (showMenuButton) {
             CircleButton(onClick = onMenuClick) {
                 Icon(
-                    imageVector = Icons.Filled.Menu,
+                    imageVector = LucideIcons.Menu,
                     contentDescription = "菜单",
                     tint = p.textPrimary,
                     modifier = Modifier.size(20.dp),
@@ -824,7 +807,7 @@ private fun ChatTopBar(
         if (showConnectRemote) {
             CircleButton(onClick = onConnectRemote) {
                 Icon(
-                    imageVector = Icons.Filled.Computer,
+                    imageVector = LucideIcons.Monitor,
                     contentDescription = "连接桌面端",
                     tint = p.accent,
                     modifier = Modifier.size(18.dp),
@@ -836,7 +819,7 @@ private fun ChatTopBar(
         }
         CircleButton(onClick = onNewChat) {
             Icon(
-                imageVector = Icons.Filled.Add,
+                imageVector = LucideIcons.Plus,
                 contentDescription = "新对话",
                 tint = p.accent,
                 modifier = Modifier.size(20.dp),
@@ -987,7 +970,7 @@ private fun ChatContent(
                     .padding(end = 14.dp, bottom = 14.dp),
             ) {
                 Icon(
-                    imageVector = Icons.Filled.KeyboardArrowDown,
+                    imageVector = LucideIcons.ChevronDown,
                     contentDescription = "回到底部",
                     tint = p.textPrimary,
                     modifier = Modifier.size(22.dp),
@@ -1019,6 +1002,7 @@ private data class PcColors(
     val accent2: Color,
     val border: Color,
     val error: Color,
+    val warning: Color = Color(0xFFF4C95D),
 )
 
 private val PcColorsDark = PcColors(
@@ -1027,16 +1011,17 @@ private val PcColorsDark = PcColors(
     accent = Color(0xFF5B78FF),
     accent2 = Color(0xFF38D4A0),
     border = Color(0x14FFFFFF), // rgba(255,255,255,.08)
-    error = Color(0xFFFF8888),
+    error = Color(0xFFFF7785),
 )
 
 private val PcColorsLight = PcColors(
     text = Color(0xFF1A1A2E),    // PC light --text
     textDim = Color(0xFF6A7090), // PC light --text-dim
-    accent = Color(0xFF5B78FF),  // PC --accent（light 无覆盖）
-    accent2 = Color(0xFF38D4A0), // PC --accent2（light 无覆盖）
+    accent = Color(0xFF405BD2),
+    accent2 = Color(0xFF147D59),
     border = Color(0x14000000),  // 黑 8%（白 8% 的亮色语义）
-    error = Color(0xFFFF8888),
+    error = Color(0xFFC73545),
+    warning = Color(0xFF8A5B00),
 )
 
 private val LocalPcColors = staticCompositionLocalOf { PcColorsDark }
@@ -1217,6 +1202,7 @@ private fun ChatMessageRow(
             } else {
                 MarkdownBody(
                     text = content,
+                    modifier = if (isUser) Modifier.padding(start = MobileReadableStartInset) else Modifier.padding(end = MobileReadableEndInset),
                     baseColor = pc.text,
                     alignEnd = isUser,
                     onLinkClick = onOpenWebLink,
@@ -1249,12 +1235,7 @@ private fun ConversationImageAttachments(attachments: List<RemoteConversationIma
     }.take(6)
     valid.forEach { attachment ->
         var expanded by remember(attachment.id, attachment.dataUrl) { mutableStateOf(false) }
-        val bitmap = remember(attachment.dataUrl) {
-            runCatching {
-                val bytes = android.util.Base64.decode(attachment.dataUrl.substringAfter(',', ""), android.util.Base64.DEFAULT)
-                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            }.getOrNull()
-        } ?: return@forEach
+        val bitmap = rememberAttachmentPreview(attachment.dataUrl).value ?: return@forEach
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1955,12 +1936,7 @@ private fun WorkDisplayImagePreview(image: com.newmark.mobile.data.WorkDisplayIm
             it.dataUrl.length <= 14 * 1024 * 1024
     } ?: return
     var expanded by remember(safe.id, safe.dataUrl) { mutableStateOf(false) }
-    val bitmap = remember(safe.dataUrl) {
-        runCatching {
-            val bytes = android.util.Base64.decode(safe.dataUrl.substringAfter(',', ""), android.util.Base64.DEFAULT)
-            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        }.getOrNull()
-    } ?: return
+    val bitmap = rememberAttachmentPreview(safe.dataUrl).value ?: return
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2078,7 +2054,7 @@ private fun WorkGuideTimelineRow(event: LocalWorkEvent) {
     )
     val statusColor = when (status) {
         "rejected" -> pc.error
-        "deferred" -> Color(0xFFFFD27A)
+        "deferred" -> pc.warning
         else -> pc.accent
     }
     Row(
@@ -2141,12 +2117,7 @@ private fun WorkGuideImageAttachments(attachments: List<com.newmark.mobile.data.
             attachment.dataUrl.length <= 14 * 1024 * 1024
     }.take(6).forEach { attachment ->
         var expanded by remember(attachment.id, attachment.dataUrl) { mutableStateOf(false) }
-        val bitmap = remember(attachment.dataUrl) {
-            runCatching {
-                val bytes = android.util.Base64.decode(attachment.dataUrl.substringAfter(',', ""), android.util.Base64.DEFAULT)
-                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            }.getOrNull()
-        } ?: return@forEach
+        val bitmap = rememberAttachmentPreview(attachment.dataUrl).value ?: return@forEach
         androidx.compose.foundation.Image(
             bitmap = bitmap.asImageBitmap(),
             contentDescription = attachment.name.ifBlank { "Guide 图片" },
@@ -2349,7 +2320,7 @@ private fun QueuePanel(
                     Modifier
                         .size(7.dp)
                         .clip(CircleShape)
-                        .background(if (paused) Color(0xFFFFC857) else pc.accent2),
+                        .background(if (paused) pc.warning else pc.accent2),
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
@@ -2361,14 +2332,14 @@ private fun QueuePanel(
                     modifier = Modifier.weight(1f),
                 )
                 QueueIconButton(
-                    icon = if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                    icon = if (paused) LucideIcons.Play else LucideIcons.Pause,
                     label = if (paused) "继续队列" else "暂停队列",
-                    tint = if (paused) Color(0xFFFFB82E) else pc.textDim,
+                    tint = if (paused) pc.warning else pc.textDim,
                     onClick = onTogglePause,
                 )
                 Spacer(Modifier.width(2.dp))
                 QueueIconButton(
-                    icon = if (collapsed) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    icon = if (collapsed) LucideIcons.ChevronUp else LucideIcons.ChevronDown,
                     label = if (collapsed) "展开" else "折叠",
                     tint = pc.textDim,
                 ) { collapsed = !collapsed }
@@ -2537,12 +2508,12 @@ private fun QueueRow(
         if (item.editable) {
             QueueIconButton(LucideIcons.ArrowRight, "立即 Guide", pc.accent2) { onGuide(item.id) }
             QueueIconButton(LucideIcons.SquarePen, "编辑", pc.textDim) { onEdit(item) }
-            QueueIconButton(LucideIcons.X, "删除", Color(0xFFFF6F7D)) { onDelete(item.id) }
+            QueueIconButton(LucideIcons.X, "删除", pc.error) { onDelete(item.id) }
         }
     }
 }
 
-/** Queue-only borderless action: color and lift replace the old framed glass button. */
+/** Plain queue action: pointer input only, with no pressed paint or motion. */
 @Composable
 private fun QueueIconButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -2551,17 +2522,9 @@ private fun QueueIconButton(
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
     Box(
         modifier = Modifier
             .size(28.dp)
-            .graphicsLayer {
-                scaleX = if (pressed) 1.08f else 1f
-                scaleY = if (pressed) 1.08f else 1f
-                translationY = if (pressed) (-0.75).dp.toPx() else 0f
-            }
-            .clip(CircleShape)
-            .background(tint.copy(alpha = if (pressed) 0.15f else 0f))
             .clickable(
                 interactionSource = interaction,
                 indication = null,
@@ -2572,7 +2535,7 @@ private fun QueueIconButton(
         Icon(
             icon,
             contentDescription = label,
-            tint = tint.copy(alpha = if (pressed) 1f else 0.88f),
+            tint = tint.copy(alpha = 0.88f),
             modifier = Modifier.size(14.dp),
         )
     }
@@ -2580,7 +2543,7 @@ private fun QueueIconButton(
 
 @Composable
 private fun StackIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color, onClick: () -> Unit) {
-    Box(Modifier.size(24.dp).glassButtonSurface(NewmarkShapeSmall, alpha = 0.58f).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(24.dp).clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick), contentAlignment = Alignment.Center) {
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(13.dp))
     }
 }
@@ -2618,8 +2581,8 @@ private fun RemoteGoalBar(goal: RemoteGoal, onEdit: () -> Unit, onTogglePause: (
                 overflow = TextOverflow.Ellipsis,
             )
             StackIconButton(LucideIcons.SquarePen, "编辑目标", pc.textDim, onEdit)
-            StackIconButton(if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause, if (paused) "继续目标" else "暂停目标", if (paused) Color(0xFFFFCC44) else pc.textDim, onTogglePause)
-            StackIconButton(LucideIcons.X, "删除目标", Color(0xFFFF7777), onDelete)
+            StackIconButton(if (paused) LucideIcons.Play else LucideIcons.Pause, if (paused) "继续目标" else "暂停目标", if (paused) pc.warning else pc.textDim, onTogglePause)
+            StackIconButton(LucideIcons.X, "删除目标", pc.error, onDelete)
         }
     }
 }
@@ -2683,12 +2646,7 @@ private fun InputArea(
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                val bitmap = remember(pendingImage.dataUrl) {
-                    runCatching {
-                        val bytes = android.util.Base64.decode(pendingImage.dataUrl.substringAfter(",", ""), android.util.Base64.DEFAULT)
-                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    }.getOrNull()
-                }
+                val bitmap = rememberAttachmentPreview(pendingImage.dataUrl).value
                 if (bitmap != null) {
                     androidx.compose.foundation.Image(
                         bitmap = bitmap.asImageBitmap(),
@@ -2708,7 +2666,7 @@ private fun InputArea(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Upload,
+                            imageVector = LucideIcons.Upload,
                             contentDescription = null,
                             tint = p.textTertiary,
                             modifier = Modifier.size(20.dp),
@@ -3418,7 +3376,7 @@ private fun ModelButton(
         onClick = onOpenMenu,
         visualModifier = Modifier.onGloballyPositioned { onAnchorBoundsChanged(it.boundsInWindow()) },
     ) {
-        Icon(Icons.Filled.AutoAwesome, "模型", tint = p.textSecondary, modifier = Modifier.size(16.dp))
+        Icon(LucideIcons.Sparkles, "模型", tint = p.textSecondary, modifier = Modifier.size(16.dp))
     }
 }
 
@@ -3436,7 +3394,7 @@ private fun PlusCombo(
         onClick = onOpenMenu,
         visualModifier = Modifier.onGloballyPositioned { onAnchorBoundsChanged(it.boundsInWindow()) },
     ) {
-        Icon(Icons.Filled.Add, "模式与文件", tint = p.accent, modifier = Modifier.size(18.dp))
+        Icon(LucideIcons.Plus, "模式与文件", tint = p.accent, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -3532,7 +3490,7 @@ private fun SubmitButton(
                         },
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.KeyboardArrowUp,
+                        imageVector = LucideIcons.ChevronUp,
                         contentDescription = "松开发送 Guide",
                         tint = p.textPrimary,
                         modifier = Modifier.size(19.dp),

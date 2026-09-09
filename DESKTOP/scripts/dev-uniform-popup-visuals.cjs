@@ -102,7 +102,7 @@ async function main() {
       // capture only its navigation shell and incorrectly compare its layout.
       let settingsReady = false;
       for (let attempt = 0; attempt < 200; attempt++) {
-        settingsReady = await evaluate(`Boolean(document.querySelector('#sub-win-overlay.open') && document.querySelector('#sub-win #settings-glass-opacity'))`);
+        settingsReady = await evaluate(`Boolean(document.querySelector('#sub-win-overlay.open') && document.querySelector('#sub-win #stab-general .setting-row'))`);
         if (settingsReady) break;
         await sleep(50);
       }

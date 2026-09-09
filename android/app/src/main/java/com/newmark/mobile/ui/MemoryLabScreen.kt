@@ -1,5 +1,7 @@
 package com.newmark.mobile.ui
 
+import com.newmark.mobile.ui.components.LucideIcons
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -46,8 +48,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -198,7 +198,7 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
                 surfaceColor = p.bgQuaternary,
                 onClick = onBack,
             ) {
-                Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = p.textPrimary, modifier = Modifier.size(20.dp))
+                Icon(LucideIcons.ArrowLeft, contentDescription = "返回", tint = p.textPrimary, modifier = Modifier.size(20.dp))
             }
             Text(
                 text = "Memory Lab",
@@ -778,18 +778,18 @@ private fun Overview(
                 val gridStep = 38f * cameraScale
                 if (gridStep >= 10f) {
                     var x = cameraPan.x % gridStep
-                    while (x < size.width) { drawLine(Color.White.copy(alpha = .035f), Offset(x, 0f), Offset(x, size.height), 1f); x += gridStep }
+                    while (x < size.width) { drawLine(p.textPrimary.copy(alpha = .055f), Offset(x, 0f), Offset(x, size.height), 1f); x += gridStep }
                     var y = cameraPan.y % gridStep
-                    while (y < size.height) { drawLine(Color.White.copy(alpha = .035f), Offset(0f, y), Offset(size.width, y), 1f); y += gridStep }
+                    while (y < size.height) { drawLine(p.textPrimary.copy(alpha = .055f), Offset(0f, y), Offset(size.width, y), 1f); y += gridStep }
                 }
                 graph.edges.forEach { edge ->
                     val a = positions[edge.from] ?: return@forEach
                     val b = positions[edge.to] ?: return@forEach
                     val hot = focusId.isBlank() || edge in related.edges
                     val edgeColor = when {
-                        edge in related.parents -> Color(0xFFF6C96B).copy(alpha = .78f)
-                        edge in related.children -> Color(0xFF74DFB0).copy(alpha = .72f)
-                        hot -> Color(0xFF7EDCFF).copy(alpha = .78f)
+                        edge in related.parents -> p.warning.copy(alpha = .78f)
+                        edge in related.children -> p.green.copy(alpha = .72f)
+                        hot -> p.accent.copy(alpha = .78f)
                         else -> (if (p == com.newmark.mobile.ui.theme.NewmarkLightThemeColors) {
                             Color(0xFF96A8D2)
                         } else p.textTertiary).copy(alpha = .08f)
@@ -798,9 +798,9 @@ private fun Overview(
                     drawLine(edgeColor, start, end, if (hot) 1.45f else 1.05f)
                     if (focusId.isNotBlank() && hot) {
                         val flowColor = when {
-                            edge in related.parents -> Color(0xFFF6C96B).copy(alpha = .88f)
-                            edge in related.children -> Color(0xFF74DFB0).copy(alpha = .82f)
-                            else -> Color(0xFF7EDCFF).copy(alpha = .82f)
+                            edge in related.parents -> p.warning.copy(alpha = .88f)
+                            edge in related.children -> p.green.copy(alpha = .82f)
+                            else -> p.accent.copy(alpha = .82f)
                         }
                         val t0 = flowPhase
                         val t1 = (t0 + .09f).coerceAtMost(1f)
@@ -907,10 +907,10 @@ private enum class MemoryRelationMode(val label: String) {
 
 private data class MemoryCloudNode(val id: String, val label: String, val tag: String = "", val slug: String = "", val type: String, val width: Float, val height: Float = 28f) {
     fun color(p: com.newmark.mobile.ui.theme.NewmarkThemeColors) = when (type) {
-        "root", "anchor" -> androidx.compose.ui.graphics.Color(0xFFF6C96B)
-        "leaf" -> androidx.compose.ui.graphics.Color(0xFF74DFB0)
-        "component" -> androidx.compose.ui.graphics.Color(0xFFE8EEF8)
-        else -> androidx.compose.ui.graphics.Color(0xFFB7A0FF)
+        "root", "anchor" -> p.warning
+        "leaf" -> p.green
+        "component" -> p.textSecondary
+        else -> p.accent
     }
 }
 private data class MemoryCloudEdge(val from: String, val to: String, val type: String)
@@ -1073,7 +1073,7 @@ private fun Detail(
                     )
                     Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("编辑 / 重构", color = p.accent, fontSize = 11.sp, modifier = Modifier.clickable { onEditComponent(activeComponent) }.padding(8.dp))
-                        Text("删除", color = Color(0xFFFF7777), fontSize = 11.sp, modifier = Modifier.clickable { onDeleteComponent(activeComponent) }.padding(8.dp))
+                        Text("删除", color = p.red, fontSize = 11.sp, modifier = Modifier.clickable { onDeleteComponent(activeComponent) }.padding(8.dp))
                     }
                 }
             }

@@ -11,7 +11,7 @@ import { JSDOM } from 'jsdom';
  * 通过伪元素浮起一层交互玻璃。
  */
 function uiHtml(): string {
-  return fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'ui', 'index.html'), 'utf-8');
+  return fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'ui', 'index.html'), 'utf-8').replace(/\r\n/g, '\n');
 }
 
 function check(condition: boolean, message: string): void {

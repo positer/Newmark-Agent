@@ -323,7 +323,7 @@ async function main() {
     && !mainSource.includes("ipcMain.handle('agent:readFile'") && !mainSource.includes("ipcMain.handle('agent:saveFile'") && !mainSource.includes("ipcMain.handle('agent:listFiles'"),
   'renderer file access: arbitrary read/write/list IPC is removed in favor of purpose-scoped APIs');
   assert(uiHtml.includes('api.openWorkspaceFile(path)') && uiHtml.includes('api.saveWorkspaceFile(state.editorToken, content, state.editorRevision)')
-    && uiHtml.includes('newmark-preview:\\/\\/') && !uiHtml.includes('partition="persist:newmark-browser" allowpopups'),
+    && uiHtml.includes("'newmark-preview:'") && !uiHtml.includes('partition="persist:newmark-browser" allowpopups'),
   'safe file router: tree and linked files use token-bound routing while browser popups stay disabled');
   assert(uiHtml.includes('window.resetEditorSurface = function')
     && uiHtml.includes('window.requestEditorTransition = async function')
@@ -4265,7 +4265,7 @@ async function main() {
   const titleGateProvider = new FakeProvider([]);
   (titleGateProvider as unknown as { intelligenceConfig: (tier: string) => { temperature: number; maxTokens: number; reasoningEffort: string } }).intelligenceConfig = (tier: string) => {
     titleGateIntelligenceTiers.push(tier);
-    return { temperature: 0, maxTokens: 100, reasoningEffort: tier };
+    return { temperature: 0, maxTokens: 32768, reasoningEffort: tier };
   };
   (titleGateProvider as unknown as { chat: (...args: any[]) => Promise<string> }).chat = async (
     modelName: string,
@@ -4276,6 +4276,7 @@ async function main() {
     _signal: AbortSignal,
     reasoningTier: string,
   ) => {
+    assert(_maxTokens === 32768, 'title probe: preserves frozen reasoning budget instead of truncating to a small title cap');
     titleGateChatCalls += 1;
     titleGateTitleModels.push(modelName);
     titleGateTitleReasoningTiers.push(String(reasoningTier || ''));

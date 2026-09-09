@@ -28,6 +28,41 @@ import org.junit.Test
  */
 class SearchOnlyHttpMcpDeviceTest {
     @Test
+    fun liveYouAdmissionReturnsPublicSources() {
+        assumeTrue(InstrumentationRegistry.getArguments().getString("searchYouLive") == "true")
+        val endpoint = MobileSearchMcpNode(
+            id = "you-search-mcp", name = "You.com Free Search MCP",
+            transport = MobileSearchMcpTransport.STREAMABLE_HTTP,
+            url = "https://api.you.com/mcp?profile=free",
+            toolName = "you-search", queryArgument = "query", timeoutMs = 15_000,
+        )
+        val result = client().search(endpoint, "Clay Mathematics Institute Navier Stokes existence smoothness Fefferman PDF").getOrThrow()
+        assertTrue(result.text.contains("https://"))
+        assertTrue(result.text.contains("claymath.org"))
+    }
+
+    @Test
+    fun liveExaAdmissionReturnsAuthoritativeSources() {
+        assumeTrue(InstrumentationRegistry.getArguments().getString("searchExaLive") == "true")
+        val queries = listOf(
+            "Clay Mathematics Institute Navier Stokes existence smoothness Fefferman PDF" to "claymath.org",
+            "中国科学院大学 2026 秋季 学期 校历" to "ucas.ac.cn",
+            "Android developers WebView PDF support" to "developer.android.com",
+        )
+        val endpoint = MobileSearchMcpNode(
+            id = "exa-search-mcp", name = "Exa Search MCP",
+            transport = MobileSearchMcpTransport.STREAMABLE_HTTP,
+            url = "https://mcp.exa.ai/mcp?tools=web_search_exa",
+            toolName = "web_search_exa", queryArgument = "query", timeoutMs = 15_000,
+        )
+        queries.forEach { (query, domain) ->
+            val result = client().search(endpoint, query).getOrThrow()
+            assertTrue("Missing authoritative domain $domain: ${result.text.take(500)}", result.text.contains(domain))
+            assertTrue(result.text.contains("https://"))
+        }
+    }
+
+    @Test
     fun streamableHttpCompletesInitializeListCallAndReturnsPublicUrl() {
         val server = MockWebServer()
         server.enqueue(jsonRpcResult("newmark-search-1", initializeResult("device-streamable")))

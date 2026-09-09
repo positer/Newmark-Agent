@@ -1,5 +1,63 @@
 # Newmark Agent Project Taste
 
+## 2026-09-09 Explicit provider output exhaustion
+
+- A Responses incomplete status with reason max_output_tokens is resumable partial progress, never a successful completion or generic network retry. Retain text/reasoning, discard incomplete tool calls, and preserve all other terminal error rules.
+- Local Agent continuation uses a request-only checkpoint and at most three additional requests, doubling the output budget up to 131072. Do not persist synthetic user prompts or replay tools. A terminal repeated budget exhaustion must not be labeled completed. This supersedes the old thought-only continuation restriction.
+
+## 2026-09-09 Title reasoning budgets
+
+- Short title length is a prompt/output normalization constraint, not a tiny completion budget. PC and Android title requests retain the frozen deployment and native reasoning tier and inherit its normal output budget. This supersedes the prior fixed 64-token primary and 1024-token metadata limits.
+- Image metadata fallback remains text-only and uses the ordinary low-tier budget. Do not silently switch models, expose reasoning as the title, bypass cancellation/storage barriers, or interpret a simulated reasoning-budget fixture as live provider verification.
+
+## 2026-09-09 Provider text delta identity
+
+- Do not apply prefix/content deduplication to protocol text deltas: repeated words, whitespace and literal null text are valid content. Complete message/done snapshots reconcile only against their own output item and content part. Replayed snapshots are not another delta.
+- Preserve whitespace-only text through both provider callbacks and UI batching. Responses output_text is an alias of the structured output, never an extra message. Do not repair persisted history by deleting repeated text heuristically.
+
+## 2026-09-09 Conversation runtime border
+
+- Local runtime indicators come from the live per-conversation runtime registry, never persisted history or only the selected conversation. Remote running/stopping/force_restarting states match PC.
+- Runtime capsules use a 2dp black/white/black/white sweep with a 3-second linear period. Rotate only the shader on a fixed capsule path; read animation state during drawing, not list composition. Disable the animation when idle or covered/lifted by conversation glass. Preserve menu haptics and static Goal/queue controls.
+
+## 2026-09-09 Free search admission
+
+- Prefer the admitted official Exa keyless HTTP search, then You.com free-profile search. Android uses the same direct endpoints before the optional paired-PC pool. Preserve explicit user endpoint overrides and full enabled-pool traversal; do not infer unlimited availability from a free tier.
+- Remote MCP must use the same configured proxy transport as ordinary web tools. Allow only verified search schema fields; extra discovery, crawling, agent and command tools remain outside web_search. A successful handshake alone is not search admission.
+- Keep live results and network limitations in the archive. The 2026-09-09 samples support Exa's higher priority; they do not establish universal relevance or uptime. The optional Ignidor scraper is disabled by default after repeated tools/call timeouts.
+
+## 2026-09-09 Responsive image navigation and math boundaries
+
+- Never serialize/fsync conversation snapshots or decode full camera bitmaps on the Compose thread. Serialize writes on IO, coalesce pending state, and stream JSON on both read and write rather than allocating full JSON and UTF-8 copies. A title must await durable storage and rebase over intervening edits before publishing. Save jobs share the foreground runtime lifetime so Activity/ViewModel disposal cannot discard final state.
+- Preview decoding uses bounds and a bounded sample size on Default; it must not alter the image sent to the model. Cancellation must prevent a departed preview from publishing into another target.
+- A released, unmoved long hold on a local or remote conversation capsule emits system LongPress haptics when opening its menu. Drag/cancel and ordinary click do not emit that menu feedback. Goal/queue static action rules remain unchanged.
+- Display math delimiters can touch prose or span lines. Protect fenced and inline code from normalization; do not mistake a cases row spacing command for a new formula. Use the pinned native RaTeX engine for inline/display layout with background parsing and offline fonts. Preserve row boundaries in the readable fallback, cap layout dimensions, and retain dependency/font notices in assets.
+
+## 2026-09-09 Image-first title recovery
+
+- An image-first title failure gets a text-only metadata retry using the same frozen provider/model, low reasoning and a separate 1024-token output allowance. Never pass image payloads to this auxiliary retry or change the formal turn's configuration/attachments.
+- If both title attempts fail, use a neutral image-analysis title and the existing durable-save/stale-target barrier. User cancellation and storage failure are never converted to success. This is the image-first exception to the original generated-title requirement below; plain-text first turns retain their existing policy.
+
+## 2026-09-08 Markdown code and visual evidence
+
+- Each fenced code block owns its copy action. Copy the block's raw code only, preserving whitespace and special characters; never include the language label, button text or surrounding reply. Keep the toolbar visible while code scrolls horizontally.
+- Reserve readable space beside both conversation timeline rails. Code cards and their actions use existing theme tokens and must not collide with the opposite role's rail in narrow layouts.
+- Mobile Goal and queue action buttons are static, borderless icons. Keep click behavior and semantic labels, with no glass surface, ripple, pressed color, lift or scaling. State changes from the submitted action still update the icon normally.
+- Validate screenshots against actual viewport dimensions and active window ownership. An ignored rotation request, system ANR overlay or unfinished compositor frame is diagnostic evidence, not a visual pass. Keep failures and pressure thresholds visible in the report.
+
+## 2026-09-08 Cross-platform visual consistency
+
+- Shared navigation and action glyphs use the existing PC Lucide family: 24-unit viewport, 2-unit strokes, round caps and joins. Preserve mobile touch targets and semantic labels. Generate additions from installed lucide-static SVGs with sync-mobile-navigation-icons.cjs; never approximate them with filled Material icons.
+- Match opaque primary/secondary/tertiary text tokens across PC and Android: dark F2F2F2/CECECE/949494, light 0A0A1A/1A1A2E/6A7090. Do not make mobile helper text depend on a translucent black token over varying glass backgrounds.
+- Neutral Material container colors and transparent surfaceTint apply in both themes. Ordinary PC hover surfaces use control-hover-bg; danger and selected states retain their own semantics. Shared visual language does not require identical desktop and mobile control measurements.
+- Verify actual dual-theme screenshots and control layout, alongside cross-platform token and upstream icon checks. Keep glass motion, pointer capture, callbacks and composer geometry intact during icon/color consistency work.
+
+## 2026-09-08 Mobile theme ownership
+
+- Resolve persisted app theme before the first Compose frame. A manual override owns both app colors and system-bar icon appearance; only the null preference follows system configuration.
+- MaterialTheme alone does not provide LocalContentColor. Supply the selected onSurface color inside the theme root so bare icons and IconButtons inherit it, while semantic per-control tints remain local.
+- Reapply system-bar appearance on composition commit and lifecycle resume, resolve wrapped Activity contexts, and dispose lifecycle observers. Verify both theme directions using rendered icon pixels and actual window appearance flags.
+
 - Windows MSI release work uses synchronized semantic versions, completes the full release gate before packaging, records the MSI SHA-256, and verifies both uninstall-registry and installed executable versions. For elevated silent installation, resolve literal absolute paths and pass one explicitly quoted argument line to `Start-Process`/`msiexec.exe`; keep `/quiet /norestart` and a verbose archive log.
 - Keep only the current deliverable set in `release/` and `APK/`. Historical release binaries and unpacked package trees may be removed from `archive/`, while textual reports, logs, screenshots, test data, conversations, and other non-release evidence remain cold archival material.
 
@@ -466,7 +524,7 @@ Build 标题按钮的 hover、focus、active 与键盘触发态都必须保持�
 
 ## First-response deployment identity
 
-- 首轮标题探测不是固定低档模型请求。它必须复用正式响应发送时冻结的 provider、model、intelligence 与供应商原生 reasoning effort；任何 fallback 都必须在冻结和标题门禁之前完成。
+- 常规首轮标题探测不是固定低档模型请求，复用正式响应发送时冻结的 provider、model、intelligence 与供应商原生 reasoning effort。图片首轮失败后的纯文字标题退路允许单独降低辅助请求的思考档位，不切换冻结的 provider/model，也不改变正式请求配置。
 - 标题成功之后不得再次解析或切换首轮部署。若可用性发生变化，应让该次门禁失败并保留重试身份，不能让“标题验证 A、正式响应运行 B”。
 - 这类跨阶段身份契约必须由测试同时观测标题调用和正式调用的实参，不能只以标题文本或请求次数间接推断。
 
@@ -499,3 +557,29 @@ WebGL 折射与 2D 泛光必须共享同一圆角裁剪路径；高频指针光�
 ### 20260905-145603 移动端暗色抽屉边缘约定
 
 全高矩形的移动端抽屉承载层不得直接绘制全局 Kyant 外沿高光；暗色竖屏左栏使用无外沿高光的 carrier glass，按钮、胶囊和拖动浮块各自负责受边界约束的玻璃边缘与泛光。
+
+
+### 20260908 dev-0.6.2 全界面主题与玻璃协调
+
+- 错误、警告、成功、强调色使用平台主题语义变量；亮色使用深一档状态色，禁止直接沿用暗色的浅黄/浅红文字。记忆图谱节点、边、网格也遵守此规则。
+- 两端选中开关的静态圆点为白色，未选中使用次级文字色；玻璃拖动态沿用光学浮层。普通 hover 使用主题 control-hover-bg。
+- 弹窗重新打开必须取消上一轮退出计时和退出样式；退出中的窗口不得进入返回栈。
+- 本地 about:blank 浏览器画布属于应用主题；不得向实际网页强制注入应用配色。执行前后检查 URL，防止导航竞争。
+- 视觉验收必须确认截图与所请求页面一致。Compose 等待语义树空闲不等于 GPU 已提交，完整窗口截图前先同步绘制；接触表也要等待图像解码与绘制。旧错误截图保留为排查历史，不冒充验收证据。
+
+
+### 20260908 内置浏览器本地文档
+
+- 用户主动输入的绝对文件路径要逐段编码，不能被当成搜索词或错误补上 https。file URL 保留百分号转义，兼容 files:// 输入；本地 URL 不接受远程 authority。
+- Android 文件读取与 file-origin 跨源权限分开配置：允许读取 file/content，不开启 allowFileAccessFromFileURLs 或 allowUniversalAccessFromFileURLs。页面发起的本地导航/弹窗只接受本地来源，地址栏主动打开不受该页面来源规则误伤。
+- 本地 HTML 回归必须包括中文、空格和 # 文件名、相对 CSS/JS 与页面跳转；URI 构造不能依赖 Windows 构建宿主对 Android /sdcard 路径的解释。
+
+## 2026-09-08 Browser visual collaboration and binary documents
+
+- Prefer DOM or parsed PDF text. Invoke a configured vision-capable collaborator for sparse content or an explicit visual request; only then run OCR. Label approximate results. Never fabricate refs or action success from visual interpretation.
+- Keep images transient and model collaborators read-only. Propagate cancellation, bound provider calls, and reject observations that change while capturing.
+- Viewport values mean real CSS canvas dimensions, not screenshot metadata. Fit that canvas inside the existing panel, transform native input accordingly, and verify both layout dimensions and rendered pixels.
+- Detect PDFs by MIME/download events as well as URLs. Parse bytes with PDFBox/PDF.js; never treat viewer chrome or a raw-byte regex as extracted document text. Preserve browser cookies and local URI access.
+- Report PDF page/scope explicitly. Default text extraction is bounded by max_chars; the default visual page is page 1. Use pdf_page to request another page.
+
+- Remote IPC coalescedDeltas retain original event identity. Expand batches before merging SSE with durable snapshots; dedupe by original IDs, never by repeated words. Preserve intentional repeated content and normalize omitted Gson fields.

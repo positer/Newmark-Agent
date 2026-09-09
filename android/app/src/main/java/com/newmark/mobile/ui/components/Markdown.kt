@@ -1,16 +1,29 @@
 package com.newmark.mobile.ui.components
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,7 +72,7 @@ private const val HighlightMarkerEnd = '\uE1FF'
 private const val HighlightMarkerBase = 0xE300
 
 private val INLINE_CODE = Regex("`([^`\\n]+)`")
-private val INLINE_DISPLAY_MATH = Regex("""\\\[([^\\n]+?)\\\]|(?<!\\)\$\$([^\$]+?)\$\$""")
+private val INLINE_DISPLAY_MATH = Regex("""\\\[([^\n]+?)\\\]|(?<!\\)\$\$([^\$]+?)\$\$""")
 private val INLINE_MATH = Regex("""\\\(([^\n]+?)\\\)|(?<!\\)\$([^\$\n]+?)(?<!\\)\$""")
 private val INLINE_LINK = Regex("!\\[([^\\]\\n]{0,160})\\]\\(([^)\\n]+)\\)|\\[([^\\]\\n]{1,180})\\]\\(([^)\\n]+)\\)")
 private val INLINE_BOLD = Regex("\\*\\*([^*]+)\\*\\*|__([^_]+)__")
@@ -94,7 +107,7 @@ private val FENCED_LANGUAGE_PREFIXES = listOf("powershell", "javascript", "types
 /** PC-compatible readable LaTeX fallback used by inline and display math. */
 internal fun renderReadableLatex(tex: String): String {
     val symbols = mapOf(
-        "times" to "×", "cdot" to "·", "leq" to "≤", "geq" to "≥", "neq" to "≠",
+        "le" to "≤", "ge" to "≥", "ne" to "≠", "ell" to "ℓ", "times" to "×", "cdot" to "·", "leq" to "≤", "geq" to "≥", "neq" to "≠",
         "approx" to "≈", "infty" to "∞", "partial" to "∂", "nabla" to "∇", "pm" to "±",
         "alpha" to "α", "beta" to "β", "gamma" to "γ", "delta" to "δ", "epsilon" to "ε",
         "theta" to "θ", "lambda" to "λ", "mu" to "μ", "nu" to "ν", "pi" to "π",
@@ -144,14 +157,14 @@ internal fun renderReadableLatex(tex: String): String {
                     when (name) {
                         "frac" -> { val (n, a) = atom(i); val (d, b) = atom(a); out.append('(').append(n).append(" / ").append(d).append(')'); i = b }
                         "sqrt" -> { val (v, n) = atom(i); out.append("√(").append(v).append(')'); i = n }
-                        "text", "mathrm", "mathbf", "mathit", "operatorname" -> {
+                        "text", "mathrm", "mathbf", "mathit", "mathbb", "mathcal", "operatorname" -> {
                             val (v, n) = atom(i); out.append(v); i = n
                         }
                         "overline", "underline", "vec", "hat", "bar" -> {
                             val (v, n) = atom(i); out.append(v); i = n
                         }
                         "begin", "end" -> { val (_, n) = atom(i); i = n }
-                        "left", "right" -> Unit
+                        "left", "right", "displaystyle", "textstyle" -> Unit
                         ",", ";", ":", "!" -> out.append(' ')
                         else -> out.append(symbols[name] ?: name)
                     }
@@ -165,7 +178,10 @@ internal fun renderReadableLatex(tex: String): String {
         }
         return out.toString().replace(Regex("\\s+"), " ").trim()
     }
-    return render(tex.replace("\r", " ").replace("\n", " ")).ifBlank { tex.trim() }
+    val rows = tex.replace(Regex("""\\\\(?:\[[^]\n]*])?"""), "")
+    return rows.split('').joinToString("\n") { row ->
+        render(row.replace('&', ' ').replace("\r", " ").replace("\n", " "))
+    }.ifBlank { tex.trim() }
 }
 
 /** 行内 markdown → AnnotatedString（code/数学/链接/图片/加粗/斜体），跟随固定亮暗主题色 */
@@ -190,11 +206,21 @@ private fun renderInline(text: String, p: NewmarkThemeColors): AnnotatedString {
     }
     src = INLINE_DISPLAY_MATH.replace(src) { m ->
         val tex = m.groupValues[1].ifBlank { m.groupValues[2] }
-        hold(AnnotatedString(renderReadableLatex(tex), mathSpan))
+        hold(buildAnnotatedString {
+            val readable = renderReadableLatex(tex)
+            append(readable)
+            addStyle(mathSpan, 0, length)
+            if (length > 0) addStringAnnotation("newmark-math", tex, 0, length)
+        })
     }
     src = INLINE_MATH.replace(src) { m ->
         val tex = m.groupValues[1].ifBlank { m.groupValues[2] }
-        hold(AnnotatedString(renderReadableLatex(tex), mathSpan))
+        hold(buildAnnotatedString {
+            val readable = renderReadableLatex(tex)
+            append(readable)
+            addStyle(mathSpan, 0, length)
+            if (length > 0) addStringAnnotation("newmark-math", tex, 0, length)
+        })
     }
     src = INLINE_LINK.replace(src) { m ->
         val alt = m.groupValues[1]
@@ -321,7 +347,7 @@ internal fun highlightCode(code: String, language: String, palette: NewmarkTheme
 
 // ---- 块级 ----
 
-private sealed interface MdBlock {
+internal sealed interface MdBlock {
     data class Paragraph(val inline: String) : MdBlock
     data class Heading(val level: Int, val inline: String) : MdBlock
     data class CodeBlock(val language: String, val rawLanguage: String, val code: String) : MdBlock
@@ -344,9 +370,9 @@ private fun isTableDivider(line: String): Boolean {
     return t.split('|').all { it.trim().matches(Regex("^:?-{2,}:?$")) }
 }
 
-private fun parseBlocks(text: String): List<MdBlock> {
+internal fun parseBlocks(text: String): List<MdBlock> {
     val source = text.replace("\r\n", "\n").replace("\r", "\n")
-    val lines = source.split("\n")
+    val lines = splitDisplayMathLines(source)
     val blocks = mutableListOf<MdBlock>()
     val paragraph = mutableListOf<String>()
     fun flushParagraph() {
@@ -395,7 +421,7 @@ private fun parseBlocks(text: String): List<MdBlock> {
             flushParagraph()
             val name = environment.groupValues[1]
             val mathLines = mutableListOf(environment.groupValues[2])
-            val end = "\\\\end{$name}"
+            val end = "\\end{$name}"
             i++
             while (i < lines.size && lines[i].trim() != end) {
                 mathLines.add(lines[i])
@@ -577,6 +603,7 @@ fun MarkdownBody(
                     TableView(block, baseFontSize, baseLineHeight, onLinkClick)
                 }
                 is MdBlock.MathBlock -> {
+                    NativeMath(block.tex, baseFontSize, p.textSecondary) {
                     Text(
                         text = renderReadableLatex(block.tex),
                         fontSize = baseFontSize.sp,
@@ -592,6 +619,7 @@ fun MarkdownBody(
                         .padding(8.dp),
                     )
                 }
+                    }
                 MdBlock.HorizontalRule -> {
                     HorizontalDivider(
                         color = p.border,
@@ -614,10 +642,39 @@ private fun MarkdownInlineText(
     textAlign: TextAlign = TextAlign.Left,
     onLinkClick: ((String) -> Unit)? = null,
 ) {
+    val density = LocalDensity.current
+    val inlineMath = mutableMapOf<String, InlineTextContent>()
+    val annotatedMath = text.getStringAnnotations("newmark-math", 0, text.length)
+    val readyMath = annotatedMath.map { annotation ->
+        rememberMathRenderer(annotation.item, fontSize.value, color, displayMode = false).value
+    }
+    val renderedText = buildAnnotatedString {
+        var cursor = 0
+        annotatedMath.forEachIndexed { index, annotation ->
+            append(text.subSequence(cursor, annotation.start))
+            val formula = readyMath[index]
+            val alternate = text.subSequence(annotation.start, annotation.end)
+            if (formula != null && formula.widthPx <= with(density) { 240.dp.toPx() }) {
+                val id = "math-$index"
+                inlineMath[id] = InlineTextContent(androidx.compose.ui.text.Placeholder(
+                    with(density) { formula.widthPx.toSp() }, with(density) { formula.totalHeightPx.toSp() },
+                    androidx.compose.ui.text.PlaceholderVerticalAlign.TextCenter,
+                )) {
+                    Canvas(Modifier.fillMaxSize().testTag("native-inline-math")) {
+                        drawIntoCanvas { formula.draw(it.nativeCanvas) }
+                    }
+                }
+                appendInlineContent(id, alternate.toString())
+            } else append(alternate)
+            cursor = annotation.end
+        }
+        append(text.subSequence(cursor, text.length))
+    }
     var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
     val linkClick = onLinkClick
     Text(
-        text = text,
+        text = renderedText,
+        inlineContent = inlineMath,
         style = androidx.compose.ui.text.TextStyle(
             color = color,
             fontSize = fontSize,
@@ -629,7 +686,7 @@ private fun MarkdownInlineText(
             detectTapGestures { position ->
                 val layout = layoutResult ?: return@detectTapGestures
                 val offset = layout.getOffsetForPosition(position)
-                text.getStringAnnotations(NewmarkWebLinkTag, offset, offset)
+                renderedText.getStringAnnotations(NewmarkWebLinkTag, offset, offset)
                     .firstOrNull()
                     ?.item
                     ?.let { url -> linkClick?.invoke(url) }
@@ -642,23 +699,32 @@ private fun MarkdownInlineText(
 @Composable
 private fun CodeBlockView(block: MdBlock.CodeBlock) {
     val p = LocalNewmarkColors.current
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(block.code) { mutableStateOf(false) }
     val code = remember(block.code, block.language, p.codeString) { highlightCode(block.code, block.language, p) }
     Column(
         modifier = Modifier
+            .testTag("markdown-code-block")
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .background(p.bgTertiary, RoundedCornerShape(8.dp))
             .padding(10.dp),
     ) {
-        if (block.rawLanguage.isNotBlank()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = block.rawLanguage,
+                text = block.rawLanguage.ifBlank { "text" },
                 fontSize = 10.sp,
                 color = p.textTertiary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(bottom = 6.dp),
+                modifier = Modifier.weight(1f),
             )
+            TextButton(
+                onClick = { clipboard.setText(AnnotatedString(block.code)); copied = true },
+                colors = ButtonDefaults.textButtonColors(contentColor = p.textSecondary),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                modifier = Modifier.testTag("markdown-copy-code"),
+            ) { Text(if (copied) "已复制" else "复制代码", fontSize = 11.sp) }
         }
         Text(
             text = code,

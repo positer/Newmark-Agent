@@ -212,6 +212,10 @@ try {
 
 /* Light theme */
 [data-theme="light"] {
+  --accent: #405bd2;
+  --accent2: #147d59;
+  --nm-state-warning: #8a5b00;
+  --nm-state-danger: #c73545;
   --bg: #f0f2f8;
   --bg2: #e4e8f0;
   --bg3: #d8dce8;
@@ -367,7 +371,7 @@ html, body {
   50% { transform: scale(1.04); filter: saturate(1.25); }
 }
 
-::selection { background: rgba(91,120,255,0.35); color: #fff; }
+::selection { background: rgba(91,120,255,0.35); color: var(--text-bright); }
 
 /* Open-source icon system: lucide-static sprite is copied into dist/ui at build time. */
 .nm-icon {
@@ -515,9 +519,9 @@ button { border-radius: var(--radius-full) !important; }
   transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo);
 }
 
-.top-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-bright); }
+.top-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); }
 .top-btn:active { transform: scale(0.92) translateZ(0); }
-.top-btn.close-btn:hover { background: rgba(255,68,68,0.2); color: #ff6666; }
+.top-btn.close-btn:hover { background: rgba(255,68,68,0.2); color: var(--nm-state-danger); }
 
 /* ============================================================
    LAYER 3 - Main Layout
@@ -724,7 +728,7 @@ button.left-nav-icon { width: calc(100% - 12px); }
   white-space: nowrap;
 }
 
-.left-nav-icon:hover { background: rgba(255,255,255,0.06); color: var(--text-bright); }
+.left-nav-icon:hover { background: var(--control-hover-bg); color: var(--text-bright); }
 .left-nav-icon:active { transform: scale(0.96) translateZ(0); }
 .left-nav-icon .icon { width: 24px; height: 20px; text-align: center; flex-shrink: 0; font-size: 0; }
 .left-nav-icon span:not(.icon) {
@@ -917,7 +921,7 @@ button.left-ws-item {
 
 .ws-pin-btn:hover,
 .ws-pin-btn.active {
-  background: rgba(255,255,255,0.08);
+  background: var(--control-hover-bg);
   color: var(--text-bright);
   border-color: var(--accent);
 }
@@ -985,7 +989,7 @@ button.left-ws-item {
   border-top: 1px solid var(--glass-border-1);
 }
 
-.left-collapse-btn:hover { background: rgba(255,255,255,0.06); color: var(--text-bright); }
+.left-collapse-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); }
 .left-collapse-btn:active { transform: scale(0.92) translateZ(0); }
 
 /* ============================================================
@@ -1102,7 +1106,7 @@ button.left-ws-item {
 }
 
 .conv-archive-btn:hover,
-.conv-rename-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-bright); }
+.conv-rename-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); }
 
 .conv-archive-btn.archiving { cursor: default; border-color: var(--accent); }
 .conv-archive-spinner {
@@ -1198,7 +1202,7 @@ button.left-ws-item {
 
 .conv-pin-btn:hover,
 .conv-pin-btn.active {
-  background: rgba(255,255,255,0.1);
+  background: var(--control-hover-bg);
   color: var(--text-bright);
   border-color: var(--accent);
 }
@@ -1378,7 +1382,7 @@ button.left-ws-item {
   position: relative;
 }
 
-.tab-btn:hover { background: rgba(255,255,255,0.06); color: var(--text-bright); }
+.tab-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); }
 .tab-btn.active { background: rgba(91,120,255,0.12); color: var(--accent); border-color: rgba(91,120,255,0.2); }
 .tab-btn:active { transform: scale(0.92) translateZ(0); }
 .tab-btn .label { display: none; }
@@ -1474,7 +1478,7 @@ button.left-ws-item {
   transition: background var(--duration-fast) var(--ease-out-expo);
 }
 
-.et-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-bright); }
+.et-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); }
 .et-btn.active { background:rgba(91,120,255,.16); color:var(--accent2); border-color:rgba(91,120,255,.55); }
 .et-btn .nm-icon { width:15px; height:15px; }
 .et-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -1518,6 +1522,7 @@ button.left-ws-item {
 
 .browser-url-input {
   flex: 1;
+  min-width: 0;
   padding: 5px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -1535,7 +1540,7 @@ button.left-ws-item {
   min-height: 280px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: var(--bg);
   overflow: hidden;
 }
 
@@ -1578,15 +1583,21 @@ button.left-ws-item {
 .md-rendered pre {
   position: relative;
   margin: 8px 0;
-  padding: 10px 12px;
-  overflow-x: auto;
+  padding: 0;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  white-space: normal;
   border: 1px solid var(--glass-border-1);
   border-radius: var(--radius-sm);
-  background: rgba(0,0,0,0.26);
+  background: var(--glass-bg-3);
 }
 .md-rendered pre code {
   display: block;
-  padding: 0;
+  padding: 10px 12px;
+  max-width: 100%;
+  overflow-x: auto;
   border: 0;
   background: transparent;
   white-space: pre;
@@ -1847,7 +1858,7 @@ button.left-ws-item {
 
 .plan-status-btn.in-progress {
   border-color: rgba(240,173,78,0.7);
-  color: #f0ad4e;
+  color: var(--nm-state-warning);
 }
 
 .plan-status-btn.done {
@@ -1978,7 +1989,7 @@ button.left-ws-item {
   line-height: 1;
 }
 
-.terminal-tab .close-tab:hover { background: rgba(255,80,80,0.3); color: #ff6666; }
+.terminal-tab .close-tab:hover { background: rgba(255,80,80,0.3); color: var(--nm-state-danger); }
 
 #terminal-body {
   flex: 1;
@@ -2105,7 +2116,7 @@ button.left-ws-item {
   transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo);
 }
 
-.shell-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-bright); }
+.shell-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); }
 .shell-btn:active { transform: scale(0.95) translateZ(0); }
 
 .shell-toggle-btn {
@@ -2171,9 +2182,7 @@ button.left-ws-item {
   background-color: var(--chat-canvas);
 }
 .md-code-copy {
-  position: absolute;
-  top: 6px;
-  right: 7px;
+  flex-shrink: 0;
   border: 1px solid var(--glass-border-1);
   border-radius: 4px;
   background: var(--glass-bg-2);
@@ -2183,6 +2192,10 @@ button.left-ws-item {
   cursor: pointer;
 }
 .md-code-copy:hover { color: var(--text); }
+.md-code-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:6px 10px; border-bottom:1px solid var(--glass-border-1); color:var(--text-dim); font:11px var(--font-ui); }
+.md-code-toolbar > span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.chat-msg.assistant > .msg-body { padding-right:28px; min-width:0; }
+.chat-msg.user > .msg-body { padding-left:28px; min-width:0; }
 
 #chat-area {
   flex: 1;
@@ -2372,10 +2385,10 @@ button.left-ws-item {
 }
 
 .chat-msg.error {
-  color: #ff8888;
+  color: var(--nm-state-danger);
 }
 
-.chat-msg.guide-rejected::after { border-color: #ff8888; }
+.chat-msg.guide-rejected::after { border-color: var(--nm-state-danger); }
 
 .guide-receipt-status {
   display: inline-flex;
@@ -2390,9 +2403,9 @@ button.left-ws-item {
   opacity: 0.86;
 }
 
-.guide-receipt-status.deferred { color: #ffd27a; border-color: rgba(255, 210, 122, 0.28); }
+.guide-receipt-status.deferred { color: var(--nm-state-warning); border-color: rgba(255, 210, 122, 0.28); }
 .guide-receipt-status.applied { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
-.guide-receipt-status.rejected { color: #ff8888; border-color: rgba(255, 136, 136, 0.34); }
+.guide-receipt-status.rejected { color: var(--nm-state-danger); border-color: rgba(255, 136, 136, 0.34); }
 
 .chat-msg .meta {
   display: flex;
@@ -2413,7 +2426,7 @@ button.left-ws-item {
 .chat-msg.user .msg-role { color: var(--accent); }
 .chat-msg.assistant .msg-role { color: var(--accent2); }
 .chat-msg.workflow .msg-role { color: var(--accent); }
-.chat-msg.error .msg-role { color: #ff8888; }
+.chat-msg.error .msg-role { color: var(--nm-state-danger); }
 .chat-msg.user .meta { justify-content: flex-end; text-align: right; }
 .chat-msg.user .msg-body { text-align: right; }
 .chat-msg.user .msg-actions { margin-left: 4px; }
@@ -2473,7 +2486,7 @@ button.left-ws-item {
 .message-edit-submit { border-color: color-mix(in srgb, var(--accent) 55%, var(--glass-border-2)); color: var(--accent); }
 .conversation-branch-pager { display:flex; justify-content:flex-end; align-items:center; gap:0; margin-top:7px; color:var(--text-dim); font-size:11px; }
 .branch-page-arrow { cursor:pointer; color:var(--text-dim); padding:1px 3px; transition:color var(--duration-fast) var(--ease-out-expo), background var(--duration-fast) var(--ease-out-expo); border-radius:var(--radius-sm); }
-.branch-page-arrow:hover { color:var(--text-bright); background:rgba(255,255,255,0.06); }
+.branch-page-arrow:hover { color:var(--text-bright); background:var(--control-hover-bg); }
 .branch-page-arrow:active { transform:scale(0.92) translateZ(0); }
 
 .chat-msg .msg-body .md-rendered {
@@ -2633,8 +2646,8 @@ button.left-ws-item {
 .conversation-work-run-title { flex: 1; min-width: 0; }
 .conversation-work-run-status { color: var(--text-dim); font: 10px var(--font-mono); }
 .conversation-work-change-badge { display:inline-flex; align-items:center; gap:8px; margin-left:auto; padding:5px 10px; border:1px solid var(--border); border-radius:999px; background:var(--panel); color:var(--text-dim); font-size:11px; white-space:nowrap; }
-.conversation-work-change-badge .add { color:#2fd67b; }
-.conversation-work-change-badge .del { color:#ff5e67; }
+.conversation-work-change-badge .add { color:var(--nm-state-success); }
+.conversation-work-change-badge .del { color:var(--nm-state-danger); }
 .conversation-work-run-body { border: 0; padding: 4px var(--work-run-right-safe) 8px 0; }
 .conversation-work-run.collapsed .conversation-work-run-body { display: none; }
 .work-run-collapsed-guides { display: none; }
@@ -2646,7 +2659,7 @@ button.left-ws-item {
 .conversation-work-event { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; align-items: start; color: var(--text-dim); font-size: 11px; line-height: 1.5; }
 .conversation-work-event .nm-icon { margin-top: 1px; color: var(--text-dim); }
 .conversation-work-event.guide { color: var(--text); padding: 3px 0; }
-.conversation-work-event.error { color: #ff8888; }
+.conversation-work-event.error { color: var(--nm-state-danger); }
 .conversation-work-event-content { min-width: 0; white-space: pre-wrap; word-break: break-word; }
 .conversation-work-event.narrative { display: block; color: var(--text); font-size: 13px; line-height: 1.65; padding: 3px 1px 7px; }
 .conversation-work-event.activity-summary { font-size: 11px; font-weight: 400; color: var(--text-dim); padding: 2px 0; }
@@ -2708,7 +2721,7 @@ button.left-ws-item {
 .conversation-work-file-inline { margin: 1px 0; border: none; border-radius: 0; background: transparent; }
 .conversation-work-file.conversation-work-file-inline > summary { display: grid; grid-template-columns: 17px minmax(0,max-content) auto 10px; gap: 7px; align-items: center; justify-content: start; width: fit-content; max-width: 100%; min-height: 24px; padding: 0; border-radius: var(--radius-sm); color: var(--text-dim); font: 400 11px/1.5 var(--font-ui); transition: background var(--duration-fast) var(--ease-out-expo); list-style: none; cursor: pointer; }
 .conversation-work-file-inline > summary::-webkit-details-marker { display: none; }
-.conversation-work-file-inline > summary:hover { background: rgba(255,255,255,0.04); }
+.conversation-work-file-inline > summary:hover { background: var(--control-hover-bg); }
 .conversation-work-file-inline > summary .nm-icon { margin-top: 2px; color: var(--text-dim); }
 .conversation-work-file-inline .conversation-work-file-name { font: inherit; }
 .conversation-work-file-inline .conversation-work-file-stats { font: 10px/1.5 var(--font-mono); }
@@ -2717,13 +2730,13 @@ button.left-ws-item {
 .conversation-work-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--font-mono); }
 .conversation-work-file-stats { display: inline-flex; gap: 7px; font: 11px var(--font-mono); }
 .conversation-work-file-add { color: var(--accent2); }
-.conversation-work-file-del { color: #ff6666; }
+.conversation-work-file-del { color: var(--nm-state-danger); }
 .conversation-work-file-diff { max-height: 340px; overflow: auto; border-top: 1px solid var(--glass-border-1); background: rgba(0,0,0,.14); font: 11px/1.55 var(--font-mono); }
 .conversation-work-file-line { display: grid; grid-template-columns: 42px minmax(0,1fr); min-height: 22px; white-space: pre; }
 .conversation-work-file-line-number { padding: 2px 8px; color: var(--text-dim); text-align: right; user-select: none; border-right: 1px solid var(--glass-border-1); }
 .conversation-work-file-line-code { padding: 2px 10px; overflow-wrap: normal; }
-.conversation-work-file-line.del { color: #ff9a9a; background: rgba(255,68,68,.14); }
-.conversation-work-file-line.add { color: #78e8b8; background: rgba(56,212,160,.13); }
+.conversation-work-file-line.del { color: var(--nm-state-danger); background: rgba(255,68,68,.14); }
+.conversation-work-file-line.add { color: var(--nm-state-success); background: rgba(56,212,160,.13); }
 .conversation-work-file-line.empty { color: var(--text-dim); }
 .conversation-work-empty { color: var(--text-dim); font-size: 11px; }
 
@@ -2822,7 +2835,7 @@ button.left-ws-item {
   transition: background var(--duration-fast) var(--ease-out-expo);
 }
 
-.shell-block-header:hover { background: rgba(255,255,255,0.06); }
+.shell-block-header:hover { background: var(--control-hover-bg); }
 .shell-block-header .arrow { transition: transform var(--duration-fast) var(--ease-out-expo); font-size: 9px; }
 .shell-block.collapsed .shell-block-header .arrow { transform: rotate(-90deg); }
 .shell-block-body {
@@ -2858,7 +2871,7 @@ button.left-ws-item {
   transition: background var(--duration-fast) var(--ease-out-expo);
 }
 
-.diff-block-header:hover { background: rgba(255,255,255,0.06); }
+.diff-block-header:hover { background: var(--control-hover-bg); }
 .diff-block.collapsed .diff-block-body { display: none; }
 .diff-block-header .arrow { transition: transform var(--duration-fast) var(--ease-out-expo); font-size: 9px; }
 .diff-block.collapsed .diff-block-header .arrow { transform: rotate(-90deg); }
@@ -2882,7 +2895,7 @@ button.todo-item { background: transparent; }
 
 .diff-stat { display: flex; gap: 8px; margin-left: auto; }
 .diff-add { color: var(--accent2); font-size: 11px; }
-.diff-del { color: #ff6666; font-size: 11px; }
+.diff-del { color: var(--nm-state-danger); font-size: 11px; }
 .diff-block-body {
   padding: 0;
   font-family: var(--font-mono);
@@ -2898,7 +2911,7 @@ button.todo-item { background: transparent; }
 }
 
 .diff-line.add { background: rgba(56,212,160,0.1); color: var(--accent2); }
-.diff-line.del { background: rgba(255,68,68,0.1); color: #ff8888; }
+.diff-line.del { background: rgba(255,68,68,0.1); color: var(--nm-state-danger); }
 .diff-line.ctx { color: var(--text-dim); }
 
 /* Option feedback */
@@ -3089,7 +3102,7 @@ button.todo-item { background: transparent; }
 }
 
 .stack-icon-btn:hover {
-  background: rgba(255,255,255,0.08);
+  background: var(--control-hover-bg);
   color: var(--text-bright);
   border-color: var(--glass-border-1);
 }
@@ -3099,8 +3112,8 @@ button.todo-item { background: transparent; }
 }
 
 .stack-icon-btn:active { transform: scale(0.94); }
-.stack-icon-btn.warn { color: #ffcc44; }
-.stack-icon-btn.danger { color: #ff7777; }
+.stack-icon-btn.warn { color: var(--nm-state-warning); }
+.stack-icon-btn.danger { color: var(--nm-state-danger); }
 .stack-icon-btn:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
@@ -3415,9 +3428,9 @@ button.todo-item { background: transparent; }
 
 .conv-runtime-badge.running { color: var(--accent2); }
 .conv-runtime-badge.stopping,
-.conv-runtime-badge.force_restarting { color: #ffd27a; }
+.conv-runtime-badge.force_restarting { color: var(--nm-state-warning); }
 .conv-runtime-badge.error,
-.conv-runtime-badge.force_interrupted { color: #ff9ca6; }
+.conv-runtime-badge.force_interrupted { color: var(--nm-state-danger); }
 
 .queue-edit:focus {
   color: var(--text-bright);
@@ -4109,7 +4122,7 @@ button.todo-item { background: transparent; }
 }
 
 #scroll-bottom-btn.visible { display: flex; }
-#scroll-bottom-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-bright); box-shadow: var(--shadow-lg); }
+#scroll-bottom-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); box-shadow: var(--shadow-lg); }
 
 /* ============================================================
    MARQUEE BORDER
@@ -4390,8 +4403,8 @@ button.todo-item { background: transparent; }
   transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo);
 }
 
-.sub-win-close:hover { background: rgba(255,68,68,0.15); color: #ff6666; }
-.sub-win-close:focus-visible { outline:none; color:#ff7777; box-shadow:inset 0 0 0 2px currentColor; }
+.sub-win-close:hover { background: rgba(255,68,68,0.15); color: var(--nm-state-danger); }
+.sub-win-close:focus-visible { outline:none; color:var(--nm-state-danger); box-shadow:inset 0 0 0 2px currentColor; }
 
 .sub-win-body {
   flex: 1;
@@ -4596,7 +4609,7 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
 .remote-touch-status:hover { background: transparent !important; }
 .remote-touch-status.listening { color: var(--accent2); }
 .remote-touch-status.error,
-.remote-touch-status.checking { color: #ffb454; }
+.remote-touch-status.checking { color: var(--nm-state-warning); }
 .remote-touch-status.off { color: var(--notice-error-text); }
 .remote-touch-status[aria-busy="true"] { cursor: wait; }
 
@@ -4825,8 +4838,8 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
 .github-repo-select-icon { position:absolute; right:11px; top:50%; width:14px; height:14px; transform:translateY(-50%); color:var(--text-dim); pointer-events:none; display:inline-flex; align-items:center; justify-content:center; }
 .model-eval-line { display:block; margin-top:4px; font-size:10px; color:var(--text-dim); }
 .model-eval-ok { color: var(--accent2); }
-.model-eval-bad { color: #ff7777; }
-.model-eval-pending { color: #ffd166; }
+.model-eval-bad { color: var(--nm-state-danger); }
+.model-eval-pending { color: var(--nm-state-warning); }
 
 /* Memory Lab tag graph */
 .memory-lab-panel {
@@ -5436,7 +5449,7 @@ html.newmark-memory-overview-viewer body {
   transition: color var(--duration-fast) var(--ease-out-expo);
 }
 
-.model-chip .remove:hover { color: #ff6666; }
+.model-chip .remove:hover { color: var(--nm-state-danger); }
 
 .model-eval-results {
   margin-top: 10px;
@@ -5534,8 +5547,8 @@ html.newmark-memory-overview-viewer body {
   transition: background var(--duration-fast) var(--ease-out-expo);
 }
 
-.archive-action-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-bright); }
-.archive-action-btn.danger:hover { background: rgba(255,68,68,0.15); color: #ff6666; }
+.archive-action-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); }
+.archive-action-btn.danger:hover { background: rgba(255,68,68,0.15); color: var(--nm-state-danger); }
 
 /* ============================================================
    AUTOMATION WINDOW
@@ -6243,11 +6256,12 @@ input[type="checkbox"]::before {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: var(--text-bright);
+  background: var(--text);
   box-shadow: 0 2px 5px rgba(0,0,0,.28);
   transform: translateX(var(--liquid-switch-x)) scale(1);
   transition: transform 160ms var(--ease-out-expo), box-shadow 100ms var(--ease-out-expo), background 100ms var(--ease-out-expo);
 }
+input[type="checkbox"]:checked::before { background: #fff; }
 input[type="checkbox"].liquid-switch-dragging::before {
   left: 1px;
   width: 22px;
@@ -8763,7 +8777,7 @@ function renderMarkdownBlocks(text) {
       var code = codeLines.join('\n');
       var normalizedLanguage = lang ? normalizeCodeLanguage(lang) : 'text';
       var highlighted = normalizedLanguage === 'text' ? esc(code) : highlightCodeByLanguage(code, normalizedLanguage);
-      html += '<pre><button class="md-code-copy" type="button" title="' + escAttr(t('common.copy')) + '" data-code="' + escAttr(code) + '" onclick="window.copyMarkdownCode(this)">' + esc(t('common.copy')) + '</button><code' + (lang ? ' data-lang="' + escAttr(lang) + '"' : '') + ' class="md-code-block language-' + escAttr(normalizedLanguage) + '">' + highlighted + '</code></pre>';
+      html += '<pre><div class="md-code-toolbar"><span>' + esc(lang || 'text') + '</span><button class="md-code-copy" type="button" aria-label="' + escAttr(currentLang() === 'zh' ? '复制代码' : 'Copy code') + '" title="' + escAttr(t('common.copy')) + '" data-code="' + escAttr(code) + '" onclick="window.copyMarkdownCode(this)">' + esc(t('common.copy')) + '</button></div><code' + (lang ? ' data-lang="' + escAttr(lang) + '"' : '') + ' class="md-code-block language-' + escAttr(normalizedLanguage) + '">' + highlighted + '</code></pre>';
       continue;
     }
     if (trimmed === '$$' || trimmed === '\\[') {
@@ -11480,9 +11494,11 @@ function updateConversationWorkRunElement(run, element) {
   }
   var running = ['running', 'stopping', 'force_restarting'].indexOf(String(run.status || '')) >= 0;
   var expanded = !!run.expanded;
-  element.className = 'conversation-work-run ' + (running ? 'running ' : '') + (expanded ? 'expanded' : 'collapsed');
-  element.setAttribute('data-run-id', run.runId);
-  element.setAttribute('data-runtime-key', runtimeKeyFor(run.target && run.target.workspaceId, run.target && run.target.conversationId));
+  var nextClassName = 'conversation-work-run ' + (running ? 'running ' : '') + (expanded ? 'expanded' : 'collapsed');
+  if (element.className !== nextClassName) element.className = nextClassName;
+  if (element.getAttribute('data-run-id') !== String(run.runId)) element.setAttribute('data-run-id', run.runId);
+  var nextRuntimeKey = runtimeKeyFor(run.target && run.target.workspaceId, run.target && run.target.conversationId);
+  if (element.getAttribute('data-runtime-key') !== nextRuntimeKey) element.setAttribute('data-runtime-key', nextRuntimeKey);
   var head = element.querySelector ? element.querySelector('.conversation-work-run-head') : null;
   if (!head) {
     element.innerHTML = '<button class="conversation-work-run-head" type="button" onclick="window.toggleConversationWorkRun(this)">' +
@@ -11560,7 +11576,9 @@ function updateConversationWorkRunElement(run, element) {
     var refreshedParentKey = String(refreshedParent && refreshedParent.getAttribute('data-activity-key') || '');
     var refreshedDetailKey = String(refreshedActivities[refreshedIndex].getAttribute('data-work-detail-key') || 'activity');
     var refreshedKey = refreshedParentKey ? refreshedParentKey + '::' + refreshedDetailKey : '';
-    if (activityOpenStates[refreshedKey] !== undefined) refreshedActivities[refreshedIndex].open = activityOpenStates[refreshedKey];
+    if (activityOpenStates[refreshedKey] !== undefined && refreshedActivities[refreshedIndex].open !== activityOpenStates[refreshedKey]) {
+      refreshedActivities[refreshedIndex].open = activityOpenStates[refreshedKey];
+    }
   }
   if (chatEl) {
     if (wasAtBottom) {
@@ -13565,6 +13583,19 @@ function positionContextInspector() {
   panel.style.maxHeight = Math.max(0, Math.floor(ring.getBoundingClientRect().top - visibleTop - 20)) + 'px';
   panel.style.overflowY = 'auto';
   panel.style.overscrollBehavior = 'contain';
+  // The chat column clips its descendants. Clamp to that column rather than
+  // the desktop viewport so a narrow composer cannot hide half the inspector.
+  var column = document.getElementById('center');
+  var parent = panel.offsetParent;
+  if (column && parent) {
+    var bounds = column.getBoundingClientRect();
+    var origin = parent.getBoundingClientRect();
+    var width = Math.min(320, Math.max(0, bounds.width - 24));
+    var left = Math.max(bounds.left + 12, Math.min(origin.right + 8 - width, bounds.right - 12 - width));
+    panel.style.width = width + 'px';
+    panel.style.left = (left - origin.left) + 'px';
+    panel.style.right = 'auto';
+  }
 }
 
 window.renderContextInspector = function() {
@@ -13665,6 +13696,10 @@ window.closeContextInspector = function() {
 
 (function() {
   window.addEventListener('resize', positionContextInspector);
+  if (typeof ResizeObserver === 'function') {
+    var contextColumn = document.getElementById('center');
+    if (contextColumn) new ResizeObserver(positionContextInspector).observe(contextColumn);
+  }
   document.addEventListener('click', function(event) {
     if (!state.contextInspectorOpen) return;
     var ring = document.getElementById('context-token-ring');
@@ -15383,6 +15418,15 @@ function wireDirectLiquidMenuInteractionsV2(menu) {
     event.stopImmediatePropagation();
   }, true);
   ensureBlock();
+}
+
+function cancelLiquidPopupExit(popup) {
+  if (!popup) return;
+  if (popup._liquidExitTimer) clearTimeout(popup._liquidExitTimer);
+  popup._liquidExitTimer = 0;
+  popup.classList.remove('liquid-popup-exit');
+  popup.style.removeProperty('--liquid-popup-origin-x');
+  popup.style.removeProperty('--liquid-popup-origin-y');
 }
 
 window.animateLiquidPopupExit = function(popup, anchor, done) {
@@ -19399,9 +19443,13 @@ function trapNewmarkDialogFocus(event, container) {
 }
 
 window.openSubWin = function(title, html) {
+  // A replacement can open during the outgoing glass's 210ms exit. Retire
+  // that exit before it can hide the newly mounted content or restore focus.
+  var replacingExitingWindow = !!els['sub-win']._liquidExitTimer;
+  cancelLiquidPopupExit(els['sub-win']);
   var overlayOpen = els['sub-win-overlay'].classList.contains('open');
   if (!overlayOpen && document.activeElement && typeof document.activeElement.focus === 'function') subWindowOriginFocus = document.activeElement;
-  if (overlayOpen && !state.restoringSubWindow && state.activeSubWindowView) {
+  if (overlayOpen && !replacingExitingWindow && !state.restoringSubWindow && state.activeSubWindowView) {
     if (!state.subWindowStack) state.subWindowStack = [];
     state.subWindowStack.push({
       view: Object.assign({}, state.activeSubWindowView),
@@ -20060,6 +20108,7 @@ function applyUiAppearance() {
   }
   applyGlassPresentation(glassPresentationForOpacity(state.glassLevel));
   window.refreshTitlebarThemeIcon();
+  document.querySelectorAll('webview[data-newmark-browser-runtime-key]').forEach(syncBlankBrowserGuestTheme);
 }
 
 window.setTheme = function(value) {
@@ -20763,7 +20812,7 @@ window.validateAllModels = function() {
     return state.modelValidationResults;
   }).catch(function(err) {
     document.body.classList.remove('model-evaluating');
-    var failedHtml = '<div style="color:#ff7777;font-size:12px;">' + esc(t('model.validationFailed')) + ': ' + esc(err.message) + '</div>';
+    var failedHtml = '<div style="color:var(--nm-state-danger);font-size:12px;">' + esc(t('model.validationFailed')) + ': ' + esc(err.message) + '</div>';
     var body = document.getElementById('sub-win-body');
     if (body && document.getElementById('model-validation-progress') && els['sub-win-overlay'].classList.contains('open')) {
       body.innerHTML = failedHtml;
@@ -21039,7 +21088,7 @@ window.showAutomationWindow = function() {
         '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">' +
         '<span style="font-size:11px;flex:1;color:var(--text);">' + esc(a.prompt) + '</span>' +
         '<button class="sec-btn" style="font-size:9px;padding:2px 8px;" onclick="window.toggleAutomation(' + ai + ')">' + (a.active ? esc(t('automation.active')) : esc(t('automation.paused'))) + '</button>' +
-        '<button class="sec-btn" style="font-size:0;padding:2px 8px;color:#ff6666;" onclick="window.deleteAutomation(' + ai + ')" title="' + escAttr(t('common.delete')) + '">' + iconSvg('trash', t('common.delete'), 'tiny') + '</button>' +
+        '<button class="sec-btn" style="font-size:0;padding:2px 8px;color:var(--nm-state-danger);" onclick="window.deleteAutomation(' + ai + ')" title="' + escAttr(t('common.delete')) + '">' + iconSvg('trash', t('common.delete'), 'tiny') + '</button>' +
         '</div>' +
         '<div style="font-size:10px;color:var(--text-dim);">' + esc(t('message.model')) + ': ' + esc(a.model) + ' | ' + esc(t('automation.condition')) + ': ' + a.condition + '</div>' +
         '</div>';
@@ -21119,7 +21168,7 @@ window.showAutomationWindow = async function() {
   var wakeHtml = '';
   if (wake) {
     wakeHtml = '<div id="automation-wake-status" style="padding:8px 10px;margin-bottom:8px;border-radius:8px;background:var(--glass-bg-1);border:1px solid var(--glass-border-1);font-size:10px;color:var(--text-dim);">' +
-      '<div style="color:var(--text);font-size:11px;margin-bottom:3px;">' + esc(t('automation.osWake')) + ': ' + (wake.registered ? '<span style="color:var(--accent2);">' + esc(t('automation.registered')) + '</span>' : (wake.active ? '<span style="color:#ffd166;">' + esc(t('automation.pending')) + '</span>' : '<span>' + esc(t('automation.inactive')) + '</span>')) + '</div>' +
+      '<div style="color:var(--text);font-size:11px;margin-bottom:3px;">' + esc(t('automation.osWake')) + ': ' + (wake.registered ? '<span style="color:var(--accent2);">' + esc(t('automation.registered')) + '</span>' : (wake.active ? '<span style="color:var(--nm-state-warning);">' + esc(t('automation.pending')) + '</span>' : '<span>' + esc(t('automation.inactive')) + '</span>')) + '</div>' +
       '<div>' + esc(t('automation.task')) + ': ' + esc(wake.taskName || '-') + '</div>' +
       '<div>' + esc(t('automation.next')) + ': ' + esc(wake.nextRunAt ? new Date(wake.nextRunAt).toLocaleString(uiLocale()) : '-') + '</div>' +
       (wake.skippedReason ? '<div>' + esc(wake.skippedReason) + '</div>' : '') +
@@ -21139,12 +21188,12 @@ window.showAutomationWindow = async function() {
         '<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">' +
         '<span style="font-size:11px;flex:1;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + esc(a.prompt || '') + '">' + esc(a.prompt || '') + '</span>' +
         '<button class="sec-btn" style="font-size:9px;padding:2px 8px;' + (a.active ? 'Active' : 'Paused') + '" onclick="window.toggleAutomationById(' + JSON.stringify(a.id).replace(/"/g, '&quot;') + ')">' + (a.active ? esc(t('automation.active')) : esc(t('automation.paused'))) + '</button>' +
-        '<button class="sec-btn" style="font-size:9px;padding:2px 8px;color:#ff6666;" onclick="window.deleteAutomationById(' + JSON.stringify(a.id).replace(/"/g, '&quot;') + ')">' + esc(t('common.delete')) + '</button>' +
+        '<button class="sec-btn" style="font-size:9px;padding:2px 8px;color:var(--nm-state-danger);" onclick="window.deleteAutomationById(' + JSON.stringify(a.id).replace(/"/g, '&quot;') + ')">' + esc(t('common.delete')) + '</button>' +
         '</div>' +
         '<div style="font-size:10px;color:var(--text-dim);">' + esc(t('automation.workspace')) + ': ' + esc(a.workspaceName || a.workspaceId || '-') + ' | ' + esc(t('automation.conversation')) + ': ' + esc(a.conversationMode === 'existing' ? (a.conversationId || '-') : t('automation.newConversation')) + '</div>' +
         '<div style="font-size:10px;color:var(--text-dim);">' + esc(t('message.model')) + ': ' + esc(a.model || t('common.current')) + ' | ' + esc(t('automation.type')) + ': ' + esc(a.condition || 'once') + ' | ' + esc(t('automation.status')) + ': ' + status + ' | ' + esc(t('automation.runs')) + ': ' + (a.runCount || 0) + '</div>' +
         '<div style="font-size:10px;color:var(--text-dim);">' + esc(t('automation.next')) + ': ' + esc(next) + ' | ' + esc(t('automation.last')) + ': ' + esc(last) + '</div>' +
-        (lastLine ? '<div style="font-size:10px;color:' + (a.lastError ? '#ff7777' : 'var(--text-dim)') + ';margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(lastLine) + '</div>' : '') +
+        (lastLine ? '<div style="font-size:10px;color:' + (a.lastError ? 'var(--nm-state-danger)' : 'var(--text-dim)') + ';margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(lastLine) + '</div>' : '') +
         '</div>';
     }
   }
@@ -21304,7 +21353,7 @@ function renderFlowItem(work, idx, expanded) {
     '<button class="sec-btn" style="flex:1;font-size:10px;" onclick="window.addFlowComp(' + idx + ',\'logic\')">+ ' + esc(t('flow.logic')) + '</button>' +
     '<button class="sec-btn primary" style="flex:0;padding:6px 8px;font-size:10px;" onclick="window.runFlowWork(' + idx + ')" title="' + escAttr(t('flow.run')) + '">' + esc(t('flow.run')) + '</button>' +
     '<button class="sec-btn" style="flex:0;padding:6px 8px;font-size:10px;" onclick="window.saveFlowToDisk(' + idx + ')" title="' + escAttr(t('flow.save')) + '">' + esc(t('flow.save')) + '</button>' +
-    '<button class="sec-btn" style="flex:0;padding:6px 8px;font-size:0;color:#ff6666;" onclick="window.deleteFlowWork(' + idx + ')" title="' + escAttr(t('flow.deleteWorkflow')) + '">' + iconSvg('trash', t('flow.deleteWorkflow'), 'tiny') + '</button>' +
+    '<button class="sec-btn" style="flex:0;padding:6px 8px;font-size:0;color:var(--nm-state-danger);" onclick="window.deleteFlowWork(' + idx + ')" title="' + escAttr(t('flow.deleteWorkflow')) + '">' + iconSvg('trash', t('flow.deleteWorkflow'), 'tiny') + '</button>' +
     '</div>' + componentsHtml +
     '</div></div>';
 }
@@ -23051,6 +23100,29 @@ function createBrowserGuestElement(target) {
   return view;
 }
 
+window.setBrowserViewport = function(contentsId, viewport) {
+  var views = document.querySelectorAll('webview[data-newmark-browser-runtime-key]');
+  var view = Array.from(views).find(function(candidate) { try { return candidate.getWebContentsId() === contentsId; } catch (_) { return false; } });
+  if (!view || !view.parentElement) return false;
+  var frame = view.parentElement;
+  view._newmarkViewport = viewport;
+  frame.style.position = 'relative';
+  frame.style.overflow = 'hidden';
+  view.style.position = 'absolute';
+  view.style.left = '0'; view.style.top = '0'; view.style.flex = 'none';
+  var fit = function() {
+    if (!view.isConnected) { view._newmarkViewportObserver?.disconnect(); return; }
+    var size = view._newmarkViewport;
+    view.style.width = size.width + 'px'; view.style.height = size.height + 'px';
+    view.style.transformOrigin = 'top left';
+    var scale = Math.min(1, (frame.clientWidth || size.width) / size.width, (frame.clientHeight || size.height) / size.height);
+    view.style.transform = 'scale(' + scale + ')';
+  };
+  if (!view._newmarkViewportObserver) { view._newmarkViewportObserver = new ResizeObserver(fit); view._newmarkViewportObserver.observe(frame); }
+  fit();
+  return true;
+};
+
 function restoreBrowserPlaceholder() {
   var frame = els['browser-frame'] || document.getElementById('browser-frame');
   if (!frame || document.getElementById('browser-guest-placeholder')) return;
@@ -23107,12 +23179,28 @@ function navigateBrowserView(view, url) {
   }
 }
 
+window.normalizeBrowserAddress = function(raw) {
+  var value = String(raw || '').trim().replace(/^files:\/\//i, 'file://');
+  if (!value || /[\x00-\x1f]/.test(value)) throw new Error('Invalid browser address');
+  if (/^[a-z]:[\\/]/i.test(value) || value.startsWith('/')) {
+    var localPath = value.replace(/\\/g, '/');
+    value = 'file://' + (localPath.startsWith('/') ? '' : '/') + localPath.split('/').map(function(part, index) {
+      return index === 0 && /^[a-z]:$/i.test(part) ? part : encodeURIComponent(part);
+    }).join('/');
+  }
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(value) || /^[^/:]+:\d+(?:\/|$)/.test(value)) value = 'https://' + value;
+  var parsed = new URL(value);
+  if (parsed.protocol === 'file:') {
+    if (parsed.hostname && parsed.hostname !== 'localhost') throw new Error('Use a local file path');
+  } else if (!['http:', 'https:', 'newmark-preview:'].includes(parsed.protocol) && value !== 'about:blank') {
+    throw new Error('Unsupported browser address');
+  }
+  return parsed.href;
+};
+
 window.navigateBrowser = function(url) {
   var target = currentConversationTarget();
-  url = String(url || '').trim();
-  if (!/^(?:https?:\/\/|about:blank$|newmark-preview:\/\/)/i.test(url)) {
-    url = 'https://' + url;
-  }
+  url = window.normalizeBrowserAddress(url);
   if (state.browserPreviewToken && url !== state.browserPreviewUrl) window.revokeBrowserPreviewCapability();
   rememberBrowserUrl(url, true, target);
   var input = els['browser-url'];
@@ -23146,6 +23234,19 @@ window.browserReload = function() {
   if (view && view.reload) view.reload();
 };
 
+// The local empty browser canvas belongs to the app theme. Visited pages
+// retain their own styling; recheck the URL inside the guest after navigation.
+function syncBlankBrowserGuestTheme(view) {
+  try {
+    if (!view._newmarkDomReady || view.getURL() !== 'about:blank') return;
+    var palette = getComputedStyle(document.documentElement);
+    var bg = palette.getPropertyValue('--bg').trim();
+    var fg = palette.getPropertyValue('--text').trim();
+    var script = 'if(location.href === "about:blank"){document.documentElement.style.background=' + JSON.stringify(bg) + ';document.documentElement.style.color=' + JSON.stringify(fg) + ';}';
+    view.executeJavaScript(script).catch(function() {});
+  } catch {}
+}
+
 function initializeBrowserGuest(view) {
   var target = arguments.length > 1 && arguments[1] ? arguments[1] : currentConversationTarget();
   var targetKey = browserTargetKey(target);
@@ -23164,6 +23265,7 @@ function initializeBrowserGuest(view) {
         currentUrl = view.getURL ? view.getURL() : '';
         if (input && currentUrl && currentUrl !== 'about:blank') input.value = currentUrl;
       } catch {}
+      syncBlankBrowserGuestTheme(view);
       rememberBrowserUrl(currentUrl, false, target);
       if (view._newmarkReadySettled) return;
       var registration = Promise.resolve({ accepted: true });
@@ -23232,7 +23334,7 @@ function initializeBrowserGuest(view) {
     // reload control, so a popup page could not be refreshed in-place.
     view.addEventListener('new-window', function(e) {
       var popupUrl = String(e && e.url || '').trim();
-      if (!popupUrl || !/^(?:https?:|about:blank|newmark-preview:)/i.test(popupUrl)) return;
+      if (!popupUrl || !/^(?:https?:|file:|about:blank|newmark-preview:)/i.test(popupUrl)) return;
       if (e && typeof e.preventDefault === 'function') e.preventDefault();
       rememberBrowserUrl(popupUrl, true, target);
       var input = els['browser-url'];
@@ -24361,7 +24463,7 @@ window.loadMemoryLabVisualization = function(reason, options) {
     return result;
   }).catch(function(err) {
     var target = document.getElementById('memory-lab-panel');
-    if (target) target.innerHTML = '<div style="color:#ff7777;font-size:12px;">' + esc(err.message || String(err)) + '</div>';
+    if (target) target.innerHTML = '<div style="color:var(--nm-state-danger);font-size:12px;">' + esc(err.message || String(err)) + '</div>';
     throw err;
   }).finally(function() {
     if (generation === state.memoryLabVisualizationGeneration) state.memoryLabVisualizationLoading = false;
@@ -26517,7 +26619,7 @@ window.openWsSettings = function() {
     '</select></div>' +
     '<div style="display:flex;gap:6px;margin-top:8px;">' +
     '<button class="sec-btn" style="flex:1;" onclick="window.showNewWorkspaceDialog()">+ ' + esc(t('left.new')) + '</button>' +
-    '<button class="sec-btn" style="flex:1;color:#ff6666;" onclick="window.deleteCurrentWorkspace()">' + esc(t('common.delete')) + '</button>' +
+    '<button class="sec-btn" style="flex:1;color:var(--nm-state-danger);" onclick="window.deleteCurrentWorkspace()">' + esc(t('common.delete')) + '</button>' +
     '</div>';
   window.openSubWin(t('workspace.settingsTitle') + ' - ' + esc(wsName), html);
 
@@ -27868,5 +27970,4 @@ function schedulePostStartupUiRendering() {
 </script>
 </body>
 </html>
-
 

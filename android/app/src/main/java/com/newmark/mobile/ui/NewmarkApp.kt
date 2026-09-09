@@ -405,27 +405,10 @@ fun NewmarkApp(
 ) {
     val context = LocalContext.current
     val themeStore = remember { ThemeStore(context) }
-    // SharedPreferences is tiny, but avoid adding synchronous storage work to
-    // the first composition.  The system theme is an acceptable first-frame
-    // fallback and the persisted preference replaces it immediately after.
-    var darkMode by remember { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(themeStore) {
-        darkMode = themeStore.loadDarkMode()
-    }
+    // Resolve the saved override before drawing icons or applying system bars.
+    var darkMode by remember(themeStore) { mutableStateOf(themeStore.loadDarkMode()) }
     val dark = darkMode ?: isSystemInDarkTheme()
-    val themeView = LocalView.current
-    LaunchedEffect(dark, themeView) {
-        val activity = (context as? Activity)
-            ?: (context as? ContextWrapper)?.baseContext as? Activity
-        activity?.window?.let { window ->
-            // Manual app themes can differ from the system theme. Keep system
-            // icons readable over the actual edge-to-edge app canvas as well.
-            androidx.core.view.WindowCompat.getInsetsController(window, themeView).apply {
-                isAppearanceLightStatusBars = !dark
-                isAppearanceLightNavigationBars = !dark
-            }
-        }
-    }
+    com.newmark.mobile.ui.theme.ThemeSystemBars(dark)
     CompositionLocalProvider(
         LocalThemeMode provides ThemeMode(darkMode) { new ->
             darkMode = new
@@ -705,6 +688,7 @@ private fun NewmarkAppContent(
                                 context = context.applicationContext,
                                 session = browserSessions.backgroundSession(browserTargetKey),
                                 correctOcr = vm::correctFinalVisualOcr,
+                                inspectImage = vm::inspectBrowserImage,
                             )
                         }
                     }
@@ -996,6 +980,7 @@ private fun NewmarkAppContent(
             page = pageArg,
             expandedDevice = expandedDevice,
             conversations = vm.conversations,
+            runningLocalConversationIds = vm.runningLocalConversationIds,
             // 并集互斥选中：远程模式下本地对话不显示选中态，反之亦然
             currentConversationId = if (useRemote) null else vm.currentId,
             onToggleDevice = onToggleDevice,

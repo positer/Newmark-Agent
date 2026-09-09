@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   ]) assert.ok(names.includes(expected), `manifest exposes ${expected}`);
   assert.deepEqual(
     DEFAULT_SEARCH_MCP_MANIFEST.filter(endpoint => endpoint.enabled).map(endpoint => endpoint.name),
-    ['@ignidor/web-search-mcp'],
+    ['Exa Search MCP', 'You.com Free Search MCP'],
     'only a candidate with a recorded initialize/tools-list/tools-call success is enabled by default',
   );
   assert.equal(
@@ -80,12 +80,41 @@ async function main(): Promise<void> {
     'runtime diagnostics remove Windows/POSIX developer paths without corrupting HTTPS sources',
   );
   const defaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-search-mcp-default-'));
+  for (const [name, fields] of [
+    ['web_search_exa', ['numResults']],
+    ['you-search', ['count', 'freshness', 'extraction', 'knowledge', 'extraction_source']],
+  ] as const) {
+    const schema = { type: 'object', properties: { query: { type: 'string' }, ...Object.fromEntries(fields.map(key => [key, { type: 'string' }])) }, required: ['query'] };
+    assert.deepEqual(chooseSearchTool([{ name, description: 'Search the web for sources', inputSchema: schema }], name), { name, argument: 'query' });
+    assert.equal(chooseSearchTool([{ name, description: 'Search the web', inputSchema: { ...schema, properties: { ...schema.properties, command: { type: 'string' } } } }], name), undefined);
+  }
+  const transportRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-search-transport-'));
+  try {
+    fs.writeFileSync(path.join(transportRoot, 'search-mcp.json'), JSON.stringify({ version: 1, endpoints: [{ id: 'remote', name: 'Remote', enabled: true, transport: 'streamable_http', url: 'https://search.example.test/mcp', tool: 'web_search_exa' }] }));
+    const methods: string[] = [];
+    const pool = new SearchMcpPool(transportRoot, { fetch: async (_input, init) => {
+      if (init?.method !== 'POST') return new Response(null, { status: 405 });
+      const message = JSON.parse(String(init.body));
+      methods.push(message.method);
+      if (message.id === undefined) return new Response(null, { status: 202 });
+      const result = message.method === 'initialize'
+        ? { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1' } }
+        : message.method === 'tools/list'
+          ? { tools: [{ name: 'web_search_exa', description: 'Search the web', inputSchema: { type: 'object', properties: { query: { type: 'string' }, numResults: { type: 'number' } }, required: ['query'] } }] }
+          : { content: [{ type: 'text', text: 'Official source https://www.claymath.org/' }] };
+      if (message.method === 'tools/call') assert.deepEqual(message.params.arguments, { query: 'source lookup' });
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }), { headers: { 'Content-Type': 'application/json' } });
+    } });
+    assert.equal((await pool.search('source lookup')).ok, true);
+    assert.deepEqual(methods, ['initialize', 'notifications/initialized', 'tools/list', 'tools/call'], 'every MCP request uses the injected proxy-capable transport');
+  } finally { fs.rmSync(transportRoot, { recursive: true, force: true }); }
   try {
     const defaultPool = new SearchMcpPool(defaultRoot, {
       callEndpoint: async endpoint => `${endpoint.name}\nhttps://example.test/default`,
     });
     const defaultResult = await defaultPool.search('default manifest');
-    assert.deepEqual(defaultResult.attempts.map(attempt => attempt.name), ['@ignidor/web-search-mcp']);
+    assert.deepEqual(defaultResult.attempts.map(attempt => attempt.name), ['Exa Search MCP', 'You.com Free Search MCP']);
+    assert.equal(defaultResult.provider, 'Exa Search MCP');
   } finally {
     fs.rmSync(defaultRoot, { recursive: true, force: true });
   }

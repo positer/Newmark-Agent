@@ -6,6 +6,28 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RemoteTrackingContractTest {
+    @Test fun coalescedSseAndDurableDeltasRenderEachNarrativeOnce() {
+        val first = RemoteWorkEvent(id = "d1", runId = "run", type = "text", sequence = 1, content = "搜索结果噪音较大，")
+        val second = first.copy(id = "d2", sequence = 2, content = "我直接去找官方 PDF。")
+        val batch = second.copy(content = first.content + second.content, coalescedDeltas = listOf(
+            RemoteWorkDelta(first.id, first.sequence, first.content), RemoteWorkDelta(second.id, second.sequence, second.content)))
+        for (snapshot in listOf(emptyList(), listOf(first), listOf(first, second))) {
+            val merged = RemoteTrackingContract.mergeEvents(snapshot, listOf(batch, batch))
+            org.junit.Assert.assertEquals(listOf(first, second), merged)
+            val projected = WorkRunProjection.project(merged.map { LocalWorkEvent(type = it.type, id = it.id, sequence = it.sequence, content = it.content) }, "running")
+            org.junit.Assert.assertEquals(first.content + second.content, (projected.single() as WorkRunProjection.Item.Narrative).content)
+        }
+    }
+
+    @Test fun sameWordsWithDifferentDeltaIdsArePreservedAndBatchJsonSurvivesNormalization() {
+        val batch = RemotePayloadNormalizer.workEvent(Gson().fromJson("""{"id":"d2","runId":"run","type":"text","content":"哈哈","coalescedDeltas":[{"id":"d1","sequence":1,"content":"哈"},{"id":"d2","sequence":2,"content":"哈"}]}""", RemoteWorkEvent::class.java))
+        val merged = RemoteTrackingContract.mergeEvents(emptyList(), listOf(batch))
+        org.junit.Assert.assertEquals("哈哈", merged.joinToString("") { it.content })
+        org.junit.Assert.assertEquals(2, merged.size)
+        val thoughts = batch.copy(type = "thought_delta")
+        org.junit.Assert.assertEquals(2, RemoteTrackingContract.mergeEvents(emptyList(), listOf(thoughts, thoughts)).size)
+    }
+
     @Test
     fun hostedUiSnapshotKeepsGoalFlowQueueRuntimeMessagesAndRunsTogether() {
         val parsed = Gson().fromJson(

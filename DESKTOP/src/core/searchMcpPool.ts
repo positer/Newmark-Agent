@@ -56,6 +56,7 @@ export interface SearchMcpPoolResult {
 
 export interface SearchMcpPoolDependencies {
   callEndpoint?: (endpoint: SearchMcpEndpoint, query: string, signal?: AbortSignal) => Promise<string>;
+  fetch?: typeof fetch;
   now?: () => number;
 }
 
@@ -68,7 +69,8 @@ const SEARCH_TOOL_DESCRIPTION = /\b(?:web|internet|duckduckgo|searxng)\b[\s\S]{0
 const SEARCH_QUERY_ARGUMENTS = ['query', 'q', 'search_query', 'searchQuery', 'keywords', 'keyword', 'text'];
 const SAFE_SEARCH_ARGUMENTS = new Set([
   ...SEARCH_QUERY_ARGUMENTS,
-  'count', 'limit', 'max_results', 'maxResults', 'page', 'offset', 'rankingMode',
+  'count', 'limit', 'max_results', 'maxResults', 'numResults', 'page', 'offset', 'rankingMode',
+  'extraction', 'knowledge', 'extraction_source',
   'category', 'categories', 'language', 'locale', 'region', 'country', 'freshness',
   'time_range', 'timeRange', 'safe_search', 'safesearch',
 ]);
@@ -82,6 +84,18 @@ const EMPTY_SEARCH_TEXT = /^(?:\s*(?:\[(?:web[_-]?)?search\]\s*)?)(?:no\s+(?:sea
  */
 export const DEFAULT_SEARCH_MCP_MANIFEST: SearchMcpEndpoint[] = [
   {
+    id: 'exa-search-mcp', name: 'Exa Search MCP', enabled: true, priority: 10,
+    transport: 'streamable_http', url: 'https://mcp.exa.ai/mcp?tools=web_search_exa',
+    tool: 'web_search_exa', argument: 'query', timeoutMs: 15_000,
+    notes: 'Official hosted keyless search; free tier is rate-limited. PC and Android tools/call admission verified 2026-09-09.',
+  },
+  {
+    id: 'you-search-mcp', name: 'You.com Free Search MCP', enabled: true, priority: 20,
+    transport: 'streamable_http', url: 'https://api.you.com/mcp?profile=free',
+    tool: 'you-search', argument: 'query', timeoutMs: 8_000,
+    notes: 'Official free profile without credentials; may require a reachable configured proxy. PC and Android tools/call verified 2026-09-09.',
+  },
+  {
     id: 'wuxing-search-mcp', name: 'Wuxing Search MCP', enabled: false, priority: 100,
     transport: 'stdio', command: process.execPath,
     args: [path.join(__dirname, '../../node_modules/@iflow-mcp/maeshughes-wuxing-search-mcp/src/index.js')],
@@ -94,12 +108,12 @@ export const DEFAULT_SEARCH_MCP_MANIFEST: SearchMcpEndpoint[] = [
   { id: 'searxng-mcp', name: 'searxng-mcp', enabled: false, priority: 400, transport: 'template', notes: 'Protocol template; configure a trusted SearXNG MCP deployment.' },
   { id: 'mcp-server-freesearch', name: 'MCP Server FreeSearch', enabled: false, priority: 500, transport: 'template', notes: 'Protocol template; concrete implementation is distributor-selected.' },
   {
-    id: 'ignidor-web-search-mcp', name: '@ignidor/web-search-mcp', enabled: true, priority: 600,
+    id: 'ignidor-web-search-mcp', name: '@ignidor/web-search-mcp', enabled: false, priority: 600,
     transport: 'stdio', command: process.execPath,
     args: [path.join(__dirname, '../../node_modules/@ignidor/web-search-mcp/dist/index.js')],
     env: { ELECTRON_RUN_AS_NODE: '1' },
     tool: 'search', argument: 'query', timeoutMs: 12_000,
-    notes: 'Bundled after initialize/tools-list/tools-call verification; search-only invocation does not expose crawler or browser tools.',
+    notes: 'Optional bundled scraper; disabled by default after three live search timeouts on 2026-09-09. Explicit user configuration remains authoritative.',
   },
   { id: 'free-search-mcp', name: 'free-search-mcp', enabled: false, priority: 700, transport: 'template', notes: 'Protocol template; configure the intended package or remote service explicitly.' },
   { id: 'duckduckgo-mcp', name: 'DuckDuckGo MCP', enabled: false, priority: 800, transport: 'template', notes: 'MCP implementation is configurable; HTTP DuckDuckGo remains the absolute final fallback.' },
@@ -321,7 +335,7 @@ function writeSearchMcpHealthSnapshot(root: string, result: SearchMcpPoolResult,
   }
 }
 
-async function callRealEndpoint(endpoint: SearchMcpEndpoint, query: string, signal?: AbortSignal): Promise<string> {
+async function callRealEndpoint(endpoint: SearchMcpEndpoint, query: string, signal?: AbortSignal, fetchImpl?: typeof fetch): Promise<string> {
   if (endpoint.transport === 'template') throw new Error('endpoint has no configured transport');
   const timeout = Math.max(1_000, Math.min(MAX_TIMEOUT_MS, endpoint.timeoutMs || DEFAULT_TIMEOUT_MS));
   const requestInit = endpoint.headers ? { headers: endpoint.headers } : undefined;
@@ -331,9 +345,9 @@ async function callRealEndpoint(endpoint: SearchMcpEndpoint, query: string, sign
         env: { ...process.env, ...(endpoint.env || {}) } as Record<string, string>, stderr: 'pipe',
       })
     : endpoint.transport === 'sse'
-      ? new SSEClientTransport(new URL(endpoint.url || ''), { requestInit })
+      ? new SSEClientTransport(new URL(endpoint.url || ''), { requestInit, fetch: fetchImpl })
       : new StreamableHTTPClientTransport(new URL(endpoint.url || ''), {
-          requestInit,
+          requestInit, fetch: fetchImpl,
           reconnectionOptions: { initialReconnectionDelay: 250, maxReconnectionDelay: 500, reconnectionDelayGrowFactor: 1, maxRetries: 0 },
         });
   const client = new Client({ name: 'newmark-search-only', version: '0.5.13' }, { capabilities: {} });
@@ -367,7 +381,7 @@ export class SearchMcpPool {
   private readonly now: () => number;
 
   constructor(private readonly root: string, dependencies: SearchMcpPoolDependencies = {}) {
-    this.callEndpoint = dependencies.callEndpoint || callRealEndpoint;
+    this.callEndpoint = dependencies.callEndpoint || ((endpoint, query, signal) => callRealEndpoint(endpoint, query, signal, dependencies.fetch));
     this.now = dependencies.now || Date.now;
   }
 

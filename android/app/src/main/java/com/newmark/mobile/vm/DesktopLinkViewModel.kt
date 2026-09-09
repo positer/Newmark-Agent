@@ -2142,13 +2142,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         events: List<RemoteWorkEvent>,
         incoming: RemoteWorkEvent,
     ): List<RemoteWorkEvent> {
-        val duplicate = events.any { existing ->
-            incoming.id.isNotBlank() && existing.id == incoming.id ||
-                (incoming.id.isBlank() && existing.id.isBlank() &&
-                    existing.sequence == incoming.sequence && existing.type == incoming.type &&
-                    existing.timestamp == incoming.timestamp)
-        }
-        return if (duplicate) events else events + incoming
+        return RemoteTrackingContract.mergeEvents(events, listOf(incoming))
     }
 
     private fun updateWorkspaceConversationRuntime(

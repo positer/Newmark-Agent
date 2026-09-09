@@ -496,11 +496,18 @@ object LocalTools {
 
     private fun browserUse(actions: Collection<String>): JSONObject = function(
         "browser_use",
-        "操作当前本地对话的浏览器会话。visible 省略时为 true，绑定右侧栏内置浏览器但不会强制展开侧栏或切换标签；visible=false 使用独立后台会话，不连接、不显示也不渲染右侧栏 WebView。navigate 需要 url；wait 可传 duration_ms；observe/extract 可传 max_chars；back、forward、reload 不需要附加字段。observe/extract 优先读取 DOM 或 PDF 文本层，文本不足时使用当前页面截图和设备端中英 OCR。返回页面状态、文本或导航错误。",
+        "操作当前本地对话的浏览器会话。visible 省略时为 true，绑定右侧栏内置浏览器但不会强制展开侧栏或切换标签；visible=false 使用独立后台会话，不连接、不显示也不渲染右侧栏 WebView。navigate 需要 url；wait 可传 duration_ms；observe/extract 可传 max_chars；back、forward、reload 不需要附加字段。observe/extract 优先读取 DOM 或 PDF 文本层，文本不足时先调用已配置视觉模型分析截图，失败后使用设备端中英 OCR；visual_mode=vision 可显式请求视觉协作。返回页面状态、文本或导航错误。",
         mapOf(
             "action" to enumProp(actions, "当前模式允许的浏览器动作"),
             "visible" to prop("boolean", "可选；是否绑定并使用右侧栏内置浏览器，省略时为 true；false 使用不参与 Compose 绘制的独立后台浏览会话"),
             "url" to prop("string", "navigate 必填的完整 http:// 或 https:// 地址；其他动作省略"),
+            "viewport" to JSONObject().put("type", "object").put("properties", JSONObject()
+                .put("width", JSONObject().put("type", "integer").put("description", "画幅宽度，单位 CSS 像素").put("minimum", 320).put("maximum", 2560))
+                .put("height", JSONObject().put("type", "integer").put("description", "画幅高度，单位 CSS 像素").put("minimum", 240).put("maximum", 2560)))
+                .put("required", org.json.JSONArray(listOf("width", "height"))).put("additionalProperties", false)
+                .put("description", "observe/navigate 可设置 CSS 像素画幅，最多 400 万像素，保留到当前会话后续动作；设备实际像素最多 1600 万。"),
+            "pdf_page" to prop("integer", "可选 PDF 页码，从 1 开始；指定时只读取该页，省略时提取全部文本至字数限制，视觉回退默认第一页"),
+            "visual_mode" to enumProp(listOf("auto", "vision"), "auto 文本优先；vision 显式请求截图视觉分析"),
             "max_chars" to prop("integer", "observe 或 extract 返回的最大正文字符数"),
             "duration_ms" to prop("integer", "wait 等待的毫秒数；必须为非负值"),
         ),

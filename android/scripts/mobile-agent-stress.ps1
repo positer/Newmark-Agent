@@ -16,6 +16,8 @@ $reportPath = Join-Path $archiveRoot "mobile-stress-$stamp.json"
 $mockLogPath = Join-Path $archiveRoot "_mobile-mock-$stamp.log"
 $mockErrorPath = Join-Path $archiveRoot "_mobile-mock-$stamp.err.log"
 $uiDumpPath = Join-Path $archiveRoot "_mobile-stress-ui-$stamp.xml"
+$visualOutput = Join-Path $archiveRoot "mobile-stress-$stamp"
+New-Item -ItemType Directory -Force -Path $visualOutput | Out-Null
 $apkPath = Join-Path $repoRoot 'android\app\build\outputs\apk\stress\app-stress.apk'
 $mockScript = Join-Path $repoRoot 'DESKTOP\scripts\mobile-mock-server.cjs'
 $adb = (Get-Command adb -ErrorAction Stop).Source
@@ -47,6 +49,7 @@ $result = [ordered]@{
     mock = $null
     launch = @{}
     graphics = @{}
+    screenshots = @()
     memory = @{}
     errors = @()
     warnings = @()
@@ -56,6 +59,14 @@ $result = [ordered]@{
 function Invoke-Adb([string[]]$Arguments) {
     & $adb -s $Serial @Arguments
     if ($LASTEXITCODE -ne 0) { throw "adb failed: $($Arguments -join ' ')" }
+}
+
+function Save-PressureScreenshot([string]$Name) {
+    $remotePath = '/sdcard/newmark-pressure-frame.png'
+    Invoke-Adb @('shell', 'screencap', '-p', $remotePath) | Out-Null
+    $destination = Join-Path $visualOutput "$Name.png"
+    Invoke-Adb @('pull', $remotePath, $destination) | Out-Null
+    $result.screenshots += $destination
 }
 
 function Invoke-AmViewIntent([string]$DataUrl, [string]$TargetComponent) {
@@ -284,6 +295,19 @@ try {
     # metric. Reset after the remote snapshot is rendered before evaluating UI
     # pressure frames.
     Assert-AppForeground 'Remote hydration'
+    # Pairing establishes the connection but preserves the user's local-chat
+    # preference. Enter the remote surface through the same control as a user.
+    Wait-ForUiNode -Find {
+        $hydratedUi = Get-UiXml
+        $remoteTitle = @($hydratedUi.SelectNodes("//*[@text='Mobile stress fixture']")) | Select-Object -First 1
+        if ($null -ne $remoteTitle) { return $remoteTitle }
+        $connectRemote = @($hydratedUi.SelectNodes("//*[@content-desc='连接桌面端']")) | Select-Object -First 1
+        if ($null -ne $connectRemote) {
+            Invoke-UiTapNode $connectRemote '连接桌面端'
+            Start-Sleep -Milliseconds 500
+        }
+        return $null
+    } -Label '已选择远端 fixture 对话' -TimeoutMs 30000 | Out-Null
     Reset-GfxMetrics
     Start-Sleep -Seconds 1
 
@@ -311,7 +335,7 @@ try {
     if (@($runningXml.SelectNodes("//*[contains(@text,'当前对话正由 Flow 接管')]")).Count -eq 0) {
         throw 'Flow takeover notice was not present in the live resident snapshot'
     }
-    if (@($runningXml.SelectNodes("//*[@text='Next 2']")).Count -eq 0) {
+    if (@($runningXml.SelectNodes("//*[@text='2 条待处理']")).Count -eq 0) {
         throw 'Authoritative remote queue was not present in the live resident snapshot'
     }
     if (@($runningXml.SelectNodes("//*[@text='已停止']")).Count -gt 0) {
@@ -322,6 +346,7 @@ try {
     $result.gates.flowPromptVisible = $true
     $result.gates.flowTakeoverVisible = $true
     $result.gates.queueVisible = $true
+    Save-PressureScreenshot 'running-goal-flow-queue'
 
     # Enqueue immediately after the single live-state snapshot so this always
     # exercises the running PC queue contract rather than racing the terminal
@@ -338,12 +363,13 @@ try {
     # insets animation is still moving can provide a button position that is
     # correct for the previous frame and make one ADB tap miss completely.
     Start-Sleep -Milliseconds 750
-    $send = Wait-ForUiNode -Find { Get-UiNodeByDescription '发送' } -Label '发送'
+    $send = Wait-ForUiNode -Find { Get-UiNodeByDescription '发送下一条；长按上滑发送 Guide' } -Label '发送下一条'
+    Save-PressureScreenshot 'keyboard-queue-input'
     Invoke-UiTapNode -Node $send -Label '发送'
     Start-Sleep -Seconds 2
     $sendStats = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 2
     if ($sendStats.queueActions -lt 1 -and $sendStats.sends -lt 1) {
-        $send = Wait-ForUiNode -Find { Get-UiNodeByDescription '发送' } -Label '发送 after IME settle'
+        $send = Wait-ForUiNode -Find { Get-UiNodeByDescription '发送下一条；长按上滑发送 Guide' } -Label '发送下一条 after IME settle'
         Invoke-UiTapNode -Node $send -Label '发送 after IME settle'
     }
     # During Flow/Build ownership, the shared PC contract routes ordinary
@@ -360,6 +386,7 @@ try {
         $model = Wait-ForUiNode -Find { Get-UiNodeByDescription '模型' } -Label '模型'
         Invoke-UiTapNode -Node $model -Label '模型'
         Wait-ForUiNode -Find { Get-UiNodeByText '模型选择' } -Label '模型选择菜单' | Out-Null
+        if ($i -eq 0 -or $i -eq ($UiLoops - 1)) { Save-PressureScreenshot "model-popup-$i" }
         # Back is only valid once the popup is proven visible.  This keeps a
         # locator failure from navigating the fixture Activity to the launcher.
         Invoke-Adb @('shell', 'input', 'keyevent', '4')
@@ -373,7 +400,12 @@ try {
             # open makes a later model-button locator succeed even though the
             # sidebar correctly intercepts that tap.
             Invoke-Adb @('shell', 'input', 'keyevent', '4')
-            Wait-ForUiNode -Find { Get-UiNodeByDescription '打开右侧栏' } -Label '右侧栏折叠' | Out-Null
+            Wait-ForUiNode -Find {
+                $closedUi = Get-UiXml
+                if (@($closedUi.SelectNodes("//*[@content-desc='关闭右侧栏']")).Count -gt 0) { return $null }
+                # Compact gesture-only layouts need not render a reopen handle.
+                return @($closedUi.SelectNodes("//*[@content-desc='模型']")) | Select-Object -First 1
+            } -Label '右侧栏折叠且返回聊天' | Out-Null
             Assert-AppForeground "UI loop $i right-sidebar close"
         }
         if (($i % 5) -eq 0) {
@@ -395,6 +427,7 @@ try {
         throw 'A delayed running event resurrected a completed remote Build'
     }
     $result.gates.staleCompletedRunRejected = $true
+    Save-PressureScreenshot 'completed-stale-event-rejected'
 
     $result.mock = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 5
     $result.graphics = Read-GfxMetrics

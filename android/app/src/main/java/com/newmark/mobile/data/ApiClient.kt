@@ -97,8 +97,24 @@ internal fun parseChatStreamTextDelta(payload: String): ChatStreamTextDelta {
 internal fun modelRequestedContinuation(finishReason: String): Boolean =
     finishReason.trim().lowercase() in setOf("length", "max_tokens", "max_output_tokens")
 
+/** Deltas are literal text (including repeated tokens and whitespace). Done/message frames are snapshots. */
+internal fun appendProtocolText(target: StringBuilder, incoming: String, snapshot: Boolean): String {
+    if (incoming.isEmpty()) return ""
+    val suffix = if (!snapshot) incoming else {
+        val current = target.toString()
+        when {
+            incoming.startsWith(current) -> incoming.substring(current.length)
+            // An append-only callback cannot replay a rewritten or already delivered snapshot.
+            current.isNotEmpty() -> ""
+            else -> incoming
+        }
+    }
+    target.append(suffix)
+    return suffix
+}
+
 internal fun appendCompatibleStreamValue(target: StringBuilder, incoming: String): String {
-    if (incoming.isBlank() || incoming == "null") return ""
+    if (incoming.isEmpty() || incoming == "null") return ""
     val current = target.toString()
     val delta = when {
         current.isEmpty() -> incoming
@@ -203,6 +219,8 @@ internal data class ResponsesStreamDelta(
     val toolArguments: String = "",
     val toolArgumentsDelta: String = "",
     val toolKey: String = "",
+    val snapshot: Boolean = false,
+    val partKey: String = "",
 )
 
 internal fun parseResponsesStreamDelta(payload: String, sseEvent: String = ""): ResponsesStreamDelta {
@@ -237,7 +255,11 @@ internal fun parseResponsesStreamDelta(payload: String, sseEvent: String = ""): 
         )
         "response.completed" -> ResponsesStreamDelta(completed = true)
         else -> ResponsesStreamDelta()
-    }
+    }.copy(
+        snapshot = type.endsWith(".done"),
+        partKey = json.optionalText("output_index").ifBlank { json.optionalText("item_id") } + ":" +
+            json.optionalText("content_index").ifBlank { json.optionalText("summary_index") },
+    )
 }
 
 private fun responsesFailureMessage(root: JSONObject?, fallbackStatus: String): String {
@@ -430,12 +452,12 @@ class ApiClient(
                         ?: choice?.optJSONObject("message")
                     val streamed = parseChatStreamTextDelta(payload)
                     if (streamed.finishReason.isNotBlank()) finishReason = streamed.finishReason
-                    val thoughtDelta = appendCompatibleStreamValue(reasoning, streamed.thought)
-                    if (thoughtDelta.isNotBlank()) {
+                    val thoughtDelta = appendProtocolText(reasoning, streamed.thought, choice?.has("message") == true && choice.optJSONObject("delta") == null)
+                    if (thoughtDelta.isNotEmpty()) {
                         onThoughtDelta(thoughtDelta)
                     }
-                    val textDelta = appendCompatibleStreamValue(content, streamed.text)
-                    if (textDelta.isNotBlank()) {
+                    val textDelta = appendProtocolText(content, streamed.text, choice?.has("message") == true && choice.optJSONObject("delta") == null)
+                    if (textDelta.isNotEmpty()) {
                         onTextDelta(textDelta)
                     }
                     messageOrDelta?.optJSONArray("tool_calls")?.let { toolCalls ->
@@ -481,7 +503,7 @@ class ApiClient(
                 if (!explicitlyCompleted) {
                     error("Chat stream ended before an explicit provider completion status")
                 }
-                val calls = (callIds.keys + callNames.keys + callArgumentParts.keys).sorted().map { index ->
+                val calls = if (modelRequestedContinuation(finishReason)) emptyList() else (callIds.keys + callNames.keys + callArgumentParts.keys).sorted().map { index ->
                     ToolCall(
                         id = callIds[index]?.toString().orEmpty(),
                         name = callNames[index]?.toString().orEmpty(),
@@ -554,9 +576,12 @@ class ApiClient(
             val content = StringBuilder()
             val reasoning = StringBuilder()
             val calls = linkedMapOf<String, ToolCallAccumulator>()
+            val textParts = mutableMapOf<String, StringBuilder>()
+            val thoughtParts = mutableMapOf<String, StringBuilder>()
             val fallbackLines = mutableListOf<String>()
             var pendingEvent = ""
             var completed = false
+            var budgetLimited = false
             var streamError = ""
             while (!source.exhausted()) {
                 val line = source.readUtf8Line() ?: break
@@ -571,10 +596,12 @@ class ApiClient(
                         val eventName = pendingEvent
                         val parsed = parseResponsesStreamDelta(payload, eventName)
                         pendingEvent = ""
-                        val thoughtDelta = appendCompatibleStreamValue(reasoning, parsed.thought)
-                        if (thoughtDelta.isNotBlank()) onThoughtDelta(thoughtDelta)
-                        val textDelta = appendCompatibleStreamValue(content, parsed.text)
-                        if (textDelta.isNotBlank()) onTextDelta(textDelta)
+                        val thoughtDelta = appendProtocolText(thoughtParts.getOrPut(parsed.partKey) { StringBuilder() }, parsed.thought, parsed.snapshot)
+                        reasoning.append(thoughtDelta)
+                        if (thoughtDelta.isNotEmpty()) onThoughtDelta(thoughtDelta)
+                        val textDelta = appendProtocolText(textParts.getOrPut(parsed.partKey) { StringBuilder() }, parsed.text, parsed.snapshot)
+                        content.append(textDelta)
+                        if (textDelta.isNotEmpty()) onTextDelta(textDelta)
                         if (parsed.toolName.isNotBlank()) {
                             mergeResponsesTool(
                                 calls,
@@ -603,11 +630,18 @@ class ApiClient(
                                 }
                             }
                         }
-                        if (
+                        val terminalResponse = eventJson?.optJSONObject("response")
+                        val exhaustedBudget = terminalResponse?.optionalText("status") == "incomplete" &&
+                            terminalResponse.optJSONObject("incomplete_details")?.optionalText("reason") == "max_output_tokens"
+                        if ((eventType == "response.incomplete" || parsed.completed) && exhaustedBudget) {
+                            budgetLimited = true
+                            streamError = ""
+                        }
+                        if (!budgetLimited && (
                             eventType == "response.failed" || eventType == "response.incomplete" ||
                             eventType == "response.cancelled" || eventType == "response.canceled" ||
                             eventType == "error"
-                        ) {
+                        )) {
                             streamError = responsesFailureMessage(eventJson, eventType)
                         }
                     }
@@ -615,21 +649,22 @@ class ApiClient(
                 }
                 // Keep explicit response.status validation, but do not wait
                 // for a second transport-level completion after a terminal event.
-                if (completed || streamError.isNotBlank()) break
+                if (completed || budgetLimited || streamError.isNotBlank()) break
             }
             if (streamError.isNotBlank()) error(streamError)
             if (fallbackLines.isNotEmpty() && content.isEmpty() && reasoning.isEmpty() && calls.isEmpty()) {
-                mergeNonStreamingResponses(fallbackLines.joinToString("\n"), content, reasoning, calls)
+                val terminalReason = mergeNonStreamingResponses(fallbackLines.joinToString("\n"), content, reasoning, calls)
+                budgetLimited = terminalReason == "max_output_tokens"
                 if (reasoning.isNotEmpty()) onThoughtDelta(reasoning.toString())
                 if (content.isNotEmpty()) onTextDelta(content.toString())
-                completed = true
+                completed = !budgetLimited
             }
-            if (!completed) error("Responses stream ended before response.completed")
+            if (!completed && !budgetLimited) error("Responses stream ended before response.completed")
             return ChatResponse(
                 content = content.toString(),
                 reasoningContent = reasoning.toString(),
-                toolCalls = calls.values.map { it.toToolCall() }.filter { it.name.isNotBlank() },
-                finishReason = if (completed) "completed" else "",
+                toolCalls = if (budgetLimited) emptyList() else calls.values.map { it.toToolCall() }.filter { it.name.isNotBlank() },
+                finishReason = if (budgetLimited) "max_output_tokens" else "completed",
                 explicitEmptyResponse = completed && content.isBlank() && reasoning.isBlank() && calls.isEmpty(),
             )
         }
@@ -774,12 +809,15 @@ class ApiClient(
         content: StringBuilder,
         reasoning: StringBuilder,
         calls: MutableMap<String, ToolCallAccumulator>,
-    ) {
+    ): String {
         val root = JSONObject(payload)
         val status = root.optionalText("status").trim().lowercase()
         if (status.isBlank()) error("Responses JSON missing explicit response.status=completed")
-        if (status != "completed") error(responsesFailureMessage(root, status))
-        root.optionalText("output_text").takeIf(String::isNotBlank)?.let(content::append)
+        val budgetLimited = status == "incomplete" &&
+            root.optJSONObject("incomplete_details")?.optionalText("reason") == "max_output_tokens"
+        if (status != "completed" && !budgetLimited) error(responsesFailureMessage(root, status))
+        // output_text is an aggregate alias, not an additional message.
+        val aggregateText = root.optionalText("output_text")
         root.optJSONArray("output")?.let { output ->
             for (index in 0 until output.length()) {
                 val item = output.optJSONObject(index) ?: continue
@@ -798,11 +836,15 @@ class ApiClient(
                 }
             }
         }
+        if (content.isEmpty()) content.append(aggregateText)
+        return if (budgetLimited) "max_output_tokens" else "completed"
     }
 
     // ---- 智能档位映射（对齐 PC provider.ts intelligenceConfig / reasoningEffort / mappedNativeEffort） ----
 
     /** 档位 → (temperature, max_tokens, reasoning_effort) */
+    internal fun outputTokenBudget(tier: String): Int = intelligenceConfig(tier).second
+
     private fun intelligenceConfig(tier: String): Triple<Double, Int, String> = when (tier) {
         "low" -> Triple(0.3, 2048, "low")
         "high" -> Triple(0.8, 16384, "high")

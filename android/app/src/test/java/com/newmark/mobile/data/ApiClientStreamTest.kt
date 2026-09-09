@@ -5,6 +5,7 @@ import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.json.JSONObject
+import org.json.JSONArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -675,7 +676,7 @@ class ApiClientStreamTest {
     }
 
     @Test
-    fun responsesCompletedEventRejectsContradictoryEmbeddedStatusAndUsesIncompleteReason() = runBlocking {
+    fun responsesCompletedEventReportsBudgetExhaustionWithoutClaimingCompletion() = runBlocking {
         val server = MockWebServer()
         server.enqueue(
             MockResponse()
@@ -697,8 +698,8 @@ class ApiClientStreamTest {
                 messages = listOf(ChatMessage(role = "user", content = "hello")),
             )
 
-            assertTrue(result.isFailure)
-            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("max_output_tokens"))
+            assertEquals("max_output_tokens", result.getOrThrow().finishReason)
+            assertFalse(result.getOrThrow().explicitEmptyResponse)
         } finally {
             server.shutdown()
         }
@@ -888,10 +889,10 @@ class ApiClientStreamTest {
                     messages = listOf(ChatMessage(role = "user", content = "status-$status")),
                 )
 
-                assertTrue("status=$status must fail", result.isFailure)
                 if (status == "incomplete") {
-                    assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("max_output_tokens"))
-                }
+                    assertEquals("max_output_tokens", result.getOrThrow().finishReason)
+                    assertFalse(result.getOrThrow().explicitEmptyResponse)
+                } else assertTrue("status=$status must fail", result.isFailure)
                 if (status == null) {
                     assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("response.status=completed"))
                 }
@@ -980,5 +981,96 @@ class ApiClientStreamTest {
         } finally {
             server.shutdown()
         }
+    }
+
+    @Test
+    fun whitespaceAndRepeatedTokensSurviveResponsesDoneSnapshots() = runBlocking {
+        val server = MockWebServer()
+        val chunks = listOf("# Grothendieck", "\n\n", "## Definition", "\n", " ", " ", "x", "x", "\n", "```latex", "\n", "a + b", "\n", "```")
+        val answer = chunks.joinToString("")
+        fun event(type: String, field: String, text: String, part: Int = 0): String =
+            "data:" + JSONObject().put("type",type).put("output_index",part).put("content_index",0).put(field,text).toString() + "\n\n"
+        val body = chunks.joinToString("") { event("response.output_text.delta", "delta", it) } +
+            event("response.output_text.done", "text", answer) +
+            event("response.output_text.done", "text", answer) +
+            // A distinct output item may legitimately repeat exactly the same text.
+            event("response.output_text.delta", "delta", answer, 1) +
+            event("response.output_text.done", "text", answer, 1) +
+            "data:{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+        server.enqueue(MockResponse().addHeader("Content-Type","text/event-stream").setBody(body))
+        server.start()
+        try {
+            val observed = StringBuilder()
+            val response = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(baseUrl=server.url("/v1").toString(), apiKey="test", model="test", protocol="openai_responses"),
+                messages=listOf(ChatMessage(role="user",content="test")), onTextDelta={ observed.append(it) },
+            ).getOrThrow()
+            assertEquals(answer + answer, response.content)
+            assertEquals(response.content, observed.toString())
+            assertEquals(1, server.requestCount)
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun chatMessageSnapshotDoesNotReplayMarkdownAfterWhitespaceDeltas() = runBlocking {
+        val server = MockWebServer()
+        val chunks = listOf("# Title", "\n", "\n", "word", "word", " ", " ", "end")
+        val answer = chunks.joinToString("")
+        fun frame(kind: String, value: String, finish: String? = null): String = "data:" + JSONObject().put("choices",
+            JSONArray().put(JSONObject().put(kind,JSONObject().put("content",value)).put("finish_reason", finish ?: JSONObject.NULL))).toString() + "\n\n"
+        server.enqueue(MockResponse().addHeader("Content-Type","text/event-stream").setBody(
+            chunks.joinToString("") { frame("delta",it) } + frame("message",answer,"stop")))
+        server.start()
+        try {
+            val observed = StringBuilder()
+            val response = ApiClient(OkHttpClient()).chat(
+                config=ApiConfig(baseUrl=server.url("/v1").toString(),apiKey="test",model="test"),
+                messages=listOf(ChatMessage(role="user",content="test")),onTextDelta={ observed.append(it) },
+            ).getOrThrow()
+            assertEquals(answer,response.content)
+            assertEquals(answer,observed.toString())
+        } finally { server.shutdown() }
+    }
+
+    @Test
+    fun nonStreamingAggregateAliasDoesNotDuplicateStructuredBody() = runBlocking {
+        val server = MockWebServer()
+        val answer = "# Grothendieck\n\nDefinition\n\nConclusion"
+        val block = JSONObject().put("type", "output_text").put("text", answer)
+        val message = JSONObject().put("type", "message").put("content", JSONArray().put(block))
+        val payload = JSONObject().put("status", "completed").put("output_text", answer)
+            .put("output", JSONArray().put(message))
+        server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody(payload.toString()))
+        server.start()
+        try {
+            val observed=StringBuilder()
+            val response=ApiClient(OkHttpClient()).chat(
+                config=ApiConfig(baseUrl=server.url("/v1").toString(),apiKey="test",model="test",protocol="openai_responses"),
+                messages=listOf(ChatMessage(role="user",content="test")),onTextDelta={ observed.append(it) },
+            ).getOrThrow()
+            assertEquals(answer,response.content)
+            assertEquals(answer,observed.toString())
+        } finally { server.shutdown() }
+    }
+
+    @Test fun responsesBudgetExhaustionPreservesProgressWithoutExecutingPartialTools() = runBlocking {
+        val server = MockWebServer()
+        val events = listOf(
+            JSONObject().put("type","response.reasoning_summary_text.delta").put("delta","Plan ready"),
+            JSONObject().put("type","response.output_text.delta").put("delta","Partial draft"),
+            JSONObject().put("type","response.output_item.added").put("item",JSONObject().put("type","function_call").put("id","tool").put("call_id","call").put("name","terminal_exec").put("arguments","{")),
+            JSONObject().put("type","response.incomplete").put("response",JSONObject().put("status","incomplete").put("incomplete_details",JSONObject().put("reason","max_output_tokens")))
+        )
+        server.enqueue(MockResponse().addHeader("Content-Type","text/event-stream").setBody(events.joinToString("") { "data:$it\n\n" }))
+        server.start()
+        try {
+            val result=ApiClient(OkHttpClient()).chat(ApiConfig(server.url("/v1").toString(),"fixture","fixture",protocol="openai_responses"),listOf(ChatMessage(role="user",content="test"))).getOrThrow()
+            assertEquals("max_output_tokens",result.finishReason)
+            assertEquals("Partial draft",result.content)
+            assertEquals("Plan ready",result.reasoningContent)
+            assertTrue(result.toolCalls.isEmpty())
+            assertFalse(result.explicitEmptyResponse)
+            assertTrue(isUsableChatResponse(result))
+        } finally { server.shutdown() }
     }
 }

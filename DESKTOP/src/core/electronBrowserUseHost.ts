@@ -1,3 +1,7 @@
+import { BrowserWindow, nativeImage } from 'electron';
+import { readBrowserPdf } from './browserPdf';
+import { readFile, stat } from 'fs/promises';
+import { fileURLToPath } from 'url';
 import type { Event as ElectronEvent, KeyboardInputEvent, Session, WebContents } from 'electron';
 import { BrowserUseEffects, BrowserUseScope } from './browserUse';
 import { browserUseClickScript, BrowserUseHostPage } from './browserUsePageAdapter';
@@ -7,16 +11,21 @@ interface PageState {
   generation: number;
   guardStack: BrowserUseEffects[];
   actionTail: Promise<void>;
+  viewport?: { width: number; height: number };
+  surface?: { width: number; height: number };
+  viewportScale?: number;
+  pdfUrl?: string;
 }
 
 export interface ElectronBrowserUseHostOptions {
+  resizeContents?(contents: WebContents, viewport: { width: number; height: number }): Promise<void>;
   resolveContents(scope: BrowserUseScope, boundContentsId?: number): Promise<WebContents>;
   openExternal?(url: string): void | Promise<void>;
   guardSettleMs?: number;
   releaseContents?(scope: BrowserUseScope, contents: WebContents): void;
 }
 
-const SAFE_NAVIGATION = /^(?:https?:|about:blank|newmark-preview:)/i;
+const SAFE_NAVIGATION = /^(?:https?:|file:|about:blank|newmark-preview:)/i;
 const BROWSER_USE_WORLD_ID = 999;
 
 /**
@@ -42,7 +51,7 @@ export class ElectronBrowserUseHost {
 
     contents.on('did-start-navigation', (details, _url, _isInPlace, isMainFrame) => {
       const mainFrame = typeof details?.isMainFrame === 'boolean' ? details.isMainFrame : isMainFrame;
-      if (mainFrame !== false) state.generation += 1;
+      if (mainFrame !== false) { state.generation += 1; state.pdfUrl = undefined; }
     });
     contents.on('render-process-gone', () => { state.generation += 1; });
     contents.once('destroyed', () => {
@@ -62,7 +71,8 @@ export class ElectronBrowserUseHost {
       return { action: 'deny' };
     });
     contents.on('will-navigate', (event, url) => {
-      if (SAFE_NAVIGATION.test(url)) return;
+      const localFromWeb = /^file:/i.test(url) && !/^file:/i.test(contents.getURL());
+      if (SAFE_NAVIGATION.test(url) && !localFromWeb) return;
       const effects = this.activeEffects(state);
       if (effects) effects.navigationBlocked = true;
       event.preventDefault();
@@ -104,11 +114,12 @@ export class ElectronBrowserUseHost {
   private page(contents: WebContents): BrowserUseHostPage {
     const state = this.pages.get(contents.id)!;
     return {
+      pdfTarget: () => state.pdfUrl,
       identity: async signal => {
         throwIfAborted(signal);
         return {
           pageToken: `${contents.id}:${contents.getProcessId()}:${state.generation}`,
-          url: contents.getURL(),
+          url: state.pdfUrl || contents.getURL(),
           title: contents.getTitle(),
         };
       },
@@ -125,7 +136,8 @@ export class ElectronBrowserUseHost {
         contents.hostWebContents?.focus();
         contents.focus();
         await abortableDelay(10, signal);
-        const point = { x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)) };
+        const scale = state.viewportScale || 1;
+        const point = { x: Math.max(0, Math.round(x * scale)), y: Math.max(0, Math.round(y * scale)) };
         contents.sendInputEvent({ type: 'mouseMove', ...point });
         await abortableDelay(10, signal);
         contents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, ...point });
@@ -159,23 +171,82 @@ export class ElectronBrowserUseHost {
         contents.sendInputEvent({ type: 'keyUp', keyCode: input.keyCode, modifiers: input.modifiers });
       },
       navigate: async (url: string, signal?: AbortSignal) => {
-        await raceWithAbort(contents.loadURL(url), signal, () => {
-          if (!contents.isDestroyed()) contents.stop();
-        });
+        try {
+          await raceWithAbort(contents.loadURL(url), signal, () => {
+            if (!contents.isDestroyed()) contents.stop();
+          });
+        } catch (error) {
+          if (signal?.aborted || !state.pdfUrl) throw error;
+          // Chromium reports ERR_ABORTED for attachment PDFs; their captured URL is read as binary.
+        }
       },
       waitForReady: async (signal?: AbortSignal) => {
         await abortableDelay(20, signal);
         await waitForPageReady(contents, 15_000, signal);
       },
       waitForStable: async (maxWaitMs: number, signal?: AbortSignal) => await waitForDomStable(contents, maxWaitMs, signal),
+      readPdf: async (maxChars, forceVision, signal, pdfPage) => {
+        const url = state.pdfUrl || contents.getURL();
+        let bytes: Uint8Array;
+        if (url.startsWith('file:')) {
+          const file = fileURLToPath(new URL(url));
+          if ((await stat(file)).size > 250 * 1024 * 1024) throw new Error('PDF too large');
+          bytes = new Uint8Array(await readFile(file));
+        } else {
+          const response = await contents.session.fetch(url, { signal });
+          if (!response.ok) throw new Error('PDF HTTP ' + response.status);
+          const reader = response.body?.getReader();
+          if (!reader) throw new Error('PDF response is empty');
+          const chunks: Uint8Array[] = []; let length = 0;
+          try {
+            for (;;) {
+              const next = await reader.read(); if (next.done) break;
+              length += next.value.length;
+              if (length > 250 * 1024 * 1024) throw new Error('PDF too large');
+              chunks.push(next.value);
+            }
+          } finally { await reader.cancel(); }
+          bytes = new Uint8Array(Buffer.concat(chunks));
+        }
+        return await readBrowserPdf(bytes, maxChars, forceVision, signal, pdfPage);
+      },
+      setViewport: async (viewport, signal) => {
+        throwIfAborted(signal);
+        if (state.viewport?.width === viewport.width && state.viewport?.height === viewport.height) return;
+        if (this.options.resizeContents) await this.options.resizeContents(contents, viewport);
+        else {
+          const window = BrowserWindow.fromWebContents(contents);
+          if (!window) throw new Error('Browser viewport host unavailable');
+          window.setContentSize(viewport.width, viewport.height);
+        }
+        contents.enableDeviceEmulation({ screenPosition: 'desktop', viewPosition: { x: 0, y: 0 }, screenSize: viewport, viewSize: viewport, deviceScaleFactor: 1, scale: 1 });
+        state.viewportScale = 1;
+        state.viewport = { ...viewport };
+        state.generation += 1;
+        await abortableDelay(100, signal);
+      },
       captureVisibleScreenshot: async (signal?: AbortSignal) => {
         throwIfAborted(signal);
-        const captured = await raceWithAbort(contents.capturePage(), signal);
+        const scale = state.viewportScale || 1;
+        const rect = state.viewport ? { x: 0, y: 0, width: Math.floor(state.viewport.width * scale), height: Math.floor(state.viewport.height * scale) } : undefined;
+        const captured = await raceWithAbort(contents.capturePage(rect, { stayHidden: true }), signal);
         const size = captured.getSize();
-        const normalized = size.width > 1200
-          ? captured.resize({ width: 1200, quality: 'good' })
-          : captured;
-        const jpeg = normalized.toJPEG(82);
+        const targetWidth = state.viewport ? Math.min(1200, state.viewport.width) : Math.min(1200, size.width);
+        const normalized = state.viewport
+          ? captured.resize({ width: targetWidth, height: Math.round(targetWidth * state.viewport.height / state.viewport.width), quality: 'good' })
+          : size.width > 1200 ? captured.resize({ width: 1200, quality: 'good' }) : captured;
+        // Embedded guests may return transparent page backgrounds. JPEG must retain readable dark text.
+        const pixels = normalized.toBitmap();
+        for (let offset = 0; offset < pixels.length; offset += 4) {
+          const white = 255 - pixels[offset + 3];
+          if (white) {
+            pixels[offset] = Math.min(255, pixels[offset] + white);
+            pixels[offset + 1] = Math.min(255, pixels[offset + 1] + white);
+            pixels[offset + 2] = Math.min(255, pixels[offset + 2] + white);
+            pixels[offset + 3] = 255;
+          }
+        }
+        const jpeg = nativeImage.createFromBitmap(pixels, normalized.getSize()).toJPEG(82);
         if (!jpeg.length || jpeg.length > 1_400_000) return '';
         return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
       },
@@ -237,7 +308,12 @@ export class ElectronBrowserUseHost {
   private installDownloadGuard(browserSession: Session): void {
     if (this.downloadHandlers.has(browserSession)) return;
     const handler = (event: ElectronEvent, _item: Electron.DownloadItem, contents: WebContents) => {
-      const effects = this.activeEffects(this.pages.get(contents.id));
+      const state = this.pages.get(contents.id);
+      const effects = this.activeEffects(state);
+      if (state && _item.getMimeType().split(';')[0] === 'application/pdf') {
+        state.pdfUrl = _item.getURL();
+        state.generation += 1;
+      }
       if (effects) effects.downloadBlocked = true;
       if (!effects && !this.isRuntimeBound(contents.id)) return;
       event.preventDefault();

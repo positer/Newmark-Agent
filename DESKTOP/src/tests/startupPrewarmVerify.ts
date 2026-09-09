@@ -445,7 +445,7 @@ function verifyDesktopContracts(): void {
     && uiHtml.includes('api.getState(startupPrewarmRequired ? undefined : activeConversationId())'), 'covered startup UI waits for the attempt Agent promise, then hydrates from its local snapshot without starting a runtime worker');
   ok(mainTs.indexOf('promoteStartupUi') < mainTs.indexOf('showStartupUpdatePrompt'), 'available-update prompt is scheduled only after the same-window main UI promotion path exists');
   const ensureBrowserStart = mainTs.indexOf('async function ensureBrowserWebContents');
-  const ensureBrowserEnd = mainTs.indexOf('function ensureElectronBrowserUseHost', ensureBrowserStart);
+  const ensureBrowserEnd = mainTs.indexOf('async function ensureBackgroundBrowserWebContents', ensureBrowserStart);
   const ensureBrowserSource = ensureBrowserStart >= 0 && ensureBrowserEnd > ensureBrowserStart
     ? mainTs.slice(ensureBrowserStart, ensureBrowserEnd)
     : '';
@@ -459,10 +459,11 @@ function verifyDesktopContracts(): void {
   const ensureBackgroundBrowserSource = ensureBackgroundBrowserStart >= 0 && ensureBackgroundBrowserEnd > ensureBackgroundBrowserStart
     ? mainTs.slice(ensureBackgroundBrowserStart, ensureBackgroundBrowserEnd)
     : '';
-  ok(ensureBackgroundBrowserSource.includes('new WebContentsView({')
+  ok(ensureBackgroundBrowserSource.includes('new BrowserWindow({')
     && ensureBackgroundBrowserSource.includes('backgroundBrowserViewsByRuntime')
     && !ensureBackgroundBrowserSource.includes("browser:ensureGuest")
-    && !ensureBackgroundBrowserSource.includes('BrowserWindow'), 'visible=false Browser-Use stays on a main-process-only background WebContents and never creates or binds the right-sidebar guest');
+    && ensureBackgroundBrowserSource.includes('show: false, skipTaskbar: true, focusable: false')
+    && !ensureBackgroundBrowserSource.includes('.show('), 'visible=false Browser-Use stays on a hidden non-focusable main-process background window and never creates or binds the right-sidebar guest');
   const coldBrowserUseIndex = packagedDev009Smoke.indexOf("action_id: 'dev009-cold-navigate'");
   const firstVisibleBrowserIndex = packagedDev009Smoke.indexOf("window.switchRightTab('browser')", coldBrowserUseIndex);
   ok(coldBrowserUseIndex >= 0

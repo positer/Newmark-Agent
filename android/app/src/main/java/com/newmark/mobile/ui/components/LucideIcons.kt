@@ -307,4 +307,108 @@ object LucideIcons {
             "M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z",
         )
     }
+    // BEGIN generated navigation icons (lucide-static, ISC)
+    val Monitor: ImageVector by lazy {
+        icon(
+            "monitor",
+            "M4 3H20a2 2 0 0 1 2 2V15a2 2 0 0 1 -2 2H4a2 2 0 0 1 -2 -2V5a2 2 0 0 1 2 -2z",
+            "M8 21L16 21",
+            "M12 17L12 21",
+        )
+    }
+
+    val Laptop: ImageVector by lazy {
+        icon(
+            "laptop",
+            "M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z",
+            "M20.054 15.987H3.946",
+        )
+    }
+
+    val Menu: ImageVector by lazy {
+        icon(
+            "menu",
+            "M4 5h16",
+            "M4 12h16",
+            "M4 19h16",
+        )
+    }
+
+    val ChevronDown: ImageVector by lazy {
+        icon(
+            "chevron-down",
+            "m6 9 6 6 6-6",
+        )
+    }
+
+    val ChevronUp: ImageVector by lazy {
+        icon(
+            "chevron-up",
+            "m18 15-6-6-6 6",
+        )
+    }
+
+    val Play: ImageVector by lazy {
+        icon(
+            "play",
+            "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z",
+        )
+    }
+
+    val Pause: ImageVector by lazy {
+        icon(
+            "pause",
+            "M15 3H18a1 1 0 0 1 1 1V20a1 1 0 0 1 -1 1H15a1 1 0 0 1 -1 -1V4a1 1 0 0 1 1 -1z",
+            "M6 3H9a1 1 0 0 1 1 1V20a1 1 0 0 1 -1 1H6a1 1 0 0 1 -1 -1V4a1 1 0 0 1 1 -1z",
+        )
+    }
+
+    val Upload: ImageVector by lazy {
+        icon(
+            "upload",
+            "M12 3v12",
+            "m17 8-5-5-5 5",
+            "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4",
+        )
+    }
+
+    val ScanLine: ImageVector by lazy {
+        icon(
+            "scan-line",
+            "M3 7V5a2 2 0 0 1 2-2h2",
+            "M17 3h2a2 2 0 0 1 2 2v2",
+            "M21 17v2a2 2 0 0 1-2 2h-2",
+            "M7 21H5a2 2 0 0 1-2-2v-2",
+            "M7 12h10",
+        )
+    }
+
+    val Image: ImageVector by lazy {
+        icon(
+            "image",
+            "M5 3H19a2 2 0 0 1 2 2V19a2 2 0 0 1 -2 2H5a2 2 0 0 1 -2 -2V5a2 2 0 0 1 2 -2z",
+            "M7 9a2 2 0 1 0 4 0a2 2 0 1 0 -4 0z",
+            "m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21",
+        )
+    }
+
+    val Trash2: ImageVector by lazy {
+        icon(
+            "trash-2",
+            "M10 11v6",
+            "M14 11v6",
+            "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6",
+            "M3 6h18",
+            "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+        )
+    }
+
+    val Terminal: ImageVector by lazy {
+        icon(
+            "terminal",
+            "M12 19h8",
+            "m4 17 6-6-6-6",
+        )
+    }
+    // END generated navigation icons
 }

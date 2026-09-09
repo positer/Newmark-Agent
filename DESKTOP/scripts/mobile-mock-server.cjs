@@ -640,6 +640,18 @@ const server = http.createServer(async (req, res) => {
       conversationId: String(input.conversationId || conversationId),
     };
     if (targetKind(target) !== 'primary') return writeJson(res, 409, { error: 'Fixture sends require the primary target' });
+    // The hosted PC /send path owns Next queueing. Mobile no longer needs a
+    // separate queue_enqueue HTTP action for an ordinary running-run send.
+    if (input.inputMode === 'next' && (liveState?.status === 'running' || flowRunning || queuePaused)) {
+      const id = String(input.clientMessageId || `stress-next-${Date.now()}`);
+      const text = String(input.message?.text ?? input.message ?? '');
+      if (!queueItems.some(item => item.id === id)) {
+        queueItems = queueItems.concat({ id, text, queueMode: 'followUp', requestedMode: String(input.requestedMode || 'build'), createdAt: new Date().toISOString() });
+        metrics.queueActions += 1;
+        metrics.uiActions.push({ ...target, action: 'queue_enqueue', id, text, source: 'send', at: new Date().toISOString() });
+      }
+      return writeJson(res, 200, { ok: true, accepted: true, conversationId, queueItems, queuePaused, queued: { steering: [], followUp: queueItems.map(item => item.text) }, runtime: conversationUiSnapshot().runtime });
+    }
     messages.push({ messageId: `mobile-user-${Date.now()}`, role: 'user', content: String(input.message || ''), timestamp: new Date().toISOString(), runId: '' });
     metrics.bursts += 1;
     await emitRun(12, 4);

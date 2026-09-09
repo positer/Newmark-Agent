@@ -1961,6 +1961,7 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
     actorId: agent.runtimeActorId,
     workspaceId: terminalTakeoverWorkspaceId(wsDir),
     backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
+    inspectBrowserImage: name === 'browser_use' ? (dataUrl, prompt) => agent.inspectBrowserImage(dataUrl, prompt, signal) : undefined,
     allowEphemeralVisionImage: (name === 'screen_capture' || name === 'computer_use' || name === 'browser_use' || name === 'pdf_read' || name === 'ocr_read')
 ,
     signal,

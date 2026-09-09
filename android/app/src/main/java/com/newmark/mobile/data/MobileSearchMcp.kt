@@ -61,6 +61,8 @@ internal data class MobileSearchMcpPoolOutcome(
 )
 
 internal val BUILT_IN_SEARCH_MCP_NAMES: List<String> = listOf(
+    "Exa Search MCP",
+    "You.com Free Search MCP",
     "Wuxing Search MCP",
     "web-search-api",
     "miyami-websearch-mcp",
@@ -72,12 +74,24 @@ internal val BUILT_IN_SEARCH_MCP_NAMES: List<String> = listOf(
     "Free MCP Web Search Server",
 )
 
-private fun builtInSearchMcpNodes(): List<MobileSearchMcpNode> = listOf(
+internal fun builtInSearchMcpNodes(): List<MobileSearchMcpNode> = listOf(
+    MobileSearchMcpNode(
+        id = "exa-search-mcp", name = "Exa Search MCP", priority = 10,
+        transport = MobileSearchMcpTransport.STREAMABLE_HTTP,
+        url = "https://mcp.exa.ai/mcp?tools=web_search_exa",
+        toolName = "web_search_exa", queryArgument = "query", timeoutMs = 15_000L,
+    ),
+    MobileSearchMcpNode(
+        id = "you-search-mcp", name = "You.com Free Search MCP", priority = 20,
+        transport = MobileSearchMcpTransport.STREAMABLE_HTTP,
+        url = "https://api.you.com/mcp?profile=free",
+        toolName = "you-search", queryArgument = "query", timeoutMs = 8_000L,
+    ),
     MobileSearchMcpNode(
         id = "desktop-configured-search-mcp-pool",
         name = "Desktop configured search MCP pool",
         enabled = true,
-        priority = 0,
+        priority = 100,
         order = 0,
         transport = MobileSearchMcpTransport.DESKTOP_BRIDGE,
     ),
@@ -225,9 +239,9 @@ private data class SearchMcpTool(
 
 private val SEARCH_QUERY_KEYS = listOf("query", "q", "search_query", "searchQuery", "text", "keyword", "keywords")
 private val SAFE_SEARCH_ARGUMENT_KEYS = (SEARCH_QUERY_KEYS + listOf(
-    "count", "limit", "max_results", "maxResults", "page", "offset",
+    "count", "limit", "max_results", "maxResults", "numResults", "page", "offset",
     "language", "locale", "region", "country", "freshness", "time_range",
-    "safe_search", "safesearch", "categories",
+    "safe_search", "safesearch", "categories", "extraction", "knowledge", "extraction_source",
 )).toSet()
 private val DANGEROUS_SEARCH_ARGUMENT_KEY = Regex(
     "(?i)(?:^|_)(?:command|cmd|shell|path|file|write|delete|execute|script|code|cwd|env|headers|body|method|tool|action)(?:$|_)",

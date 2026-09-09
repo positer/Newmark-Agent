@@ -75,3 +75,12 @@ DESKTOP/Work/
 _attic/
 classes.jar
 Electron/
+
+# Local release artifacts and temporary QA profiles
+/APK/
+/DESKTOP/.electron-dev-user/
+/DESKTOP/.newmark-proxy-test/
+/DESKTOP/.webcatch-test/
+/DESKTOP/liquid-smoke-*.png
+/android/isolated-release-*/
+/test-tmp-*/

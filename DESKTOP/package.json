@@ -1,7 +1,7 @@
 {
   "name": "newmark-agent",
   "productName": "Newmark Agent",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
   "repository": {
@@ -24,6 +24,7 @@
     "config.example.json"
   ],
   "scripts": {
+    "test:ui-consistency": "node scripts/sync-mobile-navigation-icons.cjs --check && node scripts/test-ui-consistency.cjs",
     "test:subagent-continuity": "npm run build && npm run test:subagent-continuity:built",
     "test:subagent-continuity:built": "node dist/tests/subagentMailboxConcurrencyVerify.js && node dist/tests/subagentCommunicationVerify.js && node dist/tests/subagentUltraDelegationVerify.js && node scripts/test-subagent-cache-continuity.cjs && node scripts/test-subagent-settlement-receipts.cjs && node scripts/subagent-streaming-relay-stress.cjs",
     "clean": "tsc --build --clean && node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",

@@ -83,7 +83,7 @@ class InputComposerAndModelMenuContractTest {
         val runningSend = source.substringAfter("SubmitButtonMode.RunningSend ->")
             .substringBefore("SubmitButtonMode.IdleSend ->")
         assertTrue(runningSend.contains("holdMillis = DirectGuideHoldMillis"))
-        assertTrue(runningSend.contains("imageVector = Icons.Filled.KeyboardArrowUp"))
+        assertTrue(runningSend.contains("imageVector = LucideIcons.ChevronUp"))
         assertTrue(runningSend.contains("if (submitGuide) onGuide()"))
         assertTrue(runningSend.contains("onClick = onClick"))
 

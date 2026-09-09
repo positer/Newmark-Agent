@@ -11,7 +11,7 @@ import java.net.URI
 import java.net.URLEncoder
 
 /**
- * The mobile browser accepts only ordinary web origins.  Keeping this policy
+ * The mobile browser accepts web origins and explicit local file/content URLs.  Keeping this policy
  * outside the WebView makes links, address-bar input, and future local
  * `browser_use` calls share the same boundary.
  */
@@ -24,7 +24,8 @@ object BrowserUrlPolicy {
         val trimmed = raw.trim()
         if (trimmed.isBlank()) return null
         if (trimmed.any { it.isISOControl() }) return null
-        if (trimmed.contains("://")) return normalizeNavigation(trimmed)
+        if (trimmed.startsWith("/")) return URI("file", "", trimmed, null).toASCIIString()
+        if (trimmed.contains("://") || trimmed.startsWith("file:", true)) return normalizeNavigation(trimmed)
         if (hostLike.matches(trimmed)) {
             val local = trimmed.startsWith("localhost", true) || trimmed.startsWith("127.") || trimmed.startsWith("[::1]")
             return normalizeNavigation("${if (local) "http" else "https"}://$trimmed")
@@ -38,12 +39,26 @@ object BrowserUrlPolicy {
     fun normalizeNavigation(raw: String): String? {
         val trimmed = raw.trim()
         if (trimmed.isBlank() || trimmed.any { it.isISOControl() || it.isWhitespace() }) return null
-        val candidate = trimmed
+        val candidate = trimmed.replace(Regex("^files://", RegexOption.IGNORE_CASE), "file://")
         val uri = runCatching { URI(candidate) }.getOrNull() ?: return null
         val scheme = uri.scheme?.lowercase() ?: return null
+        if (scheme == "file") {
+            if (uri.isOpaque || (!uri.host.isNullOrBlank() && uri.host != "localhost") || uri.path?.startsWith("/") != true) return null
+            return uri.toASCIIString()
+        }
+        if (scheme == "content") return if (!uri.authority.isNullOrBlank()) uri.toASCIIString() else null
         if (scheme !in setOf("http", "https") || uri.host.isNullOrBlank() || uri.userInfo != null) return null
         if (uri.port !in -1..65535) return null
         return uri.toASCIIString()
+    }
+
+    /** Web-origin redirects/popups cannot promote themselves into local-file access. */
+    fun normalizeFromPage(current: String?, target: String): String? {
+        val normalized = normalizeNavigation(target) ?: return null
+        val sourceScheme = runCatching { URI(current.orEmpty()).scheme?.lowercase() }.getOrNull()
+        val targetScheme = URI(normalized).scheme.lowercase()
+        if (targetScheme in setOf("file", "content") && sourceScheme !in setOf("file", "content")) return null
+        return normalized
     }
 
     fun normalize(raw: String): String? = resolveInput(raw)
@@ -83,6 +98,26 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
     var publicText by mutableStateOf("")
         private set
 
+    private var downloadedPdfUrl: String? = null
+    val isPdfDocument: Boolean get() = downloadedPdfUrl == address || address.substringBefore('#').substringBefore('?').endsWith(".pdf", true)
+    fun onPdfDocument(url: String) {
+        downloadedPdfUrl = url
+        address = url
+        publicText = ""
+        isLoading = false
+        progress = 100
+        error = ""
+    }
+
+    var viewport by mutableStateOf<Pair<Int, Int>?>(null)
+        private set
+    var viewportHandler: (suspend (Pair<Int, Int>) -> JSONObject)? = null
+    private var actualViewport = JSONObject()
+
+    var forceVisual = false
+        private set
+    var recognitionPage: Int? = null
+        private set
     private var recognition: (suspend (String, Int) -> JSONObject)? = null
 
     fun bindRecognition(handler: suspend (String, Int) -> JSONObject) {
@@ -105,7 +140,7 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
     fun navigate(raw: String): Boolean {
         val normalized = BrowserUrlPolicy.resolveInput(raw)
         if (normalized == null) {
-            error = "仅支持带有效主机名的 http:// 或 https:// 网页地址"
+            error = "请输入有效网页地址、本地绝对路径或 file:// / content:// 地址"
             isLoading = false
             return false
         }
@@ -167,7 +202,27 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
         publicText = value.orEmpty().replace(Regex("\\s+"), " ").trim().take(48_000)
     }
 
-    suspend fun executeTool(args: JSONObject): ToolResult = when (val action = args.optString("action").trim().lowercase()) {
+    suspend fun executeTool(args: JSONObject): ToolResult {
+        val action = args.optString("action").trim().lowercase()
+        if (args.has("visual_mode") && args.optString("visual_mode") !in setOf("auto", "vision")) return ToolResult.err("invalid_visual_mode")
+        if (args.has("viewport")) {
+            val requested = args.optJSONObject("viewport") ?: return ToolResult.err("invalid_viewport")
+            val width = requested.optDouble("width", Double.NaN)
+            val height = requested.optDouble("height", Double.NaN)
+            if (action !in setOf("observe", "navigate") || width !in 320.0..2560.0 || height !in 240.0..2560.0 ||
+                width % 1 != 0.0 || height % 1 != 0.0 || width * height > 4_000_000) return ToolResult.err("invalid_viewport")
+            val apply = viewportHandler ?: return ToolResult.err("WebView viewport host unavailable")
+            val size = width.toInt() to height.toInt()
+            actualViewport = try { apply(size) } catch (error: kotlinx.coroutines.CancellationException) { throw error } catch (error: Exception) { return ToolResult.err(error.message ?: "Viewport failed") }
+            viewport = size
+        }
+        if (args.has("pdf_page")) {
+            val page = args.optDouble("pdf_page", Double.NaN)
+            if (page !in 1.0..100000.0 || page % 1 != 0.0 || action !in setOf("observe", "extract")) return ToolResult.err("invalid_pdf_page")
+        }
+        forceVisual = args.optString("visual_mode") == "vision"
+        recognitionPage = if (args.has("pdf_page")) args.optInt("pdf_page") else null
+        return when (action) {
         "navigate" -> if (navigate(args.optString("url"))) ToolResult.ok(receipt(action)) else ToolResult.err(error)
         "back" -> { back(); ToolResult.ok(receipt(action)) }
         "forward" -> { forward(); ToolResult.ok(receipt(action)) }
@@ -185,18 +240,24 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
             val maxChars = args.optInt("max_chars", 12_000).coerceIn(256, 48_000)
             val text = publicText.take(maxChars)
             val readable = text.count { it.isLetterOrDigit() }
-            if (readable >= 20) {
+            if (readable >= 20 && !isPdfDocument && args.optString("visual_mode", "auto") != "vision") {
                 ToolResult.ok(receipt(action, text, "dom_text"))
             } else {
+                val observedCommand = command.id
+                val observedAddress = address
                 val fallback = recognition?.invoke(address, maxChars)
                     ?: JSONObject()
                         .put("ok", false)
                         .put("error", "WebView 尚未挂载，无法获取视觉回退")
+                if (command.id != observedCommand || address != observedAddress) return ToolResult.err("Page changed during recognition; observe again")
+                fallback.put("viewport", actualViewport)
                 fallback.put("action", action).put("url", address).put("title", title)
-                ToolResult.ok(fallback.toString(2))
+                if (fallback.optBoolean("ok")) ToolResult.ok(fallback.toString(2)) else ToolResult.err(fallback.toString(2))
             }
         }
         else -> ToolResult.err("browser_use 不支持动作：$action")
+    }
+
     }
 
     private fun receipt(action: String, text: String = "", source: String = ""): String = JSONObject()
@@ -204,6 +265,7 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
         .put("action", action)
         .put("url", address)
         .put("title", title)
+        .put("viewport", actualViewport)
         .put("loading", isLoading)
         .put("progress", progress)
         .put("text", text)

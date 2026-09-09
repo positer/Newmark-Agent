@@ -1,8 +1,68 @@
 # Newmark Agent
 
-## 0.6.1 Windows MSI
+## dev-0.6.2 移动端输出预算续写
 
-最新版 Windows x64 MSI 已完成全量 Desktop release 回归、打包和 UAC 提权后的静默安装。安装版本与主程序文件版本均为 `0.6.1.0`；产物为 `release/Newmark-Agent-0.6.1-x64.msi`，SHA-256 为 `BC491848286DB2C8ED5162CF9C070E66C3358B65C8BB01BB96FBD0AE32D7CBBF`。构建、PowerShell 参数格式和安装证据见 [本轮记录](archive/20260907-061-msi-install/REPORT.md)。
+修复本地 Agent 在标题已完成后因 `max_output_tokens` 直接失败的问题：供应商明确报告预算耗尽时保留进度、提高预算并有限次续写，截断工具参数不执行；断网、取消及未知不完整状态仍分别处理。见 [记录](archive/20260909-mobile-output-budget/REPORT.md)。
+
+## dev-0.6.2 双端推理模型标题预算
+
+PC 与 Android 标题总结保留当前模型及思考档位，使用该档位的正常输出预算，避免短标题上限挤占模型生成正文前所需的思考空间。移动端图片文字退路继续保留。见 [验证记录](archive/20260909-title-reasoning-budget/REPORT.md)。
+
+## dev-0.6.2 移动端整篇回复重复修复
+
+移动端按协议区分流式增量与完整回复快照，保留独立换行、空格和合法重复字词；Responses 的完成快照按消息片段核对，非流式聚合正文与结构化正文只取一份。见 [回归记录](archive/20260909-mobile-duplicate-response/REPORT.md)。
+
+## dev-0.6.2 移动端运行彩边
+
+本地与远程对话胶囊采用与 PC 一致的黑白动态运行边框：3 秒连续渐变，任务结束后消失，玻璃抬起和覆盖期间避让。后台运行的本地对话也独立显示运行状态。验证记录见 [报告](archive/20260909-mobile-runtime-border/REPORT.md)。
+
+## dev-0.6.2 免费搜索服务更新
+
+PC 与 Android 默认搜索组更新为 Exa 官方免密钥搜索优先、You.com 官方免费搜索备用。移动端可以直接连接两项 HTTP MCP，无需配对 PC；PC 远程 MCP 复用网页工具的代理设置。旧抓取服务保留为可选配置，Bing 与 DuckDuckGo 仍承担最终退路。免费服务存在额度和网络限制；调研、双端真实搜索及打包记录见 [报告](archive/20260909-search-refresh/REPORT.md)。
+
+## dev-0.6.2 移动端带图交互与公式修复
+
+移动端将对话保存和图片缩略图解码移出主线程，连续操作合并待保存状态，并保留标题提交的持久化与取消校验。本地、远程对话胶囊长按弹出菜单时提供系统触感反馈。Markdown 支持紧接正文的多行块公式，并使用离线原生引擎排版行内公式、上下标和分段大括号；解析失败保留可读退路，代码示例保持原文。验证范围及交付记录见 [报告](archive/20260909-mobile-image-navigation/REPORT.md)。
+
+## dev-0.6.2 图片首轮标题退路
+
+移动端首轮带图时，标题总结失败会改用用户文字和图片数量进行纯文字分析，不发送图片数据。该重试仍失败时保存中性标题“图片内容分析”，继续正式带图请求；用户取消、对话状态失效和保存失败仍遵循原有启动门禁。见 [验证记录](archive/20260909-image-title-fallback/REPORT.md)。
+
+## dev-0.6.2 代码块复制与双端视觉复查
+
+PC 与 Android 的 Markdown 围栏代码块均提供独立复制按钮，仅复制对应代码原文；代码卡片为左右对话时间线留出间距，PC 横向滚动代码时保留可见的复制工具栏。PC 窄窗口浏览器工具栏和上下文弹窗边界同步修正。双主题、移动端横竖屏截图、剪贴板测试及压力测试的实际结果见 [本轮报告](archive/20260908-full-visual-stress/REPORT.md)。
+
+移动端 Goal 与队列操作按钮使用静态图标，取消按钮玻璃边框、按压缩放、位移、底色和涟漪，仅执行点击操作。
+
+## dev-0.6.2 Browser-Use 视觉协作与 PDF
+
+移动端修复 PC 合并流式片段与历史快照重叠导致的过程回复重复，按原片段 ID 合并。
+
+PC 与 Android 的 `browser_use` 按 DOM/PDF 二进制文本 → 已配置视觉模型 → 本地 OCR 的顺序读取页面；文本足够时不调用视觉模型。`visual_mode: "vision"` 可显式请求视觉协作，`viewport: {"width": 390, "height": 844}` 可设置会话内浏览器 CSS 画幅，`pdf_page` 可选择 PDF 页码。网页 PDF 按二进制解析，扫描页先渲染后识别；不把 PDF 阅读器工具栏当作正文。检查范围和交付记录见 [报告](archive/20260908-browser-vision-viewport/REPORT.md)。
+
+## dev-0.6.2 内置浏览器本地 HTML
+
+Android 与 PC 内置浏览器支持本地绝对路径、`file://`（兼容 `files://` 输入），本地 HTML 的相对 CSS、JavaScript 和页面链接正常加载。Android 同时接受有读取授权的 `content://` 文档地址；文件能否读取仍遵循系统权限。网页不能通过跳转或弹窗提升为本地文件访问。验证与交付记录见 [报告](archive/20260908-local-html-browser/REPORT.md)。
+
+## dev-0.6.2 全界面主题与玻璃协调
+
+两端统一状态语义色、Lucide 导航和开关反馈，Memory Lab 图谱随亮暗主题调整。PC 修复快速重开弹窗被旧退出动画误关的问题，空白浏览器画布跟随应用主题。已完成 72 个 PC 与 54 个 Android 双主题截图场景及玻璃手势回归；[检查报告与验证边界](archive/20260908-dev-0.6.2-full-visual/REPORT.md)、[原始截图图册](archive/20260908-dev-0.6.2-full-visual/gallery.html)。
+
+## dev-0.6.2 双端视觉一致性
+
+PC 与 Android 统一采用 Lucide 线框图标及亮暗主题的三级文字色。移动端主界面、侧栏、设置、终端和 Memory Lab 的图标语言保持一致，亮色 Material 容器使用中性配色；PC 导航、工具栏、标签和展开区的悬停反馈统一跟随当前主题。沿用既有玻璃动效与触控布局。构建、截图和交付边界见 [本轮验证](archive/20260908-dev-0.6.2-ui-consistency/REPORT.md)。
+
+## dev-0.6.2 移动端图标主题跟随
+
+移动端默认图标统一继承当前亮暗主题的前景色；状态栏与导航栏图标在主题切换和页面恢复时重新应用。首帧读取已保存的主题覆盖设置，避免先按系统主题绘制图标。版本已同步为 0.6.2／602，本轮构建与验证记录见 [报告](archive/20260908-dev-0.6.2-mobile-theme/REPORT.md)。下方 0.6.1 安装与发行记录保留历史边界。
+
+## 0.6.2 Windows MSI（本地构建）
+
+Windows x64 MSI 已打包并安装到本机，主程序版本为 `0.6.2.0`。292 个安装文件与包一致，21,145 个既有用户文件未改变；实际 GUI/CLI 启动与安装后搜索通过。产物为 [Newmark-Agent-0.6.2-x64.msi](release/Newmark-Agent-0.6.2-x64.msi)，SHA-256 `F01A369A1B536CB4A9C298BFFC5FC4AA3AF1CAF6FF4E937004A0DC73D6051033`。发布检查分段执行与安装证据见 [记录](archive/20260909-062-msi-install/REPORT.md)。本轮未发布 GitHub/npm Release。
+
+## 0.6.1 Windows MSI（历史记录）
+
+此前 Windows x64 MSI 完成全量 Desktop release 回归、打包和 UAC 提权后的静默安装。当时安装版本与主程序文件版本均为 `0.6.1.0`；产物为 `release/Newmark-Agent-0.6.1-x64.msi`，SHA-256 为 `BC491848286DB2C8ED5162CF9C070E66C3358B65C8BB01BB96FBD0AE32D7CBBF`。构建、PowerShell 参数格式和历史安装证据见 [记录](archive/20260907-061-msi-install/REPORT.md)。
 
 Android 0.6.1 Release APK 位于 `APK/Newmark-Agent-0.6.1-release.apk`，SHA-256 为 `286479F2E5733885850C5F75F20BCD7CD8D5E55715BD7DD6F0B4340F18F64A6A`。旧 APK、根目录历史 `release-*` 以及 archive 内历史发行安装包和解包目录已清理；非发行归档资料保留。
 
@@ -28,7 +88,7 @@ PC 的上下文模型、默认供应商和回退池现在统一保留供应商�
 
 Newmark Agent 将桌面、命令行与原生 Android 客户端连接到同一套会话和工作区能力，面向需要本地工具执行、多模型协作及跨设备工作连续性的开发者。
 
-当前开发预发布版本为 **dev-0.6.1**，统一 Desktop 0.6.1 与 Android 0.6.1／601，提供 Windows x64 MSI／便携 ZIP、Linux x64 AppImage／deb／便携 ZIP和 Android APK。完整版本说明、六个资产与最终哈希见 [GitHub Release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.6.1)。CLI／TUI 通过 [npm `newmark-agent`](https://www.npmjs.com/package/newmark-agent) 分发。Windows 包未进行代码签名；Android APK 沿用开发证书，面向开发测试分发。下方旧版本构建、安装与验证记录保留各自历史边界。
+当前发行版本为 **dev-0.6.2**，Desktop 与 Android 同步为 0.6.2／602。提供 Windows x64 MSI／便携 ZIP、Linux x64 AppImage／deb／便携 ZIP 和 Android APK。[下载及完整双语发行说明](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.6.2)。CLI／TUI 通过 [npm newmark-agent](https://www.npmjs.com/package/newmark-agent) 分发。Windows 未做代码签名；Android 使用开发证书供侧载。下方旧版本安装、构建记录仅作为历史记录。
 
 ### SubAgent 连续工作与通信缓存（2026-09-07）
 

@@ -13,7 +13,10 @@ const { spawn, spawnSync } = require('node:child_process');
 const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
-const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
+const devMode = process.env.NEWMARK_UI_TEST_DEV === '1';
+const exePath = process.env.NEWMARK_TEST_EXE || (devMode
+  ? path.join(repoRoot, 'DESKTOP', 'node_modules', 'electron', 'dist', 'electron.exe')
+  : path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe'));
 
 function fail(message) { throw new Error(`[release-ui-incremental-render-stress] ${message}`); }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
@@ -109,6 +112,19 @@ const PAGE_STRESS = `(async () => {
   if (typeof updateConversationWorkRunElement !== 'function') throw new Error('missing updateConversationWorkRunElement');
   if (typeof applyModelFallbackToInputSurface !== 'function') throw new Error('missing applyModelFallbackToInputSurface');
   const out = {};
+  const profile = {};
+  ['renderConversations','updateConversationWorkRunElement','updateWorkRunEventsContainer','presentedWorkRunEvents','renderWorkRunEventNode','renderPendingGuideMessages','hydrateWorkDisplayImages','shouldAutoScroll'].forEach(name => {
+    const original = window[name];
+    if (typeof original !== 'function') return;
+    window[name] = function(...args) {
+      const start = performance.now();
+      try { return original.apply(this, args); } finally {
+        const elapsed = performance.now() - start;
+        const entry = profile[name] || (profile[name] = { calls: 0, totalMs: 0, maxMs: 0 });
+        entry.calls++; entry.totalMs += elapsed; entry.maxMs = Math.max(entry.maxMs, elapsed);
+      }
+    };
+  });
   const prompt = document.querySelector('#prompt');
   const list = document.querySelector('#conversation-list');
   const chatArea = document.querySelector('#chat-area');
@@ -123,10 +139,13 @@ const PAGE_STRESS = `(async () => {
   // 风暴期间的输入响应检查（10ms 间隔计时器 + 300 轮渲染压力并行）
   let maxInputDelayMs = 0;
   let inputEvents = 0;
+  let inputPhase = 'menu';
+  const delaysByPhase = {};
   let expectedAt = performance.now() + 10;
   const inputTimer = setInterval(() => {
     const now = performance.now();
     maxInputDelayMs = Math.max(maxInputDelayMs, now - expectedAt);
+    delaysByPhase[inputPhase] = Math.max(delaysByPhase[inputPhase] || 0, now - expectedAt);
     expectedAt = now + 10;
     prompt.value += 'x';
     prompt.dispatchEvent(new Event('input', { bubbles: true }));
@@ -163,10 +182,12 @@ const PAGE_STRESS = `(async () => {
 
   // ── 2. Build 块事件列表增量渲染（前缀节点引用不变） ──
   const run = {
+    // Run state is the same fixture used by real progress rendering.
     runId: 'incremental-run', status: 'running', expanded: true, startedAt: new Date().toISOString(),
     target: { workspaceId: wsId, conversationId: 'stress-b' }, events: [],
   };
   const baseEvents = [];
+  inputPhase = 'incremental';
   baseEvents.push({ id: 't0', type: 'thought', content: 'thinking', timestamp: new Date().toISOString(), sequence: 0 });
   for (let t = 0; t < 3; t += 1) baseEvents.push({ id: 'tool-' + t, type: 'tool_call', toolName: 'read', toolArgs: '{"path":"a.txt"}', content: 'read', timestamp: new Date().toISOString(), sequence: t + 1 });
   baseEvents.push({ id: 's0', type: 'status', content: 'started', timestamp: new Date().toISOString(), sequence: 4 });
@@ -202,6 +223,7 @@ const PAGE_STRESS = `(async () => {
   // 真实事件风暴形态：300 个事件快速到达，走 100ms 节流渲染路径；
   // 期间输入计时器必须保持响应（不饿死）。
   const stormSeqStart = seq;
+  inputPhase = 'storm';
   for (let i = 0; i < 300; i += 1) {
     const kind = i % 3;
     const ev = kind === 0
@@ -225,6 +247,7 @@ const PAGE_STRESS = `(async () => {
 
   // ── 3. 滚动位置保持：视口停留中间时不强制跟踪最新 ──
   const thirdScroll = Math.floor(chatArea.scrollHeight / 3);
+  inputPhase = 'scroll';
   chatArea.scrollTop = thirdScroll;
   chatArea.dispatchEvent(new Event('scroll'));
   const heldScroll = chatArea.scrollTop;
@@ -296,7 +319,7 @@ const PAGE_STRESS = `(async () => {
 
   // 收尾：恢复 auto 测试前的 providers 状态并关掉输入计时器
   clearInterval(inputTimer);
-  out.input = { events: inputEvents, maxDelayMs: maxInputDelayMs };
+  out.input = { events: inputEvents, maxDelayMs: maxInputDelayMs, delaysByPhase, profile };
   if (inputEvents < 60 || maxInputDelayMs > 100) throw new Error('input event loop was starved during the stress storm: ' + JSON.stringify(out.input));
   return out;
 })()`;
@@ -314,15 +337,32 @@ async function main() {
   let child;
   let cdp;
   try {
-    child = spawn(exePath, [`--remote-debugging-port=${port}`, '--allow-multiple-instances', '--no-sandbox', '--root', root], {
-      cwd: root, stdio: 'ignore', windowsHide: true,
+    const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+    child = spawn(exePath, [...(devMode ? [path.join(repoRoot, 'DESKTOP', 'scripts', 'ui-stress-electron-bootstrap.cjs')] : []), `--remote-debugging-port=${port}`, '--allow-multiple-instances', '--no-sandbox', '--root', root], {
+      cwd: root, stdio: ['ignore','pipe','pipe'], windowsHide: true, env,
     });
+    if (process.env.NEWMARK_UI_TEST_OUTPUT) {
+      fs.mkdirSync(process.env.NEWMARK_UI_TEST_OUTPUT, {recursive:true});
+      child.stdout.pipe(fs.createWriteStream(path.join(process.env.NEWMARK_UI_TEST_OUTPUT,'electron-out.log')));
+      child.stderr.pipe(fs.createWriteStream(path.join(process.env.NEWMARK_UI_TEST_OUTPUT,'electron-error.log')));
+    } else { child.stdout.resume(); child.stderr.resume(); }
     const target = await waitForTarget(port);
     cdp = connectCdp(target);
     await cdp.ready;
     await waitForPromotedMainUi(cdp);
     await cdp.call('Runtime.enable');
-    const result = await evaluate(cdp, PAGE_STRESS, 90_000);
+    await cdp.call('Emulation.setDeviceMetricsOverride', { width:1280, height:900, deviceScaleFactor:1, mobile:false });
+    await cdp.call('Emulation.setFocusEmulationEnabled', { enabled:true });
+    let result;
+    try {
+      result = await evaluate(cdp, PAGE_STRESS, 90_000);
+    } finally {
+      if (process.env.NEWMARK_UI_TEST_OUTPUT) {
+        fs.mkdirSync(process.env.NEWMARK_UI_TEST_OUTPUT, { recursive: true });
+        const shot = await cdp.call('Page.captureScreenshot', { format: 'png' });
+        fs.writeFileSync(path.join(process.env.NEWMARK_UI_TEST_OUTPUT, 'pressure-final.png'), Buffer.from(shot.data, 'base64'));
+      }
+    }
     if (!result || result.menu?.rowReused !== true) fail(`conversation-menu row reuse failed: ${JSON.stringify(result)}`);
     if (!result.workRun || !(result.workRun.prefixRefs >= 2) || result.workRun.replacements > 2) fail(`work-run incremental prefix reuse failed: ${JSON.stringify(result.workRun)}`);
     if (!result.scroll?.parked || result.scroll.bottomFollow !== true) fail(`scroll-follow contract failed: ${JSON.stringify(result.scroll)}`);

@@ -19,6 +19,24 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class MobileSearchMcpTest {
     @Test
+    fun officialDirectSearchNodesPrecedeOptionalPcBridge() {
+        val nodes = orderedSearchMcpNodes(builtInSearchMcpNodes())
+        assertEquals(listOf("exa-search-mcp", "you-search-mcp", "desktop-configured-search-mcp-pool"), nodes.map { it.id })
+        assertTrue(nodes.take(2).all { it.transport == MobileSearchMcpTransport.STREAMABLE_HTTP && it.headers.isEmpty() })
+        for ((name, fields) in listOf(
+            "web_search_exa" to listOf("numResults"),
+            "you-search" to listOf("count", "freshness", "extraction", "knowledge", "extraction_source"),
+        )) {
+            val properties = JSONObject().put("query", JSONObject().put("type", "string"))
+            fields.forEach { properties.put(it, JSONObject().put("type", "string")) }
+            val schema = tool(name, "Search the public web", properties)
+            assertEquals("query", allowedSearchMcpQueryArgument(schema))
+            properties.put("command", JSONObject().put("type", "string"))
+            assertNull(allowedSearchMcpQueryArgument(schema))
+        }
+    }
+
+    @Test
     fun manifestPriorityAndOrderOwnTraversalAndEveryCallStartsFresh() = runBlocking {
         val nodes = listOf(
             node("wuxing", priority = 20, order = 0),
@@ -138,6 +156,8 @@ class MobileSearchMcpTest {
     fun publicCatalogNamesAreDocumentedButAndroidHasOneDesktopBridgeOwner() {
         assertEquals(
             listOf(
+                "Exa Search MCP",
+                "You.com Free Search MCP",
                 "Wuxing Search MCP",
                 "web-search-api",
                 "miyami-websearch-mcp",

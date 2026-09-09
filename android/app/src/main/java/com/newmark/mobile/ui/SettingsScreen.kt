@@ -1,5 +1,7 @@
 package com.newmark.mobile.ui
 
+import com.newmark.mobile.ui.components.LucideIcons
+
 import android.content.Context
 import android.Manifest
 import android.content.pm.PackageManager
@@ -35,13 +37,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Computer
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Laptop
-import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
@@ -202,7 +197,7 @@ fun SettingsScreen(
                 },
             ) {
                 Icon(
-                    imageVector = Icons.Filled.ArrowBack,
+                    imageVector = LucideIcons.ArrowLeft,
                     contentDescription = "返回",
                     tint = p.textPrimary,
                     modifier = Modifier.size(20.dp),
@@ -316,7 +311,7 @@ private fun SettingsEntry(title: String, subtitle: String, onClick: () -> Unit) 
             Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = p.textPrimary)
             Text(subtitle, fontSize = 11.sp, color = p.textTertiary, modifier = Modifier.padding(top = 3.dp))
         }
-        Text("›", fontSize = 16.sp, color = p.textTertiary)
+        Icon(LucideIcons.ChevronRight, contentDescription = null, tint = p.textTertiary, modifier = Modifier.size(16.dp))
     }
 }
 
@@ -606,7 +601,7 @@ private fun DevicePairSection(linkVm: DesktopLinkViewModel, onOpenDeviceManage: 
             contentAlignment = Alignment.Center,
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.QrCodeScanner, contentDescription = null, tint = p.accent, modifier = Modifier.size(16.dp))
+                Icon(LucideIcons.ScanLine, contentDescription = null, tint = p.accent, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("扫码绑定", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = p.accent)
             }
@@ -622,7 +617,7 @@ private fun DevicePairSection(linkVm: DesktopLinkViewModel, onOpenDeviceManage: 
             contentAlignment = Alignment.Center,
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.Image, contentDescription = null, tint = p.textPrimary, modifier = Modifier.size(16.dp))
+                Icon(LucideIcons.Image, contentDescription = null, tint = p.textPrimary, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("从相册选择图片", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = p.textPrimary)
             }
@@ -678,7 +673,7 @@ private fun DevicePairSection(linkVm: DesktopLinkViewModel, onOpenDeviceManage: 
                 contentAlignment = Alignment.Center,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Computer, contentDescription = null, tint = p.textSecondary, modifier = Modifier.size(16.dp))
+                    Icon(LucideIcons.Monitor, contentDescription = null, tint = p.textSecondary, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("设备管理", fontSize = 12.sp, color = p.textPrimary)
                 }
@@ -810,7 +805,7 @@ private fun ProvidersEntry(onClick: () -> Unit) {
                 color = p.textPrimary,
                 modifier = Modifier.weight(1f),
             )
-            Text(text = "›", fontSize = 16.sp, color = p.textTertiary)
+            Icon(LucideIcons.ChevronRight, contentDescription = null, tint = p.textTertiary, modifier = Modifier.size(16.dp))
         }
     }
 }
@@ -873,7 +868,7 @@ private fun ProvidersPage(
                             label = provider.label,
                             detail = "${provider.models.count { model -> model.enabled }}/${provider.models.size} · ${provider.baseUrl}",
                             active = railSelected == it,
-                        ) { Text("›", fontSize = 16.sp, color = p.textTertiary) }
+                        ) { Icon(LucideIcons.ChevronRight, contentDescription = null, tint = p.textTertiary, modifier = Modifier.size(16.dp)) }
                     }
                     it == createIndex -> ProviderCapsuleRow("＋ 新建供应商", active = railSelected == it)
                     it == fuzzyIndex -> ProviderCapsuleRow("＋ 模糊注入", active = railSelected == it)
@@ -940,7 +935,7 @@ private fun ProvidersPage(
                             color = if (connected) p.green else p.textTertiary,
                         )
                         Spacer(Modifier.width(6.dp))
-                        Icon(Icons.Filled.Computer, null, tint = if (connected) p.accent else p.textTertiary, modifier = Modifier.size(18.dp))
+                        Icon(LucideIcons.Monitor, null, tint = if (connected) p.accent else p.textTertiary, modifier = Modifier.size(18.dp))
                     }
                 }
             }
@@ -1342,7 +1337,7 @@ internal fun ProviderDetailPanel(
                             )
                             Spacer(Modifier.width(6.dp))
                             Icon(
-                                imageVector = Icons.Filled.Delete,
+                                imageVector = LucideIcons.Trash2,
                                 contentDescription = "删除模型",
                                 tint = p.red,
                                 modifier = Modifier.size(28.dp).clickable { onDeleteModel(model.name) }.padding(6.dp),
@@ -1384,7 +1379,7 @@ private fun DeviceManagePage(linkVm: DesktopLinkViewModel) {
                         .padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Filled.Computer, contentDescription = null, tint = if (active) p.accent else p.textSecondary, modifier = Modifier.size(18.dp))
+                    Icon(LucideIcons.Monitor, contentDescription = null, tint = if (active) p.accent else p.textSecondary, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
@@ -1403,7 +1398,7 @@ private fun DeviceManagePage(linkVm: DesktopLinkViewModel) {
                         )
                     }
                     Icon(
-                        imageVector = Icons.Filled.Delete,
+                        imageVector = LucideIcons.Trash2,
                         contentDescription = "删除",
                         tint = p.red,
                         modifier = Modifier

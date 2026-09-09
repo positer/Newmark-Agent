@@ -102,7 +102,7 @@ async function main(){
         await evaluate(`(()=>{const p=document.createElement('div');p.id='direction-menu';p.className='model-select-menu liquid-glass liquid-glass-carrier liquid-glass-popup direction-probe';p.setAttribute('popover','manual');p.style.cssText='position:fixed;left:400px;top:280px;width:480px;height:320px;max-height:320px;margin:0;';p.innerHTML=Array.from({length:30},(_,i)=>'<button class="model-select-menu-option'+(i===0?' selected':'')+'" style="height:42px;min-height:42px">Option '+i+'</button>').join('');document.body.append(p);wireDirectLiquidMenuInteractionsV2(p);p.addEventListener('click',e=>{const b=e.target.closest('button');if(b){p.querySelectorAll('button').forEach(n=>n.classList.toggle('selected',n===b));wireDirectLiquidMenuInteractionsV2(p);}});p.showPopover();window.__directionPopup=p;})()`);
       }else if(kind==='settings'){
         await evaluate(`window.openSettings('general')`);
-        let ready=false;for(let i=0;i<200;i++){ready=await evaluate(`!!document.querySelector('#sub-win-overlay.open #settings-glass-opacity')`);if(ready)break;await sleep(50);}if(!ready)throw Error('Settings content not ready');
+        let ready=false;for(let i=0;i<200;i++){ready=await evaluate(`!!document.querySelector('#sub-win-overlay.open #stab-general .setting-row')`);if(ready)break;await sleep(50);}if(!ready)throw Error('Settings content not ready');
         await evaluate(`window.__directionPopup=document.getElementById('sub-win');__directionPopup.classList.add('direction-probe')`);
       }else{
         await evaluate(`window.openCommandSurface('palette');window.__directionPopup=document.getElementById('command-surface');__directionPopup.classList.add('direction-probe')`);

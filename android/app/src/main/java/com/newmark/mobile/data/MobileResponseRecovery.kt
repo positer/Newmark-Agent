@@ -9,6 +9,7 @@ fun emptyResponseRetryDelayMs(consecutiveEmptyResponses: Int): Long =
 
 /** Any provider activity is a successful turn for empty-response accounting. */
 fun isUsableChatResponse(response: ChatResponse): Boolean =
+    modelRequestedContinuation(response.finishReason) ||
     response.content.isNotBlank() ||
         response.reasoningContent.isNotBlank() ||
         response.toolCalls.isNotEmpty()

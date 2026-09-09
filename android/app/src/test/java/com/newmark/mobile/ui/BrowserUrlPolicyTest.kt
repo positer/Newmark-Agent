@@ -16,8 +16,14 @@ class BrowserUrlPolicyTest {
     }
 
     @Test
-    fun rejectsLocalFilesIntentSchemesAndInvalidHosts() {
-        assertNull(BrowserUrlPolicy.normalize("file:///sdcard/secret.txt"))
+    fun rejectsUnsafeSchemesAndInvalidHosts() {
+        assertEquals("file:///sdcard/index.html", BrowserUrlPolicy.normalize("file:///sdcard/index.html"))
+        assertEquals("file:///sdcard/index.html", BrowserUrlPolicy.normalize("files:///sdcard/index.html"))
+        assertEquals("file:///sdcard/a%20b.html", BrowserUrlPolicy.normalize("/sdcard/a b.html"))
+        assertEquals("content://documents/item/1", BrowserUrlPolicy.normalize("content://documents/item/1"))
+        assertNull(BrowserUrlPolicy.normalize("file://remote/share/index.html"))
+        assertNull(BrowserUrlPolicy.normalizeFromPage("https://example.com", "file:///sdcard/index.html"))
+        assertEquals("file:///sdcard/next.html", BrowserUrlPolicy.normalizeFromPage("file:///sdcard/index.html", "file:///sdcard/next.html"))
         assertNull(BrowserUrlPolicy.normalize("intent://open"))
         assertNull(BrowserUrlPolicy.normalize("javascript:alert(1)"))
         assertNull(BrowserUrlPolicy.normalize("https:///missing-host"))

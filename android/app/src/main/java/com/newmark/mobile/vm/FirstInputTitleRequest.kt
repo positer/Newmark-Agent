@@ -23,28 +23,55 @@ internal suspend fun requestAndApplyFirstInputTitle(
     config: ApiConfig,
     turnIntelligence: String,
     turnThinkingTierMap: Map<String, String>,
+    imageAttachmentCount: Int = 0,
     onFailure: (String) -> Unit = {},
-    applyTitle: (String) -> Result<Boolean>,
+    applyTitle: suspend (String) -> Result<Boolean>,
 ): Boolean {
     val prompt = "Summarize the user's intent and output only a short concrete noun-phrase conversation title. " +
         "Do not quote, repeat, or truncate the input. No Markdown or explanation.\n\n" +
         "First user input:\n${firstInput.take(4000)}"
     // Keep the provider's normal connection/read policy. A slow healthy title
     // must not be discarded by an unrelated total deadline before its first token.
-    val responseResult = apiClient.chat(
+    var responseResult = apiClient.chat(
         config = config,
         messages = listOf(ChatMessage(role = "user", content = prompt)),
         tools = emptyList(),
         intelligence = turnIntelligence,
         thinkingTierMap = turnThinkingTierMap,
-        maxOutputTokens = 64,
+        // Reasoning shares the output budget; use the same tier budget as the formal turn.
     )
     currentCoroutineContext().ensureActive()
-    responseResult.exceptionOrNull()?.let { error ->
-        onFailure(titleProviderFailureReason(error, config.apiKey))
-        return false
+    (responseResult.exceptionOrNull() as? CancellationException)?.let { throw it }
+    var title = responseResult.getOrNull()?.content?.let { normalizeGeneratedConversationTitle(it, firstInput) }.orEmpty()
+    if (imageAttachmentCount > 0 && title.isBlank()) {
+        // This auxiliary request must not need pixels or consume the main
+        // turn's image attachments. Name the task from text metadata only.
+        responseResult = apiClient.chat(
+            config = config,
+            messages = listOf(ChatMessage(role = "user", content =
+                "Create a short conversation title using ONLY the text metadata below. " +
+                    "There are $imageAttachmentCount image attachments, but their pixels are not available for this naming task. " +
+                    "Summarize the written intent; do not infer image contents or ask to see the images. " +
+                    "If the text does not specify a topic, output 图片内容分析. Output only the title.\n\n" +
+                    "User text:\n${firstInput.take(4000)}")),
+            tools = emptyList(),
+            intelligence = "low",
+            thinkingTierMap = emptyMap(),
+            // Even the metadata retry needs the normal low-tier reasoning budget.
+        )
+        currentCoroutineContext().ensureActive()
+        (responseResult.exceptionOrNull() as? CancellationException)?.let { throw it }
+        title = responseResult.getOrNull()?.content?.let { normalizeGeneratedConversationTitle(it, firstInput) }.orEmpty()
+        // Metadata failure is not failure of the image turn. Still use the
+        // normal persistence/stale-conversation barrier below before starting.
+        if (title.isBlank()) title = "图片内容分析"
     }
-    val title = normalizeGeneratedConversationTitle(responseResult.getOrThrow().content, firstInput)
+    if (title.isBlank()) {
+        responseResult.exceptionOrNull()?.let { error ->
+            onFailure(titleProviderFailureReason(error, config.apiKey))
+            return false
+        }
+    }
     currentCoroutineContext().ensureActive()
     if (title.isBlank()) {
         onFailure("模型返回了空标题或重复了原始输入。")

@@ -9,6 +9,29 @@ package com.newmark.mobile.data
  * treated as a wildcard because that can leak delayed events across chats.
  */
 internal object RemoteTrackingContract {
+    /** Expand IPC batches before reconciling with durable per-delta history. Content is never a dedupe key. */
+    fun mergeEvents(existing: List<RemoteWorkEvent>, incoming: List<RemoteWorkEvent>): List<RemoteWorkEvent> {
+        val output = mutableListOf<RemoteWorkEvent>()
+        val identities = mutableSetOf<String>()
+        for (event in existing + incoming) {
+            val deltas = event.coalescedDeltas.orEmpty()
+            val expanded = if (event.type in setOf("text", "thought_delta") && deltas.isNotEmpty()) deltas.map { delta ->
+                event.copy(id = delta.id.orEmpty(), sequence = delta.sequence, content = delta.content.orEmpty(),
+                    timestamp = delta.timestamp.orEmpty().ifBlank { event.timestamp }, coalescedDeltas = emptyList())
+            } else listOf(event)
+            for (part in expanded) {
+                val scope = listOf(part.workspaceId, part.conversationId, part.runId, part.actorId, part.generation).joinToString("\u0000")
+                val key = when {
+                    part.id.isNotBlank() -> "id:" + part.id
+                    part.sequence > 0 -> scope + "\u0000seq:" + part.sequence + ":" + part.type
+                    else -> null
+                }
+                if (key == null || identities.add(key)) output += part
+            }
+        }
+        return output
+    }
+
     private val terminalRunStatuses = setOf(
         "completed",
         "done",
@@ -80,15 +103,7 @@ internal object RemoteTrackingContract {
         if (matchedIndex < 0) return durable + live
         val persisted = durable[matchedIndex]
         if (!sameRun(authoritativeRunningRunId, live.runId)) return durable
-        val mergedEvents = (persisted.events + live.events).fold(mutableListOf<RemoteWorkEvent>()) { output, event ->
-            val duplicate = output.any { existing ->
-                event.id.isNotBlank() && existing.id == event.id ||
-                    (event.id.isBlank() && existing.id.isBlank() && existing.sequence == event.sequence &&
-                        existing.type == event.type && existing.timestamp == event.timestamp)
-            }
-            if (!duplicate) output += event
-            output
-        }
+        val mergedEvents = mergeEvents(persisted.events, live.events)
         val merged = persisted.copy(
             status = live.status.ifBlank { persisted.status },
             startedAt = persisted.startedAt.ifBlank { live.startedAt },

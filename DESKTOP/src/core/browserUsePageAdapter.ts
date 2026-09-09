@@ -1,3 +1,4 @@
+import type { BrowserPdfObservation } from './browserPdf';
 import {
   BrowserUseAdapterActionRequest,
   BrowserUseAdapterActionResult,
@@ -25,6 +26,9 @@ import {
  * https://github.com/unclecode/crawl4ai/blob/7e801521428ee12509994d39151006f64055ebe3/crawl4ai/async_crawler_strategy.py
  */
 export interface BrowserUseHostPage {
+  pdfTarget?(): string | undefined;
+  readPdf?(maxChars: number, forceVision: boolean, signal?: AbortSignal, pdfPage?: number): Promise<BrowserPdfObservation>;
+  setViewport?(viewport: { width: number; height: number }, signal?: AbortSignal): Promise<void>;
   identity(signal?: AbortSignal): Promise<{ pageToken: string; url: string; title: string }>;
   evaluateFixed<T>(script: string, signal?: AbortSignal): Promise<T>;
   clickAt(x: number, y: number, signal?: AbortSignal): Promise<void>;
@@ -79,6 +83,7 @@ interface DomProbe {
 }
 
 interface DomObservation {
+  isPdf?: boolean;
   url: string;
   title: string;
   viewport: BrowserUseAdapterObservation['viewport'];
@@ -213,6 +218,7 @@ export function browserUseObservationScript(maxChars: number, maxRefs: number): 
         pageHeight: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0)
       },
       text: bodyText,
+      isPdf: document.contentType === "application/pdf" || !!document.querySelector('embed[type="application/pdf"],object[type="application/pdf"]'),
       contentSource: useMain ? 'main' : 'body',
       elements
     };
@@ -310,30 +316,43 @@ function sameElement(expected: BrowserUseAdapterElement, probe: DomProbe): boole
 export class NativeBrowserUsePageAdapter implements BrowserUsePageAdapter {
   constructor(private readonly resolvePage: BrowserUseHostPageResolver) {}
 
-  async observe(scope: BrowserUseScope, options: { maxChars: number; maxRefs: number }, signal?: AbortSignal): Promise<BrowserUseAdapterObservation> {
+  async observe(scope: BrowserUseScope, options: { maxChars: number; maxRefs: number; viewport?: { width: number; height: number }; visualMode?: "auto" | "vision"; pdfPage?: number }, signal?: AbortSignal): Promise<BrowserUseAdapterObservation> {
     throwIfAborted(signal);
     const page = await this.resolvePage(scope);
     throwIfAborted(signal);
     const observe = async (): Promise<BrowserUseAdapterObservation> => {
+      if (options.viewport) {
+        if (!page.setViewport) throw new Error('This browser host cannot set viewport');
+        await page.setViewport(options.viewport, signal);
+      }
       const before = await page.identity(signal);
       const dom = await page.evaluateFixed<DomObservation>(browserUseObservationScript(options.maxChars, options.maxRefs), signal);
       const after = await page.identity(signal);
       if (!before.pageToken || before.pageToken !== after.pageToken) throw new Error('Page changed during observation; observe again.');
       const elements = Array.isArray(dom.elements) ? dom.elements : [];
-      const needsVisualFallback = /\.pdf(?:#|$)/i.test(String(dom.url || after.url || ''))
-        || String(dom.text || '').trim().length < 24
-        || elements.some(element => !String(element.name || element.text || '').trim());
-      const visionImageDataUrl = needsVisualFallback && page.captureVisibleScreenshot
-        ? await page.captureVisibleScreenshot(signal)
-        : '';
+      const isPdf = !!page.pdfTarget?.() || dom.isPdf || /\.pdf(?:[?#]|$)/i.test(String(dom.url || after.url || ''));
+      let pdf: BrowserPdfObservation | undefined;
+      let pdfError = '';
+      if (isPdf && page.readPdf) {
+        try { pdf = await page.readPdf(options.maxChars, options.visualMode === 'vision', signal, options.pdfPage); }
+        catch (error) { if (signal?.aborted) throw error; pdfError = 'PDF binary parsing failed; screenshot fallback may show viewer chrome only.'; }
+      }
+      const text = pdf ? pdf.text : isPdf ? '' : dom.text;
+      const needsVisualFallback = options.visualMode === 'vision' || String(text || '').trim().length < 24
+        || (!isPdf && elements.some(element => !String(element.name || element.text || '').trim()));
+      const visionImageDataUrl = pdf?.imageDataUrl || (needsVisualFallback && page.captureVisibleScreenshot
+        ? await page.captureVisibleScreenshot(signal) : '');
+      const finalIdentity = await page.identity(signal);
+      if (after.pageToken !== finalIdentity.pageToken) throw new Error('Page changed during visual observation; observe again.');
       return {
         pageToken: after.pageToken,
-        url: dom.url || after.url,
+        url: isPdf ? after.url : dom.url || after.url,
         title: dom.title || after.title,
         viewport: dom.viewport,
-        text: dom.text,
+        text,
+        ...(isPdf ? { document: { source: "pdf_binary", pages: pdf?.pages, visualPage: pdf?.visualPage, visualScope: pdf?.visualPage ? (options.pdfPage ? "selected_page_only" : "first_page_only") : undefined, error: pdfError || undefined } } : {}),
         contentSource: dom.contentSource,
-        elements,
+        elements: isPdf ? [] : elements,
         ...(visionImageDataUrl ? {
           visionImageDataUrl,
           visualFallbackReason: 'text_unavailable' as const,
@@ -352,8 +371,13 @@ export class NativeBrowserUsePageAdapter implements BrowserUsePageAdapter {
       if (request.expectedPageToken && before.pageToken !== request.expectedPageToken) {
         return { ok: false, code: 'stale_page', error: 'The page document changed after observation.', retryable: true, pageToken: before.pageToken, url: before.url, title: before.title };
       }
+      let visionImageDataUrl = '';
       const run = async (): Promise<unknown> => {
         if (request.action === 'navigate') {
+          if (request.viewport) {
+            if (!page.setViewport) throw new Error('This browser host cannot set viewport');
+            await page.setViewport(request.viewport, signal);
+          }
           await page.navigate(request.url || 'about:blank', signal);
           await page.waitForReady(signal);
           return { navigated: true };
@@ -411,6 +435,13 @@ export class NativeBrowserUsePageAdapter implements BrowserUsePageAdapter {
           return { waitedMs: request.durationMs || 0, stable: true, polls: 1 };
         }
         if (request.action === 'extract') {
+          const isPdf = !request.element && (page.pdfTarget?.() || /\.pdf(?:[?#]|$)/i.test(before.url)
+            || await page.evaluateFixed<boolean>('document.contentType === "application/pdf" || !!document.querySelector(\'embed[type="application/pdf"],object[type="application/pdf"]\')', signal));
+          if (isPdf && page.readPdf) {
+            const pdf = await page.readPdf(request.maxChars || 12000, request.visualMode === 'vision', signal, request.pdfPage);
+            visionImageDataUrl = pdf.imageDataUrl || '';
+            return { text: pdf.text, pages: pdf.pages, source: pdf.source, visualPage: pdf.visualPage, visualScope: pdf.visualPage ? 'selected_page_only' : undefined };
+          }
           return await page.evaluateFixed(browserUseExtractScript(request.element?.token, request.attribute, request.maxChars || 12_000), signal);
         }
         throw new Error(`Unsupported page adapter action: ${request.action}`);
@@ -428,6 +459,7 @@ export class NativeBrowserUsePageAdapter implements BrowserUsePageAdapter {
           url: after.url,
           title: after.title,
           data: guarded.value,
+          ...(!pageChanged && visionImageDataUrl ? { visionImageDataUrl } : {}),
           effects: { ...guarded.effects, ...(pageChanged ? { pageChanged: true } : {}) },
         };
       } catch (error) {

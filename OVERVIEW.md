@@ -1,5 +1,174 @@
 # Newmark Agent Overview
 
+## 2026-09-09 移动端输出预算续写
+
+- `android/app/src/main/java/com/newmark/mobile/data/ApiClient.kt`、`MobileResponseRecovery.kt`：区分供应商预算结束、完成及错误，保护未完成工具调用。
+- `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt`：最多三次提高预算的续写、请求级检查点、正文拼接与持久化。
+- `android/app/src/androidTest/java/com/newmark/mobile/ui/OutputBudgetContinuationTest.kt`：真实 ViewModel 的思考截断、正文截断、成功完成与落库测试。
+- `archive/20260909-mobile-output-budget/`：用户截图问题与验证记录。
+
+## 2026-09-09 双端标题推理预算
+
+- `DESKTOP/src/core/agent.ts`：标题预算从固定 2048 改为冻结档位的 maxTokens。
+- `android/app/src/main/java/com/newmark/mobile/vm/FirstInputTitleRequest.kt`：主标题取消 64-token 覆盖，图片 metadata 退路使用正常 low 档预算。
+- `DESKTOP/src/tests/verify.ts`、`android/app/src/test/java/com/newmark/mobile/vm/FirstInputTitleRequestTest.kt`：标题预算、思考映射、启动门禁及 HTTP 回归。
+- `archive/20260909-title-reasoning-budget/`：双端构建、测试、问题边界和交付记录。
+
+## 2026-09-09 移动端整篇重复回复
+
+- `android/app/src/main/java/com/newmark/mobile/data/ApiClient.kt`：协议增量与快照分离，Responses 按输出片段合并，非流式正文别名互斥。
+- `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt`：UI 批量发布保留空白片段，防止流式与完成态 Markdown 不一致。
+- `android/app/src/test/java/com/newmark/mobile/data/ApiClientStreamTest.kt`：真实 HTTP/SSE 回归覆盖完整快照、重复字词、空白、多个输出项及聚合别名。
+- `archive/20260909-mobile-duplicate-response/`：诊断、测试和 APK 交付记录。
+
+## 2026-09-09 移动端对话运行彩边
+
+- `android/app/src/main/java/com/newmark/mobile/ui/components/ConversationRuntimeBorder.kt`：固定胶囊路径、旋转黑白 shader，绘制阶段读取动画，仅运行时启用。
+- `ui/Sidebar.kt`、`ui/NewmarkApp.kt`、`vm/ChatViewModel.kt`（Android 主源码目录下）：本地运行 ID 集合传递与远程运行状态接入，避让浮动玻璃。
+- `android/app/src/androidTest/java/com/newmark/mobile/ui/ConversationRuntimeBorderTest.kt`：双主题、本地/远程运行帧差与结束静止验证。
+- `archive/20260909-mobile-runtime-border/`：编译、设备测试与截图证据。
+
+## 2026-09-09 免费搜索组更新
+
+| 文件/目录 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/core/searchMcpPool.ts` | Exa/You.com 官方 HTTP 默认组、搜索参数准入、注入式网络传输。 |
+| `DESKTOP/src/tools/index.ts` | MCP 与普通网页请求复用配置代理。 |
+| `android/app/src/main/java/com/newmark/mobile/data/MobileSearchMcp.kt` | 原生 HTTP 搜索优先，PC bridge 排后，保留完整池遍历与最终 HTTP 退路。 |
+| `DESKTOP/src/tests/searchMcpPoolVerify.ts` | 默认顺序、搜索专用 schema、代理传输全流程及容灾回归。 |
+| `DESKTOP/src/tests/verify.ts`, `pcGlassMigrationVerify.ts`, `startupPrewarmVerify.ts` | 发布门源码断言与当前协议写法、Windows 换行和前后台浏览器函数边界对齐；保留对应行为回归。 |
+| `android/app/src/test/java/com/newmark/mobile/data/MobileSearchMcpTest.kt` | 双端同名默认服务、顺序、参数边界与原有容灾测试。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/data/SearchOnlyHttpMcpDeviceTest.kt` | 可显式启用的 Exa/You.com 真实联网准入，以及 HTTP/SSE 设备协议测试。 |
+| `archive/20260909-search-refresh/` | 上游调研、候选 schema、原始公开查询结果、设备与发布验证记录。 |
+| `archive/20260909-062-msi-install/` | Windows 0.6.2 发布测试、MSI 打包与实际安装记录。 |
+
+## 2026-09-09 带图导航、触感与公式
+
+| 文件/目录 | 构造与作用 |
+| --- | --- |
+| `android/app/src/main/java/com/newmark/mobile/vm/ConversationPersistence.kt` | 串行后台持久化协调，标题提交等待磁盘并校验最新状态，避免恢复旧快照。 |
+| `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt` | 合并连续保存请求，交给 IO 执行，标题使用可挂起保存屏障。 |
+| `android/app/src/main/java/com/newmark/mobile/data/ConversationStore.kt` | 原子文件替换保留，JSON 流式读写以减少带图历史的中间内存分配。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/AttachmentPreview.kt` | 后台读取图片尺寸并采样解码，限制预览边长；原始附件不变。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt`, `Sidebar.kt` | 四处图片预览接入后台解码；本地及远程胶囊弹菜单时触发系统长按触感。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/DisplayMathLines.kt`, `Markdown.kt` | 分离紧接正文的块公式，保护代码，修复行内命令匹配与分段公式文本退路。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/NativeMath.kt` | RaTeX 0.1.14 离线 Canvas 公式排版；后台解析、字体加载、尺寸限制与可读退路。 |
+| `android/app/src/main/assets/licenses/` | 随 APK 打包数学引擎和 KaTeX 字体的许可证。 |
+| `android/app/src/test/java/com/newmark/mobile/vm/ConversationPersistenceTest.kt` | 保存挂起期间新建、删除、取消、失败的竞态验证。 |
+| `android/app/src/test/java/com/newmark/mobile/ui/DisplayMathRegressionTest.kt` | 截图同类 cases、多行公式、代码保护与流式未闭合公式回归。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/ImageNavigationAndMathTest.kt` | 实际带图 ViewModel 发送、退出重入、键盘关闭循环与双主题公式截图。 |
+| `archive/20260909-mobile-image-navigation/` | 构建、测试、实际截图和性能边界记录。 |
+
+## 2026-09-09 图片首轮标题退路
+
+| 文件/目录 | 构造与作用 |
+| --- | --- |
+| `android/app/src/main/java/com/newmark/mobile/vm/FirstInputTitleRequest.kt` | 图片首轮标题失败后执行纯文字元数据分析；仍失败时通过既有持久化门禁保存中性标题。 |
+| `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt` | 将首条用户消息图片数量传入标题流程，正式带图请求保留原始图片及冻结配置。 |
+| `android/app/src/test/java/com/newmark/mobile/vm/FirstInputTitleRequestTest.kt` | HTTP 夹具验证文字退路、请求载荷、服务不可用兜底、保存失败与取消。 |
+| `android/app/src/test/java/com/newmark/mobile/vm/FirstInputTitleAndNetworkRecoveryContractTest.kt` | 既有首轮门禁契约增加图片文字退路例外。 |
+| `android/app/src/test/java/com/newmark/mobile/vm/MobileEmptyResponseRetryContractTest.kt` | 标题请求计数允许图片专属文字退路，正式轮次请求契约保持不变。 |
+| `android/app/src/test/java/com/newmark/mobile/ui/QueuePanelVisualContractTest.kt` | 按既有视觉证据校正队列按钮契约，要求无边界及按压反馈。 |
+| `archive/20260909-image-title-fallback/` | 本次请求回归、构建日志与交付记录。 |
+
+## 2026-09-08 代码块与全量视觉压力复查
+
+| 文件/目录 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/ui/index.html` | Markdown 独立复制工具栏、双时间线间距、浏览器工具栏收缩、上下文弹窗随聊天列定位。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/Markdown.kt` | 每个围栏代码块独立写入系统剪贴板，主题化语言标题和复制反馈。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` | 正文代码卡片为相对侧时间线预留边距；Goal/队列按钮无玻璃框和按压反馈，只保留点击。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/MarkdownCodeRenderingTest.kt` | 双主题、双角色、多代码块的真实剪贴板、几何断言和 PixelCopy 截图。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/FullVisualAuditTest.kt` | 27 个界面状态、双主题、短屏滚动与窗口归属检查；plainActions 模式比较 Goal/队列按钮静止与按住时的真实像素。 |
+| `DESKTOP/scripts/full-visual-audit.cjs`, `render-visual-gallery.cjs` | 参数化画幅和界面筛选，代码复制与边界断言，原始截图图册。 |
+| `DESKTOP/scripts/release-ui-incremental-render-stress.cjs`, `ui-stress-electron-bootstrap.cjs` | 当前开发构建及打包构建的增量节点、滚动与输入延迟压力检查，保存阶段耗时。 |
+| `android/scripts/mobile-agent-stress.ps1` | 独立 stress 包的远端事件、队列、菜单与侧栏压力检查，通过 UI 进入远端对话并留存截图。 |
+| `DESKTOP/scripts/mobile-mock-server.cjs` | 隔离 SSE/API 夹具，按真实 PC 的统一 send 入口处理运行中 Next 入队。 |
+| `archive/20260908-full-visual-stress/` | 本轮报告、双端截图、图册、构建日志、成功与失败测试证据；无效诊断截图不计入验收。 |
+
+## 2026-09-08 Browser-Use 视觉、画幅与 PDF
+
+| 文件/目录 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/core/browserUse.ts` | 画幅、视觉模式与 PDF 页码协议校验，观察代际和视觉回执边界。 |
+| `DESKTOP/src/core/browserUsePageAdapter.ts` | DOM 优先观察；PDF 的 observe/extract 走二进制；截图前后检查页面代际。 |
+| `DESKTOP/src/core/browserPdf.ts` | PDF.js 二进制文本提取、指定页渲染、页数和识别范围元数据。 |
+| `DESKTOP/src/core/electronBrowserUseHost.ts` | 真实 CSS 画幅、适配宿主的显示缩放、截图和输入映射、会话 Cookie 与 PDF 下载 MIME 路由。 |
+| `DESKTOP/src/core/agent.ts`, `agentKernelRunner.ts`, `DESKTOP/src/tools/index.ts` | 只读视觉模型协作调用、限时与取消、失败后 OCR、一次性图片不写入工具历史。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/BrowserRecognition.kt` | PDFBox 二进制解析、PdfRenderer 页渲染、视觉优先与 ML Kit 中英 OCR 退路。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/BrowserSession.kt`, `RightSidebar.kt` | 前后台独立画幅、可见面板缩放、PDF MIME 识别、观察状态和失效检查。 |
+| `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt` | 当前视觉模型或已启用视觉模型协作，保留文本主模型，不把截图加入对话历史。 |
+| `android/app/src/main/java/com/newmark/mobile/data/LocalTools.kt` | 移动端 browser_use 参数定义及说明。 |
+| `DESKTOP/scripts/test-browser-vision-viewport.cjs` | 真实 Electron、PDF 流与模型 HTTP 协议回归。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/BrowserVisionViewportTest.kt` | 设备端压缩/扫描 PDF、视觉/OCR、前后台画幅、无后缀 PDF 和 Cookie 回归。 |
+| `android/app/src/main/java/com/newmark/mobile/data/MobileModels.kt`, `RemoteTrackingContract.kt`, `vm/DesktopLinkViewModel.kt` | 保留并展开 PC coalescedDeltas，按原片段 ID 合并快照和 SSE，消除过程文本双重显示。 |
+| `archive/20260908-browser-vision-viewport/` | 构建日志、截图、合成 PDF、测试报告和交付摘要。 |
+
+## dev-0.6.2 内置浏览器本地 HTML
+
+| 文件/目录 | 构造与作用 |
+| --- | --- |
+| `android/app/src/main/java/com/newmark/mobile/ui/BrowserSession.kt` | 网页、本地路径与 file/content URL 归一化；区分主动地址输入和页面发起的本地导航。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/RightSidebar.kt` | 前后台 WebView 共用文件/文档读取设置；保留 file-origin 跨源限制；导航和弹窗复用来源检查。 |
+| `android/app/src/test/java/com/newmark/mobile/ui/BrowserUrlPolicyTest.kt` | 主机、文件路径、协议别名与页面来源边界回归。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/LocalHtmlBrowserTest.kt` | 真实 WebView 验证含中文/空格/# 的文件与相对 CSS/JS/HTML。 |
+| `DESKTOP/src/ui/index.html` | 地址栏识别本地绝对路径、file URL 和 files 别名，不再错加 https 前缀。 |
+| `DESKTOP/src/core/browserUse.ts` | Browser-Use 主动导航支持本地绝对路径与 file URL，保留可执行协议和远程 file authority 拒绝。 |
+| `DESKTOP/src/core/electronBrowserUseHost.ts` | 本地页面间的 file 导航通过，网页发起的本地导航保持阻止。 |
+| `DESKTOP/scripts/test-local-html-browser.cjs` | 隔离配置与本地 HTML fixture，真实 Electron guest 加载、样式、脚本及链接验证。 |
+| `archive/20260908-local-html-browser/` | 本轮构建、回归日志、PC 截图和修复说明。 |
+
+## dev-0.6.2 全界面主题与玻璃协调
+
+目标：统一 PC 与移动端各页面的状态色和控件反馈，并用真实渲染证据验证玻璃与现有 UI 的协调。
+
+| 文件/目录 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/ui/index.html` | 语义状态色、主题悬停与选区；白色选中开关；取消旧弹窗退出回调；本地空白浏览器背景同步。 |
+| `DESKTOP/scripts/full-visual-audit.cjs` | 36 个 PC 页面/状态的双主题遍历、可见性与标签检查及原始截图。 |
+| `DESKTOP/scripts/render-visual-gallery.cjs` | 原始截图图册、主题/平台筛选与接触表。 |
+| `DESKTOP/scripts/test-liquid-switch-ui.cjs` | CDP 激活前台和焦点，避免后台动画节流干扰真实开关点击/拖动与持久化验证。 |
+| `DESKTOP/scripts/test-popup-reopen.cjs` | 快速关闭/重开弹窗的真实渲染器回归。 |
+| `DESKTOP/scripts/test-ui-consistency.cjs` | 增加选中开关圆点与 about:blank 主题检查。 |
+| `DESKTOP/scripts/dev-{uniform-popup-visuals,popup-direction-regression}.cjs` | 更新现有设置页面就绪选择器，继续验证玻璃动态与方向边界。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/theme/NewmarkTheme.kt` | 补充 warning 与亮色可读状态色。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/{ChatScreen,Sidebar,RightSidebar,MemoryLabScreen,SettingsScreen}.kt` | 状态与图谱配色跟随主题，设置导航箭头统一 Lucide。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/FullVisualAuditTest.kt` | 27 个移动端页面/状态、离线数据、PixelCopy 画面同步与系统栏主题。 |
+| `archive/20260908-dev-0.6.2-full-visual/` | REPORT、COVERAGE、gallery、逐页截图、玻璃动态探针和构建/测试日志；历史失败采集单独保留。 |
+
+
+## dev-0.6.2 双端视觉一致性
+
+目标：在适配各自窗口和输入方式的基础上，统一两端的图标笔画、文字层级和主题反馈。
+
+| 文件或目录 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/ui/index.html` | 11 处普通悬停背景改为 control-hover-bg 主题语义色。 |
+| `DESKTOP/scripts/sync-mobile-navigation-icons.cjs` | 从已安装 lucide-static 的原始 SVG 生成 12 个 Compose 导航图标；--check 检查资源偏移。 |
+| `DESKTOP/scripts/test-ui-consistency.cjs` | 隔离配置启动 Electron，验证两端文字色值、实际 hover 和设置操作布局，保存双主题截图。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/components/LucideIcons.kt` | 保留原图标，新增有上游来源的导航图标生成区；24dp viewBox、2px 圆头笔画。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/{ChatScreen,Sidebar,SettingsScreen,TerminalScreen,MemoryLabScreen}.kt` | 用 Lucide 替换实心 Material 图标，保留各控件尺寸、语义、回调与手势。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/theme/NewmarkTheme.kt` | 亮色文字层级与 PC 一致；补齐中性 Material 容器、次级色、反色和透明 surfaceTint。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/CrossPlatformUiRenderingTest.kt` | 渲染真实侧栏与供应商详情页，保存双主题手机宽度截图。 |
+| `android/app/src/test/java/com/newmark/mobile/ui/InputComposerAndModelMenuContractTest.kt` | 更新上箭头为 Lucide 资源的断言，保留输入栏几何约束。 |
+| `archive/20260908-dev-0.6.2-ui-consistency/` | 构建和回归日志、双端截图、报告及交付哈希。 |
+
+复验：先运行 Desktop build，再运行 `npm --prefix DESKTOP run test:ui-consistency`；Android 执行 JVM、指定设备回归和 Release 编译。
+
+## dev-0.6.2 移动端图标主题
+
+目标：默认应用图标和系统栏图标严格使用当前应用主题，支持手动覆盖、跟随系统和恢复页面。
+
+| 文件或目录 | 构造与作用 |
+| --- | --- |
+| `android/app/src/main/java/com/newmark/mobile/ui/theme/NewmarkTheme.kt` | 在 MaterialTheme 内提供默认 LocalContentColor，使普通 Icon 与 IconButton 继承主题前景色。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/theme/ThemeSystemBars.kt` | 解析宿主 Activity，在组合提交和生命周期恢复时应用系统栏图标亮暗属性，并清理观察者。 |
+| `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` | 首次组合读取持久化主题，再驱动应用颜色和系统栏外观。 |
+| `android/app/src/androidTest/java/com/newmark/mobile/ui/ThemeIconRenderingTest.kt` | 真实 Compose 图标像素、双向主题切换和恢复时系统栏属性回归。 |
+| `archive/20260908-dev-0.6.2-mobile-theme/` | 本轮报告、Gradle 日志、模拟器日志与图标截图。 |
+
+统一版本源与 Desktop 元数据同步到 0.6.2，Android 为 0.6.2／602；本次未执行桌面打包安装或远程发行。
+
 ## 0.6.1 MSI 构建与安装状态
 
 根目录 `VERSION`、`DESKTOP/package.json`、`DESKTOP/package-lock.json` 与 `android/app/build.gradle.kts` 已同步为 0.6.1／601。Windows 交付物位于 `release/Newmark-Agent-0.6.1-x64.msi`，已通过完整 release 门禁并安装到 `C:\Program Files\Newmark Agent\`。`archive/20260907-061-msi-install/` 保存报告与 Windows Installer 详细日志。

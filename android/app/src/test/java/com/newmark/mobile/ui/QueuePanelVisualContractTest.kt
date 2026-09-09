@@ -6,7 +6,7 @@ import org.junit.Test
 
 class QueuePanelVisualContractTest {
     @Test
-    fun queuedConversationButtonsAreBorderlessAndUseNewmarkFeedback() {
+    fun queuedConversationButtonsAreBorderlessWithoutPressFeedback() {
         val source = java.io.File("src/main/java/com/newmark/mobile/ui/ChatScreen.kt").readText()
         val queueSection = source.substring(
             source.indexOf("private fun QueuePanel("),
@@ -15,7 +15,10 @@ class QueuePanelVisualContractTest {
 
         assertTrue(queueSection.contains("private fun QueueIconButton("))
         assertTrue(queueSection.contains("indication = null"))
-        assertTrue(queueSection.contains("background(tint.copy(alpha = if (pressed) 0.15f else 0f))"))
+        val buttonSection = queueSection.substringAfter("private fun QueueIconButton(")
+        assertFalse(buttonSection.contains("collectIsPressedAsState"))
+        assertFalse(buttonSection.contains(".graphicsLayer"))
+        assertFalse(buttonSection.contains(".background"))
         assertFalse(queueSection.contains("Text(\"排队对话\""))
         assertTrue(queueSection.contains("\"\${items.size} 条待处理\""))
         assertFalse(queueSection.contains("glassButtonSurface("))

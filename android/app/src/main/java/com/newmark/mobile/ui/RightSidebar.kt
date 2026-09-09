@@ -187,14 +187,65 @@ private class ManagedBrowserWebView(context: Context) : WebView(context) {
     }
 }
 
-private fun WebView.applyNewmarkBrowserSettings() {
+/** A requested CSS canvas is fitted into the panel without changing the panel geometry. */
+internal class BrowserViewportLayout(context: Context, val browser: WebView) : android.widget.FrameLayout(context) {
+    var viewport: Pair<Int, Int>? = null
+        set(value) { field = value; requestLayout() }
+    init { addView(browser); clipChildren = true }
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val width = View.MeasureSpec.getSize(widthMeasureSpec)
+        val height = View.MeasureSpec.getSize(heightMeasureSpec)
+        val size = viewport
+        val density = resources.displayMetrics.density
+        val childWidth = size?.let { (it.first * density).toInt() } ?: width
+        val childHeight = size?.let { (it.second * density).toInt() } ?: height
+        browser.measure(View.MeasureSpec.makeMeasureSpec(childWidth, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(childHeight, View.MeasureSpec.EXACTLY))
+        setMeasuredDimension(width, height)
+    }
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        browser.layout(0, 0, browser.measuredWidth, browser.measuredHeight)
+        val scale = minOf(width.toFloat() / browser.width.coerceAtLeast(1), height.toFloat() / browser.height.coerceAtLeast(1), 1f)
+        browser.pivotX = 0f; browser.pivotY = 0f
+        browser.scaleX = scale; browser.scaleY = scale
+    }
+}
+
+internal suspend fun applyBrowserViewport(webView: WebView, size: Pair<Int, Int>): JSONObject {
+    val density = webView.resources.displayMetrics.density
+    val width = (size.first * density).toInt()
+    val height = (size.second * density).toInt()
+    require(width.toLong() * height <= 16_000_000L) { "Viewport exceeds device pixel limit" }
+    val panel = webView.parent as? BrowserViewportLayout
+    if (panel != null) {
+        panel.viewport = size
+        panel.measure(View.MeasureSpec.makeMeasureSpec(panel.width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(panel.height, View.MeasureSpec.EXACTLY))
+        panel.layout(panel.left, panel.top, panel.right, panel.bottom)
+    } else {
+        webView.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
+        webView.layout(0, 0, width, height)
+    }
+    kotlinx.coroutines.delay(150)
+    return kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+        webView.evaluateJavascript("JSON.stringify({width:innerWidth,height:innerHeight,devicePixelRatio:devicePixelRatio})") { encoded ->
+            val decoded = runCatching { org.json.JSONArray("[$encoded]").getString(0) }.getOrDefault("{}")
+            if (continuation.isActive) continuation.resumeWith(Result.success(JSONObject(decoded)))
+        }
+    }
+}
+
+internal fun WebView.applyNewmarkBrowserSettings() {
     setBackgroundColor(AndroidColor.TRANSPARENT)
     settings.javaScriptEnabled = true
+    settings.useWideViewPort = false
     settings.domStorageEnabled = true
     settings.loadsImagesAutomatically = true
     settings.cacheMode = WebSettings.LOAD_DEFAULT
-    settings.allowFileAccess = false
-    settings.allowContentAccess = false
+    settings.allowFileAccess = true
+    @Suppress("DEPRECATION")
+    settings.allowFileAccessFromFileURLs = false
+    @Suppress("DEPRECATION")
+    settings.allowUniversalAccessFromFileURLs = false
+    settings.allowContentAccess = true
     settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
     settings.javaScriptCanOpenWindowsAutomatically = true
     settings.setSupportMultipleWindows(true)
@@ -220,6 +271,12 @@ private fun bindBrowserClients(
     onPageSettled: (() -> Unit)? = null,
     onRendererGone: (WebView) -> Unit,
 ) {
+    webView.setDownloadListener { url, _, _, mime, _ ->
+        if (mime.substringBefore(';').equals("application/pdf", true) || url.substringBefore('?').endsWith(".pdf", true)) {
+            session.onPdfDocument(url)
+            onPageSettled?.invoke()
+        }
+    }
     webView.webViewClient = object : WebViewClient() {
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
             session.onNavigationError("网页渲染进程已结束，可重新加载网页", false, false)
@@ -228,7 +285,7 @@ private fun bindBrowserClients(
             return true
         }
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-            val target = BrowserUrlPolicy.normalizeNavigation(request.url.toString())
+            val target = BrowserUrlPolicy.normalizeFromPage(view.url, request.url.toString())
             return if (target != null) {
                 false
             } else {
@@ -300,14 +357,14 @@ private fun bindBrowserClients(
                         return true
                     }
                     override fun onPageStarted(popupView: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                        BrowserUrlPolicy.normalizeNavigation(url)?.let {
+                        BrowserUrlPolicy.normalizeFromPage(view.url, url)?.let {
                             session.navigate(it)
                             (popupView as ManagedBrowserWebView).release()
                         }
                     }
 
                     override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
-                        BrowserUrlPolicy.normalizeNavigation(request.url.toString())?.let {
+                        BrowserUrlPolicy.normalizeFromPage(view.url, request.url.toString())?.let {
                             session.navigate(it)
                             (popupView as ManagedBrowserWebView).release()
                             return true
@@ -342,20 +399,21 @@ class BackgroundBrowserHost(
     context: Context,
     private val session: BrowserSessionState,
     private val correctOcr: suspend (String, String) -> String = { _, _ -> "" },
+    private val inspectImage: suspend (String) -> String = { "" },
 ) : Closeable {
     private val webView = ManagedBrowserWebView(context.applicationContext).apply {
         applyNewmarkBrowserSettings()
         visibility = View.GONE
     }
-    private val recognition = BrowserRecognition(context.applicationContext, webView)
+    private val recognition = BrowserRecognition(context.applicationContext, webView, inspectImage, { session.isPdfDocument })
     private var settled = CompletableDeferred<Unit>().apply { complete(Unit) }
     private var handledCommandId = -1L
     private var closed = false
     val isClosed: Boolean get() = closed
     private val recognitionHandler: suspend (String, Int) -> JSONObject = { url, maxChars ->
-        val receipt = recognition.recognize(url, maxChars)
+        val receipt = recognition.recognize(url, maxChars, session.forceVisual, session.recognitionPage)
         val raw = receipt.optString("text")
-        if (raw.isNotBlank()) {
+        if (raw.isNotBlank() && receipt.optString("engine") == "mlkit-bundled") {
             val corrected = correctOcr(raw, receipt.optString("profile"))
             if (corrected.isNotBlank()) {
                 receipt.put("corrected_text", corrected.take(maxChars))
@@ -373,6 +431,10 @@ class BackgroundBrowserHost(
             onRendererGone = { webView.release(stopPendingLoad = false); close() },
         )
         session.bindRecognition(recognitionHandler)
+        session.viewportHandler = { size -> applyBrowserViewport(webView, size) }
+        val density = webView.resources.displayMetrics.density
+        webView.measure(View.MeasureSpec.makeMeasureSpec((1280 * density).toInt(), View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec((720 * density).toInt(), View.MeasureSpec.EXACTLY))
+        webView.layout(0, 0, webView.measuredWidth, webView.measuredHeight)
     }
 
     val isAttachedToUi: Boolean
@@ -428,6 +490,7 @@ class BackgroundBrowserHost(
         if (closed) return
         closed = true
         session.unbindRecognition(recognitionHandler)
+        session.viewportHandler = null
         recognition.close()
         webView.release()
     }
@@ -588,7 +651,7 @@ private fun UploadTaskRow(task: WorkspaceUploadProgress) {
             trackColor = p.bgQuaternary,
         )
         if (task.error.isNotBlank()) {
-            Text(task.error, color = Color(0xFFFF7777), fontSize = 9.sp, maxLines = 2,
+            Text(task.error, color = p.red, fontSize = 9.sp, maxLines = 2,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 5.dp))
         }
     }
@@ -1165,7 +1228,7 @@ private fun EditorPanel(vm: DesktopLinkViewModel) {
             }
             Row(Modifier.fillMaxWidth().height(25.dp).border(1.dp, p.border).padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                Text(if (markdownPreview) "READ" else "INSERT", color = Color(0xFF38D4A0), fontSize = 9.sp,
+                Text(if (markdownPreview) "READ" else "INSERT", color = p.green, fontSize = 9.sp,
                     fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                 Text("  ${editorLanguage(vm.rightSidebarEditorPath)}", color = p.textTertiary, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
                 Spacer(Modifier.weight(1f))
@@ -1273,8 +1336,8 @@ private fun EditablePlanRow(item: RemotePlanItem, onCycle: () -> Unit, onEdit: (
         IconButton(
             LucideIcons.Check,
             "切换任务状态",
-            if (item.status == "done") Color(0xFF38D4A0) else p.textSecondary,
-            border = if (item.status == "in_progress") Color(0x80F0AD4E) else p.border,
+            if (item.status == "done") p.green else p.textSecondary,
+            border = if (item.status == "in_progress") p.warning.copy(alpha = .5f) else p.border,
         ) { onCycle() }
         if (editing) {
             BasicTextField(
@@ -1325,7 +1388,7 @@ private fun SubagentPanel(vm: DesktopLinkViewModel, onOpen: (RemoteSubagent) -> 
                         targetState = agent.status,
                         transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(120)) },
                         label = "subagentStatus",
-                    ) { status -> Text(status, color = Color(0xFF38D4A0), fontSize = 9.sp) }
+                    ) { status -> Text(status, color = p.green, fontSize = 9.sp) }
                 }
                 Box(Modifier.fillMaxWidth().height(1.dp).background(p.border))
             }
@@ -1388,12 +1451,12 @@ private fun SubagentHistoryContent(agent: RemoteSubagent, modifier: Modifier = M
         Text("${agent.status} / ${agent.mode} / ${agent.model.ifBlank { "default" }}", color = p.textSecondary,
             fontSize = 10.sp, modifier = Modifier.padding(top = 7.dp, bottom = 10.dp))
         agent.result?.takeIf(String::isNotBlank)?.let {
-            Text("结果", color = Color(0xFF38D4A0), fontSize = 11.sp, modifier = Modifier.padding(bottom = 4.dp))
+            Text("结果", color = p.green, fontSize = 11.sp, modifier = Modifier.padding(bottom = 4.dp))
             Text(it, color = p.textPrimary, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = FontFamily.Monospace,
                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(p.bgTertiary)
                     .border(1.dp, p.border, RoundedCornerShape(8.dp)).padding(10.dp))
         }
-        Text("历史", color = Color(0xFF38D4A0), fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+        Text("历史", color = p.green, fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
         if (agent.messages.isEmpty()) EmptyState("没有记录消息。")
         agent.messages.forEach { message ->
             key(message.role, message.content) {
@@ -1601,10 +1664,12 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
                             ?: BrowserRecognition(
                                 context.applicationContext,
                                 this,
+                                { image -> localVm?.inspectBrowserImage(image).orEmpty() },
+                                { session.isPdfDocument },
                             ).also { recognition = it }
-                        val receipt = browserRecognition.recognize(url, maxChars)
+                        val receipt = browserRecognition.recognize(url, maxChars, session.forceVisual, session.recognitionPage)
                         val raw = receipt.optString("text")
-                        if (raw.isNotBlank() && localVm != null) {
+                        if (raw.isNotBlank() && localVm != null && receipt.optString("engine") == "mlkit-bundled") {
                             val corrected = localVm.correctFinalVisualOcr(raw, receipt.optString("profile"))
                             if (corrected.isNotBlank()) {
                                 receipt.put("corrected_text", corrected.take(maxChars))
@@ -1618,16 +1683,18 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
                     recognitionHandler = handler
                     session.bindRecognition(handler)
                     webView = this
+                    session.viewportHandler = { size -> applyBrowserViewport(this, size) }
                     visibility = if (visible) View.VISIBLE else View.INVISIBLE
-                }
+                }.let { browser -> BrowserViewportLayout(context, browser).apply { viewport = session.viewport } }
             },
             update = { view ->
                 // INVISIBLE keeps the warmed WebView mounted and loading, but
                 // guarantees it cannot draw over or intercept sibling tabs.
                 val visibility = if (visible) View.VISIBLE else View.INVISIBLE
+                view.browser.visibility = visibility
                 if (view.visibility != visibility) {
                     view.visibility = visibility
-                    if (visible) view.onResume() else view.onPause()
+                    if (visible) view.browser.onResume() else view.browser.onPause()
                 }
             },
             modifier = Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(8.dp)).border(1.dp, p.border2, RoundedCornerShape(8.dp)),
@@ -1637,6 +1704,7 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
         onDispose {
             recognitionHandler?.let(session::unbindRecognition)
             recognitionHandler = null
+            session.viewportHandler = null
             recognition?.close()
             recognition = null
             (webView as? ManagedBrowserWebView)?.release()

@@ -60,21 +60,29 @@ class ConversationStore(context: Context) {
         if (!file.exists()) return emptyList()
         return runCatching {
             val type = object : TypeToken<List<LocalConversation>>() {}.type
-            normalizeConversations(gson.fromJson<List<LocalConversation>>(file.readText(), type) ?: emptyList())
+            file.bufferedReader().use { reader ->
+                normalizeConversations(gson.fromJson<List<LocalConversation>>(reader, type) ?: emptyList())
+            }
         }.getOrDefault(emptyList())
     }
 
     @Synchronized
     fun save(conversations: List<LocalConversation>): Result<Unit> = runCatching {
-        val json = gson.toJson(conversations).toByteArray(Charsets.UTF_8)
-        writeConversationSnapshotAtomically(file) { it.write(json) }.getOrThrow()
+        writeConversationSnapshotAtomically(file) { output ->
+            // Stream large image-bearing snapshots instead of allocating JSON + UTF-8 copies.
+            val writer = output.writer(Charsets.UTF_8).buffered()
+            gson.toJson(conversations, writer)
+            writer.flush()
+        }.getOrThrow()
     }
 
     fun loadArchived(): List<LocalConversation> {
         if (!archivedFile.exists()) return emptyList()
         return runCatching {
             val type = object : TypeToken<List<LocalConversation>>() {}.type
-            normalizeConversations(gson.fromJson<List<LocalConversation>>(archivedFile.readText(), type) ?: emptyList())
+            archivedFile.bufferedReader().use { reader ->
+                normalizeConversations(gson.fromJson<List<LocalConversation>>(reader, type) ?: emptyList())
+            }
         }.getOrDefault(emptyList())
     }
 

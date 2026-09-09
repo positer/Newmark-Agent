@@ -1,5 +1,7 @@
 package com.newmark.mobile.ui
 
+import com.newmark.mobile.ui.components.LucideIcons
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -21,9 +23,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -101,7 +100,7 @@ fun TerminalScreen(onBack: () -> Unit) {
                     .clickable(onClick = onBack),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = p.textPrimary, modifier = Modifier.size(20.dp))
+                Icon(LucideIcons.ArrowLeft, contentDescription = "返回", tint = p.textPrimary, modifier = Modifier.size(20.dp))
             }
             Text("命令行", fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = p.textPrimary, modifier = Modifier.padding(horizontal = 12.dp))
         }
@@ -190,7 +189,7 @@ fun TerminalScreen(onBack: () -> Unit) {
                     .clickable { if (input.isNotBlank()) runCommand(input.trim()) },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.Send, contentDescription = "执行", tint = p.textPrimary, modifier = Modifier.size(14.dp))
+                Icon(LucideIcons.Send, contentDescription = "执行", tint = p.textPrimary, modifier = Modifier.size(14.dp))
             }
         }
     }

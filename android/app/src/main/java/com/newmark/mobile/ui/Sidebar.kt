@@ -1,6 +1,7 @@
 package com.newmark.mobile.ui
 
 import android.widget.Toast
+import com.newmark.mobile.ui.components.conversationRuntimeBorder
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -53,18 +54,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Computer
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Laptop
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -187,6 +176,7 @@ fun SidebarContent(
     expandedDevice: Device?,
     conversations: List<LocalConversation>,
     currentConversationId: String?,
+    runningLocalConversationIds: Set<String> = emptySet(),
     onToggleDevice: (Device) -> Unit,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -224,6 +214,7 @@ fun SidebarContent(
             expandedDevice = expandedDevice,
             conversations = conversations,
             currentConversationId = currentConversationId,
+            runningLocalConversationIds = runningLocalConversationIds,
             onToggleDevice = onToggleDevice,
             onOpenSettings = onOpenSettings,
             onOpenMemoryLab = onOpenMemoryLab,
@@ -304,6 +295,7 @@ private fun MainSidebar(
     expandedDevice: Device?,
     conversations: List<LocalConversation>,
     currentConversationId: String?,
+    runningLocalConversationIds: Set<String> = emptySet(),
     onToggleDevice: (Device) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenMemoryLab: () -> Unit,
@@ -533,7 +525,7 @@ private fun MainSidebar(
                         modifier = Modifier.padding(end = 10.dp),
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Add,
+                            imageVector = LucideIcons.Plus,
                             contentDescription = "新对话",
                             tint = pc.textDim,
                             modifier = Modifier.size(14.dp),
@@ -582,6 +574,7 @@ private fun MainSidebar(
                                             ?: coordinates.boundsInParent()
                                     },
                                     conversation = conv,
+                                    running = conv.id in runningLocalConversationIds,
                                     contact = localConversationContact,
                                     selected = !localConversationGlassVisible && conv.id == localVisualSelectedId,
                                     reordering = draggingLocalId != null,
@@ -777,7 +770,7 @@ private fun DeviceWorkspaceSection(
                         .clickable { onSelectDevice(device.host) },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Filled.Computer, contentDescription = device.displayName, tint = pc.textDim, modifier = Modifier.size(16.dp))
+                    Icon(LucideIcons.Monitor, contentDescription = device.displayName, tint = pc.textDim, modifier = Modifier.size(16.dp))
                 }
             }
         } else {
@@ -831,7 +824,7 @@ private fun WorkspaceInfoRow(workspace: WorkspaceInfo, onClick: () -> Unit) {
             .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Filled.Folder, contentDescription = null, tint = pc.textDim, modifier = Modifier.size(14.dp))
+        Icon(LucideIcons.Folder, contentDescription = null, tint = pc.textDim, modifier = Modifier.size(14.dp))
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Text(workspace.name, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = pc.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -862,7 +855,7 @@ private fun PairedDeviceRow(device: PairInfo, active: Boolean, linkStatus: LinkS
             .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Filled.Computer, contentDescription = null, tint = if (active) pc.accent else pc.textDim, modifier = Modifier.size(16.dp))
+        Icon(LucideIcons.Monitor, contentDescription = null, tint = if (active) pc.accent else pc.textDim, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -895,7 +888,7 @@ private fun DeviceRow(device: Device, expanded: Boolean, onClick: () -> Unit) {
             .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(imageVector = if (device.online) Icons.Filled.Computer else Icons.Filled.Laptop, contentDescription = null, tint = p.textSecondary, modifier = Modifier.size(16.dp))
+        Icon(imageVector = if (device.online) LucideIcons.Monitor else LucideIcons.Laptop, contentDescription = null, tint = p.textSecondary, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -914,7 +907,7 @@ private fun DeviceRow(device: Device, expanded: Boolean, onClick: () -> Unit) {
             )
         }
         Icon(
-            imageVector = Icons.Filled.KeyboardArrowDown,
+            imageVector = LucideIcons.ChevronDown,
             contentDescription = null,
             tint = p.textTertiary,
             modifier = Modifier.size(16.dp),
@@ -933,7 +926,7 @@ private fun DeviceRailIcon(device: Device, expanded: Boolean, onClick: () -> Uni
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(imageVector = if (device.online) Icons.Filled.Computer else Icons.Filled.Laptop, contentDescription = null, tint = p.textSecondary, modifier = Modifier.size(16.dp))
+        Icon(imageVector = if (device.online) LucideIcons.Monitor else LucideIcons.Laptop, contentDescription = null, tint = p.textSecondary, modifier = Modifier.size(16.dp))
     }
 }
 
@@ -1013,6 +1006,7 @@ private fun WorkspaceThumb(workspace: Workspace) {
 private fun LocalConversationRow(
     modifier: Modifier = Modifier,
     conversation: LocalConversation,
+    running: Boolean,
     contact: LiquidContactState,
     selected: Boolean,
     reordering: Boolean,
@@ -1034,6 +1028,7 @@ private fun LocalConversationRow(
     val pc = pcSecondaryPalette()
     val density = LocalDensity.current
     val setSidebarGestureLock = LocalSidebarGestureLock.current
+    val menuHaptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     var showMenu by remember { mutableStateOf(false) }
     var menuTrigger by remember { mutableStateOf(ConversationMenuTrigger.MoreButton) }
     var renaming by remember { mutableStateOf(false) }
@@ -1073,6 +1068,7 @@ private fun LocalConversationRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(shape)
+                .conversationRuntimeBorder(running && !lifted && !glassCovered)
                 .background(
                     when {
                         lifted || glassCovered -> Color.Transparent
@@ -1094,7 +1090,7 @@ private fun LocalConversationRow(
             } else {
                 Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
                     if (conversation.pinned) {
-                        Icon(Icons.Filled.PushPin, contentDescription = null, tint = pc.accent, modifier = Modifier.size(12.dp))
+                        Icon(LucideIcons.Pin, contentDescription = null, tint = pc.accent, modifier = Modifier.size(12.dp))
                     }
                 }
                 Box(
@@ -1114,6 +1110,7 @@ private fun LocalConversationRow(
                                     onDragEnd(moved)
                                     if (!moved) {
                                         menuTrigger = ConversationMenuTrigger.LongPress
+                                        menuHaptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                         showMenu = true
                                     }
                                 }
@@ -1191,7 +1188,7 @@ private fun ConversationRow(conversation: Conversation) {
                     .background(p.bgQuaternary),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.Folder, contentDescription = null, tint = p.textTertiary, modifier = Modifier.size(13.dp))
+                Icon(LucideIcons.Folder, contentDescription = null, tint = p.textTertiary, modifier = Modifier.size(13.dp))
             }
         }
     }
@@ -1229,7 +1226,7 @@ private fun CollapsedUtilityButtons(
     val setSidebarGestureLock = LocalSidebarGestureLock.current
     val actions = listOf(onOpenTerminal, onOpenMemoryLab, onOpenSettings)
     val currentActions by rememberUpdatedState(actions)
-    val icons = listOf(Icons.Filled.Terminal, Icons.Filled.Psychology, Icons.Filled.Settings)
+    val icons = listOf(LucideIcons.Terminal, LucideIcons.Brain, LucideIcons.Settings)
     val labels = listOf("命令行", "Memory Lab", "设置")
     val utilityBackdrop = rememberLiquidBackdrop()
     val glassContact = rememberLiquidContactState()
@@ -1436,7 +1433,7 @@ private fun ExpandedUtilityButtons(
     val setSidebarGestureLock = LocalSidebarGestureLock.current
     val actions = listOf(onOpenTerminal, onOpenMemoryLab, onOpenSettings)
     val currentActions by rememberUpdatedState(actions)
-    val icons = listOf(Icons.Filled.Terminal, Icons.Filled.Psychology, Icons.Filled.Settings)
+    val icons = listOf(LucideIcons.Terminal, LucideIcons.Brain, LucideIcons.Settings)
     val labels = listOf("命令行", "Memory Lab", "设置")
     val utilityBackdrop = rememberLiquidBackdrop()
     val glassContact = rememberLiquidContactState()
@@ -1631,7 +1628,7 @@ private fun TerminalButton(rail: Boolean, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (rail) Arrangement.Center else Arrangement.Start,
         ) {
-            Icon(Icons.Filled.Terminal, contentDescription = "命令行", tint = pc.textDim, modifier = Modifier.size(18.dp))
+            Icon(LucideIcons.Terminal, contentDescription = "命令行", tint = pc.textDim, modifier = Modifier.size(18.dp))
             if (!rail) {
                 Spacer(Modifier.width(10.dp))
                 Text(
@@ -1658,7 +1655,7 @@ private fun MemoryLabButton(rail: Boolean, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (rail) Arrangement.Center else Arrangement.Start,
         ) {
-            Icon(Icons.Filled.Psychology, contentDescription = "Memory Lab", tint = pc.textDim, modifier = Modifier.size(18.dp))
+            Icon(LucideIcons.Brain, contentDescription = "Memory Lab", tint = pc.textDim, modifier = Modifier.size(18.dp))
             if (!rail) {
                 Spacer(Modifier.width(10.dp))
                 Text(
@@ -1686,7 +1683,7 @@ private fun SettingsButton(rail: Boolean, onClick: () -> Unit) {
             horizontalArrangement = if (rail) Arrangement.Center else Arrangement.Start,
         ) {
             Icon(
-                imageVector = Icons.Filled.Settings,
+                imageVector = LucideIcons.Settings,
                 contentDescription = "设置",
                 tint = pc.textDim,
                 modifier = Modifier.size(18.dp),
@@ -1762,10 +1759,10 @@ private val PcSecondaryLight = PcSecondaryPalette(
     textDim = Color(0xFF6A7090),
     textBright = Color(0xFF0A0A1A),
     textAccent = Color(0xFF4A68DF),
-    accent = Color(0xFF5B78FF),
-    accent2 = Color(0xFF38D4A0),
-    runtimeWarning = Color(0xFFFFD27A),
-    runtimeDanger = Color(0xFFFF9CA6),
+    accent = Color(0xFF405BD2),
+    accent2 = Color(0xFF147D59),
+    runtimeWarning = Color(0xFF8A5B00),
+    runtimeDanger = Color(0xFFC73545),
     border = Color(0x0F000000),
     buttonBorder = Color(0x14000000),
     border2 = Color(0x14000000),
@@ -2272,6 +2269,7 @@ private fun PcRemoteConversationRow(
     onDragEnd: (Boolean) -> Unit,
     onDragCancel: () -> Unit,
 ) {
+    val menuHaptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     var showMenu by remember { mutableStateOf(false) }
     var menuTrigger by remember { mutableStateOf(ConversationMenuTrigger.MoreButton) }
     var archivingOut by remember { mutableStateOf(false) }
@@ -2304,6 +2302,9 @@ private fun PcRemoteConversationRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(shape)
+                .conversationRuntimeBorder(
+                    runtimeStatus in setOf("running", "stopping", "force_restarting") && !lifted && !glassCovered,
+                )
                 .background(
                     when {
                         lifted || glassCovered -> Color.Transparent
@@ -2347,6 +2348,7 @@ private fun PcRemoteConversationRow(
                                     onDragEnd(moved)
                                     if (!moved) {
                                         menuTrigger = ConversationMenuTrigger.LongPress
+                                        menuHaptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                         showMenu = true
                                     }
                                 }

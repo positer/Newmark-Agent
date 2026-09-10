@@ -80,6 +80,7 @@ function createFixture(): {
     var workUi = { pendingWorkReview: null };
     function runtimeWorkspaceId(value) { return String(value || activeTarget.workspaceId); }
     function runtimeKeyFor(workspaceId, conversationId) { return runtimeWorkspaceId(workspaceId) + '::' + String(conversationId || 'default'); }
+    function branchConversationViewKey(target) { return runtimeKeyFor(target.workspaceId, target.conversationId); }
     function currentConversationTarget() { return { workspaceId: activeTarget.workspaceId, conversationId: activeTarget.conversationId }; }
     function activeConversationId() { return activeTarget.conversationId; }
     function isActiveConversationTarget(target) { return runtimeKeyFor(target.workspaceId, target.conversationId) === runtimeKeyFor(activeTarget.workspaceId, activeTarget.conversationId); }
@@ -100,6 +101,7 @@ function createFixture(): {
     function isHiddenWorkflowMessage() { return false; }
     function renderPersistedToolMessage() {}
     function finishToolBatch() {}
+    function showUiNotice() {}
     function autoScrollIfAtBottom() {}
     function shouldAutoScroll() { return true; }
     function findWorkRunElement(run) { return document.querySelector('[data-test-run-id="' + String(run && run.runId || '') + '"]'); }
@@ -181,18 +183,22 @@ function main(): void {
     }
     fixture.renderPendingGuideMessages(fixture.targetA, {});
     const liveBody = liveRun.querySelector('.conversation-work-run-body')!;
-    const awaitingStack = liveBody.lastElementChild!;
-    assert.equal(awaitingStack.classList.contains('work-run-pending-guides'), true,
-      'unacknowledged Guides use a temporary stack at the bottom of the expanded Build body');
-    assert.deepEqual(Array.from(awaitingStack.querySelectorAll('[data-client-message-id]')).map(node => node.getAttribute('data-client-message-id')),
-      ['guide-awaiting-one', 'guide-awaiting-two'], 'multiple unacknowledged Guides enter the bottom waiting stack together in submission order');
+    assert.equal(liveBody.querySelectorAll('.work-run-pending-guides').length, 0,
+      'dev-0.6.4: unaccepted Guides never build a temporary waiting stack in the timeline');
+    assert.equal(guideRows(fixture.document, 'guide-awaiting-one').length, 0,
+      'dev-0.6.4: a Guide is not displayed before the kernel accepts it');
+    assert.equal(guideRows(fixture.document, 'guide-awaiting-two').length, 0,
+      'dev-0.6.4: every unaccepted Guide stays out of the conversation area');
     fixture.recordGuideUiMessage({
       clientMessageId: 'guide-awaiting-one', target: fixture.targetA, runId: 'run-awaiting-ack', status: 'accepted', content: 'waiting 1',
     }, fixture.targetA);
     assert.equal(guideRows(fixture.document, 'guide-awaiting-one').length, 0,
-      'the temporary bottom row disappears as soon as an authoritative acknowledgement arrives');
+      'acceptance alone does not repaint a queued Guide inside the collapsed live Build body');
+    fixture.renderPendingGuideMessages(fixture.targetA, {});
+    assert.equal(guideRows(fixture.document, 'guide-awaiting-one').length, 1,
+      'dev-0.6.4: the accepted Guide appears at its acceptance position once the timeline is reconciled');
     assert.match(liveBody.firstElementChild?.textContent || '', /existing sequenced work/,
-      'temporary Guide rendering never moves or rewrites sequenced Build events');
+      'Guide acceptance never moves or rewrites sequenced Build events');
     liveRun.remove();
     fixture.recordGuideUiMessage({
       clientMessageId: acceptedId,
@@ -223,10 +229,11 @@ function main(): void {
       }],
     }], fixture.targetA);
     fixture.renderChatMessages([]);
-    assert.equal(guideRows(fixture.document, acceptedId).length, 1, 'deferred Guide survives a destructive snapshot redraw');
-    assert.equal(guideRows(fixture.document, acceptedId)[0].getAttribute('data-guide-status'), 'deferred');
-    assert.equal(guideRows(fixture.document, acceptedId)[0].querySelectorAll('.conversation-image-attachment').length, 1,
-      'deferred receipt restores its durable attachment after a destructive snapshot redraw');
+    assert.equal(guideRows(fixture.document, acceptedId).length, 0,
+      'dev-0.6.4: a deferred (not yet accepted) Guide stays out of the conversation area');
+    const deferredRecord = fixture.guideMessagesForTarget(fixture.targetA)[acceptedId];
+    assert.equal(deferredRecord.status, 'deferred',
+      'the deferred receipt is still tracked so acceptance can place it at the acceptance position');
 
     const persisted = [{
       role: 'user',
@@ -290,10 +297,8 @@ function main(): void {
       reason: 'run already settled',
     }, fixture.targetA);
     fixture.renderChatMessages(persisted);
-    assert.equal(guideRows(fixture.document, rejectedId).length, 1, 'rejected Guide is retained through redraw');
-    const rejected = guideRows(fixture.document, rejectedId)[0];
-    assert.equal(rejected.getAttribute('data-guide-status'), 'rejected');
-    assert.match(rejected.textContent || '', /Guide\s*·\s*Rejected/, 'rejected state is explicit in visible UI');
+    assert.equal(guideRows(fixture.document, rejectedId).length, 0,
+      'dev-0.6.4: a rejected Guide is never displayed in the conversation area');
 
     fixture.recordGuideUiMessage({
       clientMessageId: 'guide-b',

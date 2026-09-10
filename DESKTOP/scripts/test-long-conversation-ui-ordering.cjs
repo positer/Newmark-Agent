@@ -36,7 +36,7 @@ function harness() {
     runtimeKeyFor(w, c) { return w + ':' + c; },
     isActiveConversationTarget(t) { return t.workspaceId === ctx.active.workspaceId && t.conversationId === ctx.active.conversationId; },
     currentLang() { return 'en'; }, shouldAutoScroll() { return false; }, esc(value) { return String(value); }, t(value) { return value; }, workspaceIdentity(value) { return value.id; },
-    document: { createElement() { const b = { addEventListener(name, fn) { this[name] = fn; }, remove() { area.buttons = area.buttons.filter(v => v !== this); } }; return b; }, getElementById() { return area; } },
+    document: { createElement() { const b = { addEventListener(name, fn) { this[name] = fn; }, remove() { area.buttons = area.buttons.filter(v => v !== this); } }; return b; }, getElementById(id) { return (id === 'chat-area' || id === 'right-status-content') ? area : null; } },
     renders: [], contextRenders: [], statusRenders: 0,
     renderChatMessages(messages, target) { const actualTarget = target || ctx.currentConversationTarget(); state.renderedChatMessages = ctx.cacheConversationMessages(messages, actualTarget); ctx.renders.push({ target: json(actualTarget), messages: json(messages) }); area.buttons = []; },
     runningConversationRecord() { return null; }, workRunsForTarget() { return []; },
@@ -48,7 +48,7 @@ function harness() {
     renderContextWindow() { ctx.contextRenders.push(json(state.contextWindow)); }, renderRightStatusPanel() { ctx.statusRenders++; }, renderSubagentList() {} };
   vm.createContext(ctx);
   const globals = html.slice(html.indexOf('var _contextWindowRefreshTimer'), html.indexOf('function scheduleActiveContextWindowRefresh'));
-  vm.runInContext(globals + ['hydrateConversationDraftSnapshot', 'cacheConversationMessages', 'conversationMessageCache', 'conversationHasReadableHistory', 'snapshotHasReadableConversationHistory', 'renderLoadEarlierButton', 'scheduleActiveContextWindowRefresh', 'applyConversationSnapshot', 'window.refreshRightStatus'].map(sourceOf).join('\n'), ctx);
+  vm.runInContext(globals + ['hydrateConversationDraftSnapshot', 'normalizeQueuedConversationTarget', 'conversationBranchIdentity', 'rememberViewedBranchNodeId', 'viewedBranchNodeIdFor', 'branchConversationViewKey', 'cacheConversationMessages', 'conversationMessageCache', 'conversationHasReadableHistory', 'snapshotHasReadableConversationHistory', 'renderLoadEarlierButton', 'scheduleActiveContextWindowRefresh', 'applyConversationModelSelection', 'applyConversationSnapshot', 'window.refreshRightStatus'].map(sourceOf).join('\n'), ctx);
   ctx.tick = async () => { const pending = [...timers.values()]; timers.clear(); for (const fn of pending) fn(); await flush(); };
   ctx.timerCount = () => timers.size;
   ctx.switchTo = target => { ctx.active = { ...target }; state.conversationLoadGeneration++; state.renderedChatMessages = [{ content: target.workspaceId === A.workspaceId ? 'A-latest' : 'B-latest' }]; };

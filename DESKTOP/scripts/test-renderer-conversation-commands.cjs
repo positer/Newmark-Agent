@@ -80,6 +80,9 @@ function harness(names, extra = {}) {
     restoreModeAfterGoalEdit() {}, showUiNotice() {}, currentLang: () => 'en',
     setQueueItemsForTarget() {}, setBackendQueueForTarget: value => value, backendQueueForTarget: () => snapshot.queued,
     applyConversationCommandSnapshot() {}, flowTakeoverRecordFor: () => ({}),
+    // dev-0.6.4: the drain-triggered transcript refresh is inert in these command harnesses.
+    scheduleDrainedTurnTranscriptRefresh() {},
+    refreshConversationTranscriptFromBackend() { return Promise.resolve(null); },
     ...extra,
     state,
   });
@@ -113,9 +116,15 @@ function crossTargetQueueHarness() {
     }
   } };
   const document = { getElementById: id => ({ 'queue-panel': panel, 'queue-list': list, 'queue-header-label': {} })[id] || null, querySelectorAll: () => rows };
-  const names = ['queueItemsForTarget', 'setQueueItemsForTarget', 'queueItemIdForText', 'bindBackendQueuedRequestToTarget', 'normalizeBackendQueue', 'setBackendQueueForTarget', 'backendQueueForTarget', 'syncNextQueueFromBackend', 'queueIndexesForTarget', 'renderQueuePanel', 'focusQueueItem', 'deleteQueueItem', 'guideQueueItem', 'restoreQueueItemAfterGuideFailure', 'startQueueDrag', 'queueDropTargetIndex', 'previewQueueDrag', 'overQueueDrag', 'dropQueueDrag', 'endQueueDrag'];
+  const names = ['queueItemsForTarget', 'setQueueItemsForTarget', 'queueItemIdForText', 'bindBackendQueuedRequestToTarget', 'normalizeBackendQueue', 'setBackendQueueForTarget', 'backendQueueForTarget', 'syncNextQueueFromBackend', 'queueIndexesForTarget', 'queueRequestBranchMismatch', 'queueRuntimeKey', 'renderQueuePanel', 'focusQueueItem', 'deleteQueueItem', 'guideQueueItem', 'restoreQueueItemAfterGuideFailure', 'startQueueDrag', 'queueDropTargetIndex', 'previewQueueDrag', 'overQueueDrag', 'dropQueueDrag', 'endQueueDrag'];
   for (const name of ['queueRequestIndex', 'queueIndexFromElement', 'refreshQueueRowIndexes']) if (functions.has(name)) names.push(name);
-  const h = harness(names, { document, isQueuePausedForTarget: () => true, t: value => value, esc: value => String(value), escAttr: value => String(value), iconSvg: () => '', state: { queueCollapsed: false, _editingQueueIndex: -1, queueDragIndex: -1 } });
+  const h = harness(names, {
+    document, isQueuePausedForTarget: () => true, t: value => value, esc: value => String(value), escAttr: value => String(value), iconSvg: () => '',
+    state: { queueCollapsed: false, _editingQueueIndex: -1, queueDragIndex: -1 },
+    // dev-0.6.4: drain-triggered transcript refresh is inert in this command harness.
+    scheduleDrainedTurnTranscriptRefresh() {},
+    refreshConversationTranscriptFromBackend() { return Promise.resolve(null); },
+  });
   const seed = (owner, ids) => {
     const items = ids.map((id, index) => ({ id, text: 'duplicate text', requestedMode: index ? 'goal' : 'plan', goalObjective: index ? 'preserved objective' : '', createdAt: `2026-09-06T00:00:0${index}.000Z` }));
     h.context.setQueueItemsForTarget(items, owner);

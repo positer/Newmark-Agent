@@ -27,6 +27,7 @@ import { FlowEngine, FlowWorkflow } from './flow';
 import { AutomationCondition, AutomationManager, AutomationSchedule } from './automation';
 import { MemoryLabManager, MemoryLabPatchInput, MemoryLabPreparedUpdate, MemoryLabUpdateInput, MemoryLabWriteResult } from './memoryLab';
 import { runAgentKernel } from './agentKernelRunner';
+import { branchConversationIdentity, assertFreshBranchIdentity } from './branchIdentity';
 import { chatModePolicyPrompt, evaluateToolPolicy, filterToolDefinitions, isReadOnlyScopedToolAction, planModePolicyPrompt } from './toolPolicy';
 import type { AgentPromptMessage } from './conversationKernel';
 import {
@@ -167,6 +168,8 @@ export interface CompressionCacheEntry {
   foldedChars: number;
   model: string;
   fallback: boolean;
+  /** Branch node that owns this folded history. Sibling pages must never read it. */
+  branchNodeId?: string;
 }
 type ConversationModelSelection = { kind: 'auto' } | { kind: 'deployment'; providerId: string; modelId: string };
 export type ConversationFlowSelection = { name: string; pc: number };
@@ -1375,6 +1378,24 @@ export class Agent {
 
   currentWorkRunId(): string {
     return this.activeWorkRunId || this.finalizingWorkRunId || '';
+  }
+
+  /**
+   * The branch node that owns the currently active Build. Provider session ids
+   * and branch-scoped caches must use this identity instead of "the branch that
+   * happens to be active", otherwise a concurrently running sibling branch
+   * (branch-communication mode) or a page switched mid-Build would read another
+   * branch's remote session and folded history.
+   */
+  activeWorkRunBranchId(): string {
+    const runId = this.currentWorkRunId();
+    const run = runId ? this.workRuns.find(item => String(item.runId || '') === runId) : undefined;
+    return String(run?.branchNodeId || '') || this.currentBranchNodeId();
+  }
+
+  /** Full conversation identity of one branch node (shared by every branch kind). */
+  branchConversationIdentity(branchNodeId: string): string {
+    return branchConversationIdentity(this.activeConversationId || 'default', branchNodeId);
   }
 
   activeModelConfig(): ReturnType<ConfigManager['allModels']>[number] | undefined {
@@ -3931,6 +3952,10 @@ export class Agent {
         && ((targetGuideNodeId && group.pageGuideIds?.[parentNodeId] === targetGuideNodeId)
           || (!targetGuideNodeId && targetMessageId && group.pageMessageIds?.[parentNodeId] === targetMessageId))));
     const branchId = crypto.randomUUID();
+    // dev-0.6.4: 新分支（用户分页编辑与实验性分支交流共用这一事务）必须拿到
+    // 全新的全对话 id。复用节点 id 会让两个分支共享 provider 会话序列、
+    // 压缩历史与本地缓存，正是「跨分支缓存」必须禁止的情形。
+    assertFreshBranchIdentity(clean || this.activeConversationId || 'default', branchId, Object.keys(tree.nodes));
     const branch = this.treeNodeFromEntry(branchId, parentNodeId, index, text, {
       ...entry,
       chatMessages: sourceNode.chatMessages.slice(0, index),
@@ -4609,7 +4634,7 @@ export class Agent {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
       providerUsage: this.conversationProviderUsage(),
-      compressionCache: [...this.compressionCache],
+      compressionCache: this.mergedCompressionCacheForPersist(stored.conversations[stateKey]),
       branchMailbox: [...this.branchMailbox],
       branchCommunication: this.branchCommunicationEnabled,
       plan: this.normalizeConversationPlan(this.conversationPlan),
@@ -4668,7 +4693,7 @@ export class Agent {
     if (saved) {
       this.restoreProviderUsage(saved.providerUsage);
       this.history = [...saved.history];
-      this.compressionCache = saved.compressionCache ? saved.compressionCache.map(entry => ({ ...entry, messages: [...entry.messages] })) : [];
+      this.compressionCache = this.compressionCacheForBranch(saved.compressionCache);
       this.nextCompressionCacheId = Math.max(1, ...this.compressionCache.map(entry => Number(entry.id.replace(/^ctx-cache-/, '')) || 0)) + 1;
       this.branchMailbox = (saved.branchMailbox || []).map(message => ({ ...message }));
       this.nextBranchMessageSequence = Math.max(1, ...this.branchMailbox.map(message => Number(message.sequence) || 0)) + 1;
@@ -4697,7 +4722,7 @@ export class Agent {
     this.restoreProviderUsage(persisted?.providerUsage);
     const repairedHistory = this.repairDanglingToolCalls(persisted?.history ? [...persisted.history] : []);
     this.history = repairedHistory.messages;
-    this.compressionCache = persisted?.compressionCache ? persisted.compressionCache.map(entry => ({ ...entry, messages: [...entry.messages] })) : [];
+    this.compressionCache = this.compressionCacheForBranch(persisted?.compressionCache);
     this.nextCompressionCacheId = Math.max(1, ...this.compressionCache.map(entry => Number(entry.id.replace(/^ctx-cache-/, '')) || 0)) + 1;
     this.branchMailbox = (persisted?.branchMailbox || []).map(message => ({ ...message }));
     this.nextBranchMessageSequence = Math.max(1, ...this.branchMailbox.map(message => Number(message.sequence) || 0)) + 1;
@@ -10019,7 +10044,40 @@ export class Agent {
 
   private compressionArchiveScopeKey(): string | null {
     if (this.isSubagentRuntime || !this.config.getBool('context', 'compression_archive_enabled')) return null;
-    return this.workspaceConversationKey();
+    const base = this.workspaceConversationKey();
+    if (!base) return null;
+    // dev-0.6.4: 折叠历史必须按分支节点隔离——用户分页产生的分支与实验性分支
+    // 交流产生的分支共用这一条身份规则，兄弟分支不得互相读取压缩归档。
+    return branchConversationIdentity(base, this.currentBranchNodeId());
+  }
+
+  /**
+   * The hot folded-history cache belongs to one branch node. Legacy entries
+   * (created before branch scoping) belong to the root node, which is where
+   * they were produced.
+   */
+  private compressionCacheForBranch(entries: CompressionCacheEntry[] | undefined): CompressionCacheEntry[] {
+    const branch = String(this.currentBranchNodeId() || '');
+    const root = String(this.conversationTree()?.rootNodeId || '');
+    return (Array.isArray(entries) ? entries : []).flatMap(entry => {
+      const owner = String(entry.branchNodeId || root || '');
+      if (branch && owner && owner !== branch) return [];
+      if (branch && !owner) return [];
+      return [{ ...entry, branchNodeId: owner || branch || undefined, messages: [...entry.messages] }];
+    });
+  }
+
+  /**
+   * Persist the union of every branch's folded history: the live in-memory
+   * cache only holds the active branch, and the stored entry holds the rest.
+   */
+  private mergedCompressionCacheForPersist(storedEntry: StoredConversationEntry | undefined): CompressionCacheEntry[] {
+    const branch = String(this.currentBranchNodeId() || '');
+    const others = (storedEntry?.compressionCache || []).filter(entry => {
+      const owner = String(entry.branchNodeId || '');
+      return !!owner && owner !== branch;
+    });
+    return [...others, ...this.compressionCache.map(entry => ({ ...entry, messages: [...entry.messages] }))];
   }
 
   private coldCompressionEntries(): CompressionCacheEntry[] {
@@ -10094,6 +10152,7 @@ export class Agent {
       foldedChars,
       model,
       fallback,
+      branchNodeId: this.currentBranchNodeId() || undefined,
     });
     this.nextCompressionCacheId += 1;
     const maxEntries = Math.max(0, Math.floor(this.config.getNum('context', 'compression_cache_max') || 8));

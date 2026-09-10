@@ -1,5 +1,6 @@
 import { LLMProvider } from '../llm/provider';
 import { Agent, type BuildProviderCache } from './agent';
+import { branchConversationIdentity } from './branchIdentity';
 import type { SubagentSettlementReceipt } from './subagent';
 import { ProviderProtocol } from './config';
 import { StreamToken } from './types';
@@ -55,13 +56,23 @@ const HIDDEN_LINE_PREFIXES = [
  * a fork that reuses the root conversation id can read the other branch's
  * history. Keep the id stable within one branch (normal sequential turns still
  * cache-hit) and change it the moment the runtime branch changes.
+ *
+ * dev-0.6.4: 分支身份固定在 Build 启动时创建的那条分支节点上（用户分页分支与
+ * 实验性分支交流分支共用同一规则）。这里绝不读取「当前正在查看/激活的分支」，
+ * 否则正在并行运行的兄弟分支或中途切换的页面会把请求绑到别的分支的远程会话。
  */
 function providerSessionIdentity(agent: Agent): string {
   const conversationId = String(agent.activeConversationId || 'default');
+  let runBranchId = '';
+  try {
+    runBranchId = String(agent.activeWorkRunBranchId() || '');
+  } catch {
+    runBranchId = '';
+  }
+  if (runBranchId) return branchConversationIdentity(conversationId, runBranchId);
   try {
     const snapshot = agent.getConversationSnapshot(conversationId);
-    const branchId = String(snapshot.runtimeBranchId || snapshot.activeBranchId || '');
-    return branchId ? `${conversationId}::branch:${branchId}` : conversationId;
+    return branchConversationIdentity(conversationId, String(snapshot.runtimeBranchId || snapshot.activeBranchId || ''));
   } catch {
     return conversationId;
   }

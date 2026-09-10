@@ -39,13 +39,25 @@ function assignedFunctionSource(source: string, name: string): string {
 
 function main(): void {
   const source = uiScriptSource();
-  const helpers = ['conversationMessageCache', 'cacheConversationMessages', 'conversationHasReadableHistory', 'snapshotHasReadableConversationHistory']
+  const helpers = [
+    'normalizeQueuedConversationTarget',
+    'conversationBranchIdentity',
+    'rememberViewedBranchNodeId',
+    'viewedBranchNodeIdFor',
+    'branchConversationViewKey',
+    'conversationMessageCache',
+    'cacheConversationMessages',
+    'conversationHasReadableHistory',
+    'snapshotHasReadableConversationHistory',
+  ]
     .map(name => functionSource(source, name)).join('\n\n');
-  const state: Record<string, any> = { conversationMessagesByTarget: {}, workRunsByTarget: {} };
+  const state: Record<string, any> = { conversationMessagesByTarget: {}, workRunsByTarget: {}, viewedBranchNodeIdsByTarget: {} };
   const active = { workspaceId: 'workspace-a', conversationId: 'error-history' };
   const install = new Function('state', 'active', `
     function currentConversationTarget() { return active; }
     function runtimeKeyFor(workspaceId, conversationId) { return workspaceId + '::' + conversationId; }
+    function isActiveConversationTarget(target) { return !!target && runtimeKeyFor(target.workspaceId, target.conversationId) === runtimeKeyFor(active.workspaceId, active.conversationId); }
+    function queueBranchPathForTarget() { return 'branch-a'; }
     function workRunsForTarget(target) { return state.workRunsByTarget[runtimeKeyFor(target.workspaceId, target.conversationId)] || []; }
     ${helpers}
     return { conversationMessageCache, cacheConversationMessages, conversationHasReadableHistory, snapshotHasReadableConversationHistory };

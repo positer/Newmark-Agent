@@ -1,5 +1,33 @@
 # Newmark Agent Project Taste
 
+## 2026-09-10 Queued turns must appear in the conversation when they enter
+
+- A queued turn that actually enters the conversation is user input and must appear in the transcript. The kernel persists it, so the renderer must refresh from the authoritative snapshot when it observes a queue drain: no optimistic bubble exists for background drains, and no send receipt will arrive.
+- Detect the drain from the authoritative `queueItems` id set (never by text), then debounce per target across the moments when the user message and the assistant reply land. Only refresh the foreground conversation and only while no renderer send is in flight, so send receipts and drain refreshes cannot fight.
+- Refresh by reading the snapshot and re-rendering (`syncWorkRunsSnapshot` + `hydrateConversationBranchState` + `cacheConversationMessages` + `renderChatMessages`). Never add a second write path just to paint a bubble.
+- Terminal run events (`done`/`error`/`interrupted`/`force_interrupted`) also refresh, so the drained turn's reply lands in the same transcript.
+- Queue rows that have *not* entered still belong only to the queue panel; do not paint them inline.
+
+## 2026-09-10 Blocked queue repair and timeline display rules
+
+- A failed admitted Build blocks its successors by design (`claimBuild` only accepts a parent that is the committed frontier). Never make failure silently skip a parent. Blockage must instead be *derived* from the parent chain on every read, so rows admitted after the failure are also reported as blocked (`waitingReason: DEPENDENCY_FAILED`) instead of silently sitting in the queue.
+- Provide an explicit, auditable escape hatch: `repair_blocked` re-anchors blocked rows to the last committed Build, keeps queue order, and writes one `BuildQueueRepaired` event per re-anchor. Keep it user-triggered (queue-panel button); resume alone must not rebase anything.
+- The UI must surface the reason: `setQueueItemsForTarget` keeps `waitingReason`/`blocked`, blocked rows carry `data-queue-blocked`, and the queue header shows the repair button while blocked rows exist.
+- Queued input that has not entered the conversation is only shown in the queue panel. Do not paint queued rows into the transcript (no inline "queued" user bubbles).
+- A Guide appears in the timeline only after the kernel accepts it, at its acceptance position. Optimistic/awaiting-ack, deferred and rejected Guides stay out of the conversation area.
+
+## 2026-09-10 Branch page identity, queue visibility and read-only Guides
+
+- One branch identity rule for every kind of branch: user pagination edits and the experimental branch-communication `branch_create` go through `Agent.branchConversation`, so both must mint a brand-new node id (`assertFreshBranchIdentity`) and share `branchConversationIdentity(conversationId, branchNodeId)` = `<conversationId>::branch:<branchNodeId>`. Never derive a branch identity from the branch that happens to be active or viewed at request time.
+- Provider session sequence ids are per branch tree: bind the request to the Build's owning branch (`activeWorkRunBranchId`), never to the conversation's current runtime branch. A concurrent sibling branch or a page switched mid-Build must not reuse another branch's remote session.
+- Local continuation and history lookup follow the branch node tree: folded compression history is scoped by the branch node (`compressionArchiveScopeKey` + `CompressionCacheEntry.branchNodeId`, merged on persist), and renderer caches key messages / Build lists by the branch node. Sibling pages must never read each other's transcript or folded history.
+- Queue rows stay visible while their execution stays captured: the queue panel lists every row of the conversation (never filtered by the running branch), newly accepted rows auto-expand it, and rows bound to another page are marked as waiting instead of being hidden or silently rebound. `rebindQueueToRuntimeBranch` may refresh the runtime key but must never rewrite the admitted `branchPath`.
+- A queued user turn is user input: it is rendered inline as a user bubble with a queued badge on its own page, deduplicated against the real message by `clientMessageId`. Do not keep queued input only inside a collapsed panel.
+- Creating a page must not wipe the local queue projection. The authoritative refresh happens when its owning page becomes active again; the new branch's kernel projection stays empty.
+- Guides are read-only records in the timeline: one-click copy only, no inline edit. Editing a historical Guide is removed; Guide delivery semantics (inline intervention of the current Build, newest-first cross-Build, no auto-resume) are unchanged.
+- Page pagination must anchor on the edited user input even when that input is rendered as a Build card without `data-message-id`: resolve the anchor by `message_id`, then rendered message index, then anchor text before giving up.
+- Do not change the existing preview/runtime separation contract while fixing rendering: a new branch never drains another branch's queue, and viewing a sibling page never reroutes queued input or Guides into it.
+
 ## 2026-09-09 Conversation identity, queue ownership and cache isolation
 
 - A queued user turn owns its exact `targetRuntimeKey`, `workspaceKey`, `branchNodeId`, `branchPath` and `modelSelection` from the moment it is accepted. Persist them with the continuation; never resolve the target or branch from the current view at drain time. A mismatch pauses the queue and keeps the row; it never reroutes into the foreground conversation.

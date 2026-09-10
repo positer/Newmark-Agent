@@ -36,8 +36,12 @@ export interface ConversationQueueItemSnapshot {
   /** Exact workspace ledger branch id used when this row was admitted. */
   ledgerBranchId?: string;
   modelSelection?: string;
+  /** Ledger reason shown when a queued row cannot run (for example DEPENDENCY_FAILED). */
+  waitingReason?: string;
+  /** True when the ledger currently blocks this row from being claimed. */
+  blocked?: boolean;
 }
-export type ConversationQueueAction = 'enqueue' | 'update' | 'delete' | 'reorder' | 'toggle_pause' | 'set_pause' | 'guide';
+export type ConversationQueueAction = 'enqueue' | 'update' | 'delete' | 'reorder' | 'toggle_pause' | 'set_pause' | 'repair_blocked' | 'guide';
 export interface ConversationQueueActionInput {
   id?: string;
   text?: string;
@@ -589,11 +593,28 @@ export class ConversationKernel {
   queueItems(target: ConversationTargetInput): ConversationQueueItemSnapshot[] {
     const runtime = this.findRuntime(target);
     if (!runtime) return [];
+    // dev-0.6.4 hotfix: 把账本里的受阻原因带进队列投影，界面才能显示
+    // “被失败前置阻断”而不是无声卡住。
+    let waitingByBuildId = new Map<string, string>();
+    const continuation = this.continuationStore(runtime);
+    if (continuation) {
+      try {
+        const snapshot = continuation.store.snapshot({
+          workspaceId: continuation.workspaceId,
+          rootId: continuation.rootId,
+          branchId: continuation.branchId,
+        });
+        waitingByBuildId = new Map(snapshot.builds
+          .filter(build => !!build.waitingReason)
+          .map(build => [build.buildId, String(build.waitingReason)]));
+      } catch { /* the projection stays usable without ledger diagnostics */ }
+    }
     return runtime.pendingNextTurn.flatMap(item => {
       if (item.queueMode !== 'followUp') return [];
       if (typeof item.message === 'string') return [];
       const id = String(item.message.clientMessageId || '');
       if (!id) return [];
+      const buildId = String(item.message.buildId || '');
       return [{
         id,
         buildId: item.message.buildId,
@@ -607,6 +628,8 @@ export class ConversationKernel {
         branchNodeId: item.message.branchNodeId,
         branchPath: item.message.branchPath?.slice(),
         modelSelection: item.message.modelSelection,
+        waitingReason: waitingByBuildId.get(buildId),
+        blocked: waitingByBuildId.has(buildId),
       }];
     });
   }
@@ -693,6 +716,8 @@ export class ConversationKernel {
     const ledgerBranchId = continuation?.branchId;
     let buildId = '';
     if (continuation) {
+      // 入队严格保持 0.6.3 语义：新命令接在当前队尾之后。被失败前置阻断的行不会
+      // 被静默跳过；用户可通过界面上的“修复受阻队列”显式动作重建可执行链。
       const authoritative = continuation.store.snapshot({
         workspaceId: continuation.workspaceId,
         rootId: continuation.rootId,
@@ -916,6 +941,10 @@ export class ConversationKernel {
   }
 
   setQueuePaused(target: ConversationTargetInput, paused: boolean): boolean {
+    // 队列策略只作用于已经存在的 runtime：在这里按需重建 runtime 会让空闲会话
+    // 重新变成“持有排队工作”的所有者，破坏工作区清理契约
+    // （`Cannot release a conversation with running or queued work`）。界面路径统一
+    // 走 queueAction，它已经负责按需创建 runtime。
     const runtime = this.findRuntime(target);
     if (!runtime) throw new Error('Target conversation runtime is unavailable');
     if (!paused && runtime.externalOwner) throw new Error('Release the Flow owner before resuming its queue');
@@ -925,6 +954,36 @@ export class ConversationKernel {
       this.schedulePendingRuntimeContinuation(runtime, runtime.runId);
     }
     return runtime.queuePaused;
+  }
+
+  /**
+   * dev-0.6.4 hotfix: 显式修复被失败前置阻断的排队行。
+   *
+   * 0.6.3 的合约是「失败/取消阻断后继，且不静默跳过」，所以这里不挂在恢复动作上
+   * 自动执行；它必须由用户的显式动作触发（界面上的“修复受阻队列”按钮）。每一次
+   * 改挂都写入 `BuildQueueRepaired` 事件并发布可见状态，触发者与原因可审计。
+   */
+  private repairBlockedQueueNow(runtime: ConversationRuntime): number {
+    const continuation = this.continuationStore(runtime);
+    if (!continuation) return 0;
+    try {
+      const result = continuation.store.repairBlockedQueue({
+        workspaceId: continuation.workspaceId,
+        rootId: continuation.rootId,
+        branchId: continuation.branchId,
+        reason: 'explicit-user-repair',
+      });
+      if (result.repaired.length) {
+        runtime.runner.recordWorkStatus(
+          `${result.repaired.length} queued row(s) blocked by a failed predecessor were re-anchored to the last committed build; the queue resumes in order.`,
+        );
+        this.schedulePendingRuntimeContinuation(runtime, runtime.runId);
+      }
+      return result.repaired.length;
+    } catch (error) {
+      runtime.runner.recordWorkStatus(`Queue repair failed: ${error instanceof Error ? error.message : String(error)}`);
+      return 0;
+    }
   }
 
   queueAction(
@@ -968,6 +1027,9 @@ export class ConversationKernel {
       this.setQueuePaused(runtime.target, !runtime.queuePaused);
     } else if (action === 'set_pause') {
       this.setQueuePaused(runtime.target, input.paused === true);
+    } else if (action === 'repair_blocked') {
+      // 显式修复：把被失败前置阻断的排队行重新挂到最后一个已提交 Build。
+      this.repairBlockedQueueNow(runtime);
     } else if (action === 'guide') {
       if (input.text !== undefined) this.updateQueueItem(runtime.target, String(input.id || ''), input.text, input);
       const item = this.queueItems(runtime.target).find(entry => entry.id === String(input.id || ''));
@@ -1910,6 +1972,9 @@ export class ConversationKernel {
         && runtime.queued.followUp.length === 0
         && runner.subagents.readRootInbox().length === 0;
     });
+    // 执行投影严格跟随当前激活分支节点：新分支绝不接管另一条分页的排队输入
+    // （dev-0.6.3 的既有契约）。界面上跨分页的排队行可见性由渲染层负责，
+    // 执行始终属于受理时捕获的那条分支。
     for (const continuation of runner.conversationContinuations()) {
       runtime.pendingNextTurn.push({
         message: continuation.clientMessageId || continuation.images?.length || continuation.hiddenUserInput

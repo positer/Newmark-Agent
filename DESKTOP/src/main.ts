@@ -3008,7 +3008,7 @@ if (isViewerArg) {
     };
     const mutateConversationQueue = async (target: ConversationRuntimeTarget, rawAction: string, input: Record<string, any> = {}): Promise<Record<string, unknown>> => {
       const action = rawAction.replace(/^queue_/, '') as ConversationQueueAction;
-      if (!['enqueue', 'update', 'delete', 'reorder', 'toggle_pause', 'set_pause', 'guide'].includes(action)) throw new Error('Unknown queue action');
+      if (!['enqueue', 'update', 'delete', 'reorder', 'toggle_pause', 'set_pause', 'repair_blocked', 'guide'].includes(action)) throw new Error('Unknown queue action');
       const key = activeFlowStateKey(target);
       const flow = activeFlowStateFor(target);
       const resumesQueue = action === 'set_pause' ? input.paused === false : action === 'toggle_pause' && flow;

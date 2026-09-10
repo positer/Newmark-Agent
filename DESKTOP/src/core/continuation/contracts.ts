@@ -192,6 +192,7 @@ export interface ContinuationEvent {
     | 'BranchForked'
     | 'BranchPaused'
     | 'BranchResumed'
+    | 'BuildQueueRepaired'
     | 'StaleWriteRejected';
   workspaceId: WorkspaceId;
   rootId: RootId;

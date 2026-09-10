@@ -1,5 +1,35 @@
 # Newmark Agent Overview
 
+## 2026-09-10 dev-0.6.4 hotfix 受阻队列修复与显示规则
+
+| 文件/目录 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/core/continuation/store.ts` | `blockedQueuedBuildIds()` 按父链推导受阻排队行（父不是链上前驱、或父已 FAILED/CANCELLED 即为受阻，受阻点之后的行同样受阻），`snapshotUnlocked()` 据此补全 `waitingReason`，使“失败之后才入队”的行也可见；`repairBlockedQueue()` 把受阻行重新挂到已提交 frontier（顺序不变，逐条写 `BuildQueueRepaired` 审计事件）。 |
+| `DESKTOP/src/core/continuation/contracts.ts` | `ContinuationEvent` 新增 `BuildQueueRepaired` 事件类型。 |
+| `DESKTOP/src/core/conversationKernel.ts` | 新增队列动作 `repair_blocked`（`repairBlockedQueueNow`，仅用户显式触发；修复后发布状态并调度队列）；`queueItems()` 把账本受阻原因带进投影（`waitingReason`/`blocked`）。恢复动作本身不改挂任何行，保持 0.6.3「失败前置继续阻断、不静默跳过」的合约。 |
+| `DESKTOP/src/main.ts` | 队列动作白名单加入 `repair_blocked`。 |
+| `DESKTOP/src/ui/index.html` | `setQueueItemsForTarget` 保留 `waitingReason`/`blocked`；受阻行标记 `data-queue-blocked`；队列头部在存在受阻行时渲染「修复受阻队列」按钮（`#queue-repair-btn` → `window.repairBlockedQueue()`）；删除内联「排队中」用户气泡（`renderPendingQueuedUserMessages` 及相关样式），排队内容只显示在队列面板；`renderPendingGuideMessages` 只渲染 accepted/applied 的 Guide（awaitingAck、deferred、rejected 不进入对话区）。 |
+| `DESKTOP/src/tests/queueBlockedRepairVerify.ts` | 复现用户账本形状（失败 → DEPENDENCY_FAILED → 失败后入队同样受阻 → claim 返回 null），验证修复后顺序 SUCCEEDED、审计事件内容与数量、健康队列幂等。 |
+| `DESKTOP/scripts/dev-0.6.4-queue-resume-e2e.cjs` | 真实内核 + UI 端到端门禁（mock provider）：暂停 → 入队失败行 → 恢复并失败 → 再入队两行（受阻可见 + 修复按钮出现）→ 显式修复 → 恢复 → 队列清空，账本 `seq1:FAILED seq2:SUCCEEDED seq3:SUCCEEDED`。 |
+| `archive/20260910-dev064-hotfix/REPORT.md` | 根因证据（真实账本）、修复说明、门禁结果、打包哈希与「安装待一次 UAC 确认」的边界。 |
+
+## 2026-09-10 dev-0.6.4 分支分页身份、排队可见与 Guide 只读
+
+| 文件/目录 | 构造与作用 |
+| --- | --- |
+| `DESKTOP/src/core/branchIdentity.ts` | 唯一的分支身份规则：`branchConversationIdentity(conversationId, branchNodeId)` = `<conversationId>::branch:<branchNodeId>`；`branchCacheScopeKey` 为工作区级分支缓存作用域；`assertFreshBranchIdentity` 保证新分页不复用既有节点 id。 |
+| `DESKTOP/src/core/agent.ts` | `branchConversation`（用户分页与 `branch_create` 工具共用的事务）在写入新节点前断言全新 id；新增 `activeWorkRunBranchId()` 与 `branchConversationIdentity()`；压缩归档作用域 `compressionArchiveScopeKey` 追加分支身份；`CompressionCacheEntry.branchNodeId` 标记折叠历史归属，`compressionCacheForBranch`/`mergedCompressionCacheForPersist` 按分支读取与合并持久化。 |
+| `DESKTOP/src/core/agentKernelRunner.ts` | `providerSessionIdentity` 改为绑定 Build 所属分支（`agent.activeWorkRunBranchId()`），不再读取「当前激活/查看的分支」，兄弟分支的远端会话序列完全分割。 |
+| `DESKTOP/src/ui/index.html` | 分支身份与分支级缓存键：`conversationBranchIdentity`/`rememberViewedBranchNodeId`/`viewedBranchNodeIdFor`/`branchConversationViewKey`；`conversationMessageCache`/`cacheConversationMessages` 按分支节点缓存，`workRunsForTarget` 读当前浏览分支的 Build 账本；`renderConversationBranchPagers` 锚点三级回退（message-id → 渲染索引 → 锚点文本）；`queueIndexesForTarget` 不再按分支过滤排队行并新增 `queueRequestBranchMismatch` 标记、队列面板新增行自动展开、`renderPendingQueuedUserMessages` 把本页排队输入渲染为带「排队中」徽标的用户气泡；`rebindQueueToRuntimeBranch` 不再改写受理时捕获的 `branchPath`；`renderWorkRunGuideMessage` 只保留复制动作。 |
+| `DESKTOP/src/tests/branchPageQueueIdentityVerify.ts` | 新回归：分支身份唯一性与 core/UI 单一路径、分页缓存隔离、跨分页排队行可见且不被改绑、排队输入内联渲染、Guide 卡片只读复制、分页编辑不清空队列投影。 |
+| `DESKTOP/scripts/dev-0.6.4-branch-page-queue-visual.cjs` | 真实 Electron 渲染器视觉复核：注入 Build 开头编辑分页 + 排队输入 + Guide 卡片，断言分页条文本、锚点、队列行、排队气泡与 Guide 动作数量，并输出截图到 `archive/`。 |
+| `DESKTOP/scripts/test-renderer-conversation-commands.cjs`、`DESKTOP/scripts/test-long-conversation-ui-ordering.cjs`、`DESKTOP/src/tests/conversationHistoryFirstVerify.ts`、`DESKTOP/src/tests/guideUiReconcileVerify.ts`、`DESKTOP/src/tests/verify.ts` | 抽取式渲染器夹具补齐新增 helper；Guide 编辑断言改为「保留复制、移除编辑」；`test-long-conversation-ui-ordering.cjs` 命中真实 `right-status-content` 与模型选择分支后 18/18。 |
+| `archive/20260910-dev064-branch-page-queue/` | 本轮截图、报告与未执行边界（打包/安装/CI 发布未在本轮执行）。 |
+
+保留边界：预览分支 ≠ 运行分支时，新分支绝不接管另一条分页的排队输入（内核执行投影仍只跟随当前激活节点）；Guide 仍是当前 Build 的内联干预；跨分支不共享 provider 会话序列与折叠历史。版本：`VERSION`/`DESKTOP/package.json`/`package-lock.json`/Android `versionName 0.6.4`+`versionCode 604`（Android 行为未改动）。`release:version-check` 通过。
+
+本轮同时完成 Windows 打包与本地安装：`release/Newmark-Agent-0.6.4-x64.msi`（SHA-256 `1BEABA08…B54E4A`）、`release/Newmark-Agent-0.6.4-win-unpacked-x64.zip`（SHA-256 `C807ECC6…4419D6`）、打包 `app.asar` SHA-256 `92842DCB…D38804`；本机 UAC 提升安装后注册表 `0.6.4.0`、安装目录 CLI `0.6.4`、安装目录 `app.asar` 与打包字节一致、292 个 payload 文件核对通过；已安装 exe 以隔离 root 通过分页/队列/Guide 渲染器门禁并截图。记录：`archive/20260910-dev064-package/REPORT.md`、`archive/20260910-dev064-install-2/`。
+
 ## 2026-09-09 dev-0.6.3 对话接续身份、分支绑定与缓存隔离
 
 | 文件/目录 | 构造与作用 |

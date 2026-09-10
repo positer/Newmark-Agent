@@ -3373,6 +3373,19 @@ button.todo-item { background: transparent; }
 .queue-item.dragging { opacity: 0.58; transform: scale(0.99); }
 .queue-item.queue-drag-displaced { transition: transform 120ms var(--ease-out-expo); }
 
+/* dev-0.6.4: 该排队行绑定的是另一条分页，正在等待自己的运行分支。 */
+.queue-item[data-queue-branch-waiting="1"] { opacity: 0.68; }
+.queue-item[data-queue-branch-waiting="1"] .queue-edit { font-style: italic; }
+
+/* dev-0.6.4: 该排队行被失败的前置 Build 阻断，恢复队列会重新挂载到已提交 frontier。 */
+.queue-item[data-queue-blocked="1"] .queue-edit { color: var(--danger, #e06c75); }
+.queue-item[data-queue-blocked="1"]::after {
+  content: '!';
+  color: var(--danger, #e06c75);
+  font: 10px var(--font-mono);
+}
+
+
 .queue-drag {
   width: 22px;
   height: 22px;
@@ -6767,6 +6780,8 @@ var state = {
   pendingOptions: [],
   pendingOptionAnswers: {},
   pendingOptionBatchKey: '',
+  pendingOptionsByTarget: {},
+  pendingOptionAnswersByTarget: {},
   promptAttachments: [],
   nextQueue: [],
   nextQueueRequests: [],
@@ -6777,6 +6792,7 @@ var state = {
   backendQueue: { steering: [], followUp: [] },
   backendQueuesByTarget: {},
   queueItemsByTarget: {},
+  pendingDrainRefreshByTarget: {},
   defaultFlow: '',
   settingsActiveTab: 'general',
   globalAgentPrompt: '',
@@ -9510,8 +9526,12 @@ window.submitUserMessageEdit = async function(message, messageIndex, editedText,
     if (!isActiveConversationTarget(target)) return;
     clearAgentWorkEvents(conversationId);
     resetConversationWorkUi(conversationId, false);
-    state.backendQueue = setBackendQueueForTarget({ steering: [], followUp: [] }, target);
-    if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, target);
+    // dev-0.6.4: 生成分页时绝不按新分支的清空队列覆盖本地投影。排队行是用户
+    // 已经提交的输入，属于它受理时捕获的那条分支；旧逻辑在这里把队列整体
+    // 清零，于是分页之后排队内容从界面上消失。内核的执行投影仍然只跟随当前
+    // 激活分支（新分支绝不接管另一页的排队输入），刷新由切回该分页时的
+    // 权威快照完成；这里只保留可见性并标记「等待所属分页」。
+    if (result && Array.isArray(result.queueItems)) setQueueItemsForTarget(result.queueItems, target);
     state.conversationBranches = Array.isArray(result.branches) ? result.branches : [];
     state.conversationBranchGroups = Array.isArray(result.branchGroups) ? result.branchGroups : [];
     state.activeConversationBranchId = String(result.activeBranchId || '');
@@ -10210,6 +10230,47 @@ function runtimeKeyFor(workspaceId, conversationId) {
   return state.runtimeKeyAliases && state.runtimeKeyAliases[base] || base;
 }
 
+// dev-0.6.4: 全对话 id（分支身份）。用户分页编辑产生的分支与实验性「分支交流」
+// 产生的分支共用这一条规则：`<conversationId>::branch:<branchNodeId>`。
+// 供应商会话序列 id 与所有分支级缓存都必须使用它；兄弟分支绝不共享消息、
+// Build 列表或折叠历史。
+function conversationBranchIdentity(conversationId, branchNodeId) {
+  var conversation = String(conversationId || 'default') || 'default';
+  var branch = String(branchNodeId || '');
+  return branch ? conversation + '::branch:' + branch : conversation;
+}
+
+// 记录每个会话最近一次「被浏览」的分支节点，供后台会话的缓存键使用。
+function rememberViewedBranchNodeId(target, branchNodeId) {
+  var owner = normalizeQueuedConversationTarget(target);
+  if (!owner) return '';
+  if (!state.viewedBranchNodeIdsByTarget) state.viewedBranchNodeIdsByTarget = {};
+  var key = runtimeKeyFor(owner.workspaceId, owner.conversationId);
+  var branch = String(branchNodeId || '');
+  if (branch) state.viewedBranchNodeIdsByTarget[key] = branch;
+  return String(state.viewedBranchNodeIdsByTarget[key] || '');
+}
+
+function viewedBranchNodeIdFor(target) {
+  var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  if (!owner) return '';
+  if (isActiveConversationTarget(owner)) {
+    var path = Array.isArray(state.viewedConversationBranchNodePath) ? state.viewedConversationBranchNodePath : [];
+    var leaf = String(path[path.length - 1] || state.activeConversationBranchId || '');
+    if (leaf) return rememberViewedBranchNodeId(owner, leaf);
+  }
+  if (!state.viewedBranchNodeIdsByTarget) return '';
+  return String(state.viewedBranchNodeIdsByTarget[runtimeKeyFor(owner.workspaceId, owner.conversationId)] || '');
+}
+
+// 分支级缓存键：同一会话的两个分页绝不共用一份缓存。
+function branchConversationViewKey(target) {
+  var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  if (!owner) return '';
+  var branch = viewedBranchNodeIdFor(owner) || 'root';
+  return runtimeKeyFor(owner.workspaceId, owner.conversationId) + '::branch::' + branch;
+}
+
 function registerRuntimeKey(target, runtimeKey) {
   runtimeKey = String(runtimeKey || '');
   if (!target || !runtimeKey) return runtimeKeyFor(target && target.workspaceId, target && target.conversationId);
@@ -10367,6 +10428,11 @@ function renderPendingGuideMessages(target, persistedGuideIds) {
   var messages = guideMessagesForTarget(target);
   var pending = Object.keys(messages).map(function(id) { return messages[id]; }).filter(function(item) {
     if (!item || persistedGuideIds[item.clientMessageId]) return false;
+    // dev-0.6.4: Guide 只有被内核接收后才出现在时间线上，并且显示在接收位置。
+    // 乐观/待确认（awaitingAck）与 deferred/rejected 的 Guide 都不进入对话区。
+    if (item.awaitingAck) return false;
+    var guideStatus = String(item.status || '').toLowerCase();
+    if (['accepted', 'applied'].indexOf(guideStatus) < 0) return false;
     // A Guide already owned by its work run is rendered by the Build block
     // (expanded events or collapsed guide list), never as a separate trailing
     // message. Without this guard, collapse/expand rebuilds would re-add the
@@ -10384,26 +10450,6 @@ function renderPendingGuideMessages(target, persistedGuideIds) {
       // the single source of truth.
       element.remove();
       element = null;
-    }
-    if (item.awaitingAck && item.runId) {
-      var runElement = findWorkRunElement({ runId: item.runId });
-      var runBody = runElement && runElement.querySelector('.conversation-work-run-body');
-      if (runBody) {
-        var pendingStack = runBody.querySelector(':scope > .work-run-pending-guides');
-        if (!pendingStack) {
-          pendingStack = document.createElement('div');
-          pendingStack.className = 'work-run-pending-guides';
-          runBody.appendChild(pendingStack);
-        }
-        if (!element || !pendingStack.contains(element)) {
-          var holder = document.createElement('div');
-          holder.innerHTML = renderWorkRunGuideMessage(Object.assign({}, item, { status: 'accepted' }));
-          element = holder.firstElementChild;
-          if (element) pendingStack.appendChild(element);
-        }
-        if (element) applyGuideMessageMeta(element, item);
-        return;
-      }
     }
     if (element) applyGuideMessageMeta(element, item);
     else addMsg('user', item.content || 'Guide', 'guide', item.model || state.model, undefined, {
@@ -10814,13 +10860,15 @@ function workRunBeforeElement(run) {
 
 function workRunsForTarget(target) {
   target = target || currentConversationTarget();
-  var key = runtimeKeyFor(target.workspaceId, target.conversationId);
-  if (!state.workRunsByTarget) state.workRunsByTarget = {};
-  if (!state.workRunsByTarget[key]) {
+  // 读取「当前浏览的分支节点」自己的 Build 列表。`workRunsByTarget` 只是
+  // 兼容性的展示镜像，按会话共享会让另一个分页的运行结果覆盖本页（新发送的
+  // 消息看起来消失），因此渲染路径一律走按分支节点存储的账本。
+  var viewedBranchId = viewedBranchNodeIdFor(target);
+  if (!viewedBranchId) {
     var branchIds = conversationBranchIdsForTarget(target);
-    state.workRunsByTarget[key] = workRunsForBranch(target, branchIds.viewed);
+    viewedBranchId = branchIds.viewed;
   }
-  return state.workRunsByTarget[key];
+  return workRunsForBranch(target, viewedBranchId);
 }
 
 function syncWorkRunsSnapshot(runs, target, branchId) {
@@ -11198,9 +11246,12 @@ function renderWorkRunGuideMessage(event) {
   var guideId = String(guide.guideId || event.guideId || '');
   var messageIndex = Number(state.guideMessageIndexByClientId && state.guideMessageIndexByClientId[clientMessageId]);
   var indexed = Number.isFinite(messageIndex) && messageIndex >= 0;
+  // dev-0.6.4: 时间线里的 Guide 记录不再提供编辑入口。Guide 是当前 Build 的
+  // 历史干预记录，改写它既不会重放 Build，也会让分支归属变得含糊；这里只保留
+  // 复制动作，消息索引属性仍然写回，供锚点/诊断使用。
   return '<div class="chat-msg user work-run-guide-message" data-client-message-id="' + escAttr(clientMessageId) + '" data-guide-id="' + escAttr(guideId) + '" data-run-id="' + escAttr(String(guide.runId || event.runId || '')) + '"' + (indexed ? ' data-message-index="' + messageIndex + '"' : '') + '>' +
     '<div class="meta"><span class="msg-role">' + esc(t('message.user')) + '</span>' + (time ? '<span> | ' + esc(time) + '</span>' : '') +
-    '<span class="guide-receipt-status ' + escAttr(status) + '">Guide · ' + esc(guideUiStatusLabel(status)) + '</span>' + messageActionsHtml('user', content, indexed ? messageIndex : -1) + '</div>' +
+    '<span class="guide-receipt-status ' + escAttr(status) + '">Guide · ' + esc(guideUiStatusLabel(status)) + '</span>' + messageActionsHtml('user', content, -1) + '</div>' +
     '<div class="msg-body">' + renderMessageContent(content) + '</div></div>';
 }
 
@@ -11729,6 +11780,12 @@ function applyAgentWorkEventToRun(event) {
       if (run.userToggled !== true) run.expanded = run.status === 'error';
     }
   }
+  // dev-0.6.4 hotfix: 排队出队的回合结束时，把权威转录（助手回复、最终用户行）
+  // 刷进对话区。正常发送路径有自己的回执刷新；这里只针对后台出队的运行，
+  // 且由 scheduleDrainedTurnTranscriptRefresh 做去抖与“无发送在飞”保护。
+  if (['done', 'error', 'interrupted', 'force_interrupted'].indexOf(type) >= 0) {
+    scheduleDrainedTurnTranscriptRefresh(target, []);
+  }
   if (isActiveConversationTarget(target) && (!branchIds.viewed || !eventBranchId || branchIds.viewed === eventBranchId)) {
     state.workRunsByTarget[runtimeKeyFor(target.workspaceId, target.conversationId)] = runs;
     var existingElement = findWorkRunElement(run);
@@ -12011,7 +12068,8 @@ function renderPersistedToolMessage(message) {
 
 function conversationMessageCache(target) {
   var scopedTarget = target || currentConversationTarget();
-  var key = runtimeKeyFor(scopedTarget.workspaceId, scopedTarget.conversationId);
+  // 分支级缓存：分页切换时另一个页面的消息快照绝不能覆盖当前页。
+  var key = branchConversationViewKey(scopedTarget);
   if (!state.conversationMessagesByTarget) state.conversationMessagesByTarget = {};
   return Array.isArray(state.conversationMessagesByTarget[key])
     ? state.conversationMessagesByTarget[key].map(function(message) { return Object.assign({}, message); })
@@ -12020,7 +12078,7 @@ function conversationMessageCache(target) {
 
 function cacheConversationMessages(messages, target) {
   var scopedTarget = target || currentConversationTarget();
-  var key = runtimeKeyFor(scopedTarget.workspaceId, scopedTarget.conversationId);
+  var key = branchConversationViewKey(scopedTarget);
   var cloned = Array.isArray(messages) ? messages.map(function(message) { return Object.assign({}, message); }) : [];
   if (!state.conversationMessagesByTarget) state.conversationMessagesByTarget = {};
   state.conversationMessagesByTarget[key] = cloned;
@@ -12301,9 +12359,20 @@ function renderConversationBranchPagers() {
       if (matched) anchor = candidate;
       return matched;
     });
-    if (!anchor && !sourceMessageId && !sourceGuideId) {
+    if (!anchor) {
+      // dev-0.6.4: 分页锚点回退。Build 开头的用户消息可能以内联 Build/Guide
+      // 卡片渲染，没有写回 data-message-id；旧逻辑此时直接放弃，导致「从 build
+      // 开头编辑」创建的分页看不到分页条。现在按渲染索引，再按锚点文本回退。
       var sourceMessageIndex = Math.max(0, Number(branchGroup.sourceMessageIndex === undefined ? activeBranch.sourceMessageIndex : branchGroup.sourceMessageIndex));
       anchor = els['chat-area'].querySelector('.chat-msg.user[data-message-index="' + sourceMessageIndex + '"]');
+      if (!anchor && String(activeBranch.sourceText || '').trim()) {
+        var wantedAnchorText = String(activeBranch.sourceText || '').trim();
+        Array.prototype.some.call(els['chat-area'].querySelectorAll('.chat-msg.user'), function(candidate) {
+          var candidateText = String(candidate && candidate._newmarkMessageText || '').trim();
+          if (candidateText && candidateText === wantedAnchorText) { anchor = candidate; return true; }
+          return false;
+        });
+      }
     }
     if (anchor) {
       var pager = document.createElement('div');
@@ -12844,6 +12913,9 @@ function hydrateConversationBranchState(snapshot) {
   if (Object.prototype.hasOwnProperty.call(s, 'branchGroupId')) state.activeConversationBranchGroupId = String(s.branchGroupId || '');
   if (Object.prototype.hasOwnProperty.call(s, 'viewedBranchNodePath')) state.viewedConversationBranchNodePath = Array.isArray(s.viewedBranchNodePath) ? s.viewedBranchNodePath.map(String) : [];
   if (Object.prototype.hasOwnProperty.call(s, 'runtimeBranchNodePath')) state.runtimeConversationBranchNodePath = Array.isArray(s.runtimeBranchNodePath) ? s.runtimeBranchNodePath.map(String) : [];
+  // 分支级缓存必须知道「当前浏览的是哪个节点」，否则换页后另一页的快照会覆盖本页。
+  var viewedLeaf = String((state.viewedConversationBranchNodePath || []).slice(-1)[0] || state.activeConversationBranchId || '');
+  rememberViewedBranchNodeId(currentConversationTarget(s.conversationId || activeConversationId()), viewedLeaf);
   rememberRuntimeConversationBranchPath(currentConversationTarget(s.conversationId || activeConversationId()));
 }
 
@@ -13005,10 +13077,54 @@ function optionQuestionKey(question, options, index) {
   return JSON.stringify({ index: index, question: question || '', options: (options || []).map(optionLabel) });
 }
 
-function addOptionBlock(question, options, questionKey) {
+// dev-0.6.4 hotfix: 选项块携带归属会话，作答必须回到提问的那个会话。
+function optionBlockOwner(element) {
+  var block = element && element.closest ? element.closest('[data-option-owner-conversation]') : null;
+  if (!block) return currentConversationTarget();
+  return {
+    workspaceId: String(block.getAttribute('data-option-owner-workspace') || '') || runtimeWorkspaceId(''),
+    conversationId: String(block.getAttribute('data-option-owner-conversation') || '') || activeConversationId()
+  };
+}
+
+function pendingOptionsForTarget(target) {
+  var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  if (!owner) return [];
+  if (!state.pendingOptionsByTarget) state.pendingOptionsByTarget = {};
+  var key = runtimeKeyFor(owner.workspaceId, owner.conversationId);
+  return Array.isArray(state.pendingOptionsByTarget[key]) ? state.pendingOptionsByTarget[key] : [];
+}
+
+function setPendingOptionsForTarget(options, target) {
+  var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  if (!owner) return;
+  if (!state.pendingOptionsByTarget) state.pendingOptionsByTarget = {};
+  var key = runtimeKeyFor(owner.workspaceId, owner.conversationId);
+  state.pendingOptionsByTarget[key] = (Array.isArray(options) ? options : []).map(function(question) {
+    return {
+      id: String(question && question.id || ''),
+      question: String(question && question.question || ''),
+      options: (Array.isArray(question && question.options) ? question.options : []).map(function(option) {
+        return typeof option === 'string' ? option : { label: String(option && option.label || ''), description: String(option && option.description || '') };
+      })
+    };
+  });
+  if (isActiveConversationTarget(owner)) state.pendingOptions = state.pendingOptionsByTarget[key];
+}
+
+function addOptionBlock(question, options, questionKey, ownerAttributes) {
   var div = document.createElement('div');
   div.className = 'chat-msg assistant';
   div.setAttribute('data-option-question', encodeURIComponent(questionKey));
+  if (ownerAttributes) {
+    var ownerHolder = document.createElement('div');
+    ownerHolder.innerHTML = '<span' + ownerAttributes + '></span>';
+    var ownerNode = ownerHolder.firstElementChild;
+    if (ownerNode) {
+      div.setAttribute('data-option-owner-workspace', ownerNode.getAttribute('data-option-owner-workspace') || '');
+      div.setAttribute('data-option-owner-conversation', ownerNode.getAttribute('data-option-owner-conversation') || '');
+    }
+  }
   var html = '<div class="option-block"><div class="option-question">' + esc(question) + '</div>';
   for (var i = 0; i < options.length; i++) {
     var label = optionLabel(options[i]);
@@ -13027,11 +13143,18 @@ function addOptionBlock(question, options, questionKey) {
 }
 
 function renderPendingOptionsInChat(options) {
+  // dev-0.6.4 hotfix: 选项提问按会话归属。旧实现把全局 pendingOptions 渲染到当前
+  // 对话区，后台会话的提问会“溢出”到前台对话，点击后还会用当前会话发送答案，
+  // 等于把提问激活给了另一个对话。
+  if (options === undefined) options = pendingOptionsForTarget(currentConversationTarget());
   options = options || [];
   if (!options.length) return;
+  var owner = currentConversationTarget();
+  var ownerAttributes = ' data-option-owner-workspace="' + escAttr(String(owner.workspaceId || '')) + '" data-option-owner-conversation="' + escAttr(String(owner.conversationId || 'default')) + '"';
   var batchKey = JSON.stringify(options.map(function(q, index) { return optionQuestionKey(q.question || q.id || '', q.options || [], index); }));
-  if (state.pendingOptionBatchKey !== batchKey) {
-    state.pendingOptionBatchKey = batchKey;
+  var batchKeyWithOwner = String(owner.workspaceId || '') + '::' + String(owner.conversationId || 'default') + '::' + batchKey;
+  if (state.pendingOptionBatchKey !== batchKeyWithOwner) {
+    state.pendingOptionBatchKey = batchKeyWithOwner;
     state.pendingOptionAnswers = {};
   }
   for (var i = 0; i < options.length; i++) {
@@ -13041,7 +13164,7 @@ function renderPendingOptionsInChat(options) {
     var encodedKey = encodeURIComponent(key);
     if (els['chat-area'] && els['chat-area'].querySelector('[data-option-question="' + encodedKey + '"]')) continue;
     state.renderedOptionKeys[key] = true;
-    addOptionBlock(q.question || q.id || t('status.question'), q.options || [], key);
+    addOptionBlock(q.question || q.id || t('status.question'), q.options || [], key, ownerAttributes);
   }
 }
 
@@ -13100,6 +13223,15 @@ function handlePlanExecutionChoice(questionKey, opt) {
 
 window.optionSelected = function(questionKey, opt, button) {
   if (!questionKey || state.pendingOptionAnswers[questionKey] !== undefined) return;
+  // dev-0.6.4 hotfix: 作答必须回到提问的那个会话；后台会话的提问不允许借用
+  // 当前对话的输入框发送（旧实现用 window.sendMessage() 直接发到当前会话）。
+  var answerOwner = optionBlockOwner(button);
+  if (!isActiveConversationTarget(answerOwner)) {
+    showUiNotice(currentLang() === 'zh'
+      ? '该提问属于另一个对话，请先切换到那个对话再作答。'
+      : 'That question belongs to another conversation; switch to it before answering.', 'error', 'option-owner-mismatch');
+    return;
+  }
   if (state.mode === 'plan' && handlePlanExecutionChoice(questionKey, opt)) {
     var planBlock = button && button.closest ? button.closest('[data-option-question]') : null;
     if (planBlock) Array.from(planBlock.querySelectorAll('.option-btn')).forEach(function(candidate) {
@@ -13116,7 +13248,7 @@ window.optionSelected = function(questionKey, opt, button) {
       candidate.classList.toggle('selected', candidate === button);
     });
   }
-  var questions = state.pendingOptions || [];
+  var questions = pendingOptionsForTarget(answerOwner);
   var answered = questions.map(function(q, index) {
     var key = optionQuestionKey(q.question || q.id || '', q.options || [], index);
     return { question: q.question || q.id || t('status.question'), answer: state.pendingOptionAnswers[key] };
@@ -13137,6 +13269,13 @@ window.optionSelected = function(questionKey, opt, button) {
 };
 
 window.optionManualSubmitted = function(element) {
+  var manualOwner = optionBlockOwner(element);
+  if (!isActiveConversationTarget(manualOwner)) {
+    showUiNotice(currentLang() === 'zh'
+      ? '该提问属于另一个对话，请先切换到那个对话再作答。'
+      : 'That question belongs to another conversation; switch to it before answering.', 'error', 'option-owner-mismatch');
+    return;
+  }
   var manual = element && element.closest ? element.closest('.option-manual') : null;
   if (!manual) return;
   var input = manual.querySelector('.option-manual-input');
@@ -16829,11 +16968,22 @@ function queueIndexesForTarget(target) {
   var requests = state.nextQueueRequests || [];
   for (var index = 0; index < queue.length; index++) {
     if (!queuedRequestMatchesTarget(requests[index], target)) continue;
-    var requestBranchPath = String(requests[index] && requests[index].branchPath || '');
-    var runtimeBranchPath = queueBranchPathForTarget(target, 'runtime');
-    if (!requestBranchPath || !runtimeBranchPath || requestBranchPath === runtimeBranchPath) indexes.push(index);
+    // dev-0.6.4: 排队行永远可见。它属于「受理时捕获的分支」，但它是这个会话里
+    // 真实存在的用户输入；旧逻辑按当前运行分支过滤，分页之后整队行被隐形，
+    // 用户既看不到内容也无法恢复。可见性与行绑定的分支解耦（分支只决定它
+    // 何时、在哪一页执行）。
+    indexes.push(index);
   }
   return indexes;
+}
+
+// 行绑定的分支与当前运行分支不一致时，该行会等待（内核会暂停而不是改投）。
+// 这个状态必须在界面上可见，用户才能切回对应分页再恢复队列。
+function queueRequestBranchMismatch(target, request) {
+  var requestBranchPath = String(request && request.branchPath || '');
+  var runtimeBranchPath = queueBranchPathForTarget(target, 'runtime');
+  if (!requestBranchPath || !runtimeBranchPath) return false;
+  return requestBranchPath !== runtimeBranchPath;
 }
 
 function queueIndexesForRuntimeTarget(target) {
@@ -16868,7 +17018,9 @@ function rebindQueueToRuntimeBranch(target) {
   if (!runtimePath || !key) return;
   (state.nextQueueRequests || []).forEach(function(request) {
     if (!request || !queuedRequestMatchesTarget(request, target)) return;
-    request.branchPath = runtimePath;
+    // dev-0.6.4: 只刷新会话 runtime 身份，绝不改写受理时捕获的分支路径。
+    // 静默改绑会把排队输入从用户提交的分页挪到另一条分支，正是
+    // 「跨分支复用/串分支」必须禁止的行为。
     request.runtimeKey = key;
   });
 }
@@ -16933,6 +17085,21 @@ function setQueueItemsForTarget(items, target) {
       runId: String(item && item.runId || ''),
       createdAt: String(item && item.createdAt || ''),
       images: (Array.isArray(item && item.images) ? item.images : []).map(function(image) { return Object.assign({}, image); }),
+      // dev-0.6.4: 保留受理时捕获的分支身份。旧实现只保留展示字段，排队行在
+      // 重新投影时会被默认绑到「当前运行分支」，等于静默改绑到另一条分页，
+      // 也让「等待所属分页」的状态永远无法显示。
+      branchNodeId: String(item && item.branchNodeId || ''),
+      branchPath: Array.isArray(item && item.branchPath)
+        ? item.branchPath.map(function(value) { return String(value || ''); }).filter(Boolean)
+        : (item && item.branchPath ? [String(item.branchPath)] : []),
+      ledgerBranchId: String(item && item.ledgerBranchId || ''),
+      targetRuntimeKey: String(item && item.targetRuntimeKey || ''),
+      workspaceKey: String(item && item.workspaceKey || ''),
+      modelSelection: String(item && item.modelSelection || ''),
+      // dev-0.6.4 hotfix: 保留账本给出的受阻原因，界面才能显示“被失败前置阻断”
+      // 并提供显式的修复入口。
+      waitingReason: String(item && item.waitingReason || ''),
+      blocked: item && item.blocked === true,
     };
   });
 }
@@ -16968,7 +17135,23 @@ function applyConversationCommandSnapshot(snapshot, target) {
     if (!state.queuePausedByTarget) state.queuePausedByTarget = {};
     state.queuePausedByTarget[key] = snapshot.queuePaused;
   }
-  if (Array.isArray(snapshot.queueItems)) setQueueItemsForTarget(snapshot.queueItems, target);
+  if (Array.isArray(snapshot.queueItems)) {
+    // dev-0.6.4 hotfix: 排队行真正进入对话（出队）时，后端会把这一轮写成正式用户
+    // 消息，但渲染端不会收到发送回执，因此此前对话区一直不显示这条用户输入。
+    // 这里比较权威队列的条数变化，检测到出队就刷新一次转录。
+    var previousQueueItems = queueItemsForTarget(target);
+    var previousQueueIds = previousQueueItems.map(function(item) { return String(item && item.id || ''); }).filter(Boolean);
+    var nextQueueIds = snapshot.queueItems.map(function(item) { return String(item && item.id || ''); }).filter(Boolean);
+    var drainedIds = previousQueueIds.filter(function(id) { return nextQueueIds.indexOf(id) < 0; });
+    setQueueItemsForTarget(snapshot.queueItems, target);
+    if (drainedIds.length) scheduleDrainedTurnTranscriptRefresh(target, drainedIds);
+  }
+  if (Array.isArray(snapshot.pendingOptions)) setPendingOptionsForTarget(snapshot.pendingOptions, target);
+  // dev-0.6.4: goal 停止/清除后，任何携带 goal 字段的权威快照都要同步前端显示。
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'goal') && isActiveConversationTarget(target)) {
+    applyReturnedGoalState(snapshot);
+    if (window.renderInputStack) window.renderInputStack();
+  }
   var queue = snapshot.queued && typeof snapshot.queued === 'object' ? snapshot.queued : snapshot.queue;
   if (queue && typeof queue === 'object') {
     setBackendQueueForTarget(queue, target);
@@ -17003,6 +17186,55 @@ function applyConversationCommandSnapshot(snapshot, target) {
     window.setInputMode(snapshot.inputMode, false);
     state._syncedInputMode = snapshot.inputMode;
   }
+}
+
+/**
+ * dev-0.6.4 hotfix: 排队输入出队进入对话后，把权威转录刷新到对话区。
+ *
+ * 走发送路径的回合有本地乐观气泡 + 回执刷新；排队回合由内核在后台启动，渲染端
+ * 既没有乐观气泡也没有回执，于是用户输入在对话区“消失”。这里在检测到排队行
+ * 出队时按目标做一次去抖刷新：只在当前前台会话、且没有渲染端发送在飞时执行，
+ * 避免与发送回执互相覆盖。
+ */
+function scheduleDrainedTurnTranscriptRefresh(target, drainedIds) {
+  var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  if (!owner || !api.getState) return;
+  var key = runtimeKeyFor(owner.workspaceId, owner.conversationId);
+  if (!isActiveConversationTarget(owner)) return;
+  if (state.activeSendCallsByTarget && state.activeSendCallsByTarget[key]) return;
+  if (!state.pendingDrainRefreshByTarget) state.pendingDrainRefreshByTarget = {};
+  if (state.pendingDrainRefreshByTarget[key]) return;
+  // 出队事件早于正式用户消息落盘，因此按几个时间点各刷新一次：首次拿到用户输入，
+  // 后续拿到助手回复；全部完成后清除登记，下一次出队可再次触发。
+  state.pendingDrainRefreshByTarget[key] = { ids: (drainedIds || []).slice(), timers: [] };
+  var pending = state.pendingDrainRefreshByTarget[key];
+  [150, 1200, 3000].forEach(function(delay, index, all) {
+    pending.timers.push(setTimeout(function() {
+      refreshConversationTranscriptFromBackend(owner);
+      if (index === all.length - 1 && state.pendingDrainRefreshByTarget) delete state.pendingDrainRefreshByTarget[key];
+    }, delay));
+  });
+}
+
+function refreshConversationTranscriptFromBackend(target) {
+  var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  if (!owner || !api.getState || !isActiveConversationTarget(owner)) return Promise.resolve(null);
+  var key = runtimeKeyFor(owner.workspaceId, owner.conversationId);
+  if (state.activeSendCallsByTarget && state.activeSendCallsByTarget[key]) return Promise.resolve(null);
+  return Promise.resolve(api.getState(owner)).then(function(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return null;
+    if (!isActiveConversationTarget(owner)) return null;
+    if (state.activeSendCallsByTarget && state.activeSendCallsByTarget[key]) return null;
+    // dev-0.6.4: goal 完成/停止后，前端必须在收到权威快照时同步清除 goal 显示。
+    applyReturnedGoalState(snapshot);
+    if (Array.isArray(snapshot.workRuns)) syncWorkRunsSnapshot(snapshot.workRuns, owner);
+    if (Array.isArray(snapshot.chatMessages)) {
+      hydrateConversationBranchState(snapshot);
+      cacheConversationMessages(snapshot.chatMessages, owner);
+      renderChatMessages(snapshot.chatMessages, owner);
+    }
+    return snapshot;
+  }).catch(function() { return null; });
 }
 
 window.queueAction = function(action, input, target) {
@@ -17105,6 +17337,15 @@ window.renderQueuePanel = function() {
   var visibleIndexes = queueIndexesForTarget(target);
   var count = visibleIndexes.length;
   panel.style.display = count ? '' : 'none';
+  // dev-0.6.4: 新排队输入必须被看见。旧行为把队列面板默认折叠，配合按分支
+  // 过滤的隐形逻辑，用户提交的排队内容在界面上完全不出现。条数增加时自动
+  // 展开，用户手动折叠在条数不变时仍然有效。
+  if (!state.queueSeenCountsByTarget) state.queueSeenCountsByTarget = {};
+  // 仅用于「新增排队行时自动展开面板」的本地记账键，不参与执行身份判定。
+  var seenKey = String(target.workspaceId || '') + '::' + String(target.conversationId || 'default');
+  var seenCount = Number(state.queueSeenCountsByTarget[seenKey] || 0);
+  if (count > seenCount) state.queueCollapsed = false;
+  state.queueSeenCountsByTarget[seenKey] = count;
   panel.classList.toggle('collapsed', !!state.queueCollapsed);
   label.textContent = t('queue.title') + ' ' + count;
   var pauseToggle = document.getElementById('queue-pause-btn');
@@ -17148,16 +17389,72 @@ window.renderQueuePanel = function() {
       '<button type="button" class="stack-icon-btn queue-guide-btn" onclick="window.guideQueueItem(' + eventIndex + ')" title="' + escAttr(t('queue.guideNow')) + '">' + iconSvg('corner-down-right', t('queue.guideNow'), 'tiny') + '<span>' + esc(t('queue.guideAction')) + '</span></button>' +
       '<button class="stack-icon-btn" onclick="window.focusQueueItem(' + eventIndex + ')" title="' + escAttr(t('common.edit')) + '">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</button>' +
       '<button class="stack-icon-btn danger" onclick="window.deleteQueueItem(' + eventIndex + ')" title="' + escAttr(t('common.delete')) + '">' + iconSvg('trash', t('common.delete'), 'tiny') + '</button>' : '';
-    html += '<div class="queue-item" data-queue-index="' + queueIndex + '"' + identityAttributes + dragAttributes + '>' +
+    // 绑定了另一条分页的行会等待而不是改投，这个状态必须在界面上显式可见，
+    // 否则用户会以为排队输入被丢弃。
+    var waitingForBranch = queueRequestBranchMismatch(target, request);
+    var waitingLabel = currentLang() === 'zh'
+      ? '等待它所属的分页：切回该分页后队列可恢复执行'
+      : 'Waiting for its own page: switch back to that page to resume the queue';
+    // dev-0.6.4 hotfix: 被失败前置阻断的排队行必须显式可见，否则用户只会看到
+    // “恢复后什么都不发生”。恢复队列时内核会把这些行重新挂到最后一个已提交 Build。
+    var authoritativeItem = queueItemId
+      ? queueItemsForTarget(target).find(function(item) { return item.id === queueItemId; })
+      : null;
+    var blockedRow = !!(authoritativeItem && (authoritativeItem.blocked === true || authoritativeItem.waitingReason));
+    var blockedLabel = currentLang() === 'zh'
+      ? '这一行被失败的前置 Build 阻断：按“恢复队列”会把它重新挂到最后一个已提交 Build 后执行'
+      : 'Blocked by a failed predecessor: resuming the queue re-anchors this row to the last committed build';
+    html += '<div class="queue-item" data-queue-index="' + queueIndex + '"' + identityAttributes
+      + (waitingForBranch ? ' data-queue-branch-waiting="1" title="' + escAttr(waitingLabel) + '"' : '')
+      + (blockedRow ? ' data-queue-blocked="1" title="' + escAttr(blockedLabel) + '"' : '')
+      + dragAttributes + '>' +
       dragHandle +
       '<input class="queue-edit" value="' + escAttr(state.nextQueue[queueIndex] || '') + '"' + inputAttributes + '>' +
       '<span class="stack-actions">' + actions + '</span>' +
     '</div>';
   }
   list.innerHTML = html;
+
+  // dev-0.6.4 hotfix: 存在受阻行时提供显式修复入口。0.6.3 合约要求失败前置继续
+  // 阻断后继（不静默跳过），因此修复必须是用户主动动作，并且可见、可审计。
+  var blockedCount = 0;
+  for (var blockedIndex = 0; blockedIndex < visibleIndexes.length; blockedIndex++) {
+    var blockedRequest = state.nextQueueRequests[visibleIndexes[blockedIndex]];
+    var blockedItemId = blockedRequest ? String(blockedRequest.queueItemId || '') : '';
+    var blockedItem = blockedItemId
+      ? queueItemsForTarget(target).find(function(item) { return item.id === blockedItemId; })
+      : null;
+    if (blockedItem && (blockedItem.blocked === true || blockedItem.waitingReason)) blockedCount++;
+  }
+  var headerActions = panel.querySelector('#queue-header .stack-actions');
+  var repairButton = document.getElementById('queue-repair-btn');
+  if (blockedCount) {
+    if (!repairButton && headerActions) {
+      repairButton = document.createElement('button');
+      repairButton.className = 'stack-icon-btn';
+      repairButton.id = 'queue-repair-btn';
+      repairButton.setAttribute('type', 'button');
+      repairButton.setAttribute('onclick', 'event.stopPropagation();window.repairBlockedQueue()');
+      var pauseButton = document.getElementById('queue-pause-btn');
+      if (pauseButton && pauseButton.parentNode === headerActions) headerActions.insertBefore(repairButton, pauseButton);
+      else headerActions.appendChild(repairButton);
+    }
+    if (repairButton) {
+      var repairLabel = currentLang() === 'zh' ? '修复受阻队列' : 'Repair blocked queue';
+      repairButton.title = repairLabel;
+      repairButton.innerHTML = iconSvg('wrench', repairLabel, 'tiny') + '<span class="icon-only-label">' + esc(repairLabel) + '</span>';
+    }
+  } else if (repairButton && repairButton.parentNode) {
+    repairButton.remove();
+  }
 };
 
 window.renderNextQueue = window.renderQueuePanel;
+
+// 显式修复受阻队列：把被失败前置阻断的排队行重新挂到最后一个已提交 Build。
+window.repairBlockedQueue = function() {
+  return window.queueAction('repair_blocked', {}, currentConversationTarget());
+};
 
 window.toggleQueuePanel = function() {
   state.queueCollapsed = !state.queueCollapsed;
@@ -18518,7 +18815,7 @@ window.refreshRightStatus = function(options) {
     }
     if (s && s.subagents) state.subagents = s.subagents;
     if (s && s.fileDiffs) state.fileDiffs = s.fileDiffs;
-    if (s && s.pendingOptions) state.pendingOptions = s.pendingOptions;
+    if (s && s.pendingOptions) setPendingOptionsForTarget(s.pendingOptions, computerTarget || currentConversationTarget(s.conversationId || requestedConversationId || activeConversationId()));
     // Bind the Flow takeover to backend per-conversation state. The takeover
     // for the requested target reflects exactly what the backend holds for that
     // conversation: a suspension (paused) or an active running Flow. It is
@@ -19404,7 +19701,9 @@ function applyReturnedGoalState(snapshot) {
   if (!snapshot || !Object.prototype.hasOwnProperty.call(snapshot, 'goal')) return;
   state.goalText = snapshot.goal && snapshot.goal.objective ? String(snapshot.goal.objective) : '';
   state.goalVisible = !!state.goalText;
-  state.goalPaused = !!(snapshot.goal && snapshot.goal.paused);
+  // dev-0.6.4: goal 结束后端会停止/清空 goal，但前端此前只清 text/visible，paused
+  // 残留会让 goal 条继续以“暂停”状态显示。这里在无 goal 时一并清除暂停态。
+  state.goalPaused = state.goalVisible ? !!(snapshot.goal && snapshot.goal.paused) : false;
   if (!snapshot.goal && snapshot.mode === 'build') {
     state.mode = 'build';
     if (els['mode-select']) {

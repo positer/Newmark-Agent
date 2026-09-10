@@ -270,6 +270,91 @@ export class GuardedContinuationStore {
     });
   }
 
+  /**
+   * dev-0.6.4 hotfix: 当某个被受理的 Build 失败/取消后，它的后继会永远无法被
+   * claim（`claimBuild` 只认「父 = 已提交 frontier」），整条队列就此卡死，新提交
+   * 也只是接在失败链后面。
+   *
+   * 这里提供一条**显式**修复通道：把被阻断的排队 Build 重新挂到当前已提交的
+   * frontier 上，保持原有队列顺序，并为每一次改挂写入 `BuildQueueRepaired`
+   * 审计事件（记录旧 parent / 新 parent / 原因）。它不是静默 rebase：调用方是
+   * 用户的显式动作（恢复队列）或一次新的入队命令。
+   */
+  repairBlockedQueue(input: {
+    workspaceId: string; rootId: RootId; branchId: BranchId; reason?: string;
+  }): { repaired: BuildId[]; frontier: BuildId | null } {
+    return this.mutate(ledger => {
+      const branch = this.requireBranch(ledger, input);
+      const frontier = branch.headBuildId || null;
+      const queued = Object.values(ledger.builds)
+        .filter(build => build.branchId === branch.branchId && build.status === 'QUEUED')
+        .sort((a, b) => a.queueSequence - b.queueSequence);
+      const repaired: BuildId[] = [];
+      let chainParent: BuildId | null = frontier;
+      let mutated = false;
+      for (const build of queued) {
+        if ((build.parentBuildId || null) !== (chainParent || null)) {
+          const previousParentBuildId = build.parentBuildId;
+          build.parentBuildId = chainParent;
+          build.waitingReason = undefined;
+          build.updatedAt = new Date().toISOString();
+          repaired.push(build.buildId);
+          mutated = true;
+          this.appendEvent(ledger, {
+            type: 'BuildQueueRepaired',
+            workspaceId: this.workspaceId,
+            rootId: branch.rootId,
+            branchId: branch.branchId,
+            buildId: build.buildId,
+            attemptId: null,
+            fence: null,
+            payload: {
+              previousParentBuildId,
+              newParentBuildId: chainParent,
+              reason: String(input.reason || 'committed-frontier-repair'),
+            },
+          });
+        }
+        chainParent = build.buildId;
+      }
+      if (mutated) {
+        branch.queueRevision += 1;
+        branch.lifecycleRevision += 1;
+        branch.updatedAt = new Date().toISOString();
+      }
+      return { repaired, frontier };
+    });
+  }
+
+  /**
+   * dev-0.6.4 hotfix: 读取视角的受阻推导。
+   *
+   * 一个 QUEUED Build 只有在它的父正好是「已提交 frontier」或队列里位于它之前
+   * 的可执行 Build 时才可能被 claim（见 `claimBuild`）。这里按队列顺序推导哪些行
+   * 目前不可执行：父不是链上前驱、或父已 FAILED/CANCELLED 的行即为受阻，且受阻点
+   * 之后的所有行同样受阻。
+   */
+  private blockedQueuedBuildIds(ledger: LedgerFile, branch: BranchRecord): Set<BuildId> {
+    const blocked = new Set<BuildId>();
+    const queued = Object.values(ledger.builds)
+      .filter(build => build.branchId === branch.branchId && build.status === 'QUEUED')
+      .sort((a, b) => a.queueSequence - b.queueSequence);
+    let chainParent: BuildId | null = branch.headBuildId || null;
+    for (const build of queued) {
+      const parent = build.parentBuildId ? ledger.builds[build.parentBuildId] : null;
+      // 链上的前驱（frontier 或队列里位于它之前的行）在执行时已经提交，因此只有
+      // 「父不是链上前驱」或「父已 FAILED/CANCELLED」的行才是真正受阻的。
+      const parentIsChainPredecessor = (build.parentBuildId || null) === (chainParent || null);
+      const parentFailed = !!parent && (parent.status === 'FAILED' || parent.status === 'CANCELLED');
+      if (!parentIsChainPredecessor || parentFailed) {
+        blocked.add(build.buildId);
+        continue;
+      }
+      chainParent = build.buildId;
+    }
+    return blocked;
+  }
+
   deleteQueuedBuild(input: { workspaceId: string; rootId: RootId; branchId: BranchId; buildId: BuildId }): void {
     this.mutate(ledger => {
       const build = ledger.builds[input.buildId];
@@ -720,10 +805,17 @@ export class GuardedContinuationStore {
 
   private snapshotUnlocked(ledger: LedgerFile, branch: BranchRecord): QueueSnapshot {
     const guard = ledger.guards[branch.branchId] || defaultGuard(branch.branchId);
+    // dev-0.6.4 hotfix: 受阻状态由父链推导，而不是只在失败瞬间给直系后继打标记。
+    // 这样“失败之后才入队”的行同样会显示为受阻，界面才能给出显式修复入口。
+    const blockedBuildIds = this.blockedQueuedBuildIds(ledger, branch);
     const builds = Object.values(ledger.builds)
       .filter(build => build.branchId === branch.branchId)
       .sort((a, b) => a.queueSequence - b.queueSequence)
-      .map(build => ({ ...build, input: cloneInput(build.input) }));
+      .map(build => ({
+        ...build,
+        input: cloneInput(build.input),
+        waitingReason: build.waitingReason || (blockedBuildIds.has(build.buildId) ? 'DEPENDENCY_FAILED' : undefined),
+      }));
     return {
       workspaceId: this.workspaceId,
       rootId: branch.rootId,

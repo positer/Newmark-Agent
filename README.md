@@ -1,5 +1,35 @@
 # Newmark Agent
 
+## dev-0.6.4 hotfix #2 排队进入对话后的用户输入显示与连续出队
+
+修复「通过排队进入的对话没有显示在对话区作为用户输入」与「队列没有连续进入」：后端在出队时已经把这一轮写成正式用户消息（`chatMessages` 里可见 `[user]` 与 work run 的 `primaryPrompt`），但渲染端既没有乐观气泡也没有发送回执，**从不为排队回合刷新转录**，所以对话区看不到用户输入、队列面板清空后又“什么都没有发生”。现在 `applyConversationCommandSnapshot` 比较权威 `queueItems` 的 id 集合，检测到出队即按目标去抖刷新（150ms/1200ms/3000ms，覆盖用户消息落盘与助手回复两个时刻），并且只在当前前台会话、渲染端无发送在飞时执行；运行终态（`done`/`error`/`interrupted`）也走同一条刷新。验证（已安装 exe、隔离 root + mock provider、连续两行）：账本 `seq1:SUCCEEDED seq2:SUCCEEDED`，后端与对话区都得到 `[user] DEV064_QUEUED_DISPLAY | [assistant] … | [user] DEV064_QUEUED_DISPLAY_2 | [assistant] …`，DOM 出现两个用户气泡。
+
+本版已打包并安装：MSI SHA-256 `614BE64B…F9E4CE`、便携包 `06D403D1…BE5642`；安装器 `Success=true`、`ProductCode={ECF2B123-F441-4141-97AF-6E46694F40D7}`、`VerifiedPayloadFileCount=292`、`InstalledAsarSha256=C91A06A1…24EC82`；安装目录 `app.asar` 与打包目录一致，注册表/安装目录 exe/CLI 均为 `0.6.4`。记录与安装态截图见 [hotfix #2 报告](archive/20260910-dev064-queue-drain-fix/REPORT.md)。
+
+## dev-0.6.4 hotfix 受阻队列修复、排队/Guide 显示规则
+
+修复「无法启动暂停的队列、也无法提交新队列」：某个被受理的 Build 一旦失败，`claimBuild` 只认「父 = 已提交 frontier」的排队行，于是它的整条后继链永久无法被 claim —— 恢复暂停队列看起来毫无反应，之后提交的新行也只是接在这条失败链后面。现在按队列顺序从父链推导受阻状态（失败之后才入队的行同样会显示原因），队列面板给受阻行加 `data-queue-blocked` 标记，并在队列头部提供显式的 **“修复受阻队列”** 按钮：把受阻行重新挂到最后一个已提交 Build（顺序不变，每次改挂写入 `BuildQueueRepaired` 审计事件）。修复必须是用户显式动作——0.6.3 合约要求失败前置继续阻断后继、不得静默跳过，因此恢复动作本身保持原语义。
+
+显示规则按你的要求收紧：未进入对话的排队内容**不再画进对话区**，只在输入栈的队列面板中显示；Guide **只有被内核接受后**才出现在时间线上、并显示在接收位置（乐观/待确认、deferred、rejected 的 Guide 都不进入对话区）。
+
+验证：新增 `queueBlockedRepairVerify`（复现用户账本形状 → 修复 → 依次 SUCCEEDED + 审计事件 + 幂等）；真实内核 + UI 端到端（mock provider）验证 `ledger: seq1:FAILED seq2:SUCCEEDED seq3:SUCCEEDED`、受阻标记与修复按钮出现、修复+恢复后队列清空；`verify.js`、`test-shared-conversation-commands.cjs`、`test-queue-start-failure.cjs`、`test-queue-acceptance-boundary.cjs`、`test-queue-continuation-identity.cjs`、`guideUiReconcileVerify`、`branchPageQueueIdentityVerify` 等门禁全部通过。
+
+修复版已打包并**在本机完成 UAC 提升安装**：MSI SHA-256 `C174A886…E391F`、便携包 `5DA8CA31…CFC6`；安装器结果 `Success=true`、`Version=0.6.4.0`、`ProductCode={A45790C3-50B4-42F1-B58D-ED0CD2094398}`、`VerifiedPayloadFileCount=292`。独立复核：注册表 `0.6.4.0`、安装目录 exe `0.6.4.0`、安装目录 CLI `0.6.4`、安装目录 `resources/app.asar` SHA-256 `44935476…D3F7`（与打包目录一致）。已安装 exe 的隔离 root 门禁：受阻队列两行显示 `DEPENDENCY_FAILED` + 修复按钮，显式修复并恢复后账本 `seq1:FAILED seq2:SUCCEEDED seq3:SUCCEEDED`；视觉门禁分页条 `<2/2>`、队列 2 行（1 行等待所属分页）、内联排队气泡 0、Guide 仅“复制”。记录见 [hotfix 报告](archive/20260910-dev064-hotfix/REPORT.md)。
+
+## dev-0.6.4 分支分页身份、排队输入可见与 Guide 只读
+
+PC 端修复三处对话接续表现：(1) 从 Build 开头编辑输入生成分页时，分页条现在稳定出现在被编辑的那条用户输入上——锚点解析改为 `message_id` → 渲染索引 → 锚点文本三级回退，Build 卡片式渲染（没有 `data-message-id`）也能命中；同时消息快照与 Build 列表按「分支节点」缓存，新分支页新发送的消息留在本页，不会被另一页的快照覆盖。(2) 排队输入不再隐形：队列面板不再按当前运行分支过滤、新增排队行自动展开面板，并在时间线上把属于当前分页的排队内容渲染为带「排队中」标记的用户气泡；生成分页时不再清空本地排队投影，也不再静默改写受理时捕获的 `branchPath`。(3) 时间线中的 Guide 记录只保留复制按钮，移除编辑入口（Guide 仍是当前 Build 的内联干预，不重放、不重写）。
+
+分支身份统一为一条规则：`<conversationId>::branch:<branchNodeId>`（`DESKTOP/src/core/branchIdentity.ts`）。用户分页产生的分支与实验性「分支交流」产生的分支共用同一套逻辑：新分页必须拿到全新节点 id（`assertFreshBranchIdentity`），供应商会话序列 id 绑定 Build 所属分支（`activeWorkRunBranchId`，不再读「当前查看的分支」），压缩归档与热折叠历史按分支节点隔离，渲染端消息/Build 缓存同样按分支节点键隔离。
+
+保留既有边界：预览分支与运行分支分离时，新分支绝不接管另一条分页的排队输入，跨分支不共享 provider 会话与折叠历史，Guide 行为不变（`test-shared-conversation-commands.cjs` 51/51 通过）。
+
+验证：`verify.js` 1717/1717；`test-shared-conversation-commands.cjs` 51/51；`queueAttachmentIsolationVerify` 渲染器命令 57/57；`test-long-conversation-ui-ordering.cjs` 18/18；新增 `branchPageQueueIdentityVerify` 分支身份/排队可见/Guide 只读回归；真实 Electron 渲染器视觉复核脚本 `test:branch-page-queue-visual`，截图见 [归档](archive/20260910-dev064-branch-page-queue/)。版本已同步为 `0.6.4`／Android `versionCode 604`（Android 行为未改动）。
+
+本地已生成并核对：`release/Newmark-Agent-0.6.4-x64.msi`（246,759,622 bytes，SHA-256 `1BEABA08…B54E4A`）、`release/Newmark-Agent-0.6.4-win-unpacked-x64.zip`（321,900,311 bytes，SHA-256 `C807ECC6…4419D6`）。打包后 context-compress CLI stress、console wrapper boundary stress（`version=0.6.4`）与真实 loopback sshd SSH TUI 压力（4 轮重启）全部通过。
+
+Windows MSI 已在本机完成一次 UAC 提升安装并独立复核：注册表 `0.6.4.0`、安装目录 `Newmark Agent.exe` FileVersion/ProductVersion `0.6.4.0`、安装目录 CLI `0.6.4`、`C:\Program Files\Newmark Agent\resources\app.asar` SHA-256 `92842DCB…D38804`（与打包目录字节一致）、安装器核对 292 个 payload 文件。安装前已关闭 6 个运行中的 0.6.3 实例；安装器的“用户数据未被触碰”守卫因安装窗口内仍有运行时写入 `.Newmark`（`startup.log`、`.newmark-runtime`、`.newmark-context-v2`、Electron session-data）而报 `failed`，但 MSI 退出码为 `0`、payload 无误、该目录下安装后无任何 Newmark 进程 —— 判定为并发写入误报。安装后 GUI 运行验收：以隔离 root 启动**已安装**的 exe，通过 CDP 断言 `<2/2>` 分页条、队列行 2（1 行标记等待所属分页）、排队用户气泡 1 个与 Guide 仅“复制”动作并截图，`GuiRuntimeVerified=true`（渲染器层面；真实 provider 端到端仍是独立边界）。记录见 [打包安装报告](archive/20260910-dev064-package/REPORT.md)。
+
 ## dev-0.6.3 对话接续身份、分支绑定与缓存隔离
 
 PC 与 Android 修复“底部显示的模型不等于实际发送的 provider/model”、新对话首轮长时间无反馈、排队 Next 被误接到上一个 Build、排队项落到错误分支，以及正常回复被客户端输出上限截断的问题。队列项在受理时固定 `targetRuntimeKey`、`workspaceKey`、`branchNodeId`、`branchPath` 与 `modelSelection`；Next 在上一 Build 完整结束后以新 runId 启动为同会话新用户轮次，Guide 仍内联干预当前 Build；跨会话队列项进入暂停而不是改投当前对话。受理、抢占、心跳与最终提交现在经过工作区级 `GuardedContinuationStore`：CAS/幂等回执、固定 parent、BranchGuard/fence、唯一 final、head/tail 分离、失败/取消阻断后继、分叉 lineage 校验与 append-only 事件；受理后重排被显式拒绝，必须取消后缀后以新命令重新提交。可选的 provider session 身份按分支隔离，每次模型请求记录 `branchId` 与实际 payload 的 `contextHash`。正常回复不再发送客户端 `max_tokens`/`max_output_tokens` 上限，只有明确短输出的辅助请求才传正值；移动端预算耗尽保留部分答案并标记未完成。PC 远程对话与 hosted mobile 命令共用同一 kernel/ledger；Android 本地对话仍使用独立的 `LocalQueueContract` 持久队列。验证记录见 [报告](archive/20260909-continuation-identity/REPORT.md)。

@@ -992,5 +992,5 @@ Release APK installed on emulator and MSI built. MSI elevation was canceled, so 
 
 
 ## dev-0.6.5 cross-platform release artifacts
-Windows MSI, Windows portable ZIP, and Android release APK were rebuilt and hash-verified. See [release artifact manifest](archive/20260916-dev065-release-packaging/REPORT.md).
+Windows MSI, Windows portable ZIP, Linux AppImage/deb/portable ZIP, and Android release APK were rebuilt and hash-verified. See [release artifact manifest](archive/20260916-dev065-release-packaging/REPORT.md).
 

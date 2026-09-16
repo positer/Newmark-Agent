@@ -4256,3 +4256,7 @@ pm run test:liquid-renderer-electron 全部通过。渲染器测量保持单 Web
 ## archive/20260915-dev065-release-runtime
 Release APK/MSI hashes, install preparation, emulator screenshot, and the canceled MSI installation record for the dev-0.6.5 runtime gate.
 
+
+## archive/20260916-dev065-release-packaging
+Cross-platform release manifest with artifact sizes and SHA-256 hashes for MSI, portable ZIP, and Android APK.
+

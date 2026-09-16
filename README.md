@@ -990,3 +990,7 @@ pm run test:liquid-renderer-electron 全部通过。渲染器测量保持单 Web
 ## dev-0.6.5 release runtime gate
 Release APK installed on emulator and MSI built. MSI elevation was canceled, so installed-0.6.5 runtime queue/Goal/Flow measurements remain pending; see [release runtime report](archive/20260915-dev065-release-runtime/REPORT.md).
 
+
+## dev-0.6.5 cross-platform release artifacts
+Windows MSI, Windows portable ZIP, and Android release APK were rebuilt and hash-verified. See [release artifact manifest](archive/20260916-dev065-release-packaging/REPORT.md).
+

@@ -1,5 +1,15 @@
 # Newmark Agent
 
+## dev-0.6.5 弹窗与模型配置
+
+移动端返回项不再参与色块移动，模型菜单打开时定位当前选项，浏览器按钮采用外扩玻璃画布；供应商模型行落地后进入配置页。双端分别设置调用模型标识与显示名，并加强同名模型的供应商隔离。PC 实际窗口与 Android 模拟器触控/截图验证已执行，实体手机尚未连接。见 [本轮报告](archive/20260915-dev065-popup-models/REPORT.md)。
+
+
+## dev-0.6.5 低内存适配与流式显示
+
+针对 8GB 电脑收紧闲置会话进程驻留预算，限制分支消息快照缓存，并阻止切换会话后的过期流式绘制。真实 DeepSeek 部署完成运行中 Next、暂停/恢复与出队回复验收。当前为源码开发版，未打包安装；8GB 实机性能仍待测。见 [验证报告](archive/20260915-dev065-memory-ui/REPORT.md)。
+
+
 ## dev-0.6.4 hotfix #2 排队进入对话后的用户输入显示与连续出队
 
 修复「通过排队进入的对话没有显示在对话区作为用户输入」与「队列没有连续进入」：后端在出队时已经把这一轮写成正式用户消息（`chatMessages` 里可见 `[user]` 与 work run 的 `primaryPrompt`），但渲染端既没有乐观气泡也没有发送回执，**从不为排队回合刷新转录**，所以对话区看不到用户输入、队列面板清空后又“什么都没有发生”。现在 `applyConversationCommandSnapshot` 比较权威 `queueItems` 的 id 集合，检测到出队即按目标去抖刷新（150ms/1200ms/3000ms，覆盖用户消息落盘与助手回复两个时刻），并且只在当前前台会话、渲染端无发送在飞时执行；运行终态（`done`/`error`/`interrupted`）也走同一条刷新。验证（已安装 exe、隔离 root + mock provider、连续两行）：账本 `seq1:SUCCEEDED seq2:SUCCEEDED`，后端与对话区都得到 `[user] DEV064_QUEUED_DISPLAY | [assistant] … | [user] DEV064_QUEUED_DISPLAY_2 | [assistant] …`，DOM 出现两个用户气泡。
@@ -976,3 +986,7 @@ pm run test:liquid-renderer-electron 全部通过。渲染器测量保持单 Web
 定位到亮边来自竖屏 ModalDrawerSheet 的全高矩形 liquidGlassModifier：默认 Kyant 外沿高光被绘制在整个左抽屉边界，暗色背景下表现为神秘亮框。新增 dgeHighlight 参数，竖屏抽屉关闭整面外沿高光，保留磨砂、折射和内部控件玻璃交互；默认值保持开启以兼容普通弹窗与交互浮块。
 
 验证：Android :app:testDebugUnitTest 全部通过。
+
+## dev-0.6.5 release runtime gate
+Release APK installed on emulator and MSI built. MSI elevation was canceled, so installed-0.6.5 runtime queue/Goal/Flow measurements remain pending; see [release runtime report](archive/20260915-dev065-release-runtime/REPORT.md).
+

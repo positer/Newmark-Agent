@@ -176,7 +176,13 @@ class LiquidGlassContractTest {
         assertTrue(compositeMenu.contains(".liquidMotionDeformationDeferred("))
         assertFalse(compositeMenu.contains(".offset(y = activeOffset)"))
         assertTrue(compositeMenu.contains("if (index >= 0)"))
-        assertFalse(compositeMenu.substringAfter("entries.forEachIndexed").contains(".clickable("))
+        // Back navigation has its own accessible, ripple-free click action;
+        // selection rows still use only the shared flight gesture handler.
+        val rows = compositeMenu.substringAfter("entries.forEachIndexed")
+        assertEquals(1, rows.split(".clickable(").size - 1)
+        assertTrue(rows.contains("if (entry.navigation) Modifier.clickable("))
+        assertTrue(rows.contains("indication = null"))
+        assertTrue(rows.contains("onClick = entry.onActivate"))
         assertFalse(compositeMenu.contains(".shadow(12.dp"))
         assertFalse(compositeMenu.contains(".border(1.5.dp"))
         assertFalse(compositeMenu.contains("Color.White.copy(alpha = 0.30f)"))

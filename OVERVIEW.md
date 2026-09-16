@@ -1,5 +1,15 @@
 # Newmark Agent Overview
 
+## 2026-09-15 弹窗及模型配置增量
+
+`android/ui/ChatScreen.kt`（完整路径见报告）管理返回项和选中滚动；`RightSidebar.kt` 使用外扩按钮画布；`SettingsScreen.kt` 增加供应商模型编辑导航；`vm/ChatViewModel.kt` 按供应商身份重命名。`Dev065PopupModelsTest.kt` 提供触控/视觉门禁，PC `src/ui/index.html` 分离模型字段及稳定身份，`scripts/dev065-model-settings-visual.cjs` 验证实际配置路径。`archive/20260915-dev065-popup-models/` 存放截图、报告与日志。目标是交互稳定且配置不跨供应商。
+
+
+## 2026-09-15 dev-0.6.5
+
+目标：降低低内存电脑会话驻留开销，保持历史、分支与队列身份正确。文件树增量：`DESKTOP/src/core/runtimeMemoryBudget.ts` 提供物理内存策略，由两类 RuntimePool 消费；`DESKTOP/src/ui/index.html` 限制消息快照和防止过期绘制；`DESKTOP/src/tests/runtimeMemoryBudgetVerify.ts` 覆盖预算边界；`DESKTOP/scripts/test-dev065-renderer-memory.cjs` 覆盖缓存与导航；`DESKTOP/scripts/dev-0.6.5-real-queue-deepseek.cjs` 锁定真实部署验收。`archive/20260915-dev065-memory-ui/` 保存报告、文档原始快照和门禁日志；`archive/20260915-dev065-real-deepseek-queue/` 保存真实模型证据/截图。其余目录作用保持下方记录。
+
+
 ## 2026-09-10 dev-0.6.4 hotfix 受阻队列修复与显示规则
 
 | 文件/目录 | 构造与作用 |
@@ -4242,3 +4252,7 @@ pm run test:liquid-renderer-electron 全部通过。渲染器测量保持单 Web
 ### 20260905-145603 移动端暗色竖屏左边栏亮边修复
 
 定位确认亮边来自 `CompactMainLayout` 的 `ModalDrawerSheet`：全高矩形抽屉把默认 Kyant 外沿高光绘制在整块左栏边界，暗色背景下形成异常亮框。`liquidGlassModifier` 新增 `edgeHighlight` 开关，竖屏抽屉传入 `false`，关闭整面 carrier 的外沿高光，同时保留磨砂、折射以及内部按钮/浮块的独立玻璃边缘和点击泛光。Android `:app:testDebugUnitTest` 全量通过。
+
+## archive/20260915-dev065-release-runtime
+Release APK/MSI hashes, install preparation, emulator screenshot, and the canceled MSI installation record for the dev-0.6.5 runtime gate.
+

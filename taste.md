@@ -1,5 +1,21 @@
 # Newmark Agent Project Taste
 
+## 2026-09-15 Popup navigation and provider-scoped model editing
+
+- Back entries are navigation, never selection-flight destinations. Reopen scroll follows provider-qualified current selection after layout.
+- Glass toolbar optics need an outset canvas independent of their nominal hit area; retain disabled semantics.
+- Model API identifiers and display labels are separate. Edit identity is provider ID plus original model name; never resolve duplicate names by first-provider order. Renames preserve other fields and sibling providers.
+- Model-row navigation commits after glass landing; nested toggle/delete actions do not navigate. Distinguish emulator rendering evidence from physical-device validation.
+
+
+## 2026-09-15 Low-memory runtime and renderer budgets
+
+- Size default runtime residency from physical RAM; explicit options win. Never evict active/unknown-state runtimes to meet a budget. Lower capacity is a concurrency tradeoff and must be documented.
+- Evict only reconstructable UI snapshots; never truncate durable history or model context to reduce frontend memory. Budget both entry count and text size, preserving complete oversized results for immediate rendering.
+- Revalidate the workspace/conversation and UI object when a delayed rendering callback executes.
+- Live-model tests must pin provider-qualified deployment identities, disable fallback, assert the visible model and queue behavior, and avoid awaiting the first run before enqueueing. Distinguish real 8GB measurements from deterministic policy tests.
+
+
 ## 2026-09-10 Queued turns must appear in the conversation when they enter
 
 - A queued turn that actually enters the conversation is user input and must appear in the transcript. The kernel persists it, so the renderer must refresh from the authoritative snapshot when it observes a queue drain: no optimistic bubble exists for background drains, and no send receipt will arrive.
@@ -626,3 +642,7 @@ WebGL 折射与 2D 泛光必须共享同一圆角裁剪路径；高频指针光�
 - Report PDF page/scope explicitly. Default text extraction is bounded by max_chars; the default visual page is page 1. Use pdf_page to request another page.
 
 - Remote IPC coalescedDeltas retain original event identity. Expand batches before merging SSE with durable snapshots; dedupe by original IDs, never by repeated words. Preserve intentional repeated content and normalize omitted Gson fields.
+
+## 2026-09-15 Release runtime gate
+Never report installed-runtime performance from the old installed version. Separate built, installed, emulator, physical-device, and 8GB evidence; a canceled elevation leaves the installed version unchanged.
+

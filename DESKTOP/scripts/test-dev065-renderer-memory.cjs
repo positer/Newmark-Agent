@@ -1,0 +1,17 @@
+const fs = require('fs'), vm = require('vm'), assert = require('node:assert/strict'), ts = require('typescript');
+const source = fs.readFileSync('src/ui/index.html','utf8').match(/<script>([\s\S]*)<\/script>/)[1];
+const ast = ts.createSourceFile('ui.js',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+const names = ['cacheConversationMessages','conversationMessageCache','scheduleStreamingWorkflowTextFlush'];
+const funcs = ast.statements.filter(n=>ts.isFunctionDeclaration(n)&&names.includes(n.name?.text)).map(n=>n.getText(ast)).join('\n');
+const c={state:{},branchConversationViewKey:t=>t.id,currentConversationTarget:()=>({id:'active'}),frames:[],requestAnimationFrame:fn=>c.frames.push(fn),conversationWorkUiState:()=>c.ui,isActiveConversationTarget:()=>c.active,applyStreamingWorkflowText:()=>c.painted++};
+vm.createContext(c); vm.runInContext(funcs,c);
+for(let i=0;i<100;i++) c.cacheConversationMessages([{content:'x'.repeat(100000)}],{id:String(i)});
+assert.equal(Object.keys(c.state.conversationMessagesByTarget).length,6);
+const full=[{content:'z'.repeat(5*1024*1024)}];
+assert.equal(c.cacheConversationMessages(full,{id:'large'})[0].content.length,full[0].content.length);
+assert(!c.state.conversationMessagesByTarget.large);
+assert.equal(c.conversationMessageCache({id:'99'})[0].content.length,100000);
+c.ui={}; c.active=false; c.painted=0;
+c.scheduleStreamingWorkflowTextFlush(c.ui,'old','ws'); c.frames.shift()(); assert.equal(c.painted,0);
+c.active=true;c.scheduleStreamingWorkflowTextFlush(c.ui,'new','ws');c.frames.shift()();assert.equal(c.painted,1);
+console.log('PASS: 100 branches bounded; oversized snapshot returned intact; evicted history cache miss; navigation frame isolation.');

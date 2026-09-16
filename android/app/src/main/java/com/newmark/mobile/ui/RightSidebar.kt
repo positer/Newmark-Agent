@@ -117,6 +117,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.newmark.mobile.data.RemoteSubagent
 import com.newmark.mobile.data.RemotePlanItem
+import com.newmark.mobile.ui.components.GlassButtonCanvas
 import com.newmark.mobile.ui.components.LucideIcons
 import com.newmark.mobile.ui.components.MarkdownBody
 import com.newmark.mobile.ui.theme.LocalNewmarkColors
@@ -1241,12 +1242,15 @@ private fun EditorPanel(vm: DesktopLinkViewModel) {
 private fun editorLanguage(path: String): String = path.substringAfterLast('.', "text").ifBlank { "text" }
 
 @Composable
-private fun EditorToolbarButton(icon: ImageVector, label: String, enabled: Boolean, active: Boolean = false, onClick: () -> Unit) {
+internal fun EditorToolbarButton(icon: ImageVector, label: String, enabled: Boolean, active: Boolean = false, onClick: () -> Unit) {
     val p = LocalNewmarkColors.current
     val shape = RoundedCornerShape(50)
-    Box(Modifier.size(30.dp).glassButtonSurface(shape, if (active) p.accentSoft else p.bgPrimary)
-        .border(1.dp, if (active) p.accentBorder else p.border2, shape).clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center) {
+    GlassButtonCanvas(
+        visualWidth = 30.dp, visualHeight = 30.dp, shape = shape,
+        surfaceColor = if (active) p.accentSoft else p.bgPrimary,
+        restingBorderColor = if (active) p.accentBorder else p.border2,
+        enabled = enabled, onClick = onClick,
+    ) {
         Icon(icon, label, tint = if (active) p.accent else if (enabled) p.textSecondary else p.textTertiary.copy(alpha = .35f), modifier = Modifier.size(15.dp))
     }
 }

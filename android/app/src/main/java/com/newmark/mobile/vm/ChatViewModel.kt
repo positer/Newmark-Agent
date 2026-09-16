@@ -821,6 +821,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun editModel(providerId: String, originalName: String, model: ModelConfig) {
+        val normalized = model.copy(name = model.name.trim(), display = model.display.trim())
+        val provider = providers.find { it.id == providerId } ?: error("供应商已不存在")
+        require(normalized.name.isNotEmpty()) { "请输入模型标识" }
+        require(provider.models.any { it.name == originalName }) { "模型已不存在" }
+        require(provider.models.none { it.name != originalName && it.name.equals(normalized.name, ignoreCase = true) }) { "该模型标识已存在" }
+        if (activeProviderId == providerId && activeModelName == originalName) activeModelName = normalized.name
+        updateProviderModels(providerId) { p -> p.copy(models = p.models.map { if (it.name == originalName) normalized else it }) }
+        persistActive()
+    }
+
     fun removeModel(providerId: String, name: String) {
         updateProviderModels(providerId) { p ->
             p.copy(models = p.models.filter { it.name != name })

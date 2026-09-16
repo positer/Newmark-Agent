@@ -134,6 +134,7 @@ private sealed interface SettingsPage {
     data object Plugins : SettingsPage
     data class ProviderDetail(val providerId: String) : SettingsPage
     data class NewModel(val providerId: String) : SettingsPage
+    data class EditModel(val providerId: String, val modelName: String) : SettingsPage
 }
 
 @Composable
@@ -157,6 +158,7 @@ fun SettingsScreen(
                 is SettingsPage.Plugins -> page = SettingsPage.Main
                 is SettingsPage.ProviderDetail -> page = SettingsPage.Providers
                 is SettingsPage.NewModel -> page = SettingsPage.ProviderDetail((page as SettingsPage.NewModel).providerId)
+                is SettingsPage.EditModel -> page = SettingsPage.ProviderDetail((page as SettingsPage.EditModel).providerId)
             }
         },
         retainProgressOnCommit = page is SettingsPage.Main,
@@ -193,6 +195,7 @@ fun SettingsScreen(
                         is SettingsPage.Plugins -> page = SettingsPage.Main
                         is SettingsPage.ProviderDetail -> page = SettingsPage.Providers
                         is SettingsPage.NewModel -> page = SettingsPage.ProviderDetail((page as SettingsPage.NewModel).providerId)
+                is SettingsPage.EditModel -> page = SettingsPage.ProviderDetail((page as SettingsPage.EditModel).providerId)
                     }
                 },
             ) {
@@ -214,6 +217,7 @@ fun SettingsScreen(
                     is SettingsPage.Plugins -> "插件"
                     is SettingsPage.ProviderDetail -> vm.providers.find { it.id == (page as SettingsPage.ProviderDetail).providerId }?.label ?: "供应商"
                     is SettingsPage.NewModel -> "新建模型"
+                    is SettingsPage.EditModel -> "模型配置"
                 },
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -267,6 +271,16 @@ fun SettingsScreen(
                     providerId = target.providerId,
                     onBack = { page = SettingsPage.Providers },
                     onCreateModel = { page = SettingsPage.NewModel(target.providerId) },
+                    onEditModel = { page = SettingsPage.EditModel(target.providerId, it) },
+                )
+                is SettingsPage.EditModel -> ManualModelPage(
+                    provider = vm.providers.find { it.id == target.providerId },
+                    initialModel = vm.providers.find { it.id == target.providerId }?.models?.find { it.name == target.modelName },
+                    onSave = { model ->
+                        vm.editModel(target.providerId, target.modelName, model)
+                        page = SettingsPage.ProviderDetail(target.providerId)
+                    },
+                    onCancel = { page = SettingsPage.ProviderDetail(target.providerId) },
                 )
                 is SettingsPage.NewModel -> ManualModelPage(
                     provider = vm.providers.find { it.id == target.providerId },
@@ -1135,18 +1149,19 @@ private fun FuzzyInjectPage(onSave: (ProviderConfig) -> Unit, onCancel: () -> Un
 
 // ---- 供应商内基础新建模型（与 PC addModel 的核心字段一致） ----
 @Composable
-private fun ManualModelPage(
+internal fun ManualModelPage(
     provider: ProviderConfig?,
+    initialModel: ModelConfig? = null,
     onSave: (ModelConfig) -> Unit,
     onCancel: () -> Unit,
 ) {
     val p = LocalNewmarkColors.current
-    var name by remember { mutableStateOf("") }
-    var display by remember { mutableStateOf("") }
-    var maxTokens by remember { mutableStateOf("128000") }
-    var description by remember { mutableStateOf("") }
-    var vision by remember { mutableStateOf(false) }
-    var thinking by remember { mutableStateOf(false) }
+    var name by remember(provider?.id, initialModel?.name) { mutableStateOf(initialModel?.name ?: "") }
+    var display by remember(provider?.id, initialModel?.name) { mutableStateOf(initialModel?.display ?: "") }
+    var maxTokens by remember { mutableStateOf(initialModel?.maxTokens?.takeIf { it > 0 }?.toString() ?: "128000") }
+    var description by remember(provider?.id, initialModel?.name) { mutableStateOf(initialModel?.description ?: "") }
+    var vision by remember(provider?.id, initialModel?.name) { mutableStateOf(initialModel?.vision ?: false) }
+    var thinking by remember(provider?.id, initialModel?.name) { mutableStateOf(initialModel?.thinking ?: false) }
     var status by remember { mutableStateOf("") }
     var railSelected by remember { mutableIntStateOf(4) }
     val railCount = 7 + if (status.isNotBlank()) 1 else 0
@@ -1184,12 +1199,12 @@ private fun ManualModelPage(
                     }
                     6 -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         ProviderCapsuleAction(
-                            label = "创建模型",
+                            label = if (initialModel == null) "创建模型" else "保存模型",
                             active = true,
                             modifier = Modifier.weight(1f),
                             onClick = {
                                 val parsedMaxTokens = maxTokens.toIntOrNull()
-                                if (provider.models.any { it.name.equals(name.trim(), ignoreCase = true) }) {
+                                if (provider.models.any { it.name != initialModel?.name && it.name.equals(name.trim(), ignoreCase = true) }) {
                                     status = "该模型标识已存在"
                                 } else runCatching {
                                     createManualModelConfig(
@@ -1200,6 +1215,10 @@ private fun ManualModelPage(
                                         vision = vision,
                                         thinking = thinking,
                                     )
+                                }.map { validated ->
+                                    initialModel?.copy(name = validated.name, display = validated.display,
+                                        description = validated.description, maxTokens = validated.maxTokens,
+                                        vision = validated.vision, thinking = validated.thinking) ?: validated
                                 }.onSuccess(onSave).onFailure {
                                     status = when {
                                         name.isBlank() -> "请输入模型标识"
@@ -1225,6 +1244,7 @@ private fun ProviderDetailPage(
     providerId: String,
     onBack: () -> Unit,
     onCreateModel: () -> Unit,
+    onEditModel: (String) -> Unit,
 ) {
     val provider = vm.providers.find { it.id == providerId }
     if (provider == null) {
@@ -1238,6 +1258,7 @@ private fun ProviderDetailPage(
         },
         onProtocolChange = { vm.updateProviderProtocol(providerId, it) },
         onCreateModel = onCreateModel,
+        onEditModel = onEditModel,
         onDeleteProvider = { vm.removeProvider(providerId); onBack() },
         onToggleModel = { vm.toggleModel(providerId, it) },
         onDeleteModel = { vm.removeModel(providerId, it) },
@@ -1253,6 +1274,7 @@ internal fun ProviderDetailPanel(
     onDeleteProvider: () -> Unit,
     onToggleModel: (String) -> Unit,
     onDeleteModel: (String) -> Unit,
+    onEditModel: (String) -> Unit = {},
 ) {
     val p = LocalNewmarkColors.current
     var railSelected by remember(provider.id) { mutableIntStateOf(0) }
@@ -1308,6 +1330,7 @@ internal fun ProviderDetailPanel(
                     railSelected = it
                     when (it) {
                         0 -> onCreateModel()
+                        in modelStart until deleteIndex -> onEditModel(provider.models[it - modelStart].name)
                         deleteIndex -> {
                             onDeleteProvider()
                         }

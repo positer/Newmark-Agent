@@ -1,3 +1,4 @@
+import { runtimeMemoryBudget } from './runtimeMemoryBudget';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
 import { ConversationQueueAction, ConversationQueueActionInput } from './conversationKernel';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, normalizeConversationTarget } from './conversationTarget';
@@ -661,13 +662,9 @@ export class ElectronUtilityRuntimePool {
   }
 
   private maxResidentRuntimes(): number {
-    // The pool hosts one utility runtime per active conversation target.
-    // A small default (2) silently blocked users from running more than two
-    // conversations at once with "utility runtime pool capacity reached".
-    // Idle runtimes are still evicted on LRU after the idle TTL, so a higher
-    // default bounds memory by activity, not by an arbitrary conversation cap.
-    const configured = Number(this.options.maxResidentRuntimes ?? 8);
-    return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 8;
+    const fallback = runtimeMemoryBudget().maxResidentRuntimes;
+    const configured = Number(this.options.maxResidentRuntimes ?? fallback);
+    return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : fallback;
   }
 
   private async serializeCapacity<T>(operation: () => Promise<T>): Promise<T> {
@@ -713,7 +710,7 @@ export class ElectronUtilityRuntimePool {
 
   private scheduleIdle(entry: RuntimeEntry): void {
     this.touch(entry);
-    const ttl = Math.max(10, Number(this.options.idleTtlMs ?? 5 * 60 * 1000));
+    const ttl = Math.max(10, Number(this.options.idleTtlMs ?? runtimeMemoryBudget().idleTtlMs));
     const timer = setTimeout(() => {
       void this.evictIfIdle(entry.target.runtimeKey, entry.lastUsedAt);
     }, ttl);

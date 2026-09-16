@@ -1,0 +1,51 @@
+{
+  "name": "newmark-agent",
+  "productName": "Newmark Agent",
+  "version": "0.5.15",
+  "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
+  "homepage": "https://github.com/positer/Newmark-Agent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/positer/Newmark-Agent.git"
+  },
+  "author": {
+    "name": "Newmark AI",
+    "email": "support@newmark.ai"
+  },
+  "main": "dist/main.js",
+  "bin": {
+    "newmark": "dist/launcher.js"
+  },
+  "files": [
+    "dist/**/*",
+    "!dist/tests/**/*",
+    "!dist/**/*.map",
+    "assets/**/*",
+    "config.example.json"
+  ],
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "@tesseract.js-data/chi_sim": "1.0.0",
+    "@tesseract.js-data/eng": "1.0.0",
+    "cross-fetch": "^4.0.0",
+    "glob": "^13.0.6",
+    "https-proxy-agent": "^9.1.0",
+    "jpeg-js": "^0.4.4",
+    "jsdom": "^29.1.1",
+    "just-bash": "3.2.0",
+    "lucide-static": "^1.21.0",
+    "node-pty": "^1.1.0",
+    "pdfjs-dist": "^5.4.149",
+    "pngjs": "^7.0.0",
+    "qrcode": "^1.5.4",
+    "resedit": "^1.7.2",
+    "tesseract.js": "6.0.1",
+    "typebox": "^1.1.38"
+  },
+  "optionalDependencies": {
+    "electron": "^43.1.1"
+  },
+  "overrides": {
+    "fast-uri": "3.1.5"
+  }
+}

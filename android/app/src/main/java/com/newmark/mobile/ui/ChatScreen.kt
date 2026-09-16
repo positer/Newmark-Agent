@@ -2985,7 +2985,7 @@ private fun InputCompositeMenuOverlay(
                             LiquidMenuEntry("选择图片") { currentOnDismiss.value(); currentOnChooseImage.value() },
                         )
                         InputCompositeMenu.PlusModes -> listOf(
-                            LiquidMenuEntry("← 返回") { currentOnMenuChange.value(InputCompositeMenu.PlusMain) },
+                            LiquidMenuEntry("← 返回", navigation = true) { currentOnMenuChange.value(InputCompositeMenu.PlusMain) },
                         ) + availableModes.map { candidate ->
                             LiquidMenuEntry(candidate, selected = candidate == mode) {
                                 currentOnMode.value(candidate)
@@ -3002,7 +3002,7 @@ private fun InputCompositeMenuOverlay(
                             },
                         )
                         InputCompositeMenu.Models -> buildList {
-                            add(LiquidMenuEntry("← 返回") { currentOnMenuChange.value(InputCompositeMenu.ModelMain) })
+                            add(LiquidMenuEntry("← 返回", navigation = true) { currentOnMenuChange.value(InputCompositeMenu.ModelMain) })
                             if (options.isEmpty()) {
                                 add(LiquidMenuEntry("暂无可用模型") { currentOnDismiss.value() })
                             }
@@ -3026,7 +3026,7 @@ private fun InputCompositeMenuOverlay(
                             }
                         }
                         InputCompositeMenu.Tiers -> listOf(
-                            LiquidMenuEntry("← 返回") { currentOnMenuChange.value(InputCompositeMenu.ModelMain) },
+                            LiquidMenuEntry("← 返回", navigation = true) { currentOnMenuChange.value(InputCompositeMenu.ModelMain) },
                         ) + INTELLIGENCE_TIERS.map { tier ->
                             LiquidMenuEntry(tier, selected = tier == intelligence) {
                                 currentOnSelectIntelligence.value(tier)
@@ -3034,6 +3034,13 @@ private fun InputCompositeMenuOverlay(
                             }
                         }
                     }) }
+                    val selectedEntry = entrySet.values.indexOfFirst { it.selected }
+                    LaunchedEffect(targetMenu, selectedEntry, pageScroll.maxValue) {
+                        if (selectedEntry >= 0) {
+                            val offset = entrySet.values.take(selectedEntry).fold(0) { sum, entry -> sum + if (entry.header) 26 else 44 }
+                            pageScroll.scrollTo(with(density) { (offset.dp - 88.dp).roundToPx() }.coerceAtLeast(0))
+                        }
+                    }
                     Box(
                         Modifier
                             .fillMaxWidth()
@@ -3058,6 +3065,7 @@ private data class LiquidMenuEntry(
     val trailing: String = "",
     val selected: Boolean = false,
     val header: Boolean = false,
+    val navigation: Boolean = false,
     val onActivate: () -> Unit = {},
 )
 
@@ -3130,7 +3138,7 @@ private fun LiquidMenuList(
     fun interactiveIndexAt(yPx: Float, density: Float): Int {
         val yDp = yPx / density
         return entries.indices.firstOrNull { index ->
-            !entries[index].header && yDp >= offsets[index].value && yDp < offsets[index].value + rowHeight.value
+            !entries[index].header && !entries[index].navigation && yDp >= offsets[index].value && yDp < offsets[index].value + rowHeight.value
         } ?: -1
     }
 
@@ -3233,6 +3241,10 @@ private fun LiquidMenuList(
             .liquidHoldDragGesture(
                 geometry.gestureKeys,
                 holdMillis = 300L,
+                canStartAt = { position ->
+                    val y = position.y / density.density
+                    entries.indices.none { entries[it].navigation && y >= offsets[it].value && y < offsets[it].value + rowHeight.value }
+                },
                 onCandidateStart = { onShellPress(true) },
                 onCandidateEnd = { onShellPress(false) },
                 onTap = { position ->
@@ -3244,8 +3256,8 @@ private fun LiquidMenuList(
                 },
                 onDrag = { position, _ ->
                     onShellDrag(position - holdStartPoint)
-                    val firstInteractive = entries.indices.firstOrNull { !entries[it].header }
-                    val lastInteractive = entries.indices.lastOrNull { !entries[it].header }
+                    val firstInteractive = entries.indices.firstOrNull { !entries[it].header && !entries[it].navigation }
+                    val lastInteractive = entries.indices.lastOrNull { !entries[it].header && !entries[it].navigation }
                     if (firstInteractive != null && lastInteractive != null) {
                         val minimum = with(density) { offsets[firstInteractive].toPx() }
                         val maximum = with(density) { offsets[lastInteractive].toPx() }
@@ -3307,6 +3319,11 @@ private fun LiquidMenuList(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(rowHeight)
+                            .then(if (entry.navigation) Modifier.clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = entry.onActivate,
+                            ) else Modifier)
                             .background(
                                 if (entry.selected && !moving) p.accentSoft else Color.Transparent,
                                 RoundedCornerShape(22.dp),

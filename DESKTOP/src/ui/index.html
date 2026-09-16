@@ -7147,7 +7147,8 @@ var NEWMARK_I18N = {
     'model.githubModelsImported': 'Imported {count} models.',
     'model.githubModelsWarning': 'Warning: {warning}',
     'model.autoDetect': 'Auto detect',
-    'model.modelName': 'Model name',
+    'model.modelName': 'API model identifier',
+    'model.displayName': 'Display name',
     'model.provider': 'Provider',
     'model.contextSize': 'Context size',
     'model.vision': 'Vision',
@@ -7890,7 +7891,8 @@ var NEWMARK_I18N = {
     'model.githubModelsImported': '已导入 {count} 个模型。',
     'model.githubModelsWarning': '警告：{warning}',
     'model.autoDetect': '自动检测',
-    'model.modelName': '模型名称',
+    'model.modelName': '调用模型标识',
+    'model.displayName': '显示名称',
     'model.provider': '供应商',
     'model.contextSize': '上下文规模',
     'model.vision': '视觉',
@@ -12081,7 +12083,19 @@ function cacheConversationMessages(messages, target) {
   var key = branchConversationViewKey(scopedTarget);
   var cloned = Array.isArray(messages) ? messages.map(function(message) { return Object.assign({}, message); }) : [];
   if (!state.conversationMessagesByTarget) state.conversationMessagesByTarget = {};
+  // Disk remains authoritative. Limit retained branch snapshots, not history.
+  delete state.conversationMessagesByTarget[key];
   state.conversationMessagesByTarget[key] = cloned;
+  var cacheKeys = Object.keys(state.conversationMessagesByTarget);
+  var retainedChars = 0;
+  for (var i = cacheKeys.length - 1; i >= 0; i--) {
+    var cachedKey = cacheKeys[i];
+    var rows = state.conversationMessagesByTarget[cachedKey];
+    var chars = rows.reduce(function(sum, row) { return sum + String(row.content || '').length; }, 0);
+    if (cacheKeys.length - i > 6 || retainedChars + chars > 4 * 1024 * 1024) {
+      delete state.conversationMessagesByTarget[cachedKey];
+    } else retainedChars += chars;
+  }
   return cloned.map(function(message) { return Object.assign({}, message); });
 }
 
@@ -12477,6 +12491,8 @@ function scheduleStreamingWorkflowTextFlush(ui, eventConversationId, eventWorksp
   requestAnimationFrame(function() {
     var current = conversationWorkUiState(eventConversationId, eventWorkspaceId);
     current._streamFlushPending = false;
+    // A queued frame can outlive navigation or its UI state object.
+    if (current !== ui || !isActiveConversationTarget({ workspaceId: eventWorkspaceId, conversationId: eventConversationId })) return;
     applyStreamingWorkflowText(current, eventConversationId, current._streamMode || state.mode, current._streamModel || state.model);
   });
 }
@@ -14152,19 +14168,14 @@ function modelDeploymentValueForName(name, providerId) {
   var modelName = String(name || '').trim();
   if (!modelName) return '';
   var providers = Array.isArray(state.providers) ? state.providers : [];
-  var match = null;
-  for (var pi = 0; pi < providers.length && !match; pi++) {
-    var provider = providers[pi];
-    if (providerId && String(provider.id || provider.name || '') !== String(providerId)) continue;
-    var models = Array.isArray(provider.models) ? provider.models : [];
-    for (var mi = 0; mi < models.length && !match; mi++) {
-      var entryName = typeof models[mi] === 'string' ? models[mi] : (models[mi] && models[mi].name || '');
-      if (entryName === modelName) match = { provider: provider, name: entryName };
-    }
-  }
-  if (!match) return modelName;
-  var providerIdValue = String(match.provider.id || match.provider.name || '');
-  return 'deployment:' + encodeURIComponent(providerIdValue) + ':' + encodeURIComponent(match.name);
+  var matches = [];
+  providers.forEach(function(provider) {
+    if (providerId && String(provider.id || '') !== String(providerId)) return;
+    if ((provider.models || []).some(function(model) { return (typeof model === 'string' ? model : model.name) === modelName; })) matches.push(provider);
+  });
+  // Missing/ambiguous identities must never select another provider's credentials.
+  if (matches.length !== 1 || !matches[0].id) return '';
+  return 'deployment:' + encodeURIComponent(matches[0].id) + ':' + encodeURIComponent(modelName);
 }
 
 // 不可用模型回退同步输入框下方选择区：固定模型选择被回退时，选择区
@@ -20892,6 +20903,7 @@ window.removeProvider = function(idx) {
 
 window.addModel = function() {
   window.openSubWin(t('model.addModel'), '<div class="auto-input-group"><label>' + esc(t('model.modelName')) + '</label><input id="new-model-name" placeholder="gpt-4"></div>' +
+    '<div class="auto-input-group"><label>' + esc(t('model.displayName')) + '</label><input id="new-model-display"></div>' +
     '<div class="auto-input-group"><label>' + esc(t('model.provider')) + '</label><select id="new-model-provider">' + state.providers.map(function(p,i){return '<option value="'+i+'">'+esc(p.name)+'</option>';}).join('') + '</select></div>' +
     '<div class="auto-input-group"><label>' + esc(t('model.contextSize')) + '</label><input id="new-model-ctx" type="number" value="128000" placeholder="tokens"></div>' +
     '<div style="display:flex;gap:10px;margin-bottom:10px;"><label style="font-size:11px;color:var(--text-dim);"><input type="checkbox" id="new-model-vision"> ' + esc(t('model.vision')) + '</label>' +
@@ -20923,7 +20935,8 @@ window.serializeThinkingTierMap = function(map) {
 };
 
 window.saveNewModel = function() {
-  var name = document.getElementById('new-model-name').value;
+  var name = document.getElementById('new-model-name').value.trim();
+  var display = document.getElementById('new-model-display').value.trim();
   var provIdx = parseInt(document.getElementById('new-model-provider').value);
   var ctxEl = document.getElementById('new-model-ctx');
   var visionEl = document.getElementById('new-model-vision');
@@ -20932,10 +20945,11 @@ window.saveNewModel = function() {
   var tierMapEl = document.getElementById('new-model-tier-map');
   if (name && !isNaN(provIdx) && state.providers[provIdx]) {
     if (!state.providers[provIdx].models) state.providers[provIdx].models = [];
+    if (state.providers[provIdx].models.some(function(m) { return String(typeof m === 'string' ? m : m.name).toLowerCase() === name.toLowerCase(); })) { showUiNotice('该供应商下模型标识已存在', 'error', 'duplicate-model'); return; }
     var tierMap = window.parseThinkingTierMap(tierMapEl ? tierMapEl.value : '');
     var entry = {
       name: name,
-      display: name,
+      display: display || name,
       description: descEl ? descEl.value : '',
       max_tokens: ctxEl ? parseInt(ctxEl.value || '128000') : 128000,
       vision: !!(visionEl && visionEl.checked),
@@ -20966,8 +20980,10 @@ window.editModel = function(provIdx, modelIdx) {
   var model = provider.models[modelIdx];
   if (!model) return;
   if (typeof model === 'string') model = { name: model, display: model };
+  state.modelEditIdentity = { providerId: provider.id, modelName: model.name };
   window.openSubWin(t('common.edit'), '<div class="auto-input-group"><label>' + esc(t('model.modelName')) + '</label><input id="edit-model-name" value="' + escAttr(model.name || '') + '"></div>' +
-    '<div class="auto-input-group"><label>' + esc(t('model.provider')) + '</label><select id="edit-model-provider">' + state.providers.map(function(p,i){return '<option value="'+i+'"' + (i === provIdx ? ' selected' : '') + '>'+esc(p.name)+'</option>';}).join('') + '</select></div>' +
+    '<div class="auto-input-group"><label>' + esc(t('model.displayName')) + '</label><input id="edit-model-display" value="' + escAttr(model.display || '') + '"></div>' +
+    '<div class="auto-input-group"><label>' + esc(t('model.provider')) + '</label><select id="edit-model-provider" disabled>' + state.providers.map(function(p,i){return '<option value="'+i+'"' + (i === provIdx ? ' selected' : '') + '>'+esc(p.name)+'</option>';}).join('') + '</select></div>' +
     '<div class="auto-input-group"><label>' + esc(t('model.contextSize')) + '</label><input id="edit-model-ctx" type="number" value="' + escAttr(model.max_tokens || 4096) + '"></div>' +
     '<div style="display:flex;gap:10px;margin-bottom:10px;"><label style="font-size:11px;color:var(--text-dim);"><input type="checkbox" id="edit-model-vision"' + (model.vision ? ' checked' : '') + '> ' + esc(t('model.vision')) + '</label>' +
     '<label style="font-size:11px;color:var(--text-dim);"><input type="checkbox" id="edit-model-thinking"' + (model.thinking ? ' checked' : '') + '> ' + esc(t('model.thinking')) + '</label></div>' +
@@ -20978,7 +20994,11 @@ window.editModel = function(provIdx, modelIdx) {
 };
 
 window.saveModelEdit = function(oldProvIdx, modelIdx) {
+  var identity = state.modelEditIdentity;
+  if (!identity) return;
+  oldProvIdx = state.providers.findIndex(function(p) { return p.id === identity.providerId; });
   var oldProvider = state.providers[oldProvIdx];
+  modelIdx = oldProvider && oldProvider.models ? oldProvider.models.findIndex(function(m) { return (typeof m === 'string' ? m : m.name) === identity.modelName; }) : -1;
   if (!oldProvider || !oldProvider.models || !oldProvider.models[modelIdx]) return;
   var nameEl = document.getElementById('edit-model-name');
   var provEl = document.getElementById('edit-model-provider');
@@ -20988,15 +21008,17 @@ window.saveModelEdit = function(oldProvIdx, modelIdx) {
   var descEl = document.getElementById('edit-model-desc');
   var tierMapEl = document.getElementById('edit-model-tier-map');
   var name = nameEl ? nameEl.value.trim() : '';
-  var newProvIdx = provEl ? parseInt(provEl.value) : oldProvIdx;
+  var newProvIdx = oldProvIdx;
+  var displayEl = document.getElementById('edit-model-display');
   if (!name || isNaN(newProvIdx) || !state.providers[newProvIdx]) return;
+  if (oldProvider.models.some(function(m, i) { return i !== modelIdx && String(typeof m === 'string' ? m : m.name).toLowerCase() === name.toLowerCase(); })) { showUiNotice('该供应商下模型标识已存在', 'error', 'duplicate-model'); return; }
   var previous = oldProvider.models[modelIdx];
   if (typeof previous === 'string') previous = { name: previous, display: previous };
   var tierMap = window.parseThinkingTierMap(tierMapEl ? tierMapEl.value : '');
   var updated = Object.assign({}, previous, {
     _previous_name: previous.name || name,
     name: name,
-    display: name,
+    display: displayEl ? displayEl.value.trim() || name : name,
     description: descEl ? descEl.value : '',
     max_tokens: ctxEl ? parseInt(ctxEl.value || '4096') : 4096,
     vision: !!(visionEl && visionEl.checked),

@@ -85,7 +85,7 @@ class ManualProviderModelCreationTest {
         assertTrue(settings.contains("data class NewModel(val providerId: String) : SettingsPage"))
         assertTrue(providersPage.contains("＋ 新建供应商"))
         assertTrue(settings.contains("private fun ManualProviderPage("))
-        assertTrue(settings.contains("private fun ManualModelPage("))
+        assertTrue(settings.contains("internal fun ManualModelPage("))
         assertTrue(detailPage.contains("＋ 新建模型"))
         assertTrue(detailPage.contains("ProviderProtocolRail("))
         assertTrue(detailPage.contains("openai_responses"))

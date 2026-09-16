@@ -13,7 +13,7 @@ class ProviderSettingsCapsuleRailContractTest {
             settings.substringAfter("private fun ProvidersPage(").substringBefore("// ---- 基础新建供应商"),
             settings.substringAfter("private fun ManualProviderPage(").substringBefore("// ---- 模糊注入"),
             settings.substringAfter("private fun FuzzyInjectPage(").substringBefore("// ---- 供应商内基础新建模型"),
-            settings.substringAfter("private fun ManualModelPage(").substringBefore("// ---- 供应商详情"),
+            settings.substringAfter("internal fun ManualModelPage(").substringBefore("// ---- 供应商详情"),
             settings.substringAfter("private fun ProviderDetailPage(").substringBefore("// ---- 设备管理"),
         )
 
@@ -96,7 +96,7 @@ class ProviderSettingsCapsuleRailContractTest {
         val settings = File("src/main/java/com/newmark/mobile/ui/SettingsScreen.kt").readText()
         val provider = settings.substringAfter("private fun ManualProviderPage(").substringBefore("// ---- 模糊注入")
         val fuzzy = settings.substringAfter("private fun FuzzyInjectPage(").substringBefore("// ---- 供应商内基础新建模型")
-        val model = settings.substringAfter("private fun ManualModelPage(").substringBefore("// ---- 供应商详情")
+        val model = settings.substringAfter("internal fun ManualModelPage(").substringBefore("// ---- 供应商详情")
         val source = File("src/main/java/com/newmark/mobile/ui/components/ProviderSettingsCapsules.kt").readText()
         val gestures = File("src/main/java/com/newmark/mobile/ui/components/LiquidHoldGesture.kt").readText()
 
@@ -120,7 +120,7 @@ class ProviderSettingsCapsuleRailContractTest {
         val source = File("src/main/java/com/newmark/mobile/ui/components/ProviderSettingsCapsules.kt").readText()
         val provider = settings.substringAfter("private fun ManualProviderPage(").substringBefore("// ---- 模糊注入")
         val fuzzy = settings.substringAfter("private fun FuzzyInjectPage(").substringBefore("// ---- 供应商内基础新建模型")
-        val model = settings.substringAfter("private fun ManualModelPage(").substringBefore("// ---- 供应商详情")
+        val model = settings.substringAfter("internal fun ManualModelPage(").substringBefore("// ---- 供应商详情")
 
         assertTrue(source.contains("fun ProviderCapsuleAction("))
         assertTrue(source.contains("delay(270)"))

@@ -185,8 +185,14 @@ async function verifyPackagedSources() {
   assert(packaged.version === packageJson.version, `packaged version mismatch: expected ${packageJson.version}, got ${packaged.version}`);
 
   const auto = readAsarText(asarPath, 'dist/core/autoRouter.js');
-  assert(auto.includes('catalogSnapshotHash') && auto.includes('maxQualityLoss') && auto.includes('rankedCandidates'), 'packaged Auto router lacks auditable decision fields');
+  assert(auto.includes('catalogSnapshotHash') && auto.includes('decisionSource') && auto.includes('alternatives'), 'packaged Auto router lacks auditable decision fields');
   assert(auto.includes("kind: 'provider'") || auto.includes('scope.providerId'), 'packaged Auto router lacks provider-scope enforcement');
+  const jev = readAsarText(asarPath, 'dist/core/jevDecision.js');
+  assert(jev.includes('JEV_ROUTE_MODEL_VERSION') && jev.includes('reasonCodes'), 'packaged Auto router lacks the JEV decision engine contract');
+  const eligibility = readAsarText(asarPath, 'dist/core/routeEligibility.js');
+  assert(eligibility.includes('evaluateRouteEligibility') && eligibility.includes('context_too_small'), 'packaged Auto router lacks the deterministic eligibility guard');
+  const validator = readAsarText(asarPath, 'dist/core/routeDecisionValidator.js');
+  assert(validator.includes('primary_not_eligible') && validator.includes('resolveAutoRouteDecision'), 'packaged Auto router lacks the JEV decision validator');
 
   const validation = readAsarText(asarPath, 'dist/core/modelValidation.js');
   assert(validation.includes('MODEL_VALIDATION_TTL_MS') && validation.includes('strict_json') && validation.includes('tool_result'), 'packaged Standard validation service is incomplete');

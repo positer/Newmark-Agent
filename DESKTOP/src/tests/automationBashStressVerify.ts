@@ -7,6 +7,7 @@ import { Agent } from '../core/agent';
 import { AutomationManager, AutomationSchedule } from '../core/automation';
 import { ConfigManager } from '../core/config';
 import { ConversationKernel } from '../core/conversationKernel';
+import { readConversationStateDocument } from '../core/conversationStateDocument';
 import { ConversationRuntimeTarget } from '../core/conversationTarget';
 import { executeWorkspaceBash, NativeBashSession } from '../core/nativeBash';
 import type { StreamToken } from '../core/types';
@@ -188,7 +189,7 @@ async function stressAutomations(root: string): Promise<Record<string, unknown>>
   assert.strictEqual(slowManager.list().find(item => item.id === slow.id)?.runCount, 1);
 
   const persistedRuns = [workspaceA, workspaceB].flatMap(workspacePath => {
-    const state = JSON.parse(fs.readFileSync(path.join(workspacePath, 'conversations', 'state.json'), 'utf-8')) as {
+    const state = readConversationStateDocument(workspacePath) as unknown as {
       conversations?: Record<string, { workRuns?: Array<{ runId: string; status: string }> }>;
     };
     return Object.values(state.conversations || {}).flatMap(conversation => conversation.workRuns || []);
@@ -360,7 +361,7 @@ async function stressContextModelSwitches(root: string): Promise<Record<string, 
   }
 
   const statePath = path.join(workspacePath, 'conversations', 'state.json');
-  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf-8')) as {
+  const persisted = readConversationStateDocument(workspacePath) as unknown as {
     conversations?: Record<string, { history?: Array<Record<string, unknown>> }>;
   };
   const entry = Object.values(persisted.conversations || {}).find(item => Array.isArray(item.history) && item.history.length > 0);

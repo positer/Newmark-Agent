@@ -19,11 +19,13 @@ $packageName = 'com.newmark.mobile.stress'
 $component = 'com.newmark.mobile.stress/com.newmark.mobile.MainActivity'
 $formalComponent = 'com.newmark.mobile/com.newmark.mobile.MainActivity'
 $token = 'mobile-stress-token'
-$pairUrl = "newmark-pair://10.0.2.2:${Port}?token=$token"
+$pairUrl = "newmark-pair://127.0.0.1:${Port}?token=$token"
 $apkPath = Join-Path $repoRoot 'android\app\build\outputs\apk\stress\app-stress.apk'
 $fixtureScript = Join-Path $repoRoot 'DESKTOP\scripts\mobile-mock-server.cjs'
 $fixtureProcess = $null
 $initialPid = ''
+$batteryWhitelistInstalled = $false
+$reverseInstalled = $false
 $result = [ordered]@{
     timestamp = (Get-Date).ToString('o')
     serial = $Serial
@@ -72,8 +74,30 @@ function Tap-Node($Node, [string]$Label) {
     Invoke-Adb @('shell', 'input', 'tap', "$x", "$y") | Out-Null
 }
 
+function Dismiss-BackgroundPrompt {
+    $xml = Get-UiXml
+    if ($xml.OuterXml -notmatch 'always run in the background') { return $false }
+    $allow = Get-TextNode $xml 'Allow'
+    if ($null -eq $allow) { $allow = Get-TextNode $xml '允许' }
+    Tap-Node $allow 'Android background execution prompt'
+    Start-Sleep -Milliseconds 500
+    return $true
+}
+
 function Open-RemoteConversation([string]$WorkspaceName, [string]$ConversationTitle) {
     $xml = Get-UiXml
+    # Pairing intentionally preserves the selected local-chat surface. The
+    # normal UI path to the paired desktop is the toolbar's connect control.
+    $workspaceAlreadyVisible = $null -ne (Get-TextNode $xml $WorkspaceName)
+    $conversationAlreadyVisible = $null -ne (Get-ContainingTextNode $xml $ConversationTitle)
+    if (-not $workspaceAlreadyVisible -and -not $conversationAlreadyVisible) {
+        $connectRemote = Get-DescriptionNode $xml '连接桌面端'
+        if ($null -ne $connectRemote) {
+            Tap-Node $connectRemote '连接桌面端'
+            Start-Sleep -Milliseconds 900
+            $xml = Get-UiXml
+        }
+    }
     $workspaceNode = Get-TextNode $xml $WorkspaceName
     if ($null -eq $workspaceNode) {
         $menuNode = Get-DescriptionNode $xml '菜单'
@@ -123,6 +147,12 @@ try {
         Invoke-Adb @('install', '-r', $apkPath) | Out-Null
     }
 
+    if ([int]((Invoke-Adb @('shell', 'getprop', 'ro.build.version.sdk')) -join '') -ge 33) {
+        Invoke-Adb @('shell', 'pm', 'grant', $packageName, 'android.permission.POST_NOTIFICATIONS') | Out-Null
+    }
+    Invoke-Adb @('shell', 'dumpsys', 'deviceidle', 'whitelist', "+$packageName") | Out-Null
+    $batteryWhitelistInstalled = $true
+
     Invoke-Adb @('shell', 'am', 'force-stop', $packageName) | Out-Null
     Invoke-Adb @('shell', 'run-as', $packageName, 'rm', '-f', 'files/newmark/pairs.json') | Out-Null
     $env:NEWMARK_MOBILE_MOCK_PORT = "$Port"
@@ -135,15 +165,23 @@ try {
     } while ($null -eq $health -and (Get-Date) -lt $deadline)
     if ($null -eq $health) { throw 'Fixture did not become ready' }
 
+    # The deterministic fixture binds only to host loopback. Use an adb
+    # reverse tunnel, matching the already validated mobile stress harness.
+    Invoke-Adb @('reverse', "tcp:$Port", "tcp:$Port") | Out-Null
+    $reverseInstalled = $true
+
     Invoke-Adb @('logcat', '-c') | Out-Null
-    $remoteStart = 'am start -W -a android.intent.action.VIEW -d "' + $pairUrl + '" -n "' + $component + '"'
-    Invoke-Adb @('shell', $remoteStart) | Out-Null
+    Invoke-Adb @('shell', 'am', 'start', '-W', '-a', 'android.intent.action.VIEW', '-d', $pairUrl, '-n', $component) | Out-Null
     $deadline = (Get-Date).AddSeconds(35)
     do {
         Start-Sleep -Milliseconds 250
         $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 2
     } while ($health.sseConnections -lt 1 -and (Get-Date) -lt $deadline)
     if ($health.sseConnections -lt 1) { throw 'SSE connection was not established' }
+    # A fresh AVD install may show the Android "always run in background"
+    # system page over the sidebar. The fixture package is isolated and needs
+    # this foreground-service permission for the live run-switch test.
+    Dismiss-BackgroundPrompt | Out-Null
     $initialPid = (Invoke-Adb @('shell', 'pidof', $packageName) | Select-Object -First 1).Trim()
     $result.initialPid = $initialPid
     if (-not $initialPid) { throw 'Stress app process is not alive after pairing' }
@@ -163,8 +201,10 @@ try {
         $primary = Get-UiXml
         Assert-Contains $primary 'Stress Goal' "cycle $cycle primary"
         Assert-Contains $primary 'Flow prompt remains visible' "cycle $cycle primary"
-        Assert-Contains $primary '处理中' "cycle $cycle primary"
+        Assert-Contains $primary '当前对话正由 Flow 接管' "cycle $cycle primary"
         Assert-Omits $primary 'SECONDARY_TARGET_ONLY_MARKER' "cycle $cycle primary"
+        $switchStats = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 3
+        if ($switchStats.activeBursts -ne 1) { throw "cycle $cycle primary live run was not active (activeBursts=$($switchStats.activeBursts))" }
     }
 
     $finalPid = (Invoke-Adb @('shell', 'pidof', $packageName) | Select-Object -First 1).Trim()
@@ -192,7 +232,17 @@ catch {
     throw
 }
 finally {
+    try {
+        $finalStats = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 2
+        $result.targetReads = @($finalStats.targetReads)
+        $result.fixture = $finalStats
+    } catch { }
+    if ([string]::IsNullOrWhiteSpace($result.finalPid)) {
+        $result.finalPid = ((& $adb -s $Serial shell pidof $packageName | Select-Object -First 1) -join '').Trim()
+    }
     if ($fixtureProcess -and -not $fixtureProcess.HasExited) { Stop-Process -Id $fixtureProcess.Id -Force -ErrorAction SilentlyContinue }
+    if ($reverseInstalled) { & $adb -s $Serial reverse --remove "tcp:$Port" | Out-Null }
+    if ($batteryWhitelistInstalled) { & $adb -s $Serial shell dumpsys deviceidle whitelist "-$packageName" | Out-Null }
     & $adb -s $Serial shell am force-stop $packageName | Out-Null
     & $adb -s $Serial shell am start -n $formalComponent | Out-Null
     $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $reportPath -Encoding utf8

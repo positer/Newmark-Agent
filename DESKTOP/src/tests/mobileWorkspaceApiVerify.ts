@@ -82,6 +82,9 @@ const B_SECRET = 'B_WORKSPACE_PRIVATE_MESSAGE';
 const B_DUPLICATE_ID = 'workspace-b-duplicate-content';
 const B_ARCHIVE_ID = 'workspace-b-archive-context';
 const B_SCOPED_SEND_ID = 'workspace-b-scoped-send';
+const C_ACTIVE_GOAL_ID = 'workspace-c-active-goal';
+const C_ACTIVE_GOAL_OBJECTIVE = 'C_ACTIVE_PAUSED_GOAL';
+const C_ACTIVE_GOAL_MESSAGE = 'C_ACTIVE_GOAL_MESSAGE';
 const FOREGROUND_GOAL = 'FOREGROUND_GOAL_MUST_NOT_LEAK';
 const BACKGROUND_GOAL = 'BACKGROUND_ARCHIVE_GOAL';
 
@@ -117,6 +120,7 @@ function conversationEntry(title: string, message: string, order: number, overri
 function writeWorkspaceConversationState(
   workspace: WorkspaceInfo,
   entries: Array<{ id: string; title: string; message: string; overrides?: Record<string, unknown> }>,
+  activeConversationId: string = SHARED_ID,
 ): void {
   const prefix = workspacePrefix(workspace);
   const conversations = Object.fromEntries(entries.map((entry, index) => [
@@ -127,12 +131,12 @@ function writeWorkspaceConversationState(
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, 'state.json'), JSON.stringify({
     version: 3,
-    activeConversationId: SHARED_ID,
+    activeConversationId,
     conversations,
   }, null, 2), 'utf-8');
 }
 
-function setupRoot(): { root: string; workspaceA: WorkspaceInfo; workspaceB: WorkspaceInfo; token: string } {
+function setupRoot(): { root: string; workspaceA: WorkspaceInfo; workspaceB: WorkspaceInfo; workspaceC: WorkspaceInfo; token: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-mobile-workspace-api-'));
   fs.mkdirSync(path.join(root, 'Work'), { recursive: true });
   fs.writeFileSync(path.join(root, 'PC_Hash.config'), 'mobile-api-test-pc|test|x64', 'utf-8');
@@ -158,7 +162,8 @@ function setupRoot(): { root: string; workspaceA: WorkspaceInfo; workspaceB: Wor
   const workspaces = new WorkspaceManager(root, config);
   const workspaceA = workspaces.createInternal('mobile-api-a');
   const workspaceB = workspaces.createInternal('mobile-api-b');
-  if (!workspaceA.id || !workspaceB.id) throw new Error('Workspace test identities were not created');
+  const workspaceC = workspaces.createInternal('mobile-api-c');
+  if (!workspaceA.id || !workspaceB.id || !workspaceC.id) throw new Error('Workspace test identities were not created');
   workspaces.select(workspaceA.id);
   writeWorkspaceConversationState(workspaceA, [
     { id: SHARED_ID, title: 'A shared title', message: A_SECRET, overrides: {
@@ -187,12 +192,21 @@ function setupRoot(): { root: string; workspaceA: WorkspaceInfo; workspaceB: Wor
     } },
     { id: B_SCOPED_SEND_ID, title: 'B scoped send', message: 'B_SCOPED_INITIAL_MESSAGE' },
   ]);
+  // Workspace C holds exactly one conversation, it is the active one, and its
+  // goal is paused — the state that used to make the mobile endpoints report
+  // the conversation as "running" and refuse archiving the row the user sees.
+  writeWorkspaceConversationState(workspaceC, [
+    { id: C_ACTIVE_GOAL_ID, title: 'C active paused goal', message: C_ACTIVE_GOAL_MESSAGE, overrides: {
+      mode: 'goal',
+      goal: { objective: C_ACTIVE_GOAL_OBJECTIVE, changes: [], goalRounds: 1, verified: false, paused: true },
+    } },
+  ], C_ACTIVE_GOAL_ID);
   fs.mkdirSync(path.join(workspaceB.path, 'src'), { recursive: true });
   fs.writeFileSync(path.join(workspaceB.path, 'README.md'), '# mobile editor fixture\n', 'utf-8');
   fs.writeFileSync(path.join(workspaceB.path, 'src', 'nested.txt'), 'nested fixture\n', 'utf-8');
   fs.writeFileSync(path.join(workspaceB.path, 'binary.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   fs.writeFileSync(path.join(workspaceB.path, 'oversized.txt'), Buffer.alloc(1024 * 1024 + 1, 0x61));
-  return { root, workspaceA, workspaceB, token: ensureMobileToken(root) };
+  return { root, workspaceA, workspaceB, workspaceC, token: ensureMobileToken(root) };
 }
 
 function requestJson(port: number, token: string, method: 'GET' | 'POST', endpoint: string, payload?: Record<string, unknown>): Promise<JsonResponse> {
@@ -782,6 +796,26 @@ export async function verifyMobileWorkspaceApi(record: VerifyAssert): Promise<vo
     record(duplicateArchive.status === 200,
       'mobile workspace archive: exact raw state-key membership allows archiving a duplicate-content conversation hidden from the UI list',
       JSON.stringify(duplicateArchive.body));
+
+    // Regression: a paused goal (or any terminal status) is not "running". The
+    // conversation the user is looking at must still archive from the phone.
+    const workspaceCId = String(fixture.workspaceC.id || '');
+    const activeGoalState = await requestJson(
+      port, fixture.token, 'GET',
+      `/api/mobile/conversation?workspaceId=${encodeURIComponent(workspaceCId)}&conversationId=${encodeURIComponent(C_ACTIVE_GOAL_ID)}`,
+    );
+    const activeGoalArchive = await requestJson(port, fixture.token, 'POST', '/api/mobile/conversation-archive', {
+      workspaceId: workspaceCId,
+      conversationId: C_ACTIVE_GOAL_ID,
+    });
+    record(activeGoalState.status === 200 && activeGoalState.body.goal?.paused === true
+      && activeGoalArchive.status === 200,
+    'mobile conversation archive: an active conversation with a paused goal archives instead of reporting it as running',
+    JSON.stringify({ state: activeGoalState.status, paused: activeGoalState.body.goal?.paused, archive: activeGoalArchive.status, body: activeGoalArchive.body }));
+    const workspaceCRows = await getWorkspaceRows(port, fixture.token, fixture.workspaceC);
+    record(!rows(workspaceCRows).some(item => item.id === C_ACTIVE_GOAL_ID),
+      'mobile conversation archive: the archived paused-goal conversation leaves only its workspace list',
+      JSON.stringify(workspaceCRows.body));
 
     const reorderUnpinned = await requestJson(port, fixture.token, 'POST', '/api/mobile/conversation-reorder', {
       workspaceId: workspaceBId,

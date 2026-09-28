@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { Agent } from '../core/agent';
 import { LLMProvider } from '../llm/provider';
+import { CURRENT_MODEL_JEV_VERSION } from '../core/jevDecision';
 
 let assertions = 0;
 function ok(value: unknown, message: string): void {
@@ -91,7 +92,17 @@ async function main(): Promise<void> {
         });
       }
       if (body.response_format) {
-        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ nonce }) } }] }), {
+        const schemaName = body.response_format.json_schema?.name;
+        const content = schemaName === 'newmark_jev_route_decision'
+          ? JSON.stringify({
+            primary: { providerId: 'fixture-provider', modelId: 'fixture-model', logicalModelGroupId: '' },
+            alternates: [],
+            reasonCodes: ['fixture_current_model'],
+            confidence: null,
+            modelVersion: CURRENT_MODEL_JEV_VERSION,
+          })
+          : JSON.stringify({ nonce });
+        return new Response(JSON.stringify({ choices: [{ message: { content } }], model: 'fixture-model' }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
@@ -230,7 +241,13 @@ async function main(): Promise<void> {
     ok(validationProgress.totalModels === 1 && validationProgress.completedModels === 1 && validationProgress.recentChecks.length === 11, 'each cached or executed model check advances the per-model progress ledger');
 
     agent.setModel('auto');
-    ok(await agent.evaluateAndSwitch('Use a tool to inspect this screenshot'), 'a model joins Auto only after Standard validation succeeds');
+    const joinedAuto = await agent.evaluateAndSwitch('Use a tool to inspect this screenshot');
+    const jevBody = protocolBodies.find(body => body.response_format?.json_schema?.name === 'newmark_jev_route_decision');
+    ok(joinedAuto
+      && agent.lastRouteDecision?.decisionSource === 'jev'
+      && agent.lastRouteDecision.jev.modelVersion === `${CURRENT_MODEL_JEV_VERSION}:fixture-provider/fixture-model`
+      && jevBody?.reasoning_effort === undefined,
+    'a validated model joins Auto only after current-model strict JSON returns a valid route');
   } finally {
     LLMProvider.prototype.chat = originalChat;
     LLMProvider.prototype.chatStreamWithTools = originalStream;

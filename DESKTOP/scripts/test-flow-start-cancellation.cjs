@@ -24,6 +24,19 @@ async function run(options={}) {
    return {subscribe:()=>()=>{},setHostToolHandler(){},status:()=>({enabled:true,connected,pid:0,error:'',runtimeKey:t.runtimeKey}),snapshot:async()=>structuredClone(state),queueAction:async(action,input)=>{if(enteredStop)mutationAfterStop++;if(action==='set_pause')state.queuePaused=input.paused;if(action==='toggle_pause')state.queuePaused=!state.queuePaused;return structuredClone(state);},stop:async()=>{if(t.runtimeKey===target.runtimeKey&&!enteredStop){enteredStop=true;await new Promise(resolve=>{releaseStop=resolve;});disposalFinished=true;}connected=false;}};
   },{idleTtlMs:0});
   const context={console,setTimeout,clearTimeout,Date,Promise,AbortController,Error,path,randomUUID:crypto.randomUUID,root:'isolated-flow-cancel',agent:{rootPath:'isolated-flow-cancel',activeConversationId:target.conversationId},pendingFlowStarts:new Map(),mainConversationOwners:new Set(),activeFlowsByRuntimeKey:new Map(),conversationSelections:new Map(),activeFlowStateKey:t=>normalizeConversationTarget(t).runtimeKey,activeFlowStateFor:()=>null,conversationRuntimeTarget:t=>normalizeConversationTarget(t),wslBackendEnabled:()=>false,ensureElectronUtilityPool:()=>pool,ensureWslConversationPool:()=>pool,stopTargetRuntime:t=>pool.stopTarget(t),ensureConversationKernel:()=>({beginExternalRun(){flowStarted++;throw Error('Cancelled Flow started');}}),FlowEngine:{findWorkflow:()=> 'fixture',load:()=>({name:'fixture',components:[{id:0}]})},broadcastAgentWorkEvent:event=>events.push(event),discardFlowSuspensionForTarget:async()=>{throw Error('No suspension should exist');}};
+  // Production admits the Flow build at command-acceptance time and only claims
+  // it when the start wins, so the harness must expose that boundary too.
+  context.ensureConversationKernel=()=>({
+    admitExternalBuild:()=>`flow-build-${crypto.randomUUID()}`,
+    beginExternalRun(){flowStarted++;throw Error('Cancelled Flow started');},
+  });
+  // The extracted run/stop commands read the frozen deployment identity and the
+  // owning conversation's model/intelligence when they admit a Flow build.
+  context.agent.model='flow-fixture-model';
+  context.agent.intelligence='high';
+  context.agent.inputMode='guide';
+  context.agent.engine='builtin';
+  context.agent.modelSelectionValue=()=>'deployment:flow-fixture-provider:flow-fixture-model';
   vm.createContext(context);vm.runInContext(code,context);
   const c=context.commands;
   await pool.snapshot(other);

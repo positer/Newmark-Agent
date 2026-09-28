@@ -216,6 +216,77 @@ async function verifyConversationCacheObservesExternalWrites(): Promise<void> {
   }
 }
 
+async function verifyTerminalWorkRunSurvivesStalePeerSave(): Promise<void> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-workrun-terminal-merge-'));
+  const workspacePath = path.join(root, 'workspace');
+  const workspace = {
+    id: 'workrun-terminal-merge', name: 'workrun-terminal-merge', path: workspacePath,
+    isInternal: false, hostBinding: '', icon: '', kind: 'local' as const,
+  };
+  const conversationId = 'parallel-conversation';
+  const runId = 'parallel-work-run';
+  try {
+    fs.mkdirSync(workspacePath, { recursive: true });
+    const owner = new Agent(root, { agentOnly: true });
+    owner.workspace.current = workspace;
+    owner.setConversation(conversationId);
+    owner.beginConversationWorkRun(runId, { workspaceId: workspace.id, conversationId }, '2026-09-26T00:00:00.000Z');
+    owner.saveWorkspaceConversationState(true);
+
+    const stalePeer = new Agent(root, { agentOnly: true });
+    stalePeer.workspace.current = workspace;
+    stalePeer.setConversationFromStorage(conversationId);
+    assert.equal(stalePeer.getConversationSnapshot(conversationId).workRuns.find(run => run.runId === runId)?.status, 'running',
+      'the second runtime fixture captures the shared running work-run snapshot');
+
+    const finishingPeer = new Agent(root, { agentOnly: true });
+    finishingPeer.workspace.current = workspace;
+    finishingPeer.setConversationFromStorage(conversationId);
+    const endedAt = new Date().toISOString();
+    assert.equal(finishingPeer.finishConversationWorkRun(runId, 'completed', endedAt), true,
+      'the owning runtime completes the target-bound work run');
+    assert.equal(finishingPeer.getConversationSnapshot(conversationId).workRuns.find(run => run.runId === runId)?.status, 'completed');
+
+    // Give the stale peer a strictly later entry timestamp, reproducing a
+    // harmless metadata/transcript save that currently wins the whole-shard
+    // updatedAt comparison even though its WorkRun ledger is older.
+    await new Promise(resolve => setTimeout(resolve, 5));
+    stalePeer.chatMessages.push({
+      messageId: 'stale-peer-independent-update', role: 'user', content: 'Independent conversation update',
+      mode: 'chat', model: '', timestamp: new Date().toISOString(),
+    });
+    stalePeer.history.push({ role: 'user', content: 'Independent conversation update' });
+    stalePeer.saveWorkspaceConversationState(true);
+    // The utility/main-process mirror may also perform a lightweight metadata
+    // save without owning the transcript shard. Preserve the same terminal
+    // ledger on that path while keeping the transcript already written above.
+    stalePeer.chatMessages = [];
+    stalePeer.history = [];
+    stalePeer.saveWorkspaceConversationState(true);
+
+    const cold = new Agent(root, { agentOnly: true });
+    cold.workspace.current = workspace;
+    cold.setConversationFromStorage(conversationId);
+    const persisted = cold.getConversationSnapshot(conversationId).workRuns.find(run => run.runId === runId);
+    assert.equal(persisted?.status, 'completed',
+      'a stale peer save with the same run count cannot revert a durable terminal status after a cold reload');
+    assert.equal(persisted?.endedAt, endedAt, 'the terminal timestamp survives the competing snapshot');
+    assert.ok(cold.getConversationSnapshot(conversationId).chatMessages.some(message => message.messageId === 'stale-peer-independent-update'),
+      'the merge still preserves independent transcript changes from the stale peer');
+
+    assert.equal(cold.resumeConversationWorkRun(runId), true,
+      'the explicit same-run Guide resume path remains able to reopen a completed run');
+    cold.saveWorkspaceConversationState(true);
+    const resumed = new Agent(root, { agentOnly: true });
+    resumed.workspace.current = workspace;
+    resumed.setConversationFromStorage(conversationId);
+    assert.equal(resumed.getConversationSnapshot(conversationId).workRuns.find(run => run.runId === runId)?.status, 'running',
+      'an explicit higher-sequence resume remains distinguishable from a stale running snapshot');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 async function verifyWorkspaceRegistryReloadsExternalChanges(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-workspace-registry-refresh-'));
   const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-workspace-registry-external-'));
@@ -2164,17 +2235,29 @@ async function verifyUtilityHostToolRouting(): Promise<void> {
   assert.equal(computerCalls[0].captureMaxWidth, 640, 'utility host forwards bounded capture width requests');
   assert.equal(computerCalls[0].captureMaxHeight, 480, 'utility host forwards bounded capture height requests');
   assert.equal(computerCalls[0].allowEphemeralVisionImage, false, 'model-authored args cannot enable ephemeral screenshot retention');
+  const sparseAbortController = new AbortController();
+  assert.equal(await handler(request({
+    requestId: 'c1-sparse',
+    tool: 'computer_use',
+    args: { action: 'observe', sparse_wait_ms: 1200 },
+    target: targetInfo,
+    context,
+  }), sparseAbortController.signal), 'computer-ok');
+  assert.equal(computerCalls[1].sparseWaitMs, 1200, 'isolated utility host forwards sparse_wait_ms to the desktop sampler');
+  assert.equal(computerCalls[1].signal, sparseAbortController.signal, 'isolated utility host forwards the run cancellation signal to sparse observation');
+  sparseAbortController.abort(new Error('fixture cancellation'));
+  assert.equal((computerCalls[1].signal as AbortSignal).aborted, true, 'sparse sampler can observe Build cancellation');
   const beta = normalizeConversationTarget(target('beta', 'C:\\work\\beta', 'same'));
   const betaTarget = { workspaceId: beta.workspaceId, conversationId: beta.conversationId, runtimeKey: beta.runtimeKey, workspaceKey: beta.workspaceKey, workspacePath: beta.workspace!.path };
   const betaContext = { ...context, workspaceId: beta.workspaceId, conversationId: beta.conversationId, workspacePath: beta.workspace!.path };
   const locked = await handler(request({ requestId: 'c2', tool: 'computer_use', args: { action: 'observe' }, target: betaTarget, context: betaContext }));
   assert.match(String(locked), /already active/, 'main-process Computer Use lock must span all utility runtimes');
-  assert.equal(computerCalls.length, 1);
+  assert.equal(computerCalls.length, 2);
   await handler(request({ requestId: 'c3', tool: 'computer_use', args: { action: 'takeover_stop' }, target: targetInfo, context }));
   const betaVisionContext = { ...betaContext, allowEphemeralVisionImage: true };
   await handler(request({ requestId: 'c4', tool: 'computer_use', args: { action: 'observe' }, target: betaTarget, context: betaVisionContext }));
-  assert.equal(computerCalls.length, 3);
-  assert.equal(computerCalls[2].allowEphemeralVisionImage, true, 'trusted utility runtime context may enable one-use vision input');
+  assert.equal(computerCalls.length, 4);
+  assert.equal(computerCalls[3].allowEphemeralVisionImage, true, 'trusted utility runtime context may enable one-use vision input');
   handler.cancelTarget(beta.runtimeKey);
   await Promise.resolve();
   assert.equal(computerCalls.at(-1)?.action, 'takeover_stop', 'target cancellation revokes its global Computer Use lease');
@@ -2246,6 +2329,7 @@ async function main(): Promise<void> {
   await verifyCrossHostWorkspaceRegistryIsolation();
   await verifyProtectedInstallWorkspaceRecovery();
   await verifyConversationCacheObservesExternalWrites();
+  await verifyTerminalWorkRunSurvivesStalePeerSave();
   await verifyWorkspaceRegistryReloadsExternalChanges();
   await verifyWorkspaceSelectionCoordination();
   await verifyWorkspaceSelectionCircuitBreaker();

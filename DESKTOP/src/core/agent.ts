@@ -53,17 +53,29 @@ import {
 import { FileModelValidationCache } from './modelValidationStore';
 import {
   AutoRouteCandidate,
-  AutoRouter,
   DeploymentRef,
   ModelSelection,
   PlannedRouteAttempt,
   RouteDecision,
-  RouteFeedbackEvent,
+  RouteExecutionController,
   RouteMode,
+  RoutePolicy,
+  RouteRequest,
+  ROUTE_POLICY_VERSION,
+  catalogSnapshotHash,
+  classifyTaskClasses,
   classifyRouteFailure,
+  createRouteId,
   defaultRoutePolicy,
   normalizeAutoPreference,
 } from './autoRouter';
+import {
+  DEFAULT_JEV_TIMEOUT_MS,
+  CURRENT_MODEL_JEV_VERSION,
+  CurrentModelJevDecisionEngine,
+  JevDecisionEngine,
+} from './jevDecision';
+import { resolveAutoRouteDecision } from './routeDecisionValidator';
 import { AgentContextManager } from '../context/services/agent-context-manager';
 import type { AssembledContext } from '../context/services/context-orchestrator';
 import { seedToolchainFromDefinitions, type ToolchainCore } from '../toolchain';
@@ -111,11 +123,29 @@ export interface ModelValidationProgress {
   recentChecks: Array<{ model: string; check: string }>;
 }
 
-export interface AutoRouteRatingResult {
+/** Editable settings for model-backed Auto decisions. */
+export interface JevDecisionModelPatch {
+  enabled?: boolean;
+  timeoutMs?: number;
+}
+
+export interface JevDecisionModelState {
+  /** `models.auto_switch`: the user's Auto master switch. */
+  autoEnabled: boolean;
+  /** True when Auto is off: the decision model cannot be edited and cannot move a model. */
+  locked: boolean;
+  lockReason?: 'auto_disabled';
+  enabled: boolean;
+  decisionModel: 'current_eligible_model';
+  thinkingMode: 'off';
+  outputFormat: 'strict_json_schema';
+  timeoutMs: number;
+}
+
+export interface JevDecisionModelUpdateResult {
   ok: boolean;
-  score?: -1 | 1;
-  routeId?: string;
-  reason?: 'invalid_score' | 'no_active_auto_route' | 'stale_route' | 'already_rated';
+  reason?: 'auto_disabled' | 'invalid_value';
+  state: JevDecisionModelState;
 }
 export const ROOT_AGENT_ACTOR_ID = '00000000-0000-4000-8000-000000000001';
 
@@ -266,6 +296,19 @@ interface StoredConversationState {
     tree?: ConversationTreeState;
     branchReset?: boolean;
     updatedAt?: string;
+    /** Index-only record: heavy payload lives in `conversations/shards/<shard>`. */
+    shard?: string;
+    shardBytes?: number;
+    messageCount?: number;
+    historyCount?: number;
+    workRunCount?: number;
+    /** Index-visible branch structure presence (the branches/tree payload itself stays in the shard). */
+    hasTree?: boolean;
+    hasBranches?: boolean;
+    /** Index-visible queue length (the entries themselves stay in the shard). */
+    continuationCount?: number;
+    /** Monotonic durable-queue revision; guards against stale queue snapshots. */
+    continuationRevision?: number;
     pinned?: boolean;
     pinnedAt?: string;
     order?: number;
@@ -512,7 +555,7 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - Be thorough and precise. Verify your work.
 - Use tools appropriately - don't just describe, do it.
 - Deletion safety (intrinsic, non-overridable): file deletion is allowed only ONE file at a time under Agent supervision. Use the delete_file tool with an absolute path for every single-file delete. Never use bash or the terminal to delete files in bulk: recursive deletes (rm -r/-rf, Remove-Item -Recurse, rmdir /s, del /s), wildcard deletes (rm *.log, del *), loop deletes (for/foreach/while + rm), pipe-fed deletes (Get-ChildItem | Remove-Item), find/xargs deletes, and multi-target or multi-statement deletes are hard-blocked by the runtime and will be rejected. To remove a directory, delete its files one by one first, then remove the now-empty directory without a recursive flag.
-- For desktop Computer Use requests, follow observe -> decide -> act -> observe. Start visible takeover with computer_use takeover_start before multi-step desktop control and stop it when finished. Prefer app-scoped actions through app_list/app_observe/app_* when controlling one taskbar application, because this preserves human collaboration around other windows. Prefer target_id from the latest high-priority semantic UI objects, otherwise precise coordinates from the latest observation. Use vision plus UI controls together when the selected model has vision input. Avoid destructive UI actions unless the user asked for them, and do not claim YOLO/OCR perception unless an actual detector/OCR result is present.
+- For desktop Computer Use requests, follow observe -> decide -> act -> observe. For passive waits, prefer one observe call with sparse_wait_ms (up to 5000) over repeated immediate full observations; it still returns a fresh full screenshot/UIA whether signaled or timed out, and no signal is not proof of no change. Start visible takeover with computer_use takeover_start before multi-step desktop control and stop it when finished. Prefer app-scoped actions through app_list/app_observe/app_* when controlling one taskbar application, because this preserves human collaboration around other windows. Prefer target_id from the latest high-priority semantic UI objects, otherwise precise coordinates from the latest observation. Use vision plus UI controls together when the selected model has vision input. Avoid destructive UI actions unless the user asked for them, and do not claim YOLO/OCR perception unless an actual detector/OCR result is present.
 - For browser buttons and scanned document pages, the strict recognition sequence is text layer/DOM -> screenshot to a validated vision model -> local OCR. Do not skip directly to OCR. If OCR is used, treat it as approximate evidence and repair only what surrounding context supports.
 - Multiple tool calls emitted in one provider turn run concurrently. Treat their returned records as one barrier: continue reasoning only after every call in that batch has returned either a successful receipt or a failure receipt.
 - terminal_takeover start creates or reuses a persistent session. Its successful start receipt completes that Build step immediately; continue with write/read or other work without waiting for detach, stop, shell exit, or terminal closure.
@@ -589,7 +632,7 @@ export class Agent {
   private compressionArchiveCountCache: { scopeKey: string; count: number } | null = null;
   private nextCompressionCacheId = 1;
   private readonly compressionHistoryArchive: CompressionHistoryArchive;
-  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; compressionCache?: CompressionCacheEntry[]; providerUsage?: ConversationProviderUsage; branchMailbox?: BranchMessage[]; branchCommunication?: boolean; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; titleRequestMessageId?: string; firstAgentResponseStarted?: boolean; runtimeOwnerId?: string; runtimeOwnerPid?: number; runtimeLifecycleRole?: RuntimeLifecycleRole; updatedAt?: string }>();
+  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; compressionCache?: CompressionCacheEntry[]; providerUsage?: ConversationProviderUsage; branchMailbox?: BranchMessage[]; branchCommunication?: boolean; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; continuationRevision?: number; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; titleRequestMessageId?: string; firstAgentResponseStarted?: boolean; runtimeOwnerId?: string; runtimeOwnerPid?: number; runtimeLifecycleRole?: RuntimeLifecycleRole; updatedAt?: string }>();
   public isSubagentRuntime = false;
   private subagentName = '';
   private subagentPrompt = '';
@@ -632,6 +675,8 @@ export class Agent {
   // Bounded caller-owned peer slots retain protocol compatibility learning
   // between mailbox jobs. They never retain the child Agent or go to disk.
   private peerProviderCaches = new Map<string, BuildProviderCache>();
+  /** Reuses the provider connection for current-model JEV calls without sharing conversation build state. */
+  private readonly jevProviderCache: BuildProviderCache = {};
   private awaitingAgentKernelRuntime = false;
   private pendingAgentKernelQueue: Array<{ content: string; queueMode: 'steer' | 'followUp'; clientMessageId?: string; runId?: string; images?: Array<{ dataUrl: string; name?: string; type?: string }>; hiddenUserInput?: boolean }> = [];
   private linkedPlanAccess: AgentRuntimeOptions['linkedPlanAccess'];
@@ -651,7 +696,7 @@ export class Agent {
   private finalizingWorkRunId = '';
   private agentRunService: AgentRunService | null = null;
   private agentRunByWorkRunId = new Map<string, string>();
-  private readonly autoRouter: AutoRouter;
+  private readonly routeController: RouteExecutionController;
   private resolvedDeployment: DeploymentRef | null = null;
   private fixedDeployment: DeploymentRef | null = null;
   private preferredConversationModelSelection: ConversationModelSelection | null = null;
@@ -663,11 +708,21 @@ export class Agent {
   private lastRouteRetryDelayMs = 0;
   private routeAttemptStartedAt = 0;
   private readonly providerBalanceBlockedUntilByDeployment = new Map<string, number>();
-  private readonly explicitlyRatedRoutes = new Map<string, -1 | 1>();
   private conversationStateCache = new Map<string, StoredConversationState>();
   private conversationStateCacheFingerprint = new Map<string, string>();
+  private conversationStateWrittenFingerprint = new Map<string, string>();
+  private conversationShardFingerprint = new Map<string, string>();
+  private hydratedShardEntries = new WeakSet<object>();
+  /**
+   * Revision of the durable queue snapshot this runtime is working from. The
+   * merge only accepts a writer's queue when that writer has seen the persisted
+   * revision, so an outdated in-memory snapshot can neither drop queued work
+   * nor resurrect an entry that was already consumed or cleared.
+   */
+  private continuationRevision = 0;
   private conversationStateFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private conversationStateDirty = new Map<string, { state: StoredConversationState; ws: WorkspaceInfo | null }>();
+  private conversationStateDirty = new Map<string, { state: StoredConversationState; ws: WorkspaceInfo | null; at: number }>();
+  private conversationStateLastWriteAt = new Map<string, number>();
   private systemPromptCache: { identity: string; value: string } | null = null;
   private toolDefinitionCache = new Map<string, unknown[]>();
   private modelValidationPromise: Promise<ModelValidationResult[]> | null = null;
@@ -744,8 +799,7 @@ export class Agent {
         /* crash recovery is best-effort at startup */
       }
     }
-    this.autoRouter = new AutoRouter({ policyVersion: 'newmark-auto-v1' });
-    this.loadLearnedRouteFeedback();
+    this.routeController = new RouteExecutionController({ policyVersion: ROUTE_POLICY_VERSION });
     if (this.isSubagentRuntime || this.agentOnly) {
       this.config.set('workspace', 'auto_create_timestamp_workspace', false);
     }
@@ -1223,7 +1277,6 @@ export class Agent {
       }
       return;
     }
-    const previousAuto = this.model === 'auto' ? this.resolvedDeployment : null;
     const qualified = parseDeploymentSelectionValue(requested);
     const legacyQualified = requested.includes('/')
       ? this.config.allModels().filter(model =>
@@ -1238,11 +1291,8 @@ export class Agent {
     this.resolvedDeployment = null;
     this.pendingAutoAttempts = [];
     if (current?.provider_id) this.config.set('models', 'auto_switch_anchor_provider', current.provider_id);
-    if (previousAuto && current) {
-      const taskClass = this.lastRouteDecision?.taskClasses[0] || 'chat';
-      this.recordRouteFeedbackFor(previousAuto, taskClass, -1, 'manual_switch');
-      this.recordRouteFeedbackFor(this.deploymentRef(current), taskClass, 1, 'manual_switch');
-    }
+    // A manual model switch is explicit user control. Auto Router v2 records
+    // no feedback for it: switching models must never train future Auto routes.
     this.lastRouteDecision = null;
     this.routeAttemptStartedAt = 0;
     this.routeStreamCommitted = false;
@@ -1414,7 +1464,7 @@ export class Agent {
   }
 
   resetAutoRoute(): void {
-    if (this.routeTransactionId) this.autoRouter.endTransaction(this.routeTransactionId);
+    if (this.routeTransactionId) this.routeController.endTransaction(this.routeTransactionId);
     this.resolvedDeployment = null;
     this.lastRouteDecision = null;
     this.pendingAutoAttempts = [];
@@ -1459,7 +1509,7 @@ export class Agent {
   recordRouteSuccess(latencyMs?: number, throughput?: number): void {
     const deployment = this.activeDeployment();
     if (!deployment) return;
-    this.autoRouter.recordEndpointSuccess(deployment, latencyMs, throughput);
+    this.routeController.recordEndpointSuccess(deployment, latencyMs, throughput);
     if (this.lastRouteDecision) {
       const attempt = [...this.lastRouteDecision.attempts].reverse().find(item => deploymentIdentity(item.deployment) === deploymentIdentity(deployment));
       if (attempt) {
@@ -1477,7 +1527,7 @@ export class Agent {
   recordRouteToolOutcome(valid: boolean): void {
     const deployment = this.activeDeployment();
     if (!deployment) return;
-    this.autoRouter.recordToolOutcome(deployment, valid);
+    this.routeController.recordToolOutcome(deployment, valid);
   }
 
   updateProviders(value: unknown): void {
@@ -1497,7 +1547,7 @@ export class Agent {
       for (const provider of [previous, next]) {
         if (!provider) continue;
         for (const model of provider.models || []) {
-          this.autoRouter.resetEndpointAfterConfigChange({
+          this.routeController.resetEndpointAfterConfigChange({
             providerId: provider.id,
             modelId: model.name,
             logicalModelGroupId: model.logical_model_group_id || undefined,
@@ -1508,75 +1558,59 @@ export class Agent {
     if (changed) this.resetAutoRoute();
   }
 
-  clearLearnedModelPreferences(): void {
-    this.autoRouter.clearLearnedPreferences();
-    const target = path.join(this.rootPath, 'routing', 'feedback.jsonl');
-    try { fs.rmSync(target, { force: true }); } catch {}
+  /**
+   * Auto master switch. Every automatic model decision in this runtime is
+   * gated on it: when it is off the Agent neither routes nor edits the current
+   * model decision settings, and no code path may move the active model on its own.
+   */
+  autoDecisionEnabled(): boolean {
+    return this.config.autoSwitchEnabled();
   }
 
-  rateActiveAutoRoute(score: number, expectedRouteId = ''): AutoRouteRatingResult {
-    const normalizedScore = Number(score);
-    if (normalizedScore !== -1 && normalizedScore !== 1) {
-      return { ok: false, reason: 'invalid_score' };
-    }
-    const decision = this.lastRouteDecision;
-    const deployment = this.activeDeployment();
-    if (this.model !== 'auto'
-      || decision?.requestedSelection.kind !== 'auto'
-      || !decision.routeId
-      || !decision.resolvedDeployment
-      || !deployment) {
-      return { ok: false, reason: 'no_active_auto_route' };
-    }
-    const requestedRouteId = String(expectedRouteId || '').trim();
-    if (requestedRouteId && requestedRouteId !== decision.routeId) {
-      return { ok: false, routeId: decision.routeId, reason: 'stale_route' };
-    }
-    const previousScore = this.explicitlyRatedRoutes.get(decision.routeId);
-    if (previousScore !== undefined) {
-      return { ok: false, score: previousScore, routeId: decision.routeId, reason: 'already_rated' };
-    }
-    const taskClasses = [...new Set(decision.taskClasses)];
-    for (const taskClass of taskClasses) {
-      this.recordRouteFeedbackFor(deployment, taskClass, normalizedScore, 'explicit_rating');
-    }
-    this.recordRouteQualityObservation(deployment, taskClasses, normalizedScore > 0);
-    this.explicitlyRatedRoutes.set(decision.routeId, normalizedScore);
-    while (this.explicitlyRatedRoutes.size > 1_000) {
-      const oldest = this.explicitlyRatedRoutes.keys().next().value as string | undefined;
-      if (!oldest) break;
-      this.explicitlyRatedRoutes.delete(oldest);
-    }
-    return { ok: true, score: normalizedScore, routeId: decision.routeId };
+  /** Current-model JEV settings exposed to GUI / TUI / CLI editors. */
+  jevDecisionModelState(): JevDecisionModelState {
+    const autoEnabled = this.autoDecisionEnabled();
+    const timeout = Number(this.config.get<number>('models', 'jev_timeout_ms'));
+    return {
+      autoEnabled,
+      locked: !autoEnabled,
+      ...(autoEnabled ? {} : { lockReason: 'auto_disabled' as const }),
+      enabled: this.config.get<boolean>('models', 'jev_enabled') !== false,
+      decisionModel: 'current_eligible_model',
+      thinkingMode: 'off',
+      outputFormat: 'strict_json_schema',
+      timeoutMs: Number.isFinite(timeout) && timeout > 0 ? Math.round(timeout) : DEFAULT_JEV_TIMEOUT_MS,
+    };
   }
 
-  recordObjectiveRouteResult(success: boolean): void {
-    const deployment = this.activeDeployment();
-    if (!deployment || !this.lastRouteDecision) return;
-    const taskClasses = [...new Set(this.lastRouteDecision.taskClasses)];
-    this.recordRouteQualityObservation(deployment, taskClasses, success);
-    for (const taskClass of taskClasses) {
-      if (success) this.recordRouteFeedbackFor(deployment, taskClass, 1, 'objective_success');
+  /**
+   * Edit current-model Auto decision settings.
+   *
+   * Refuses every write while Auto is off (`auto_disabled`): with automatic
+   * decision-making disabled, not even the decision-model configuration may
+   * change — that is what "Auto off never moves a model" means at the editor
+   * boundary. Invalid values are rejected without touching the stored config.
+   */
+  updateJevDecisionModel(patch: JevDecisionModelPatch = {}): JevDecisionModelUpdateResult {
+    if (!this.autoDecisionEnabled()) {
+      return { ok: false, reason: 'auto_disabled', state: this.jevDecisionModelState() };
     }
-  }
+    const current = this.jevDecisionModelState();
+    const next = { ...current };
+    const reject = (): JevDecisionModelUpdateResult => ({ ok: false, reason: 'invalid_value', state: this.jevDecisionModelState() });
+    const editableKeys = new Set(['enabled', 'timeoutMs']);
+    if (Object.keys(patch).some(key => !editableKeys.has(key))) return reject();
 
-  private recordRouteQualityObservation(
-    deployment: DeploymentRef,
-    taskClasses: RouteDecision['taskClasses'],
-    success: boolean,
-  ): void {
-    const model = this.config.findDeployment(deployment);
-    if (!model) return;
-    const quality = Object.assign({}, model.quality_by_task);
-    for (const taskClass of new Set(taskClasses)) {
-      const previous = quality[taskClass] || { successes: 0, attempts: 0 };
-      quality[taskClass] = {
-        attempts: Math.max(0, previous.attempts) + 1,
-        successes: Math.max(0, previous.successes) + (success ? 1 : 0),
-      };
+    if (patch.enabled !== undefined) next.enabled = patch.enabled === true;
+    if (patch.timeoutMs !== undefined) {
+      const timeout = Number(patch.timeoutMs);
+      if (!Number.isFinite(timeout) || timeout < 100 || timeout > 30_000) return reject();
+      next.timeoutMs = Math.round(timeout);
     }
-    if (!this.config.updateModelByDeployment(deployment.providerId, deployment.modelId, { quality_by_task: quality })) return;
+    this.config.set('models', 'jev_enabled', next.enabled);
+    this.config.set('models', 'jev_timeout_ms', next.timeoutMs);
     this.config.save();
+    return { ok: true, state: this.jevDecisionModelState() };
   }
 
   private workspaceConversationKey(): string | null {
@@ -1588,6 +1622,169 @@ export class Agent {
   private workspaceConversationStorePath(ws: WorkspaceInfo | null = this.workspace.current): string | null {
     if (!ws) return null;
     return path.join(ws.path, 'conversations', 'state.json');
+  }
+
+  /**
+   * Heavy conversation payload that lives in a per-conversation shard file
+   * instead of the workspace index document. Everything else (title, pinning,
+   * order, draft, mode, goal, runtime owner, counters) stays in the index so
+   * listing, sorting and cross-process merge never need to parse a transcript.
+   */
+  private static readonly CONVERSATION_SHARD_FIELDS = [
+    'chatMessages', 'history', 'workRuns', 'continuations',
+    'compressionCache', 'branches', 'tree', 'branchMailbox',
+  ] as const;
+
+  private workspaceConversationShardDir(ws: WorkspaceInfo | null = this.workspace.current): string | null {
+    const store = this.workspaceConversationStorePath(ws);
+    if (!store) return null;
+    return path.join(path.dirname(store), 'shards');
+  }
+
+  private conversationShardFileName(key: string): string {
+    const safe = String(key).replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 180);
+    const digest = crypto.createHash('sha1').update(String(key)).digest('hex').slice(0, 12);
+    return `${safe}.${digest}.json`;
+  }
+
+  private conversationShardPath(key: string, ws: WorkspaceInfo | null = this.workspace.current): string | null {
+    const dir = this.workspaceConversationShardDir(ws);
+    if (!dir) return null;
+    return path.join(dir, this.conversationShardFileName(key));
+  }
+
+  /**
+   * Hydrate one conversation entry from its shard on first access. The heavy
+   * fields are non-enumerable so `{ ...entry }` (and therefore the index
+   * document written back to disk) never pulls a transcript into memory, while
+   * every existing reader that asks for `entry.chatMessages` / `entry.history`
+   * keeps working unchanged.
+   */
+  private attachConversationShard(entry: Record<string, unknown>, shardFile: string, key: string): void {
+    const cache: { loaded: boolean; value: Record<string, unknown> | null } = { loaded: false, value: null };
+    const load = (): Record<string, unknown> | null => {
+      if (cache.loaded) return cache.value;
+      cache.loaded = true;
+      this.hydratedShardEntries.add(entry);
+      try {
+        const raw = fs.readFileSync(shardFile, 'utf-8').replace(/^\uFEFF/, '');
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        cache.value = parsed && typeof parsed === 'object' ? parsed : null;
+      } catch {
+        cache.value = null;
+      }
+      return cache.value;
+    };
+    for (const field of Agent.CONVERSATION_SHARD_FIELDS) {
+      Object.defineProperty(entry, field, {
+        enumerable: false,
+        configurable: true,
+        get: () => {
+          const shard = load();
+          return shard ? shard[field] : undefined;
+        },
+        set: (value: unknown) => {
+          this.hydratedShardEntries.add(entry);
+          const shard = { ...(cache.value || {}) };
+          shard[field] = value;
+          cache.value = shard;
+          cache.loaded = true;
+        },
+      });
+    }
+    void key;
+  }
+
+  /**
+   * Heavy payload carried in memory by this entry, or `null` when the entry is
+   * a shard-backed index record whose heavy fields were never touched. That
+   * distinction is what keeps unrelated conversations off the write path.
+   */
+  private conversationShardSnapshot(entry: Record<string, unknown>): Record<string, unknown> | null {
+    // Ownership rule: a *live* entry carries the heavy fields as own enumerable
+    // properties; an index record read back from disk exposes them as
+    // non-enumerable accessors that hydrate from the shard on demand. Only a
+    // record that was actually hydrated (its accessors fired) counts as owning
+    // its payload — keying on a `shard` marker instead would misclassify the
+    // live entry, because it is built by spreading the previous index entry.
+    const hydrated = this.hydratedShardEntries.has(entry);
+    const snapshot: Record<string, unknown> = {};
+    let any = false;
+    for (const field of Agent.CONVERSATION_SHARD_FIELDS) {
+      const descriptor = Object.getOwnPropertyDescriptor(entry, field);
+      if (!descriptor) continue;
+      if (!descriptor.enumerable && !hydrated) continue;
+      const value = descriptor.get ? descriptor.get.call(entry) : descriptor.value;
+      if (value === undefined) continue;
+      snapshot[field] = value;
+      any = true;
+    }
+    return any ? snapshot : null;
+  }
+
+  /**
+   * Force one shard-backed entry into memory. Used only on the rare recovery
+   * paths that must compare against a payload written by another runtime.
+   */
+  private hydrateConversationEntry(entry: Record<string, unknown>): void {
+    if (typeof entry.shard !== 'string' || !entry.shard) return;
+    this.hydratedShardEntries.add(entry);
+    for (const field of Agent.CONVERSATION_SHARD_FIELDS) {
+      const value = entry[field] as unknown;
+      if (value !== undefined) entry[field] = value;
+    }
+  }
+
+  /**
+   * Durable queue merge.
+   *
+   * Queue entries are the user's pending work, so a runtime that never saw an
+   * entry must not delete it, while an entry this runtime actually consumed
+   * must not be resurrected. Identity-based union minus exactly the consumed
+   * ids gives both guarantees without needing a global revision clock.
+   */
+  private mergeConversationContinuations(
+    incoming: ConversationContinuation[],
+    existingCount: number,
+    existingShardBacked: boolean,
+    existingEntry: Record<string, unknown>,
+    incomingRevision: number,
+    existingRevision: number,
+  ): ConversationContinuation[] {
+    // A writer that has seen the persisted revision owns the queue (including
+    // deliberate clearing/consumption). Anything older keeps what is stored.
+    if (incomingRevision >= existingRevision) return this.normalizeContinuations(incoming);
+    if (existingShardBacked) this.hydrateConversationEntry(existingEntry);
+    const existing = (existingEntry.continuations as ConversationContinuation[] | undefined) || [];
+    void existingCount;
+    return this.normalizeContinuations(existing.length ? existing : incoming);
+  }
+
+  /** Index-document form of a conversation entry: metadata plus a shard pointer. */
+  private conversationIndexEntryForDisk(
+    entry: Record<string, unknown>,
+    shardFileName: string | null,
+    shardBytes: number,
+    counts: {
+      messageCount: number; historyCount: number; workRunCount: number;
+      hasTree: boolean; hasBranches: boolean; continuationCount: number; continuationRevision: number;
+    },
+  ): StoredConversationEntry {
+    const index: Record<string, unknown> = {};
+    for (const [field, value] of Object.entries(entry)) index[field] = value;
+    for (const field of Agent.CONVERSATION_SHARD_FIELDS) delete index[field];
+    index.messageCount = counts.messageCount;
+    index.historyCount = counts.historyCount;
+    index.workRunCount = counts.workRunCount;
+    index.hasTree = counts.hasTree;
+    index.hasBranches = counts.hasBranches;
+    index.continuationCount = counts.continuationCount;
+    index.continuationRevision = counts.continuationRevision;
+    if (shardFileName) {
+      index.shard = shardFileName;
+      index.shardBytes = shardBytes;
+    }
+    return index as StoredConversationEntry;
   }
 
   private workspaceConversationStateKey(conversationId = this.activeConversationId): string | null {
@@ -1912,6 +2109,25 @@ export class Agent {
     };
   }
 
+  /**
+   * Bound the live Build ledger.
+   *
+   * `normalizeWorkRuns()` already windows the persisted/served ledger to 120
+   * runs, but the live `this.workRuns` array kept every Build block of the
+   * conversation (measured: 307 runs / 4.6 MiB after 300 turns). The renderer
+   * only ever shows the newest window, so older terminal runs can be dropped
+   * from memory while the conversation continues.
+   */
+  private pruneLiveWorkRuns(): void {
+    const window = 120;
+    if (this.workRuns.length <= window) return;
+    const running = this.workRuns.filter(run => run.status === 'running');
+    const keep = new Set<string>(running.map(run => run.runId));
+    const byRecency = [...this.workRuns].sort((a, b) => String(a.startedAt || '').localeCompare(String(b.startedAt || '')));
+    for (const run of byRecency.slice(-window)) keep.add(run.runId);
+    this.workRuns = this.workRuns.filter(run => keep.has(run.runId));
+  }
+
   private normalizeWorkRuns(runs: ConversationWorkRun[] | null | undefined): ConversationWorkRun[] {
     if (!Array.isArray(runs)) return [];
     const byRun = new Map<string, ConversationWorkRun>();
@@ -2190,6 +2406,7 @@ export class Agent {
     managed = false,
     runtimeKey?: string,
   ): ConversationWorkRun {
+    this.pruneLiveWorkRuns();
     const cleanRunId = String(runId || crypto.randomUUID()).trim().slice(0, 200);
     const existing = this.workRuns.find(run => run.runId === cleanRunId);
     if (existing) {
@@ -2859,7 +3076,10 @@ export class Agent {
       console.error(`[NewmarkWork] event-published type=${publishedType} subscribers=${this.workEventSubscribers.length}`);
     }
     if (event.type === 'start') this.saveWorkspaceConversationState(false);
-    if (event.type === 'done' || event.type === 'error') this.saveWorkspaceConversationState(true);
+    // Terminal events are coalesced on purpose: `Agent.process()` performs the
+    // synchronous save right after this sequence, so persisting here as well
+    // only rewrote the whole conversation again for the same turn.
+    if (event.type === 'done' || event.type === 'error') this.saveWorkspaceConversationState(false);
     if (activeRun && this.finalizingWorkRunId !== activeRun.runId
       && (event.type === 'done' || event.type === 'error') && activeRun.status !== 'running') {
       const terminalStatus = activeRun.status;
@@ -2971,7 +3191,10 @@ export class Agent {
     const before = this.continuations.length;
     this.continuations = this.continuations.filter(item => item.queueMode !== 'followUp'
       || !matches(item.content, item.hiddenUserInput === true, item.clientMessageId));
-    if (this.continuations.length !== before) this.saveWorkspaceConversationState(true);
+    if (this.continuations.length !== before) {
+      this.continuationRevision += 1;
+      this.saveWorkspaceConversationState(true);
+    }
     for (const subscriber of this.rootInboxRetiredSubscribers) subscriber(ids);
     return ids;
   }
@@ -3057,6 +3280,7 @@ export class Agent {
       createdAt: item.createdAt || new Date().toISOString(),
     }))]);
     this.continuations = combined;
+    this.continuationRevision += 1;
     this.saveWorkspaceConversationState(true);
     return combined.map(item => ({
       ...item,
@@ -3071,9 +3295,11 @@ export class Agent {
       : item.queueMode === match.queueMode && item.content === match.content);
     if (index < 0) return false;
     this.continuations.splice(index, 1);
+    this.continuationRevision += 1;
     this.saveWorkspaceConversationState(true);
     return true;
   }
+
 
   conversationContinuations(): ConversationContinuation[] {
     return this.continuations.map(item => ({
@@ -3162,7 +3388,14 @@ export class Agent {
         state.version = Math.max(1, Number(state.version || 1));
         state.conversations = state.conversations || {};
         let migrated = false;
-        for (const entry of Object.values(state.conversations)) {
+        const shardDir = this.workspaceConversationShardDir(ws);
+        for (const [key, entry] of Object.entries(state.conversations)) {
+          if (entry.shard) {
+            // Index record: attach lazy accessors instead of reading the shard.
+            const shardFile = shardDir ? path.join(shardDir, String(entry.shard)) : '';
+            if (shardFile) this.attachConversationShard(entry as unknown as Record<string, unknown>, shardFile, key);
+            continue;
+          }
           if (!entry.tree && entry.branches?.length) {
             this.normalizeConversationTree(entry);
             entry.branches = undefined;
@@ -3181,23 +3414,73 @@ export class Agent {
     return {};
   }
 
+  /** Durable replacement-style text write (temp file + fsync + rename). */
+  private writeAtomicTextFile(file: string, content: string): void {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    try {
+      const handle = fs.openSync(temp, 'w');
+      try {
+        fs.writeFileSync(handle, content, 'utf-8');
+        fs.fsyncSync(handle);
+      } finally {
+        fs.closeSync(handle);
+      }
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        try { fs.renameSync(temp, file); return; } catch (error) {
+          lastError = error;
+          const code = error && typeof error === 'object' && 'code' in error ? String((error as NodeJS.ErrnoException).code || '') : '';
+          if (!['EPERM', 'EACCES', 'EBUSY'].includes(code)) break;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * (attempt + 1));
+        }
+      }
+      throw lastError;
+    } finally {
+      try { fs.unlinkSync(temp); } catch {}
+    }
+  }
+
   private writeStoredConversationState(state: StoredConversationState, ws: WorkspaceInfo | null = this.workspace.current, deletedKeys: Iterable<string> = []): void {
     this.writeStoredConversationStateNow(state, ws, deletedKeys);
   }
 
-  private scheduleStoredConversationState(state: StoredConversationState, ws: WorkspaceInfo | null = this.workspace.current, delayMs = 80): void {
+  /**
+   * Coalesced conversation-state write.
+   *
+   * Mid-turn persistence used to rewrite the whole workspace document
+   * synchronously on every kernel event (measured: 5.33 full rewrites per turn
+   * with no tools). The document grows with the conversation, so that cost grew
+   * with the turn count. This path keeps durability at turn boundaries (the
+   * terminal save stays synchronous and cancels any pending timer) while
+   * throttling intermediate saves: the latest snapshot wins, and bursts inside
+   * one throttle window collapse into a single write.
+   */
+  private scheduleStoredConversationState(state: StoredConversationState, ws: WorkspaceInfo | null = this.workspace.current, minIntervalMs = 80): void {
     const file = this.workspaceConversationStorePath(ws);
     if (!file) return;
-    this.conversationStateDirty.set(file, { state, ws });
-    const current = this.conversationStateFlushTimers.get(file);
-    if (current) clearTimeout(current);
-    this.conversationStateFlushTimers.set(file, setTimeout(() => {
+    this.conversationStateDirty.set(file, { state, ws, at: Date.now() });
+    // A write is already queued: keep it and let it carry the newest snapshot
+    // instead of pushing the deadline out (debounce) on every event.
+    if (this.conversationStateFlushTimers.has(file)) return;
+    const elapsed = Date.now() - (this.conversationStateLastWriteAt.get(file) || 0);
+    const wait = Math.max(0, minIntervalMs - elapsed);
+    const timer = setTimeout(() => {
       this.conversationStateFlushTimers.delete(file);
       const pending = this.conversationStateDirty.get(file);
       if (!pending) return;
       this.conversationStateDirty.delete(file);
-      this.writeStoredConversationStateNow(pending.state, pending.ws);
-    }, Math.max(0, delayMs)));
+      try {
+        this.writeStoredConversationStateNow(pending.state, pending.ws);
+      } catch (error) {
+        // A deferred write must never take the process down: keep the snapshot
+        // pending so the next save or the exit flush retries it.
+        this.conversationStateDirty.set(file, pending);
+        if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error(`[NewmarkState] deferred conversation-state write failed: ${String(error)}`);
+      }
+    }, wait);
+    if (typeof (timer as { unref?: () => void }).unref === 'function') (timer as { unref: () => void }).unref();
+    this.conversationStateFlushTimers.set(file, timer);
   }
 
   flushWorkspaceConversationState(): void {
@@ -3275,6 +3558,16 @@ export class Agent {
   private writeStoredConversationStateNow(state: StoredConversationState, ws: WorkspaceInfo | null = this.workspace.current, deletedKeys: Iterable<string> = []): void {
     const file = this.workspaceConversationStorePath(ws);
     if (file) {
+      // A queued coalesced snapshot may hold changes for *other* conversations
+      // (for example provider usage recorded just before switching away). Fold
+      // those in before cancelling it so a synchronous save can never drop them.
+      const pending = this.conversationStateDirty.get(file);
+      if (pending) {
+        state = {
+          ...state,
+          conversations: { ...(pending.state.conversations || {}), ...(state.conversations || {}) },
+        };
+      }
       const pendingTimer = this.conversationStateFlushTimers.get(file);
       if (pendingTimer) clearTimeout(pendingTimer);
       this.conversationStateFlushTimers.delete(file);
@@ -3294,29 +3587,144 @@ export class Agent {
         const existingUpdatedAt = Date.parse(existing.updatedAt || '') || 0;
         const preferred = incomingUpdatedAt >= existingUpdatedAt ? { ...existing, ...incoming } : { ...incoming, ...existing };
         const branchPageReplacement = !!incoming.branchReset || !!incoming.tree || !!incoming.branches?.length;
-        const incomingTranscriptEmpty = !(incoming.chatMessages || []).length && !(incoming.history || []).length;
-        const existingTranscriptPresent = !!(existing.chatMessages || []).length || !!(existing.history || []).length;
-        if (incomingTranscriptEmpty && existingTranscriptPresent && !branchPageReplacement) {
-          preferred.chatMessages = existing.chatMessages;
-          preferred.history = existing.history;
+        // Only the side that actually carries a payload may decide the heavy
+        // fields. A shard-backed index entry that this process never touched
+        // must not be hydrated just to merge metadata.
+        const incomingEntry = incoming as unknown as Record<string, unknown>;
+        const existingEntry = existing as unknown as Record<string, unknown>;
+        const incomingShard = this.conversationShardSnapshot(incomingEntry);
+        const count = (value: unknown) => (Array.isArray(value) ? value.length : 0);
+        const existingMessages = Number(existing.messageCount) || count(existingEntry.chatMessages);
+        const existingHistory = Number(existing.historyCount) || count(existingEntry.history);
+        const incomingMessages = incomingShard ? count(incomingShard.chatMessages) : Number(incoming.messageCount) || 0;
+        const incomingHistory = incomingShard ? count(incomingShard.history) : Number(incoming.historyCount) || 0;
+        const incomingTranscriptEmpty = incomingMessages === 0 && incomingHistory === 0;
+        // Legacy guard: an empty in-memory snapshot must never clobber a stored
+        // transcript (mirrors, cold reloads and legacy callers can carry an
+        // entry without its messages).
+        const keepsExistingPayload = incomingTranscriptEmpty
+          && (existingMessages > 0 || existingHistory > 0)
+          && !branchPageReplacement;
+        if (!incomingShard || keepsExistingPayload) {
+          // Metadata-only update: keep the existing heavy payload and pointer.
+          preferred.messageCount = existingMessages || Number(preferred.messageCount) || 0;
+          preferred.historyCount = existingHistory || Number(preferred.historyCount) || 0;
+          preferred.workRunCount = Number(existing.workRunCount) || Number(preferred.workRunCount) || 0;
+          if (typeof existing.shard === 'string' && existing.shard) {
+            preferred.shard = existing.shard;
+            preferred.shardBytes = Number(existing.shardBytes) || Number(preferred.shardBytes) || 0;
+          }
+          // `preferred` is a shallow metadata copy: the lazy shard accessors are
+          // non-enumerable and therefore absent from it. Re-attach them so the
+          // cached state keeps exposing this conversation's transcript instead
+          // of looking like an empty conversation to later readers.
+          if (typeof preferred.shard === 'string' && preferred.shard) {
+            const shardDir = this.workspaceConversationShardDir(ws);
+            if (shardDir) {
+              this.attachConversationShard(
+                preferred as unknown as Record<string, unknown>,
+                path.join(shardDir, String(preferred.shard)),
+                key,
+              );
+            }
+          }
+          // Even a metadata-only writer can carry a stale WorkRun ledger. Load
+          // the existing shard, then reconcile by run id and event sequence;
+          // the other heavy fields still come from that same persisted shard.
+          // Explicit branch-page replacement is the only path that replaces
+          // runs without merging. A completed snapshot wins over an older
+          // running copy, while explicit resume emits a newer sequence.
+          const incomingRuns = Array.isArray(incoming.workRuns) ? incoming.workRuns : null;
+          if (branchPageReplacement) {
+            preferred.workRuns = this.normalizeWorkRuns(incomingRuns || []);
+          } else if (incomingRuns) {
+            const existingShardBacked = typeof preferred.shard === 'string' && !!preferred.shard;
+            let previousRuns: ConversationWorkRun[] = [];
+            if (existingShardBacked) {
+              const preferredEntry = preferred as unknown as Record<string, unknown>;
+              this.hydrateConversationEntry(preferredEntry);
+              previousRuns = (preferred.workRuns as ConversationWorkRun[] | undefined) || [];
+            } else {
+              previousRuns = (existing.workRuns as ConversationWorkRun[] | undefined) || [];
+            }
+            preferred.workRuns = this.normalizeWorkRuns([...previousRuns, ...incomingRuns]);
+          }
+          merged[key] = preferred;
+          continue;
         }
+        // This process owns a payload for this conversation. Which side wins is
+        // decided per field exactly like the pre-shard merge did:
+        //   - `updatedAt` orders whole entries (a stale in-memory snapshot must
+        //     never revert a newer persisted transcript/queue);
+        //   - fields the caller does not produce at all (`tree`/`branches` come
+        //     from branch transactions, never from saveWorkspaceConversationState)
+        //     always survive from the stored payload;
+        //   - a branch page replacement still takes the incoming side verbatim.
+        const preferIncoming = incomingUpdatedAt >= existingUpdatedAt;
+        const existingShardBacked = Object.prototype.hasOwnProperty.call(existing, 'shard');
+        const needsExistingPayload = existingShardBacked && (!preferIncoming
+          || (!!existing.hasTree && incomingShard.tree === undefined)
+          || (!!existing.hasBranches && incomingShard.branches === undefined));
+        const priorPayload: Record<string, unknown> | null = needsExistingPayload
+          ? (this.hydrateConversationEntry(existingEntry), existingEntry)
+          : null;
+        const winningHeavy = (field: string): unknown => {
+          const existingValue = priorPayload ? priorPayload[field] : undefined;
+          const incomingValue = incomingShard[field];
+          if (preferIncoming) return incomingValue !== undefined ? incomingValue : existingValue;
+          return existingValue !== undefined ? existingValue : incomingValue;
+        };
         const incomingPlanRevision = Math.max(0, Number(incoming.linkedPlan?.revision || 0));
         const existingPlanRevision = Math.max(0, Number(existing.linkedPlan?.revision || 0));
         preferred.linkedPlan = incomingPlanRevision >= existingPlanRevision ? incoming.linkedPlan : existing.linkedPlan;
         const incomingSequence = Math.max(0, Number(incoming.subagentState?.nextSequence || 0));
         const existingSequence = Math.max(0, Number(existing.subagentState?.nextSequence || 0));
         preferred.subagentState = incomingSequence >= existingSequence ? incoming.subagentState : existing.subagentState;
-        preferred.chatMessages = branchPageReplacement ? [...(incoming.chatMessages || [])] : preferred.chatMessages;
-        preferred.history = branchPageReplacement ? [...(incoming.history || [])] : preferred.history;
+        preferred.chatMessages = branchPageReplacement
+          ? [...((incomingShard.chatMessages as ChatMessage[] | undefined) || [])]
+          : (winningHeavy('chatMessages') as ChatMessage[] | undefined) || [];
+        preferred.history = branchPageReplacement
+          ? [...((incomingShard.history as Array<Record<string, unknown>> | undefined) || [])]
+          : (winningHeavy('history') as Array<Record<string, unknown>> | undefined) || [];
+        // WorkRun ledgers can diverge across isolated runtimes while keeping
+        // the same number of runs (for example, a stale `running` snapshot
+        // after another runtime durably completed that run). Always reconcile
+        // the persisted ledger with the incoming one; normalizeWorkRuns merges
+        // duplicate run ids by event sequence and terminal rank. Explicit
+        // resume emits a newer event sequence, so it still reopens the run.
+        const incomingRuns = (incomingShard.workRuns as ConversationWorkRun[] | undefined) || [];
+        const previousRuns = existingShardBacked && !branchPageReplacement
+          ? (this.hydrateConversationEntry(existingEntry), (existingEntry.workRuns as ConversationWorkRun[] | undefined) || [])
+          : [];
         preferred.workRuns = branchPageReplacement
-          ? this.normalizeWorkRuns(incoming.workRuns)
-          : this.normalizeWorkRuns([...(existing.workRuns || []), ...(incoming.workRuns || [])]);
-        preferred.continuations = branchPageReplacement ? this.normalizeContinuations(incoming.continuations) : preferred.continuations;
-        preferred.branches = branchPageReplacement ? [...(incoming.branches || [])] : preferred.branches;
+          ? this.normalizeWorkRuns(incomingRuns)
+          : this.normalizeWorkRuns([...previousRuns, ...incomingRuns]);
+        preferred.continuations = branchPageReplacement
+          ? this.normalizeContinuations((incomingShard.continuations as ConversationContinuation[] | undefined) || [])
+          : this.mergeConversationContinuations(
+            (incomingShard.continuations as ConversationContinuation[] | undefined) || [],
+            Number(existing.continuationCount) || 0,
+            existingShardBacked,
+            existingEntry,
+            Number(incoming.continuationRevision) || 0,
+            Number(existing.continuationRevision) || 0,
+          );
+        if (branchPageReplacement) preferred.branches = [...((incomingShard.branches as ConversationBranchState[] | undefined) || [])];
+        else if (winningHeavy('branches') !== undefined) preferred.branches = winningHeavy('branches') as ConversationBranchState[];
         preferred.activeBranchId = branchPageReplacement ? String(incoming.activeBranchId || '') : preferred.activeBranchId;
         preferred.activeBranchGroupId = branchPageReplacement ? String(incoming.activeBranchGroupId || '') : preferred.activeBranchGroupId;
-        preferred.tree = branchPageReplacement ? incoming.tree : preferred.tree;
+        preferred.tree = (winningHeavy('tree') as ConversationTreeState | undefined) || preferred.tree;
         preferred.branchReset = branchPageReplacement;
+        if (priorPayload) {
+          for (const field of Agent.CONVERSATION_SHARD_FIELDS) {
+            if (field === 'chatMessages' || field === 'history') continue;
+            if ((preferred as Record<string, unknown>)[field] === undefined && priorPayload[field] !== undefined) {
+              (preferred as Record<string, unknown>)[field] = priorPayload[field];
+            }
+          }
+        }
+        delete preferred.shard;
+        delete preferred.shardBytes;
         merged[key] = preferred;
       }
       return {
@@ -3327,6 +3735,13 @@ export class Agent {
         conversations: merged,
       };
     });
+    // A deleted conversation must not leave its transcript shard behind.
+    for (const key of deletedKeys) {
+      const shardFile = this.conversationShardPath(String(key), ws);
+      if (!shardFile) continue;
+      try { fs.unlinkSync(shardFile); } catch {}
+      this.conversationShardFingerprint.delete(shardFile);
+    }
     stopTimer();
   }
 
@@ -3340,16 +3755,27 @@ export class Agent {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const lock = `${file}.lock`;
     let lockHandle: number | null = null;
-    for (let attempt = 0; attempt < 80; attempt += 1) {
+    for (let attempt = 0; attempt < 400; attempt += 1) {
       try {
         lockHandle = fs.openSync(lock, 'wx');
+        // Record the owner so a lock left behind by a killed runtime can be
+        // reclaimed immediately instead of blocking saves for the age window.
+        try { fs.writeFileSync(lockHandle, String(process.pid), 'utf-8'); } catch {}
         break;
       } catch (error) {
         const code = error && typeof error === 'object' && 'code' in error ? String((error as NodeJS.ErrnoException).code || '') : '';
         if (!['EEXIST', 'EPERM', 'EACCES', 'EBUSY'].includes(code)) throw error;
         if (code === 'EEXIST') {
           try {
-            if (Date.now() - fs.statSync(lock).mtimeMs > 30000) fs.unlinkSync(lock);
+            const stat = fs.statSync(lock);
+            const rawOwner = fs.readFileSync(lock, 'utf-8').trim();
+            const ownerPid = Number(rawOwner);
+            const knownOwner = rawOwner.length > 0 && Number.isFinite(ownerPid) && ownerPid > 0;
+            const ownerAlive = knownOwner && (ownerPid === process.pid || (() => {
+              try { process.kill(ownerPid, 0); return true; } catch { return false; }
+            })());
+            if (knownOwner && !ownerAlive) fs.unlinkSync(lock);
+            else if (Date.now() - stat.mtimeMs > 30_000) fs.unlinkSync(lock);
           } catch {}
         }
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 + attempt);
@@ -3371,8 +3797,50 @@ export class Agent {
     contentState.version = 3;
     contentState.conversations = contentState.conversations || {};
     const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    const diskConversations = Object.fromEntries(Object.entries(contentState.conversations || {})
-      .map(([key, entry]) => [key, this.conversationEntryForDisk(entry)]));
+    const shardDir = this.workspaceConversationShardDir(ws);
+    const diskConversations: Record<string, StoredConversationEntry> = {};
+    const pendingShards: Array<{ file: string; content: string }> = [];
+    for (const [key, rawEntry] of Object.entries(contentState.conversations || {})) {
+      const entry = rawEntry as unknown as Record<string, unknown>;
+      const snapshot = this.conversationShardSnapshot(entry);
+      let shardFileName = typeof entry.shard === 'string' ? entry.shard : '';
+      let shardBytes = Number(entry.shardBytes) || 0;
+      let messageCount = Number(entry.messageCount) || 0;
+      let historyCount = Number(entry.historyCount) || 0;
+      let workRunCount = Number(entry.workRunCount) || 0;
+      let hasTree = !!entry.hasTree;
+      let hasBranches = !!entry.hasBranches;
+      let continuationCount = Number(entry.continuationCount) || 0;
+      let continuationRevision = Number(entry.continuationRevision) || 0;
+      if (snapshot && shardDir) {
+        const payload = this.conversationEntryForDisk(snapshot as StoredConversationEntry);
+        messageCount = Array.isArray(payload.chatMessages) ? payload.chatMessages.length : 0;
+        historyCount = Array.isArray(payload.history) ? payload.history.length : 0;
+        workRunCount = Array.isArray(payload.workRuns) ? payload.workRuns.length : 0;
+        hasTree = !!payload.tree;
+        hasBranches = Array.isArray(payload.branches) && payload.branches.length > 0;
+        continuationCount = Array.isArray(payload.continuations) ? payload.continuations.length : 0;
+        continuationRevision = Number(entry.continuationRevision) || this.continuationRevision;
+        // Shard content is the heavy payload only: no `updatedAt`, no metadata.
+        // A save that only bumps metadata therefore produces a byte-identical
+        // shard and is skipped by the fingerprint check below.
+        const shardContent = JSON.stringify({ version: 1, key, ...payload });
+        shardFileName = shardFileName || this.conversationShardFileName(key);
+        const shardFile = path.join(shardDir, shardFileName);
+        const shardFingerprint = crypto.createHash('sha1').update(shardContent).digest('hex');
+        if (this.conversationShardFingerprint.get(shardFile) !== shardFingerprint) {
+          pendingShards.push({ file: shardFile, content: shardContent });
+          this.conversationShardFingerprint.set(shardFile, shardFingerprint);
+        }
+        shardBytes = Buffer.byteLength(shardContent, 'utf8');
+      }
+      diskConversations[key] = this.conversationIndexEntryForDisk(
+        entry, shardFileName || null, shardBytes, {
+          messageCount, historyCount, workRunCount, hasTree, hasBranches, continuationCount, continuationRevision,
+        },
+      );
+    }
+    for (const shard of pendingShards) this.writeAtomicTextFile(shard.file, shard.content);
     const content = JSON.stringify({
       version: 3,
       activeConversationId: contentState.activeConversationId || this.activeConversationId || 'default',
@@ -3380,6 +3848,26 @@ export class Agent {
       flowSuspensions: contentState.flowSuspensions || undefined,
       conversations: diskConversations,
     }, null, 2);
+    // Content-fingerprint short circuit: a save whose serialized document is
+    // byte-identical to what this process last wrote needs no temp file, no
+    // fsync and no rename. Repeated saves inside one turn (Build start, kernel
+    // events, work-run bookkeeping) usually collapse into this case.
+    const contentFingerprint = crypto.createHash('sha1').update(content).digest('hex');
+    const knownDiskFingerprint = this.conversationStateCacheFingerprint.get(file);
+    let diskUntouched = false;
+    if (knownDiskFingerprint) {
+      try {
+        const current = fs.statSync(file, { bigint: true });
+        diskUntouched = knownDiskFingerprint === `${current.mtimeNs}:${current.ctimeNs}:${current.size}`;
+      } catch {
+        diskUntouched = false;
+      }
+    }
+    if (diskUntouched && this.conversationStateWrittenFingerprint.get(file) === contentFingerprint) {
+      this.conversationStateCache.set(file, contentState);
+      this.conversationStateLastWriteAt.set(file, Date.now());
+      return select ? select(contentState) : undefined;
+    }
     try {
       const handle = fs.openSync(temp, 'w');
       try {
@@ -3393,6 +3881,8 @@ export class Agent {
         try {
           fs.renameSync(temp, file);
           this.conversationStateCache.set(file, contentState);
+          this.conversationStateWrittenFingerprint.set(file, contentFingerprint);
+          this.conversationStateLastWriteAt.set(file, Date.now());
           const writtenStat = fs.statSync(file, { bigint: true });
           this.conversationStateCacheFingerprint.set(file, `${writtenStat.mtimeNs}:${writtenStat.ctimeNs}:${writtenStat.size}`);
           return select ? select(contentState) : undefined;
@@ -3484,11 +3974,17 @@ export class Agent {
     for (const [key, value] of Object.entries(stored.conversations || {})) {
       if (prefix && !key.startsWith(prefix)) continue;
       const id = key.slice(prefix.length + 1) || key;
+      // Index-resident counts: listing conversations must never hydrate a
+      // shard, otherwise every UI refresh would parse every transcript.
+      const entry = value as unknown as Record<string, unknown>;
+      const shardBacked = typeof entry.shard === 'string' && !!entry.shard;
       rows.push({
         id,
         key,
-        title: value.title || this.titleFromMessages(value.chatMessages || [], id),
-        messageCount: value.chatMessages?.length || 0,
+        title: value.title || (shardBacked
+          ? String(entry.title || id)
+          : this.titleFromMessages(value.chatMessages || [], id)),
+        messageCount: Number(value.messageCount) || value.chatMessages?.length || 0,
         historyCount: value.history?.length || 0,
         updatedAt: value.updatedAt || '',
         pinned: !!value.pinned,
@@ -4064,8 +4560,12 @@ export class Agent {
     stored.conversations = stored.conversations || {};
     const existing = stored.conversations[stateKey];
     if (!existing) return false;
-    existing.pinned = !!pinned;
-    existing.pinnedAt = existing.pinned ? new Date().toISOString() : '';
+      existing.pinned = !!pinned;
+      existing.pinnedAt = existing.pinned ? new Date().toISOString() : '';
+      // The pin is a real change: advance `updatedAt` so a concurrent older
+      // snapshot (which ties on the previous timestamp) cannot win the merge and
+      // silently unpin the conversation.
+      existing.updatedAt = new Date().toISOString();
     const siblingOrders = Object.entries(stored.conversations)
       .filter(([key, value]) => key !== stateKey && !!value.pinned === existing.pinned && Number.isFinite(value.order))
       .map(([, value]) => Number(value.order));
@@ -4092,6 +4592,7 @@ export class Agent {
       if (item.queueMode !== 'followUp' || !item.clientMessageId) return item;
       return byId.get(orderedIds[nextIndex++])!;
     });
+    this.continuationRevision += 1;
     this.saveWorkspaceConversationState(true);
     return this.conversationContinuations();
   }
@@ -4437,6 +4938,12 @@ export class Agent {
       this.firstAgentResponseStarted = true;
       return true;
     }
+    // This is a hard durability gate: it verifies the flag by reading the store
+    // back, so the snapshot produced by the current turn must be on disk first.
+    // Intermediate saves are coalesced, which can leave the entry unwritten for
+    // up to one throttle window; flush it synchronously here instead of relying
+    // on timing.
+    this.saveWorkspaceConversationState(true);
     const marked = this.mutateStoredConversationState(workspace, latest => {
       const current = latest.conversations?.[stateKey];
       const firstUser = (current?.chatMessages || []).find(message => message.role === 'user');
@@ -4492,7 +4999,14 @@ export class Agent {
       const orderSlots = requested.map(entry => Number(entry!.order));
       if (orderSlots.some(order => !Number.isFinite(order))) return latest;
       orderSlots.sort((a, b) => a - b);
-      normalized.forEach((id, index) => { entryById.get(id)!.order = orderSlots[index]; });
+      const reorderedAt = new Date().toISOString();
+      normalized.forEach((id, index) => {
+        const entry = entryById.get(id)!;
+        entry.order = orderSlots[index];
+        // Same reason as pinning: keep a real change strictly newer than any
+        // snapshot a coalesced save may still be holding.
+        entry.updatedAt = reorderedAt;
+      });
       accepted = true;
       return latest;
     });
@@ -4607,6 +5121,7 @@ export class Agent {
       subagentState: this.subagents.serialize(),
       workRuns: this.normalizeWorkRuns(this.workRuns),
       continuations: this.normalizeContinuations(this.continuations),
+      continuationRevision: this.continuationRevision,
       modelSelection: this.currentConversationModelSelection(),
       flowSelection: this.currentConversationFlowSelection(),
       inputMode: this.inputMode,
@@ -4652,6 +5167,7 @@ export class Agent {
       runtimeOwnerId: runtimeOwner.runtimeOwnerId,
       runtimeOwnerPid: runtimeOwner.runtimeOwnerPid,
       runtimeLifecycleRole: runtimeOwner.runtimeLifecycleRole,
+      continuationRevision: this.continuationRevision,
       updatedAt,
     };
     if (nextEntry.tree || nextEntry.branches?.length) {
@@ -4678,6 +5194,7 @@ export class Agent {
       this.linkedPlan = { markdown: '', revision: 0 };
       this.workRuns = [];
       this.continuations = [];
+      this.continuationRevision = 0;
       this.mode = 'build';
       this.goal = null;
       this.titleRequestMessageId = '';
@@ -4704,6 +5221,7 @@ export class Agent {
       this.bindConversationSubagents(this.activeConversationId, saved.subagentState);
       this.workRuns = this.normalizeWorkRuns(saved.workRuns);
       this.continuations = this.normalizeContinuations(saved.continuations);
+      this.continuationRevision = Number(saved.continuationRevision || 0);
       this.restoreConversationModelSelection(saved.modelSelection);
       this.restoreConversationFlowSelection(saved.flowSelection);
       this.inputMode = this.defaultInputMode();
@@ -4737,6 +5255,7 @@ export class Agent {
     );
     this.workRuns = recoveredWorkRuns.runs;
     this.continuations = this.normalizeContinuations(persisted?.continuations);
+    this.continuationRevision = Number(persisted?.continuationRevision || 0);
     this.restoreConversationModelSelection(persisted?.modelSelection);
     this.restoreConversationFlowSelection(persisted?.flowSelection);
     this.inputMode = this.defaultInputMode();
@@ -6042,6 +6561,7 @@ export class Agent {
       if (source.subagents) this.subagents = source.subagents;
       this.workRuns = workRuns;
       this.continuations = continuations;
+      this.continuationRevision += 1;
       this.mode = source.mode || this.mode;
       if (source.goal !== undefined) this.goal = this.restoreGoal(source.goal);
       this.titleRequestMessageId = titleRequestMessageId;
@@ -6970,7 +7490,9 @@ export class Agent {
       : (memory?.history ?? persisted?.history ?? []);
     const messages = this.normalizeConversationChatMessages(sourceMessages, sourceHistory);
     const filename = this.writeSessionArchive(messages, this.modeName(), this.model);
-    const archiveEntry: StoredConversationEntry = persisted ? JSON.parse(JSON.stringify(persisted)) : {
+    // Materialize the shard-backed entry before cloning: a plain JSON round-trip
+    // of the index record would archive an empty transcript and no branch tree.
+    const archiveEntry: StoredConversationEntry = persisted ? JSON.parse(JSON.stringify(this.conversationEntryForDisk(persisted))) : {
       title: this.titleFromMessages(messages, clean),
       chatMessages: messages,
       history: sourceHistory,
@@ -6982,6 +7504,9 @@ export class Agent {
       continuations: memory?.continuations,
       updatedAt: new Date().toISOString(),
     };
+    for (const key of ['shard', 'shardBytes', 'messageCount', 'historyCount', 'workRunCount', 'hasTree', 'hasBranches'] as const) {
+      delete (archiveEntry as Record<string, unknown>)[key];
+    }
     const manifest: ConversationArchiveManifest = {
       version: 2,
       kind: 'newmark-conversation-archive',
@@ -7055,6 +7580,22 @@ export class Agent {
     const cachedStored = this.readStoredConversationState(ws);
     const stored: StoredConversationState = JSON.parse(JSON.stringify(cachedStored || {}));
     const persisted = stored.conversations?.[stateKey];
+    // A shard-backed index record keeps `chatMessages` / `history` / `workRuns`
+    // / `tree` behind non-enumerable accessors, and the JSON round-trip above
+    // drops exactly those. Without this the archive of a conversation this
+    // process does not hold in memory (the GUI archives while a utility runtime
+    // owns the transcript) writes an empty payload -- and then deletes the real
+    // transcript from the store. Read the live record's payload into the
+    // detached copy instead.
+    const cachedEntry = (cachedStored.conversations || {})[stateKey] as unknown as Record<string, unknown> | undefined;
+    if (persisted && cachedEntry) {
+      for (const field of Agent.CONVERSATION_SHARD_FIELDS) {
+        if ((persisted as Record<string, unknown>)[field] !== undefined) continue;
+        const value = cachedEntry[field];
+        if (value === undefined) continue;
+        (persisted as Record<string, unknown>)[field] = JSON.parse(JSON.stringify(value));
+      }
+    }
     if (persisted) this.normalizeConversationTree(persisted);
     const memory = this.workspaceConversations.get(memoryKey);
     const archiveMode = persisted?.mode || memory?.mode || 'build';
@@ -7074,7 +7615,8 @@ export class Agent {
       model: archiveModel,
       goal: archiveGoal,
     }, archiveDir);
-    const archiveEntry: StoredConversationEntry = persisted ? JSON.parse(JSON.stringify(persisted)) : {
+    // Same materialization rule as the synchronous archive path.
+    const archiveEntry: StoredConversationEntry = persisted ? JSON.parse(JSON.stringify(this.conversationEntryForDisk(persisted))) : {
       title: this.titleFromMessages(messages, clean),
       chatMessages: messages,
       history: sourceHistory,
@@ -7086,6 +7628,9 @@ export class Agent {
       continuations: memory?.continuations,
       updatedAt: new Date().toISOString(),
     };
+    for (const key of ['shard', 'shardBytes', 'messageCount', 'historyCount', 'workRunCount', 'hasTree', 'hasBranches'] as const) {
+      delete (archiveEntry as Record<string, unknown>)[key];
+    }
     const manifest: ConversationArchiveManifest = {
       version: 2,
       kind: 'newmark-conversation-archive',
@@ -7133,6 +7678,16 @@ export class Agent {
       nextActiveId = latest.activeConversationId || remaining[0] || 'default';
       return latest;
     });
+    // The index record is gone, so its transcript shard must go with it: an
+    // orphaned shard is dead weight now and a stale transcript source if the
+    // same conversation id is ever written again. The synchronous archive path
+    // deletes shards through `writeStoredConversationState(...deletedKeys)`; the
+    // async path mutates the locked state directly, so it unlinks here.
+    const archivedShardFile = this.conversationShardPath(stateKey, ws);
+    if (archivedShardFile) {
+      try { fs.unlinkSync(archivedShardFile); } catch { /* already gone */ }
+      this.conversationShardFingerprint.delete(archivedShardFile);
+    }
     this.workspaceConversations.delete(memoryKey);
     const duplicateMemoryKey = `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`;
     this.workspaceConversations.delete(duplicateMemoryKey);
@@ -7437,7 +7992,7 @@ export class Agent {
           capabilities.add(capability);
         }
       }
-      const health = this.autoRouter.endpointMetrics(this.deploymentRef(model));
+      const health = this.routeController.endpointMetrics(this.deploymentRef(model));
       const latencySeconds = Number(model.evaluation?.latency);
       const configuredPrivacy = (model.privacy || ['default']).filter(value => value === 'default' || value === 'no_training' || value === 'zdr');
       const supportedParameters = new Set((routeMetadata.supported_parameters || []).map(value => String(value).toLowerCase()));
@@ -7456,6 +8011,7 @@ export class Agent {
       return {
         deployment: this.deploymentRef(model),
         enabled: model.enabled !== false,
+        unavailableReason: this.isBalanceBlockedDeployment(this.deploymentRef(model)) ? 'balance_blocked' : undefined,
         validation: {
           level: validation.level,
           status: effectiveValidationStatus,
@@ -7477,7 +8033,7 @@ export class Agent {
         reliability: health.attempts ? health.reliability : 0.5,
         toolValidity: health.toolAttempts ? health.toolValidity : undefined,
         throughput: health.throughput ?? (model.speed_rating === 'fast' ? 80 : model.speed_rating === 'medium' ? 40 : model.speed_rating === 'slow' ? 15 : undefined),
-        qualityByTask: model.quality_by_task,
+        circuit: health.circuit,
         preference: Number.isFinite(Number(routeMetadata.route_preference)) ? Number(routeMetadata.route_preference) : undefined,
         fallbackOnly: !!model.fallback_only,
       };
@@ -7492,40 +8048,6 @@ export class Agent {
     } catch {
       // Routing remains available when metrics-only audit storage is read-only.
     }
-  }
-
-  private loadLearnedRouteFeedback(): void {
-    try {
-      const file = path.join(this.rootPath, 'routing', 'feedback.jsonl');
-      if (!fs.existsSync(file)) return;
-      const lines = fs.readFileSync(file, 'utf-8').split(/\r?\n/).filter(Boolean).slice(-2000);
-      for (const line of lines) {
-        const value = JSON.parse(line) as Partial<RouteFeedbackEvent>;
-        const deployment = value.deployment;
-        if (!deployment?.providerId || !deployment.modelId) continue;
-        if (!['chat', 'coding', 'reasoning', 'long_context', 'vision', 'image_generation', 'tool_use', 'computer_use'].includes(String(value.taskClass))) continue;
-        if (!['manual_switch', 'explicit_rating', 'objective_success'].includes(String(value.source))) continue;
-        if (!Number.isFinite(Number(value.score)) || !Number.isFinite(Number(value.at))) continue;
-        this.autoRouter.recordFeedback(value as RouteFeedbackEvent);
-      }
-    } catch {
-      // A malformed preference log is ignored instead of influencing routing.
-    }
-  }
-
-  private recordRouteFeedbackFor(
-    deployment: DeploymentRef,
-    taskClass: RouteFeedbackEvent['taskClass'],
-    score: number,
-    source: RouteFeedbackEvent['source'],
-  ): void {
-    const event: RouteFeedbackEvent = { deployment: { ...deployment }, taskClass, score, source, at: Date.now() };
-    this.autoRouter.recordFeedback(event);
-    try {
-      const directory = path.join(this.rootPath, 'routing');
-      fs.mkdirSync(directory, { recursive: true });
-      fs.appendFileSync(path.join(directory, 'feedback.jsonl'), `${JSON.stringify(event)}\n`, 'utf-8');
-    } catch {}
   }
 
   allModelNames(): string[] {
@@ -7545,13 +8067,8 @@ export class Agent {
     const before = this.resolvedDeployment ? deploymentIdentity(this.resolvedDeployment) : '';
     const mode = override?.mode || normalizeAutoPreference(this.config.autoSwitchPreference());
     const policy = defaultRoutePolicy(mode);
-    const configuredQualityLoss = this.config.get<number>('models', 'auto_max_quality_loss');
-    if (typeof configuredQualityLoss === 'number' && Number.isFinite(configuredQualityLoss) && configuredQualityLoss >= 0) {
-      policy.maxQualityLoss = Math.min(1, configuredQualityLoss);
-    }
-    if (typeof override?.maxQualityLoss === 'number' && Number.isFinite(override.maxQualityLoss) && override.maxQualityLoss >= 0) {
-      policy.maxQualityLoss = Math.min(1, override.maxQualityLoss);
-    }
+    // The tendency is guidance for the current-model JEV decision. Eligibility
+    // and explicit cost ceilings remain hard constraints.
     const maxExpectedCost = this.config.get<number>('models', 'auto_max_expected_cost_usd');
     if (typeof maxExpectedCost === 'number' && Number.isFinite(maxExpectedCost) && maxExpectedCost > 0) policy.maxExpectedCostUsd = maxExpectedCost;
     if (typeof override?.maxExpectedCostUsd === 'number' && Number.isFinite(override.maxExpectedCostUsd) && override.maxExpectedCostUsd > 0) policy.maxExpectedCostUsd = override.maxExpectedCostUsd;
@@ -7594,25 +8111,144 @@ export class Agent {
     };
     const ownsTransaction = !this.routeTransactionId;
     const transactionId = this.routeTransactionId || `route-${crypto.randomUUID()}`;
-    const decision = this.autoRouter.route(selection, policy, this.autoRouteCandidates(), {
+    const estimatedInputTokens = this.estimateContextTokens();
+    const expectedOutputTokens = this.intelligence === 'ultra' || this.intelligence === 'max' ? 32768
+      : this.intelligence === 'xhigh' ? 16384
+        : this.intelligence === 'high' ? 8192
+          : this.intelligence === 'low' ? 2048 : 4096;
+    const routeRequest: RouteRequest = {
       transactionId,
-      affinityKey: `${this.workspace.current?.path || this.rootPath}\u0000${this.activeConversationId || 'default'}`,
       taskText: task,
-      estimatedInputTokens: this.estimateContextTokens(),
-      expectedOutputTokens: this.intelligence === 'ultra' || this.intelligence === 'max' ? 32768
-        : this.intelligence === 'xhigh' ? 16384
-          : this.intelligence === 'high' ? 8192
-            : this.intelligence === 'low' ? 2048 : 4096,
+      estimatedInputTokens,
+      expectedOutputTokens,
       requiredCapabilities: [...requiredCapabilities],
       batch: override?.batch === true,
+    };
+    const decision = await this.decideAutoRoute({
+      selection,
+      policy,
+      task,
+      request: routeRequest,
+      candidates: this.autoRouteCandidates(),
     });
-    if (ownsTransaction) this.autoRouter.endTransaction(transactionId);
+    if (ownsTransaction) this.routeController.endTransaction(transactionId);
+    else if (decision.resolvedDeployment) this.routeController.pinTransaction(transactionId, decision.resolvedDeployment);
+    if (decision.resolvedDeployment) this.routeController.claimEndpointAttempt(decision.resolvedDeployment);
     this.lastRouteDecision = decision;
-    this.resolvedDeployment = decision.resolvedDeployment ? { ...decision.resolvedDeployment } : null;
+    // Auto Router v2 freeze rule: a decision that produced no deployment must
+    // not move the conversation to another model. Keeping the previous resolved
+    // deployment is what makes "Auto off / decision model off never changes my
+    // model" observable behaviour instead of a silent re-selection.
+    if (decision.resolvedDeployment) {
+      this.resolvedDeployment = { ...decision.resolvedDeployment };
+    } else if (decision.finalStatus !== 'no_candidate') {
+      this.resolvedDeployment = null;
+    }
     this.pendingAutoAttempts = [];
     this.routeAttemptStartedAt = this.resolvedDeployment ? Date.now() : 0;
     this.persistRouteDecision(decision);
     return !!this.resolvedDeployment && before !== deploymentIdentity(this.resolvedDeployment);
+  }
+
+  /**
+   * Auto Router v2 decision pipeline:
+   *
+   *   RouteEligibilityGuard → JevDecisionEngine → RouteDecisionValidator → pin
+   *
+   * The current conversation model is the only Auto decision source. If it is
+   * disabled, times out, crashes or returns something the guard cannot accept,
+   * Auto stops without selecting another deployment.
+   */
+  private async decideAutoRoute(input: {
+    selection: ModelSelection;
+    policy: RoutePolicy;
+    task: string;
+    request: RouteRequest;
+    candidates: AutoRouteCandidate[];
+  }): Promise<RouteDecision> {
+    const { selection, policy, task, request, candidates } = input;
+    const taskClasses = classifyTaskClasses(task, [...policy.requiredCapabilities, ...request.requiredCapabilities], request.estimatedInputTokens);
+    const stopTimer = performanceTimer('jev_route_decision', { conversationId: this.activeConversationId || 'default' });
+    try {
+      const configuredTimeout = Number(this.config.get<number>('models', 'jev_timeout_ms'));
+      const jevUsageRequest = this.beginProviderUsageRequest();
+      const jev = this.resolveCurrentModelJevEngine(jevUsageRequest);
+      return await resolveAutoRouteDecision({
+        selection,
+        policy,
+        taskText: task,
+        request,
+        candidates,
+        taskClasses,
+        intelligence: this.intelligence,
+        engine: jev.engine || undefined,
+        unavailableReason: jev.unavailableReason,
+        timeoutMs: Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : DEFAULT_JEV_TIMEOUT_MS,
+        previousDeployment: this.resolvedDeployment,
+        pinnedDeployment: this.routeTransactionId ? this.routeController.transactionPin(request.transactionId) : undefined,
+        policyVersion: this.routeController.version(),
+      });
+    } finally {
+      stopTimer();
+    }
+  }
+
+  /** Resolve JEV to the current eligible conversation model, never a second model slot. */
+  private resolveCurrentModelJevEngine(usageRequest: ConversationUsageRequest): {
+    engine: JevDecisionEngine | null;
+    unavailableReason: 'auto_disabled' | 'disabled';
+  } {
+    const jevEnabled = this.config.get<boolean>('models', 'jev_enabled') !== false;
+    const decisionEnabled = this.config.autoSwitchEnabled() && jevEnabled;
+    const engine = !decisionEnabled
+      ? null
+      : new CurrentModelJevDecisionEngine(request => {
+        const eligible = request.candidates;
+        if (!eligible.length) return null;
+        const eligibleByIdentity = new Map(eligible.map(candidate => [
+          `${candidate.deployment.providerId}\u0000${candidate.deployment.modelId}`,
+          candidate,
+        ]));
+        const availableModels = eligible.flatMap(candidate => {
+          const model = this.config.findDeployment(candidate.deployment);
+          return model?.provider_url && model.api_key ? [{ candidate, model }] : [];
+        });
+        const preferredDeployment = request.previous?.deployment || this.activeDeployment();
+        const defaultSelection = this.config.getStr('models', 'default_model');
+        const defaultRef = parseDeploymentSelectionValue(defaultSelection);
+        const defaultModel = defaultRef
+          ? this.config.findDeployment(defaultRef)
+          : this.config.findModel(defaultSelection);
+        const defaultDeployment = defaultModel ? this.deploymentRef(defaultModel) : null;
+        const preferred = preferredDeployment
+          ? eligibleByIdentity.get(`${preferredDeployment.providerId}\u0000${preferredDeployment.modelId}`)
+          : undefined;
+        const configuredDefault = defaultDeployment
+          ? eligibleByIdentity.get(`${defaultDeployment.providerId}\u0000${defaultDeployment.modelId}`)
+          : undefined;
+        const selected = availableModels.find(entry => preferred
+          && entry.candidate.deployment.providerId === preferred.deployment.providerId
+          && entry.candidate.deployment.modelId === preferred.deployment.modelId)
+          || availableModels.find(entry => configuredDefault
+            && entry.candidate.deployment.providerId === configuredDefault.deployment.providerId
+            && entry.candidate.deployment.modelId === configuredDefault.deployment.modelId)
+          || availableModels[0];
+        if (!selected) return null;
+        const modelIdentity = `${selected.model.provider_id}/${selected.model.name}`;
+        return {
+          provider: this.modelProvider(selected.model, this.jevProviderCache),
+          model: selected.model.name,
+          modelVersion: `${CURRENT_MODEL_JEV_VERSION}:${modelIdentity}`,
+          thinkingCapable: selected.model.thinking === true,
+          onUsage: usage => this.recordProviderUsage(usage, usageRequest),
+        };
+      });
+    return {
+      engine,
+      unavailableReason: !this.config.autoSwitchEnabled()
+        ? 'auto_disabled'
+        : 'disabled',
+    };
   }
 
   shouldExposeToolInterface(): boolean {
@@ -7651,7 +8287,7 @@ export class Agent {
       && previousAttempt.errorType === observedFailure.type) {
       return null;
     }
-    if (observedDeployment) this.autoRouter.recordEndpointFailure(observedDeployment, observedFailure);
+    if (observedDeployment) this.routeController.recordEndpointFailure(observedDeployment, observedFailure);
     if (this.model === 'auto') {
       const current = this.activeDeployment();
       if (!current || !this.lastRouteDecision) return null;
@@ -7667,7 +8303,7 @@ export class Agent {
         if (this.routeAttemptStartedAt > 0) currentAttempt.durationMs = Math.max(0, Date.now() - this.routeAttemptStartedAt);
       }
       if (!this.pendingAutoAttempts.length) {
-        this.pendingAutoAttempts = this.autoRouter.planAttempts(this.lastRouteDecision, this.autoRouteCandidates(), {
+        this.pendingAutoAttempts = this.routeController.planAttempts(this.lastRouteDecision, this.autoRouteCandidates(), {
           error: failure,
           streamCommitted: this.routeStreamCommitted,
           sideEffectCommitted: this.routeSideEffectCommitted,
@@ -7687,7 +8323,7 @@ export class Agent {
       this.lastRouteDecision.attempts.push({ ...next });
       this.lastRouteDecision.resolvedDeployment = { ...next.deployment };
       this.lastRouteDecision.finalStatus = 'retrying';
-      this.autoRouter.claimEndpointAttempt(next.deployment);
+      this.routeController.claimEndpointAttempt(next.deployment);
       this.routeAttemptStartedAt = Date.now();
       this.persistRouteDecision(this.lastRouteDecision);
       return current.modelId;
@@ -7701,8 +8337,9 @@ export class Agent {
     if (!all.length) return null;
     const usable = all.filter(m => !modelConfigIsUnavailable(m) && !this.failedDeploymentsThisRun.has(deploymentIdentity(this.deploymentRef(m))));
     if (!usable.length) return null;
-    const pref = this.config.autoSwitchPreference();
-    const ranked = [...usable].sort((a, b) => this.modelScore(b, pref, false, false) - this.modelScore(a, pref, false, false));
+    // Operational recovery is independent of the user-facing Auto tendency;
+    // that tendency is supplied only to the current-model JEV decision.
+    const ranked = [...usable].sort((a, b) => this.modelScore(b, 'balanced', false, false) - this.modelScore(a, 'balanced', false, false));
     const next = ranked[0];
     if (!next?.name) return null;
     this.model = next.name;
@@ -8597,7 +9234,13 @@ export class Agent {
       stopTotalTimer();
       this.processDepth = Math.max(0, this.processDepth - 1);
       if (this.processDepth === 0) {
-        if (this.routeTransactionId) this.autoRouter.endTransaction(this.routeTransactionId);
+        // Kernel events coalesce intermediate writes to avoid rewriting the
+        // workspace document on every token. A completed Agent turn is a
+        // durability boundary across GUI, TUI, and one-shot CLI runtimes; do
+        // the terminal write here so callers can safely read or exit as soon
+        // as process() resolves.
+        this.flushConversationState();
+        if (this.routeTransactionId) this.routeController.endTransaction(this.routeTransactionId);
         this.routeTransactionId = '';
         this.processingConversationId = null;
         this.activeProcessAbortController = null;

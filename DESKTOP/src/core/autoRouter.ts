@@ -1,4 +1,25 @@
+/**
+ * Auto Router v2 — shared route contracts, failure classification, operational
+ * endpoint health and provider-local recovery planning.
+ *
+ * This file no longer selects models. Model selection is the exclusive
+ * responsibility of the JEV decision engine (`jevDecision.ts`) inside the
+ * candidate space produced by the deterministic eligibility guard
+ * (`routeEligibility.ts`). What remains here is execution plumbing:
+ *
+ *   - shared route types (`RouteDecision`, `RouteAttempt`, `RoutePolicy`, …)
+ *   - provider failure classification
+ *   - endpoint health / circuit breaker (operational protection only)
+ *   - build-scoped transaction pinning (execution consistency inside one Build)
+ *   - provider-local recovery planning (retry / equivalent / fallback / JEV alternate)
+ *
+ * Removed on purpose: the feedback map, EWMA preference learning,
+ * `quality_by_task` scoring, cache affinity, switch thresholds, and every
+ * weighted cost/reliability/speed utility pass. Nothing in this file may
+ * reconstruct a second model selector.
+ */
 import { createHash, randomUUID } from 'crypto';
+import { excludedOnlyForFallbackPool, inAutoScope, inAutoSubset, sameDeploymentRef } from './routeEligibility';
 
 export type AutoScope =
   | { kind: 'global' }
@@ -14,7 +35,7 @@ export type ModelSelection =
   | { kind: 'fixed'; deployment: DeploymentRef }
   | { kind: 'auto'; scope: AutoScope; policyId: string; subset?: DeploymentRef[] };
 
-export type RouteMode = 'quality' | 'balanced' | 'cost' | 'speed';
+export type RouteMode = 'conservative' | 'balanced' | 'aggressive';
 export type RoutePrivacy = 'default' | 'no_training' | 'zdr';
 export type TaskClass = 'chat' | 'coding' | 'reasoning' | 'long_context' | 'vision' | 'image_generation' | 'tool_use' | 'computer_use';
 export type ValidationLevel = 'discovered' | 'legacy_basic' | 'basic' | 'standard' | 'extended';
@@ -22,18 +43,23 @@ export type ValidationStatus = 'verified' | 'degraded' | 'unavailable' | 'auth_e
 
 export interface RoutePolicy {
   mode: RouteMode;
-  maxQualityLoss: number;
-  maxExpectedCostUsd?: number;
   allowPreview: boolean;
   privacy: RoutePrivacy;
   requiredCapabilities: string[];
   dataRegion?: string;
   requiredProtocolParameters?: string[];
+  maxExpectedCostUsd?: number;
 }
 
 export interface AutoRouteCandidate {
   deployment: DeploymentRef;
   enabled: boolean;
+  /**
+   * Set by the Agent when a deployment is explicitly unusable right now
+   * (for example a provider-reported balance exhaustion window). It carries a
+   * guard reason instead of silently mutating `enabled`.
+   */
+  unavailableReason?: string;
   validation: { level: ValidationLevel; status: ValidationStatus; checkedAt: string };
   capabilities: string[];
   maxContextTokens: number;
@@ -43,37 +69,24 @@ export interface AutoRouteCandidate {
   supportedProtocolParameters?: string[];
   expectedInputCostUsdPerM?: number;
   expectedOutputCostUsdPerM?: number;
+  /** Current operational measurements. Never persisted as a preference. */
   latencyMs?: number;
   reliability?: number;
   toolValidity?: number;
   throughput?: number;
-  qualityByTask?: Partial<Record<TaskClass, { successes: number; attempts: number }>>;
+  circuit?: 'closed' | 'open' | 'half_open';
+  /** Explicit user configuration (`route_preference`), not learned history. */
   preference?: number;
   fallbackOnly?: boolean;
 }
 
 export interface RouteRequest {
   transactionId: string;
-  affinityKey: string;
   taskText: string;
   estimatedInputTokens: number;
   expectedOutputTokens: number;
   requiredCapabilities: string[];
   batch?: boolean;
-}
-
-export interface RankedRouteCandidate {
-  deployment: DeploymentRef;
-  quality: number;
-  utility: number;
-  expectedCostUsd?: number;
-  components: {
-    cost: number;
-    reliability: number;
-    speed: number;
-    cache: number;
-    preference: number;
-  };
 }
 
 export type RouteAttemptStatus = 'planned' | 'success' | 'failed' | 'blocked';
@@ -92,12 +105,21 @@ export interface RouteDecision {
   routeId: string;
   requestedSelection: ModelSelection;
   policyVersion: string;
+  decisionSource: 'jev';
   catalogSnapshotHash: string;
   taskClasses: TaskClass[];
   excludedCandidates: Array<{ deployment: DeploymentRef; reasons: string[] }>;
-  rankedCandidates: RankedRouteCandidate[];
   resolvedDeployment?: DeploymentRef;
-  pinReason?: 'transaction' | 'cache_affinity';
+  /** Ordered recovery hints produced by the decision engine, already validated. */
+  alternatives: DeploymentRef[];
+  jev: {
+    modelVersion: string;
+    confidence?: number;
+    reasonCodes: string[];
+    latencyMs: number;
+  };
+  decisionError?: string;
+  pinReason?: 'transaction';
   attempts: RouteAttempt[];
   finalStatus: 'resolved' | 'no_candidate' | 'fixed_unavailable' | 'retrying' | 'succeeded' | 'failed' | 'blocked';
   retryBudgetMs?: number;
@@ -130,14 +152,6 @@ export interface PlannedRouteAttempt extends RouteAttempt {
   status: 'planned';
 }
 
-export interface RouteFeedbackEvent {
-  deployment: DeploymentRef;
-  taskClass: TaskClass;
-  score: number;
-  source: 'manual_switch' | 'explicit_rating' | 'objective_success';
-  at?: number;
-}
-
 interface HealthEvent {
   at: number;
   ok: boolean;
@@ -159,18 +173,12 @@ interface EndpointHealth {
   halfOpenClaimed: boolean;
 }
 
-interface AffinityEntry {
-  deployment: DeploymentRef;
-  expiresAt: number;
-}
-
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const VALIDATION_TTL_MS = 7 * DAY_MS;
-const AFFINITY_TTL_MS = 5 * 60_000;
 const HEALTH_WINDOW_MS = 30 * 60_000;
 const CIRCUIT_COOLDOWN_MS = 60_000;
-const FEEDBACK_WINDOW_MS = 30 * DAY_MS;
-const FEEDBACK_HALF_LIFE_MS = 30 * DAY_MS;
+
+export const ROUTE_POLICY_VERSION = 'newmark-auto-v2';
 
 function finite(value: unknown): number | undefined {
   const number = Number(value);
@@ -185,35 +193,17 @@ function deploymentKey(deployment: DeploymentRef): string {
   return `${deployment.providerId}\u0000${deployment.modelId}\u0000${deployment.logicalModelGroupId || ''}`;
 }
 
-function sameDeployment(left: DeploymentRef, right: DeploymentRef): boolean {
-  return left.providerId === right.providerId && left.modelId === right.modelId;
-}
-
-function inSubset(deployment: DeploymentRef, subset: DeploymentRef[] | undefined): boolean {
-  if (!subset?.length) return true;
-  return subset.some(item => sameDeployment(item, deployment));
-}
-
-function inScope(deployment: DeploymentRef, scope: AutoScope): boolean {
-  return scope.kind === 'global' || deployment.providerId === scope.providerId;
-}
-
 export function normalizeAutoPreference(value: string): RouteMode {
-  switch (String(value || '').toLowerCase()) {
-    case 'performance':
-    case 'quality': return 'quality';
-    case 'cheap_save':
-    case 'cost': return 'cost';
-    case 'speed': return 'speed';
-    default: return 'balanced';
-  }
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'conservative' || normalized === 'balanced' || normalized === 'aggressive') return normalized;
+  // Previous values selected fixed quality/cost/speed objectives. They do not
+  // have a reliable one-to-one mapping to a model decision tendency.
+  return 'balanced';
 }
 
 export function defaultRoutePolicy(mode: RouteMode = 'balanced'): RoutePolicy {
-  const maxQualityLoss = mode === 'quality' ? 0 : mode === 'balanced' ? 0.02 : mode === 'cost' ? 0.06 : 0.04;
   return {
     mode,
-    maxQualityLoss,
     allowPreview: false,
     privacy: 'default',
     requiredCapabilities: [],
@@ -289,130 +279,83 @@ export function classifyRouteFailure(error: unknown): RouteFailure {
   return { type: 'execution_error', retryable: false, switchAllowed: false, statusCode };
 }
 
-export class AutoRouter {
+export function createRouteId(): string {
+  return randomUUID();
+}
+
+export function catalogSnapshotHash(candidates: AutoRouteCandidate[]): string {
+  const snapshot = candidates.map(candidate => ({
+    deployment: candidate.deployment,
+    enabled: candidate.enabled,
+    unavailableReason: candidate.unavailableReason,
+    validation: candidate.validation,
+    capabilities: [...candidate.capabilities].sort(),
+    maxContextTokens: candidate.maxContextTokens,
+    preview: candidate.preview,
+    privacy: [...candidate.privacy].sort(),
+    dataRegions: [...(candidate.dataRegions || [])].sort(),
+    supportedProtocolParameters: [...(candidate.supportedProtocolParameters || [])].sort(),
+    expectedInputCostUsdPerM: candidate.expectedInputCostUsdPerM,
+    expectedOutputCostUsdPerM: candidate.expectedOutputCostUsdPerM,
+    latencyMs: candidate.latencyMs,
+    reliability: candidate.reliability,
+    toolValidity: candidate.toolValidity,
+    throughput: candidate.throughput,
+    circuit: candidate.circuit,
+    preference: candidate.preference,
+    fallbackOnly: !!candidate.fallbackOnly,
+  })).sort((left, right) => deploymentKey(left.deployment).localeCompare(deploymentKey(right.deployment)));
+  return createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+}
+
+/**
+ * Operational execution controller.
+ *
+ * It owns endpoint health, the circuit breaker, build-scoped transaction pins
+ * and the provider-local recovery ladder. It never ranks models and never
+ * learns a preference; health observations only decide whether an endpoint is
+ * attempted right now.
+ */
+export class RouteExecutionController {
   private readonly now: () => number;
   private readonly policyVersion: string;
-  private readonly affinityTtlMs: number;
-  private readonly switchThreshold: number;
   private readonly transactionPins = new Map<string, DeploymentRef>();
-  private readonly affinities = new Map<string, AffinityEntry>();
   private readonly endpointHealth = new Map<string, EndpointHealth>();
-  private readonly feedback = new Map<string, RouteFeedbackEvent[]>();
 
-  constructor(options: { now?: () => number; policyVersion?: string; affinityTtlMs?: number; switchThreshold?: number } = {}) {
+  constructor(options: { now?: () => number; policyVersion?: string } = {}) {
     this.now = options.now || Date.now;
-    this.policyVersion = options.policyVersion || 'newmark-auto-v1';
-    this.affinityTtlMs = Math.max(0, options.affinityTtlMs ?? AFFINITY_TTL_MS);
-    this.switchThreshold = Math.max(0, options.switchThreshold ?? 0.15);
+    this.policyVersion = options.policyVersion || ROUTE_POLICY_VERSION;
   }
 
-  route(selection: ModelSelection, policy: RoutePolicy, candidates: AutoRouteCandidate[], request: RouteRequest): RouteDecision {
-    const now = this.now();
-    const taskClasses = classifyTaskClasses(request.taskText, [...policy.requiredCapabilities, ...request.requiredCapabilities], request.estimatedInputTokens);
-    const decision: RouteDecision = {
-      routeId: randomUUID(),
-      requestedSelection: cloneSelection(selection),
-      policyVersion: this.policyVersion,
-      catalogSnapshotHash: catalogHash(candidates),
-      taskClasses,
-      excludedCandidates: [],
-      rankedCandidates: [],
-      attempts: [],
-      finalStatus: 'no_candidate',
-      retryBudgetMs: request.batch ? 15_000 : 5_000,
-    };
+  version(): string {
+    return this.policyVersion;
+  }
 
-    if (selection.kind === 'fixed') {
-      const fixed = candidates.find(item => sameDeployment(item.deployment, selection.deployment));
-      if (!fixed || fixed.enabled === false) {
-        decision.finalStatus = 'fixed_unavailable';
-        return decision;
-      }
-      const ranked = this.rankCandidate(fixed, taskClasses, policy, request, false, now);
-      decision.rankedCandidates = [ranked];
-      decision.resolvedDeployment = { ...fixed.deployment };
-      decision.attempts = [{ deployment: { ...fixed.deployment }, kind: 'initial', status: 'planned' }];
-      decision.finalStatus = 'resolved';
-      this.claimEndpointAttempt(fixed.deployment);
-      return decision;
-    }
+  /** Execution-consistency pin for one Build / route transaction. */
+  pinTransaction(transactionId: string, deployment: DeploymentRef): void {
+    if (!transactionId || !deployment.providerId || !deployment.modelId) return;
+    this.transactionPins.set(transactionId, { ...deployment });
+  }
 
-    const eligible: AutoRouteCandidate[] = [];
-    for (const candidate of candidates) {
-      const reasons: string[] = [];
-      if (!candidate.enabled) reasons.push('disabled');
-      if (!inScope(candidate.deployment, selection.scope)) reasons.push('outside_scope');
-      if (!inSubset(candidate.deployment, selection.subset)) reasons.push('outside_subset');
-      if (candidate.fallbackOnly) reasons.push('fallback_only');
-      if (candidate.preview && !policy.allowPreview) reasons.push('preview_disallowed');
-      if (request.estimatedInputTokens + request.expectedOutputTokens > Math.max(0, candidate.maxContextTokens || 0)) reasons.push('context_too_small');
-
-      if (policy.privacy !== 'default' && !candidate.privacy.includes(policy.privacy)) reasons.push(`privacy:${policy.privacy}`);
-      if (policy.dataRegion) {
-        const requiredRegion = policy.dataRegion.toLowerCase();
-        const regions = new Set((candidate.dataRegions || []).map(item => String(item).toLowerCase()));
-        if (!regions.has(requiredRegion)) reasons.push(`data_region:${policy.dataRegion}`);
-      }
-      const supportedParameters = new Set((candidate.supportedProtocolParameters || []).map(item => String(item).toLowerCase()));
-      for (const parameter of policy.requiredProtocolParameters || []) {
-        const requiredParameter = String(parameter).toLowerCase();
-        if (requiredParameter && !supportedParameters.has(requiredParameter)) reasons.push(`protocol_parameter:${requiredParameter}`);
-      }
-      const expectedCost = expectedRequestCost(candidate, request);
-      if (policy.maxExpectedCostUsd !== undefined && (expectedCost === undefined || expectedCost > policy.maxExpectedCostUsd)) {
-        reasons.push(expectedCost === undefined ? 'unknown_cost' : 'budget_exceeded');
-      }
-
-      if (reasons.length) decision.excludedCandidates.push({ deployment: { ...candidate.deployment }, reasons: [...new Set(reasons)] });
-      else eligible.push(candidate);
-    }
-    if (!eligible.length) return decision;
-
-    const affinityKey = this.affinityKey(request.affinityKey, selection.scope, policy.mode);
-    let affinity = this.affinities.get(affinityKey);
-    if (affinity && affinity.expiresAt <= now) {
-      this.affinities.delete(affinityKey);
-      affinity = undefined;
-    }
-    const affinityDeployment = affinity?.deployment;
-    const transactionPin = this.transactionPins.get(request.transactionId);
-    if (transactionPin) {
-      const pinned = eligible.find(item => sameDeployment(item.deployment, transactionPin));
-      if (pinned) {
-        decision.rankedCandidates = this.rankEligible(eligible, taskClasses, policy, request, now, affinityDeployment);
-        decision.resolvedDeployment = { ...pinned.deployment };
-        decision.pinReason = 'transaction';
-        decision.attempts = [{ deployment: { ...pinned.deployment }, kind: 'initial', status: 'planned' }];
-        decision.finalStatus = 'resolved';
-        this.claimEndpointAttempt(pinned.deployment);
-        return decision;
-      }
-      this.transactionPins.delete(request.transactionId);
-    }
-
-    const ranked = this.rankEligible(eligible, taskClasses, policy, request, now, affinityDeployment);
-    decision.rankedCandidates = ranked;
-    let selected = ranked[0];
-    if (affinity) {
-      const incumbent = ranked.find(item => sameDeployment(item.deployment, affinity.deployment));
-      if (incumbent && selected.utility - incumbent.utility < this.switchThreshold) {
-        selected = incumbent;
-        decision.pinReason = 'cache_affinity';
-      }
-    }
-    decision.resolvedDeployment = { ...selected.deployment };
-    decision.attempts = [{ deployment: { ...selected.deployment }, kind: 'initial', status: 'planned' }];
-    decision.finalStatus = 'resolved';
-    this.claimEndpointAttempt(selected.deployment);
-    this.transactionPins.set(request.transactionId, { ...selected.deployment });
-    this.affinities.set(affinityKey, { deployment: { ...selected.deployment }, expiresAt: now + this.affinityTtlMs });
-    return decision;
+  transactionPin(transactionId: string): DeploymentRef | undefined {
+    const pinned = this.transactionPins.get(transactionId);
+    return pinned ? { ...pinned } : undefined;
   }
 
   endTransaction(transactionId: string): void {
     this.transactionPins.delete(transactionId);
   }
 
+  /**
+   * Provider-local recovery ladder.
+   *
+   * Order of preference: retry the same deployment (when the failure is
+   * retryable inside the retry budget), then an equivalent deployment of the
+   * same logical model group, then the alternates the decision engine already
+   * validated (in the order it produced them), then explicit fallback-only
+   * models. Recovery never crosses the failed provider boundary and never
+   * re-runs model selection.
+   */
   planAttempts(
     decision: RouteDecision,
     candidates: AutoRouteCandidate[],
@@ -425,7 +368,7 @@ export class AutoRouter {
     const attempts: PlannedRouteAttempt[] = [];
     const retryDelayMs = failure.error.retryAfterMs ?? 250;
     const alreadyRetriedCurrent = decision.attempts.some(attempt => attempt.kind === 'retry_same_deployment'
-      && sameDeployment(attempt.deployment, current));
+      && sameDeploymentRef(attempt.deployment, current));
     if (failure.error.retryable && !alreadyRetriedCurrent && retryDelayMs <= (decision.retryBudgetMs ?? 5_000)) {
       attempts.push({
         deployment: { ...current },
@@ -440,11 +383,9 @@ export class AutoRouter {
     if (failure.allowModelFallback === false) return attempts.slice(0, remainingAttempts);
     const selection = decision.requestedSelection;
     if (selection.kind === 'fixed') return attempts.slice(0, remainingAttempts);
-    const scope = selection.kind === 'auto' ? selection.scope : { kind: 'provider' as const, providerId: current.providerId };
     const subset = selection.kind === 'auto' ? selection.subset : undefined;
     const currentGroup = current.logicalModelGroupId;
     const currentProviderId = current.providerId;
-    const now = this.now();
     const attemptedDeployments = decision.attempts.map(attempt => attempt.deployment);
     // Fallback is a recovery operation, not a new global routing decision.
     // It must never cross the provider boundary, even when the original Auto
@@ -452,25 +393,30 @@ export class AutoRouter {
     // switching credentials/endpoints (for example provider A/model X to
     // provider B/model X).
     const eligible = candidates.filter(candidate => candidate.enabled
+      && !candidate.unavailableReason
       && candidate.deployment.providerId === currentProviderId
-      && inScope(candidate.deployment, scope)
-      && inSubset(candidate.deployment, subset)
-      && !sameDeployment(candidate.deployment, current)
-      && !attemptedDeployments.some(attempted => sameDeployment(candidate.deployment, attempted))
+      && inAutoScope(candidate.deployment, { kind: 'provider', providerId: currentProviderId })
+      && inAutoSubset(candidate.deployment, subset)
+      && !sameDeploymentRef(candidate.deployment, current)
+      && !attemptedDeployments.some(attempted => sameDeploymentRef(candidate.deployment, attempted))
       && this.passedInitialHardFilters(decision, candidate));
     const equivalent = currentGroup
       ? eligible.find(candidate => candidate.deployment.logicalModelGroupId === currentGroup && !candidate.fallbackOnly)
       : undefined;
     const fallback = eligible.find(candidate => candidate.fallbackOnly);
-    const rankedAlternates = decision.rankedCandidates
-      .map(ranked => eligible.find(candidate => sameDeployment(candidate.deployment, ranked.deployment)))
-      .filter((candidate): candidate is AutoRouteCandidate => !!candidate && candidate !== equivalent && candidate !== fallback && !candidate.fallbackOnly);
+    const orderedAlternates: AutoRouteCandidate[] = [];
+    for (const alternate of decision.alternatives) {
+      const match = eligible.find(candidate => sameDeploymentRef(candidate.deployment, alternate));
+      if (!match || match === equivalent || match === fallback || match.fallbackOnly) continue;
+      if (orderedAlternates.some(existing => sameDeploymentRef(existing.deployment, match.deployment))) continue;
+      orderedAlternates.push(match);
+    }
     for (const candidate of eligible) {
       if (candidate === equivalent || candidate === fallback || candidate.fallbackOnly
-        || rankedAlternates.some(existing => sameDeployment(existing.deployment, candidate.deployment))) continue;
-      rankedAlternates.push(candidate);
+        || orderedAlternates.some(existing => sameDeploymentRef(existing.deployment, candidate.deployment))) continue;
+      orderedAlternates.push(candidate);
     }
-    for (const next of [equivalent, fallback, ...rankedAlternates]) {
+    for (const next of [equivalent, ...orderedAlternates, fallback]) {
       if (!next || attempts.length >= 2) continue;
       attempts.push({
         deployment: { ...next.deployment },
@@ -553,93 +499,6 @@ export class AutoRouter {
     };
   }
 
-  recordFeedback(event: RouteFeedbackEvent): boolean {
-    const at = event.at ?? this.now();
-    const safe: RouteFeedbackEvent = {
-      deployment: { ...event.deployment },
-      taskClass: event.taskClass,
-      score: clamp(Number(event.score) || 0, -1, 1),
-      source: event.source,
-      at,
-    };
-    const key = feedbackKey(safe.deployment, safe.taskClass);
-    const events = (this.feedback.get(key) || []).filter(item => at - Number(item.at || 0) <= FEEDBACK_WINDOW_MS);
-    events.push(safe);
-    this.feedback.set(key, events);
-    return events.length >= 3;
-  }
-
-  clearLearnedPreferences(): void {
-    this.feedback.clear();
-  }
-
-  learnedPreference(deployment: DeploymentRef, taskClasses: TaskClass[]): number {
-    const now = this.now();
-    const values: number[] = [];
-    for (const taskClass of taskClasses) {
-      const events = (this.feedback.get(feedbackKey(deployment, taskClass)) || [])
-        .filter(event => now - Number(event.at || 0) <= FEEDBACK_WINDOW_MS)
-        .sort((left, right) => Number(left.at || 0) - Number(right.at || 0));
-      if (events.length < 3) continue;
-      let ewma = events[0].score;
-      let previousAt = Number(events[0].at || now);
-      for (const event of events.slice(1)) {
-        const eventAt = Number(event.at || previousAt);
-        const betweenDecay = Math.pow(0.5, Math.max(0, eventAt - previousAt) / FEEDBACK_HALF_LIFE_MS);
-        ewma = 0.2 * event.score + 0.8 * ewma * betweenDecay;
-        previousAt = eventAt;
-      }
-      const newestAt = Number(events[events.length - 1].at || now);
-      const decay = Math.pow(0.5, Math.max(0, now - newestAt) / FEEDBACK_HALF_LIFE_MS);
-      values.push(clamp(ewma * decay, -1, 1));
-    }
-    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
-  }
-
-  private rankEligible(candidates: AutoRouteCandidate[], taskClasses: TaskClass[], policy: RoutePolicy, request: RouteRequest, now: number, affinityDeployment?: DeploymentRef): RankedRouteCandidate[] {
-    const qualities = candidates.map(candidate => ({ candidate, quality: qualityScore(candidate, taskClasses) }));
-    const bestQuality = Math.max(...qualities.map(item => item.quality));
-    const band = qualities.filter(item => bestQuality - item.quality <= policy.maxQualityLoss + Number.EPSILON);
-    return band.map(item => this.rankCandidate(item.candidate, taskClasses, policy, request, !!affinityDeployment && sameDeployment(item.candidate.deployment, affinityDeployment), now, item.quality))
-      .sort((left, right) => right.utility - left.utility || right.quality - left.quality || deploymentKey(left.deployment).localeCompare(deploymentKey(right.deployment)));
-  }
-
-  private rankCandidate(candidate: AutoRouteCandidate, taskClasses: TaskClass[], policy: RoutePolicy, request: RouteRequest, cache: boolean, _now: number, quality = qualityScore(candidate, taskClasses)): RankedRouteCandidate {
-    const expectedCostUsd = expectedRequestCost(candidate, request);
-    const cost = expectedCostUsd === undefined ? 0 : 1 / (1 + Math.max(0, expectedCostUsd) * 1_000);
-    const endpointReliability = candidate.reliability === undefined ? 0.5 : clamp(candidate.reliability);
-    const toolRelevant = taskClasses.some(taskClass => taskClass === 'tool_use' || taskClass === 'computer_use');
-    const reliability = toolRelevant && candidate.toolValidity !== undefined
-      ? (endpointReliability + clamp(candidate.toolValidity)) / 2
-      : endpointReliability;
-    const latency = candidate.latencyMs === undefined ? 0.5 : 1 / (1 + Math.max(0, candidate.latencyMs) / 1_000);
-    const throughput = candidate.throughput === undefined ? 0.5 : Math.max(0, candidate.throughput) / (Math.max(0, candidate.throughput) + 40);
-    const speed = (latency + throughput) / 2;
-    const learned = this.learnedPreference(candidate.deployment, taskClasses);
-    const configuredPreference = clamp(Number(candidate.preference) || 0, -1, 1);
-    const effectivePreference = configuredPreference === 0 ? learned : configuredPreference;
-    const preference = clamp((effectivePreference + 1) / 2);
-    const components = { cost, reliability, speed, cache: cache ? 1 : 0, preference };
-    let utility: number;
-    switch (policy.mode) {
-      case 'quality': utility = quality * 0.55 + reliability * 0.25 + speed * 0.15 + cost * 0.05; break;
-      case 'cost': utility = cost * 0.65 + reliability * 0.15 + speed * 0.10 + components.cache * 0.05 + preference * 0.05; break;
-      case 'speed': utility = speed * 0.60 + reliability * 0.20 + cost * 0.10 + components.cache * 0.05 + preference * 0.05; break;
-      default: utility = cost * 0.40 + reliability * 0.25 + speed * 0.20 + components.cache * 0.10 + preference * 0.05; break;
-    }
-    return {
-      deployment: { ...candidate.deployment },
-      quality,
-      utility: clamp(utility),
-      expectedCostUsd,
-      components,
-    };
-  }
-
-  private affinityKey(key: string, scope: AutoScope, mode: RouteMode): string {
-    return `${key}\u0000${scope.kind === 'global' ? 'global' : `provider:${scope.providerId}`}\u0000${mode}`;
-  }
-
   private healthFor(deployment: DeploymentRef, now: number): EndpointHealth {
     const key = deploymentKey(deployment);
     let health = this.endpointHealth.get(key);
@@ -652,11 +511,9 @@ export class AutoRouter {
   }
 
   private passedInitialHardFilters(decision: RouteDecision, candidate: AutoRouteCandidate): boolean {
-    const exclusion = decision.excludedCandidates.find(entry => sameDeployment(entry.deployment, candidate.deployment));
+    const exclusion = decision.excludedCandidates.find(entry => sameDeploymentRef(entry.deployment, candidate.deployment));
     if (!exclusion) return true;
-    return !!candidate.fallbackOnly
-      && exclusion.reasons.length > 0
-      && exclusion.reasons.every(reason => reason === 'fallback_only');
+    return !!candidate.fallbackOnly && excludedOnlyForFallbackPool(exclusion);
   }
 
   private circuitState(deployment: DeploymentRef, now: number, claimHalfOpen = true): 'closed' | 'open' | 'half_open' {
@@ -673,61 +530,10 @@ export class AutoRouter {
   }
 }
 
-function cloneSelection(selection: ModelSelection): ModelSelection {
-  if (selection.kind === 'fixed') return { kind: 'fixed', deployment: { ...selection.deployment } };
-  return {
-    kind: 'auto',
-    scope: selection.scope.kind === 'global' ? { kind: 'global' } : { kind: 'provider', providerId: selection.scope.providerId },
-    policyId: selection.policyId,
-    subset: selection.subset?.map(item => ({ ...item })),
-  };
-}
-
-function qualityScore(candidate: AutoRouteCandidate, taskClasses: TaskClass[]): number {
-  const scores = taskClasses.map(taskClass => {
-    const metric = candidate.qualityByTask?.[taskClass];
-    if (!metric) return 0.5;
-    const attempts = Math.max(0, Math.floor(Number(metric.attempts) || 0));
-    const successes = clamp(Number(metric.successes) || 0, 0, attempts);
-    return (successes + 2) / (attempts + 4);
-  });
-  return scores.reduce((sum, value) => sum + value, 0) / Math.max(1, scores.length);
-}
-
-function expectedRequestCost(candidate: AutoRouteCandidate, request: RouteRequest): number | undefined {
-  const input = finite(candidate.expectedInputCostUsdPerM);
-  const output = finite(candidate.expectedOutputCostUsdPerM);
-  if (input === undefined || output === undefined) return undefined;
-  return input * Math.max(0, request.estimatedInputTokens) / 1_000_000
-    + output * Math.max(0, request.expectedOutputTokens) / 1_000_000;
-}
-
-function catalogHash(candidates: AutoRouteCandidate[]): string {
-  const snapshot = candidates.map(candidate => ({
-    deployment: candidate.deployment,
-    enabled: candidate.enabled,
-    validation: candidate.validation,
-    capabilities: [...candidate.capabilities].sort(),
-    maxContextTokens: candidate.maxContextTokens,
-    preview: candidate.preview,
-    privacy: [...candidate.privacy].sort(),
-    dataRegions: [...(candidate.dataRegions || [])].sort(),
-    supportedProtocolParameters: [...(candidate.supportedProtocolParameters || [])].sort(),
-    expectedInputCostUsdPerM: candidate.expectedInputCostUsdPerM,
-    expectedOutputCostUsdPerM: candidate.expectedOutputCostUsdPerM,
-    latencyMs: candidate.latencyMs,
-    reliability: candidate.reliability,
-    toolValidity: candidate.toolValidity,
-    throughput: candidate.throughput,
-    qualityByTask: candidate.qualityByTask,
-    preference: candidate.preference,
-    fallbackOnly: !!candidate.fallbackOnly,
-  })).sort((left, right) => deploymentKey(left.deployment).localeCompare(deploymentKey(right.deployment)));
-  return createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
-}
-
-function feedbackKey(deployment: DeploymentRef, taskClass: TaskClass): string {
-  return `${deploymentKey(deployment)}\u0000${taskClass}`;
+export function validationEvidenceIsStale(checkedAt: string | undefined, now = Date.now()): boolean {
+  const checked = Date.parse(String(checkedAt || ''));
+  if (!Number.isFinite(checked)) return true;
+  return now - checked > VALIDATION_TTL_MS;
 }
 
 function trimHealth(health: EndpointHealth, now: number): void {

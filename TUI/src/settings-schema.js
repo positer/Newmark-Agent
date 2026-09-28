@@ -6,6 +6,7 @@ const SETTINGS_CATEGORIES = Object.freeze([
   { id: "runtime", icon: "[R]", label: "Runtime", source: "agent.* / terminal.*" },
   { id: "providers", icon: "[V]", label: "Providers", source: "models.providers" },
   { id: "models", icon: "[M]", label: "Models", source: "models.providers[].models" },
+  { id: "jev", icon: "[J]", label: "Auto decision policy", source: "current eligible conversation model + models.jev_* policy" },
   { id: "tools", icon: "[T]", label: "Tools", source: "tools.enabled" },
   { id: "archive", icon: "[A]", label: "Archive", source: "archive API / archive.*" },
   { id: "updates", icon: "[U]", label: "Updates", source: "update API / updates.*" }
@@ -14,6 +15,8 @@ const SETTINGS_CATEGORIES = Object.freeze([
 const FONT_CHOICES = Object.freeze(["Terminal default", "Cascadia Mono", "JetBrains Mono", "Consolas", "Noto Sans Mono"]);
 const FONT_COLOR_CHOICES = Object.freeze(["#E6EAF2", "#B7E4FF", "#C7F9CC", "#FFD6A5", "#F8B4D9"]);
 const BACKGROUND_COLOR_CHOICES = Object.freeze(["#0A0A1A", "#111827", "#172554", "#1F2937", "#F0F2F8"]);
+
+const JEV_TIMEOUT_PRESETS = Object.freeze([500, 1000, 2000, 3000, 5000, 10000]);
 
 function settingsRows(state, tab = state.settingsTab) {
   const s = state.settings;
@@ -40,6 +43,21 @@ function settingsRows(state, tab = state.settingsTab) {
     { key: "terminalTimeout", label: "Terminal timeout cap", value: s.runtime.terminalTimeout, choices: [0, 30000, 60000, 120000], save: ["setting", "terminal", "interrupt_timeout_ms"] },
     { key: "defaultShell", label: "Default shell", value: s.runtime.defaultShell, choices: ["PowerShell", "Command Prompt", "WSL Bash"], save: ["setting", "terminal", "default_shell"] }
   ];
+  if (tab === "jev") {
+    const jev = s.jev || {};
+    // Auto off locks current-model decision settings: the rows stay visible so the user can see
+    // why, but Enter refuses every change (see setSelectedRow in state.js).
+    const locked = jev.locked === true || jev.autoEnabled === false;
+    const lockedValue = locked ? "Locked (Auto off)" : undefined;
+    return [
+      { key: "enabled", label: "Current-model decision", value: lockedValue || (jev.enabled === false ? "Off" : "On"), choices: [], action: "jev-toggle-enabled", locked },
+      { key: "decisionModel", label: "Decision source", value: "Current eligible model", choices: [], action: "jev-report-current-model", locked: true },
+      { key: "thinkingMode", label: "Thinking mode", value: "Off", choices: [], action: "jev-report-current-model", locked: true },
+      { key: "outputFormat", label: "Output format", value: "Strict JSON Schema", choices: [], action: "jev-report-current-model", locked: true },
+      { key: "timeoutMs", label: "Decision timeout", value: lockedValue || `${Number(jev.timeoutMs) || 3000} ms`, choices: [], action: "jev-cycle-timeout", locked },
+      { key: "autoSwitch", label: "Auto routing", value: jev.autoEnabled === false ? "Off" : "On", choices: [], action: "jev-report-auto" }
+    ];
+  }
   if (tab === "archive") return [
     { key: "autoArchive", label: "Automatic archive", value: s.archive.autoArchive, choices: [true, false], save: ["setting", "archive", "automatic"] },
     { key: "retentionDays", label: "Retention", value: s.archive.retentionDays, choices: [30, 90, 180, 365], save: ["setting", "archive", "retention_days"] },
@@ -67,6 +85,7 @@ module.exports = {
   BACKGROUND_COLOR_CHOICES,
   FONT_CHOICES,
   FONT_COLOR_CHOICES,
+  JEV_TIMEOUT_PRESETS,
   SETTINGS_CATEGORIES,
   displaySettingValue,
   settingsRows

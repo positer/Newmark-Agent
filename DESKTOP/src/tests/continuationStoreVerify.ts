@@ -160,6 +160,70 @@ function main(): void {
     && events.some(event => event.type === 'StaleWriteRejected'),
     'events: append-only cursor order is retained and stale writes are audited');
 
+  // ---- dev-0.6.6: a normal queue behind a RUNNING turn is never "blocked" ----
+  // The reported defect: with the current turn still executing, the following
+  // queue row (and every row after it) was projected as DEPENDENCY_FAILED, so
+  // the UI offered "repair" for a perfectly healthy sequential queue.
+  const seqBranch = 'branch-seq';
+  store.ensureRoot('root-seq', seqBranch);
+  const seqA = store.enqueueBuild(command({ rootId: 'root-seq', branchId: seqBranch, commandId: 'seq-1', text: 'turn 1' }));
+  const seqScope = store.claimBuild({ workspaceId: 'ws-1', rootId: 'root-seq', branchId: seqBranch, workerCapability: 'worker-seq' });
+  check(!!seqScope && seqScope.buildId === seqA.buildId, 'sequential queue: the first turn is claimed and running');
+  const seqSnapshotAfterFirst = store.snapshot({ workspaceId: 'ws-1', rootId: 'root-seq', branchId: seqBranch });
+  const seqB = store.enqueueBuild(command({
+    rootId: 'root-seq', branchId: seqBranch, commandId: 'seq-2', text: 'turn 2',
+    expectedTailBuildId: seqSnapshotAfterFirst.tailBuildId, expectedQueueRevision: seqSnapshotAfterFirst.queueRevision,
+  }));
+  const seqSnapshotAfterSecond = store.snapshot({ workspaceId: 'ws-1', rootId: 'root-seq', branchId: seqBranch });
+  const seqC = store.enqueueBuild(command({
+    rootId: 'root-seq', branchId: seqBranch, commandId: 'seq-3', text: 'turn 3',
+    expectedTailBuildId: seqSnapshotAfterSecond.tailBuildId, expectedQueueRevision: seqSnapshotAfterSecond.queueRevision,
+  }));
+  const midRun = store.snapshot({ workspaceId: 'ws-1', rootId: 'root-seq', branchId: seqBranch });
+  const waitingReasonOf = (snapshot: typeof midRun, buildId: string) => snapshot.builds.find(build => build.buildId === buildId)?.waitingReason;
+  check(waitingReasonOf(midRun, seqB.buildId) === undefined,
+    'sequential queue: the row directly behind the running turn is not marked dependency-failed');
+  check(waitingReasonOf(midRun, seqC.buildId) === undefined,
+    'sequential queue: the row after it is not marked dependency-failed either');
+  check(store.claimBuild({ workspaceId: 'ws-1', rootId: 'root-seq', branchId: seqBranch, workerCapability: 'worker-seq-2' }) === null,
+    'sequential queue: the queued rows still wait for the running turn to commit');
+
+  // A real failure must still block the successor chain (0.6.3 contract).
+  store.failBuild({ scope: seqScope!, reason: 'simulated failure' });
+  const afterSeqFailure = store.snapshot({ workspaceId: 'ws-1', rootId: 'root-seq', branchId: seqBranch });
+  check(waitingReasonOf(afterSeqFailure, seqB.buildId) === 'DEPENDENCY_FAILED'
+    && waitingReasonOf(afterSeqFailure, seqC.buildId) === 'DEPENDENCY_FAILED',
+    'sequential queue: a failed predecessor still blocks its whole successor chain');
+  const seqRepair = store.repairBlockedQueue({ workspaceId: 'ws-1', rootId: 'root-seq', branchId: seqBranch, reason: 'test-repair' });
+  const afterSeqRepair = store.snapshot({ workspaceId: 'ws-1', rootId: 'root-seq', branchId: seqBranch });
+  check(seqRepair.repaired.length === 1 && seqRepair.repaired[0] === seqB.buildId
+    && waitingReasonOf(afterSeqRepair, seqB.buildId) === undefined
+    && waitingReasonOf(afterSeqRepair, seqC.buildId) === undefined,
+    'sequential queue: the explicit repair re-anchors the first row and clears the whole blocked chain');
+  const repairedClaim = store.claimBuild({ workspaceId: 'ws-1', rootId: 'root-seq', branchId: seqBranch, workerCapability: 'worker-seq-3' });
+  check(!!repairedClaim && repairedClaim.buildId === seqB.buildId,
+    'sequential queue: the first repaired row becomes the claimable next turn');
+
+  // ---- dev-0.6.6: read-only projections must not rewrite the ledger ----
+  // ensureRoot() is called by every queue projection and state snapshot. It used
+  // to write the whole ledger even when the root/branch already existed, which
+  // turned every state read into a full-file write and made long conversations
+  // progressively slower.
+  const writeCountStore = new GuardedContinuationStore(workspace, 'ws-1', { leaseMs: 50 });
+  writeCountStore.ensureRoot('root-1', 'branch-a');
+  let ledgerWrites = 0;
+  const writableStore = writeCountStore as unknown as { writeLedgerUnlocked: (ledger: unknown) => void };
+  const originalWrite = writableStore.writeLedgerUnlocked;
+  writableStore.writeLedgerUnlocked = function patchedWrite(this: unknown, ledger: unknown) {
+    ledgerWrites += 1;
+    return originalWrite.call(this, ledger);
+  };
+  writeCountStore.ensureRoot('root-1', 'branch-a');
+  writeCountStore.snapshot({ workspaceId: 'ws-1', rootId: 'root-1', branchId: 'branch-a' });
+  check(ledgerWrites === 0, 'projections: an existing root/branch is read without rewriting the ledger');
+  writeCountStore.ensureRoot('root-new', 'branch-new');
+  check(ledgerWrites === 1, 'projections: a genuinely new root/branch is still persisted');
+
   fs.rmSync(root, { recursive: true, force: true });
   console.log('continuationStoreVerify: all checks passed');
 }

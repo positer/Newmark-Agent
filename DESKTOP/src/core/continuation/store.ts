@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID, createHash } from 'crypto';
 import {
+  AttemptId,
   AttemptRecord,
   BranchGuardSnapshot,
   BranchId,
@@ -65,7 +66,18 @@ export class GuardedContinuationStore {
     return this.ledgerPath;
   }
 
+  /** How often a live owner must renew its lease (one third of the lease). */
+  get leaseRenewalMs(): number {
+    return Math.max(1_000, Math.floor(this.leaseMs / 3));
+  }
+
   ensureRoot(rootId: RootId, defaultBranchId: BranchId): void {
+    // Hot path: most ensureRoot() calls come from read-only projections
+    // (`queueItems`, snapshots, mobile state reads) for a root/branch that
+    // already exists. Rewriting the whole ledger for those turns every state
+    // read into a write and makes a long conversation progressively slower.
+    const current = this.readLedger();
+    if (current.roots[rootId] && current.branches[defaultBranchId]) return;
     this.mutate(ledger => {
       if (!ledger.roots[rootId]) {
         ledger.roots[rootId] = {
@@ -80,6 +92,9 @@ export class GuardedContinuationStore {
   }
 
   ensureBranch(input: { rootId: RootId; branchId: BranchId; parentAnchorBuildId: BuildId | null }): BranchRecord {
+    const current = this.readLedger();
+    const existing = current.branches[input.branchId];
+    if (existing) return { ...existing };
     return this.mutate(ledger => this.ensureBranchRecord(ledger, input));
   }
 
@@ -286,44 +301,59 @@ export class GuardedContinuationStore {
     return this.mutate(ledger => {
       const branch = this.requireBranch(ledger, input);
       const frontier = branch.headBuildId || null;
-      const queued = Object.values(ledger.builds)
-        .filter(build => build.branchId === branch.branchId && build.status === 'QUEUED')
-        .sort((a, b) => a.queueSequence - b.queueSequence);
-      const repaired: BuildId[] = [];
-      let chainParent: BuildId | null = frontier;
-      let mutated = false;
-      for (const build of queued) {
-        if ((build.parentBuildId || null) !== (chainParent || null)) {
-          const previousParentBuildId = build.parentBuildId;
-          build.parentBuildId = chainParent;
-          build.waitingReason = undefined;
-          build.updatedAt = new Date().toISOString();
-          repaired.push(build.buildId);
-          mutated = true;
-          this.appendEvent(ledger, {
-            type: 'BuildQueueRepaired',
-            workspaceId: this.workspaceId,
-            rootId: branch.rootId,
-            branchId: branch.branchId,
-            buildId: build.buildId,
-            attemptId: null,
-            fence: null,
-            payload: {
-              previousParentBuildId,
-              newParentBuildId: chainParent,
-              reason: String(input.reason || 'committed-frontier-repair'),
-            },
-          });
-        }
-        chainParent = build.buildId;
-      }
-      if (mutated) {
-        branch.queueRevision += 1;
-        branch.lifecycleRevision += 1;
-        branch.updatedAt = new Date().toISOString();
-      }
-      return { repaired, frontier };
+      const outcome = this.reanchorQueuedChainUnlocked(ledger, branch, String(input.reason || 'committed-frontier-repair'));
+      return { repaired: outcome.rebased, frontier };
     });
+  }
+
+  /**
+   * Re-anchor the QUEUED chain onto the committed frontier, in queue order.
+   *
+   * Used by the explicit "repair blocked queue" action *and* by orphan recovery:
+   * a crashed attempt is returned to QUEUED, so the rows behind it must chain
+   * back onto it, otherwise the first row runs and the rest stay derived-blocked
+   * (the real workspace showed exactly that: seq3 kept a stale
+   * `DEPENDENCY_FAILED` because its parent was re-anchored to the old frontier).
+   */
+  private reanchorQueuedChainUnlocked(
+    ledger: LedgerFile,
+    branch: BranchRecord,
+    reason: string,
+  ): { rebased: BuildId[]; clearedMarkers: number } {
+    const queued = Object.values(ledger.builds)
+      .filter(build => build.branchId === branch.branchId && build.status === 'QUEUED')
+      .sort((a, b) => a.queueSequence - b.queueSequence);
+    const rebased: BuildId[] = [];
+    let chainParent: BuildId | null = branch.headBuildId || null;
+    for (const build of queued) {
+      if ((build.parentBuildId || null) !== (chainParent || null)) {
+        const previousParentBuildId = build.parentBuildId;
+        build.parentBuildId = chainParent;
+        build.waitingReason = undefined;
+        build.updatedAt = new Date().toISOString();
+        rebased.push(build.buildId);
+        this.appendEvent(ledger, {
+          type: 'BuildQueueRepaired',
+          workspaceId: this.workspaceId,
+          rootId: branch.rootId,
+          branchId: branch.branchId,
+          buildId: build.buildId,
+          attemptId: null,
+          fence: null,
+          payload: { previousParentBuildId, newParentBuildId: chainParent, reason },
+        });
+      }
+      chainParent = build.buildId;
+    }
+    // A row whose parent already matches the chain can still carry a fail-time
+    // marker from an earlier shape; the derived blocked set is authoritative.
+    const clearedMarkers = this.clearStaleBlockedMarkers(ledger, branch);
+    if (rebased.length) branch.queueRevision += 1;
+    if (rebased.length || clearedMarkers) {
+      branch.lifecycleRevision += 1;
+      branch.updatedAt = new Date().toISOString();
+    }
+    return { rebased, clearedMarkers };
   }
 
   /**
@@ -333,26 +363,62 @@ export class GuardedContinuationStore {
    * 的可执行 Build 时才可能被 claim（见 `claimBuild`）。这里按队列顺序推导哪些行
    * 目前不可执行：父不是链上前驱、或父已 FAILED/CANCELLED 的行即为受阻，且受阻点
    * 之后的所有行同样受阻。
+   *
+   * dev-0.6.6 hotfix: 链上前驱必须包含 **正在执行（RUNNING）** 的 Build。已受理但
+   * 尚未提交的执行只把 `branch.headBuildId` 留在上一个已提交 Build 上，所以只按
+   * QUEUED 行走链会把「正在跑的这一轮」当成断链：紧随其后的正常排队行会被误判为
+   * 「被失败前置阻断」，而且后面每一行都会跟着被标记。RUNNING 行执行完会提交为
+   * frontier，因此它才是下一行的真实前驱。
    */
   private blockedQueuedBuildIds(ledger: LedgerFile, branch: BranchRecord): Set<BuildId> {
     const blocked = new Set<BuildId>();
-    const queued = Object.values(ledger.builds)
-      .filter(build => build.branchId === branch.branchId && build.status === 'QUEUED')
+    const chain = Object.values(ledger.builds)
+      .filter(build => build.branchId === branch.branchId
+        && (build.status === 'QUEUED' || build.status === 'RUNNING'))
       .sort((a, b) => a.queueSequence - b.queueSequence);
     let chainParent: BuildId | null = branch.headBuildId || null;
-    for (const build of queued) {
+    for (const build of chain) {
       const parent = build.parentBuildId ? ledger.builds[build.parentBuildId] : null;
-      // 链上的前驱（frontier 或队列里位于它之前的行）在执行时已经提交，因此只有
-      // 「父不是链上前驱」或「父已 FAILED/CANCELLED」的行才是真正受阻的。
+      // 链上的前驱（frontier、正在执行的行、或队列里位于它之前的行）在执行时都会
+      // 提交，因此只有「父不是链上前驱」或「父已 FAILED/CANCELLED」的排队行才是
+      // 真正受阻的。
       const parentIsChainPredecessor = (build.parentBuildId || null) === (chainParent || null);
       const parentFailed = !!parent && (parent.status === 'FAILED' || parent.status === 'CANCELLED');
       if (!parentIsChainPredecessor || parentFailed) {
-        blocked.add(build.buildId);
+        // 正在执行的行已经拿到执行权，它的「受阻」只可能是账本损坏，不应该反过来
+        // 让它在界面和队列投影里变成一个可修复的等待行。
+        if (build.status === 'QUEUED') blocked.add(build.buildId);
         continue;
       }
       chainParent = build.buildId;
     }
     return blocked;
+  }
+
+  /**
+   * dev-0.6.6: drop persisted `waitingReason` markers that the current chain no
+   * longer justifies.
+   *
+   * `markDependentsBlocked()` stamps the direct successor of a failed build, and
+   * a later repair/recovery can re-anchor that row so the same marker is simply
+   * stale. Leaving it behind keeps a healthy queue row painted as "blocked by a
+   * failed predecessor" forever (real workspace: seq3 kept the marker after two
+   * explicit repairs). The derived blocked set is authoritative, so any marker
+   * on a row it does not list is by definition stale.
+   */
+  private clearStaleBlockedMarkers(ledger: LedgerFile, branch: BranchRecord): number {
+    const derivedBlocked = this.blockedQueuedBuildIds(ledger, branch);
+    let cleared = 0;
+    const now = new Date().toISOString();
+    for (const build of Object.values(ledger.builds)) {
+      if (build.branchId !== branch.branchId || build.status !== 'QUEUED') continue;
+      if (!build.waitingReason) continue;
+      if (derivedBlocked.has(build.buildId)) continue;
+      build.waitingReason = undefined;
+      build.updatedAt = now;
+      cleared += 1;
+    }
+    return cleared;
   }
 
   deleteQueuedBuild(input: { workspaceId: string; rootId: RootId; branchId: BranchId; buildId: BuildId }): void {
@@ -404,8 +470,7 @@ export class GuardedContinuationStore {
         || guard.activeAttemptId !== scope.attemptId
         || guard.fence !== scope.fence
         || attempt.fence !== scope.fence
-        || attempt.status !== 'RUNNING'
-        || guard.leaseUntil <= now) {
+        || attempt.status !== 'RUNNING') {
         this.appendEvent(ledger, {
           type: 'StaleWriteRejected',
           workspaceId: this.workspaceId,
@@ -460,8 +525,7 @@ export class GuardedContinuationStore {
         || guard.activeAttemptId !== scope.attemptId
         || guard.fence !== scope.fence
         || attempt.fence !== scope.fence
-        || attempt.status !== 'RUNNING'
-        || guard.leaseUntil <= now) {
+        || attempt.status !== 'RUNNING') {
         this.appendEvent(ledger, {
           type: 'StaleWriteRejected',
           workspaceId: this.workspaceId,
@@ -470,7 +534,7 @@ export class GuardedContinuationStore {
           buildId: build.buildId,
           attemptId: scope.attemptId,
           fence: scope.fence,
-          payload: { operation: 'commit_final' },
+          payload: { operation: 'commit_final', leaseUntil: guard.leaseUntil },
         });
         throw new ContinuationError('STALE_EXECUTION', `Attempt ${scope.attemptId} no longer owns branch ${branch.branchId}`);
       }
@@ -803,6 +867,50 @@ export class GuardedContinuationStore {
     return this.snapshotUnlocked(ledger, branch);
   }
 
+  /**
+   * dev-0.6.6: queue projections only need "which queued rows cannot run yet,
+   * and why". Building the full QueueSnapshot for that (every build of the
+   * conversation, each with a deep-cloned input) made every state read cost
+   * more as the conversation grew. This read-only view touches the queued rows
+   * only and never clones anything.
+   */
+  queuedBlockedReasons(input: { workspaceId: string; rootId: RootId; branchId: BranchId }): Record<BuildId, string> {
+    const ledger = this.readLedger();
+    const branch = this.requireBranch(ledger, input);
+    const reasons: Record<BuildId, string> = {};
+    const blocked = this.blockedQueuedBuildIds(ledger, branch);
+    for (const build of Object.values(ledger.builds)) {
+      if (build.branchId !== branch.branchId || build.status !== 'QUEUED') continue;
+      if (build.waitingReason) reasons[build.buildId] = String(build.waitingReason);
+      else if (blocked.has(build.buildId)) reasons[build.buildId] = 'DEPENDENCY_FAILED';
+    }
+    return reasons;
+  }
+
+  /**
+   * dev-0.6.6: read-only view of the branch guard so callers can decide whether
+   * an in-flight attempt is an orphan (dead owner / long-expired lease) without
+   * paying for a ledger write on every projection.
+   */
+  activeAttempt(input: { workspaceId: string; rootId: RootId; branchId: BranchId }): {
+    buildId: BuildId; attemptId: AttemptId | ''; fence: number;
+    status: string; workerCapability: string; leaseUntil: number;
+  } | null {
+    const ledger = this.readLedger();
+    const branch = this.requireBranch(ledger, input);
+    const guard = ledger.guards[branch.branchId];
+    if (!guard || !guard.activeBuildId) return null;
+    const attempt = guard.activeAttemptId ? ledger.attempts[guard.activeAttemptId] : undefined;
+    return {
+      buildId: guard.activeBuildId,
+      attemptId: guard.activeAttemptId || '',
+      fence: Number(guard.fence || 0),
+      status: String(attempt?.status || 'UNKNOWN'),
+      workerCapability: String(attempt?.workerCapability || guard.workerCapability || ''),
+      leaseUntil: Number(guard.leaseUntil || 0),
+    };
+  }
+
   private snapshotUnlocked(ledger: LedgerFile, branch: BranchRecord): QueueSnapshot {
     const guard = ledger.guards[branch.branchId] || defaultGuard(branch.branchId);
     // dev-0.6.4 hotfix: 受阻状态由父链推导，而不是只在失败瞬间给直系后继打标记。
@@ -857,6 +965,96 @@ export class GuardedContinuationStore {
         recovered += 1;
       }
       return recovered;
+    });
+  }
+
+  /**
+   * dev-0.6.6: 回收「孤儿 attempt」。
+   *
+   * 真实现场：持有账本 attempt 的 utility host 进程被 V8 OOM 直接杀死
+   * （`utility_runtime_unexpected_exit`，exit 4294930435，3GB 堆耗尽）。崩溃者
+   * 不可能再写终态，于是 build 永远停在 RUNNING、guard 永远指向它：后续排队行既
+   * 不会执行，界面上也只是一直“计时”。崩溃不可怕，把崩溃后的账本留在不可恢复的
+   * 状态才可怕——这里允许任何存活读方在确认「所有者进程已死 / 租约早已过期 /
+   * guard 挂着的 attempt 已经终态」后回收它：attempt → EXPIRED、RUNNING build →
+   * QUEUED（保留原始输入，用户消息按 userMessageId 幂等）、guard 释放，并写入
+   * `AttemptOrphanRecovered` 审计事件。真实存活的所有者（PID 活着且心跳正常）不会
+   * 被抢占。
+   */
+  recoverOrphanedAttempt(input: {
+    workspaceId: string; rootId: RootId; branchId: BranchId;
+    now?: number; graceMs?: number; reason?: string;
+    ownerAlive?: (workerCapability: string) => boolean;
+  }): {
+    recovered: boolean; buildId?: BuildId; attemptId?: AttemptId;
+    previousBuildStatus?: string; ownerAlive?: boolean; reason?: string;
+  } {
+    return this.mutate(ledger => {
+      const branch = this.requireBranch(ledger, input);
+      const guard = ledger.guards[branch.branchId];
+      if (!guard || !guard.activeBuildId) return { recovered: false };
+      const build = ledger.builds[guard.activeBuildId];
+      const attempt = guard.activeAttemptId ? ledger.attempts[guard.activeAttemptId] : undefined;
+      const now = input.now ?? Date.now();
+      const capability = String(attempt?.workerCapability || guard.workerCapability || '');
+      const ownerAlive = input.ownerAlive ? input.ownerAlive(capability) === true : true;
+      const leaseUntil = Number(guard.leaseUntil || 0);
+      const graceMs = Math.max(0, Number(input.graceMs ?? 0));
+      const leaseLongExpired = leaseUntil > 0 && leaseUntil + graceMs <= now;
+      const attemptTerminal = !attempt || attempt.status !== 'RUNNING';
+      const buildTerminal = !build || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(build.status);
+      // A dangling guard (attempt already terminal) and a dead owner are always
+      // recoverable; a live owner is only recovered once its lease is long gone.
+      if (!attemptTerminal && !buildTerminal && ownerAlive && !leaseLongExpired) {
+        return { recovered: false, buildId: build?.buildId, ownerAlive };
+      }
+      const previousBuildStatus = build ? build.status : undefined;
+      const reason = String(input.reason || (!ownerAlive ? 'owner-process-exited'
+        : leaseLongExpired ? 'lease-expired' : 'dangling-guard'));
+      if (attempt && attempt.status === 'RUNNING') {
+        attempt.status = 'EXPIRED';
+        attempt.endedAt = new Date(now).toISOString();
+      }
+      if (build && build.status === 'RUNNING') {
+        build.status = 'QUEUED';
+        build.waitingReason = undefined;
+        build.updatedAt = new Date(now).toISOString();
+      }
+      const recoveredBuildId = guard.activeBuildId;
+      const recoveredAttemptId = guard.activeAttemptId;
+      this.releaseGuard(ledger, branch.branchId, guard.fence);
+      // The reclaimed build returns to QUEUED, so the rows behind it have to be
+      // chained back onto it; otherwise the first row runs and the rest stay
+      // derived-blocked behind a predecessor that already moved.
+      const chain = this.reanchorQueuedChainUnlocked(ledger, branch, 'orphan-recovery-chain');
+      branch.lifecycleRevision += 1;
+      branch.updatedAt = new Date(now).toISOString();
+      this.appendEvent(ledger, {
+        type: 'AttemptOrphanRecovered',
+        workspaceId: this.workspaceId,
+        rootId: branch.rootId,
+        branchId: branch.branchId,
+        buildId: recoveredBuildId,
+        attemptId: recoveredAttemptId,
+        fence: guard.fence,
+        payload: {
+          reason,
+          workerCapability: capability,
+          ownerAlive,
+          leaseUntil,
+          previousBuildStatus,
+          rebasedBuildIds: chain.rebased,
+          clearedMarkers: chain.clearedMarkers,
+        },
+      });
+      return {
+        recovered: true,
+        buildId: recoveredBuildId || undefined,
+        attemptId: recoveredAttemptId || undefined,
+        previousBuildStatus,
+        ownerAlive,
+        reason,
+      };
     });
   }
 
@@ -1049,28 +1247,64 @@ export class GuardedContinuationStore {
     this.ensureLedgerExists();
     try {
       const raw = fs.readFileSync(this.ledgerPath, 'utf-8').replace(/^\uFEFF/, '');
-      const parsed = JSON.parse(raw) as LedgerFile;
-      if (!parsed || parsed.version !== 1 || !parsed.branches || !parsed.builds) {
-        throw new ContinuationError('EFFECT_UNCERTAIN', `Continuation ledger ${this.ledgerPath} has an unsupported shape`);
-      }
-      parsed.attempts = parsed.attempts || {};
-      parsed.guards = parsed.guards || {};
-      parsed.commands = parsed.commands || {};
-      parsed.finals = parsed.finals || {};
-      parsed.events = Array.isArray(parsed.events) ? parsed.events : [];
-      parsed.nextEventCursor = Math.max(1, Number(parsed.nextEventCursor) || (parsed.events.at(-1)?.cursor || 0) + 1);
-      parsed.nextQueueSequence = Math.max(1, Number(parsed.nextQueueSequence) || (Object.values(parsed.builds).reduce((max, build) => Math.max(max, build.queueSequence || 0), 0) + 1));
-      return parsed;
+      return this.normalizeLedgerShape(JSON.parse(raw) as LedgerFile);
     } catch (error) {
       if (error instanceof ContinuationError) throw error;
+      // dev-0.6.6: a truncated/corrupt ledger used to make the whole workspace
+      // queue unusable (every command threw EFFECT_UNCERTAIN). The previous
+      // good ledger is kept next to it, so recover from it instead of failing
+      // closed: durable state must survive a half-written file.
+      const recovered = this.recoverFromBackup();
+      if (recovered) return recovered;
       throw new ContinuationError('EFFECT_UNCERTAIN', `Continuation ledger ${this.ledgerPath} is unreadable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private normalizeLedgerShape(parsed: LedgerFile): LedgerFile {
+    if (!parsed || parsed.version !== 1 || !parsed.branches || !parsed.builds) {
+      throw new ContinuationError('EFFECT_UNCERTAIN', `Continuation ledger ${this.ledgerPath} has an unsupported shape`);
+    }
+    parsed.attempts = parsed.attempts || {};
+    parsed.guards = parsed.guards || {};
+    parsed.commands = parsed.commands || {};
+    parsed.finals = parsed.finals || {};
+    parsed.events = Array.isArray(parsed.events) ? parsed.events : [];
+    parsed.nextEventCursor = Math.max(1, Number(parsed.nextEventCursor) || (parsed.events.at(-1)?.cursor || 0) + 1);
+    parsed.nextQueueSequence = Math.max(1, Number(parsed.nextQueueSequence) || (Object.values(parsed.builds).reduce((max, build) => Math.max(max, build.queueSequence || 0), 0) + 1));
+    return parsed;
+  }
+
+  private recoverFromBackup(): LedgerFile | null {
+    const backupPath = `${this.ledgerPath}.bak`;
+    if (!fs.existsSync(backupPath)) return null;
+    try {
+      const raw = fs.readFileSync(backupPath, 'utf-8').replace(/^\uFEFF/, '');
+      const parsed = this.normalizeLedgerShape(JSON.parse(raw) as LedgerFile);
+      // Restore the recovered ledger as the authoritative file, keeping the
+      // unreadable source for post-mortem instead of silently deleting it.
+      try { fs.copyFileSync(this.ledgerPath, `${this.ledgerPath}.corrupt`); } catch { /* best effort */ }
+      const temp = `${this.ledgerPath}.${process.pid}.${randomUUID()}.tmp`;
+      fs.writeFileSync(temp, `${JSON.stringify(parsed, null, 2)}\n`, 'utf-8');
+      fs.renameSync(temp, this.ledgerPath);
+      this.invalidateCache();
+      console.warn(`[continuation-ledger-recovered] ${this.ledgerPath} restored from ${backupPath}`);
+      return parsed;
+    } catch {
+      return null;
     }
   }
 
   private writeLedgerUnlocked(ledger: LedgerFile): void {
     const temp = `${this.ledgerPath}.${process.pid}.${randomUUID()}.tmp`;
-    fs.writeFileSync(temp, `${JSON.stringify(ledger, null, 2)}\n`, 'utf-8');
+    const content = `${JSON.stringify(ledger, null, 2)}\n`;
+    fs.writeFileSync(temp, content, 'utf-8');
     fs.renameSync(temp, this.ledgerPath);
+    // Keep the last good ledger next to the live one so a truncated/corrupt file
+    // (crash between write and rename, full disk, killed process) is recoverable.
+    // Copied after the rename so the backup always equals a fully written state.
+    try {
+      fs.copyFileSync(this.ledgerPath, `${this.ledgerPath}.bak`);
+    } catch { /* the backup is best effort; the atomic rename is still safe */ }
     this.invalidateCache();
   }
 

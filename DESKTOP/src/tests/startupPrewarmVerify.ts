@@ -441,7 +441,9 @@ function verifyDesktopContracts(): void {
     && getStateSource.indexOf('await startupAgentReady') < getStateSource.indexOf('if (!agent) return {}')
     && getStateSource.includes('localConversationSnapshotForStartup(target, { window: requestedWindow, before: requestedBefore })')
     && getStateSource.includes('startupPrewarmRequest')
-    && /conversationSnapshot\s*=\s*startupPrewarmRequest\s*\?\s*localConversationSnapshotForStartup\(target, \{ window: requestedWindow, before: requestedBefore \}\)\s*:\s*await runtimeSnapshotForTarget\(target, \{ window: requestedWindow, before: requestedBefore \}\)/.test(getStateSource)
+    // The runtime branch carries the renderer-acknowledged transcript revision
+    // (dev-0.6.6 slim-snapshot handshake), so only the call identity is fixed.
+    && /conversationSnapshot\s*=\s*startupPrewarmRequest\s*\?\s*localConversationSnapshotForStartup\(target, \{ window: requestedWindow, before: requestedBefore \}\)\s*:\s*await runtimeSnapshotForTarget\(target, acknowledgedRevision/.test(getStateSource)
     && uiHtml.includes('api.getState(startupPrewarmRequired ? undefined : activeConversationId())'), 'covered startup UI waits for the attempt Agent promise, then hydrates from its local snapshot without starting a runtime worker');
   ok(mainTs.indexOf('promoteStartupUi') < mainTs.indexOf('showStartupUpdatePrompt'), 'available-update prompt is scheduled only after the same-window main UI promotion path exists');
   const ensureBrowserStart = mainTs.indexOf('async function ensureBrowserWebContents');

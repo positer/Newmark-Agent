@@ -13,7 +13,7 @@ import {
 } from './conversationKernel';
 import { ConversationRuntimeTarget, NormalizedConversationTarget } from './conversationTarget';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
-import type { AutoRouteRatingResult, ConversationSnapshot } from './agent';
+import type { ConversationSnapshot } from './agent';
 
 export interface UtilityPromptRequest {
   message: string | AgentPromptMessage;
@@ -66,14 +66,25 @@ export interface UtilityHostToolResult {
 export type UtilityAgentRequest =
   | { id: string; method: 'ping' }
   | { id: string; method: 'prompt'; params: UtilityPromptRequest }
-  | { id: string; method: 'snapshot'; params: { target: ConversationRuntimeTarget; options?: { window?: number; before?: number } } }
+  | {
+    id: string;
+    method: 'snapshot';
+    params: {
+      target: ConversationRuntimeTarget;
+      /**
+       * dev-0.6.6: `transcript: 'force'` always returns the full transcript;
+       * `transcriptRevision` lets a caller that already holds that exact
+       * revision receive a slim snapshot instead of a full re-transfer.
+       */
+      options?: { window?: number; before?: number; transcript?: 'auto' | 'force'; transcriptRevision?: string };
+    };
+  }
   | { id: string; method: 'rewind'; params: { target: ConversationRuntimeTarget; messageIndex: number } }
   | { id: string; method: 'stop'; params: { target: ConversationRuntimeTarget; runId?: string } }
   | { id: string; method: 'guide'; params: { target: ConversationRuntimeTarget; envelope: ConversationInputEnvelope } }
   | { id: string; method: 'queue_action'; params: { target: ConversationRuntimeTarget; action: ConversationQueueAction; input?: ConversationQueueActionInput } }
   | { id: string; method: 'checkpoint'; params: { target: ConversationRuntimeTarget } }
   | { id: string; method: 'context_compress'; params: { target: ConversationRuntimeTarget; options?: ConversationContextCompressOptions } }
-  | { id: string; method: 'rate_auto_route'; params: { target: ConversationRuntimeTarget; score: number; routeId?: string } }
   | { id: string; method: 'set_work_run_expanded'; params: { target: ConversationRuntimeTarget; runId: string; expanded: boolean } }
   | { id: string; method: 'set_mode'; params: { target: ConversationRuntimeTarget; mode: AgentMode } }
   | { id: string; method: 'set_model'; params: { target: ConversationRuntimeTarget; model: string } }
@@ -111,5 +122,4 @@ export interface UtilityAgentSnapshotResult {
 }
 
 export type UtilityGuideResult = GuideReceipt;
-export type UtilityAutoRouteRatingResult = AutoRouteRatingResult;
 export type UtilityConversationRewindResult = ConversationSnapshot;

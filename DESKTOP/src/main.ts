@@ -369,6 +369,13 @@ function dispatchAgentWorkEvent(event: unknown, mirrorToMobile = true): void {
 
 const workEventCoalescer = new WorkEventCoalescer(event => dispatchAgentWorkEvent(event, true));
 const workEventNoMobileCoalescer = new WorkEventCoalescer(event => dispatchAgentWorkEvent(event, false));
+/**
+ * dev-0.6.6: transcript revisions a renderer has actually painted/cached, keyed
+ * by `webContentsId::workspaceId::conversationId`. Only what the renderer
+ * itself acknowledged is ever attached to a state request, so a slim snapshot
+ * can never be handed to a renderer that does not hold that exact revision.
+ */
+const transcriptRevisionAcks = new Map<string, string>();
 let projectConversationEvent: ((event: AgentWorkEvent) => AgentWorkEvent) | null = null;
 function publishConversationList(workspace: Agent['workspace']['current'] = agent?.workspace.current || null): void {
   if (agent && workspace) broadcastAgentWorkEvent(conversationListEvent(agent, workspace));
@@ -2105,9 +2112,7 @@ if (isViewerArg) {
         conversationLocked: false,
         routeDecision: startupAgent.lastRouteDecision,
         resolvedDeployment: startupAgent.activeDeployment(),
-        autoRouteRatingAvailable: startupAgent.model === 'auto'
-          && startupAgent.lastRouteDecision?.requestedSelection.kind === 'auto'
-          && !!startupAgent.lastRouteDecision.resolvedDeployment,
+        jevDecisionModel: startupAgent.jevDecisionModelState(),
       };
     };
     const ensureStartupAutomation = async (): Promise<void> => {
@@ -2714,7 +2719,21 @@ if (isViewerArg) {
     });
     const ensureElectronUtilityPool = (): ElectronUtilityRuntimePool => {
       if (!electronUtilityRuntimePool) {
-        electronUtilityRuntimePool = new ElectronUtilityRuntimePool(root, ensureElectronUtilityRuntimeHost());
+        electronUtilityRuntimePool = new ElectronUtilityRuntimePool(root, ensureElectronUtilityRuntimeHost(), undefined, {
+          // dev-0.6.6: per-conversation visual budget. The pool recycles an idle
+          // host whose resident memory grew past the machine-derived watermark
+          // (long ComputerUse/BrowserControl conversations) instead of reusing a
+          // process that is already close to a V8 abort.
+          sampleProcessMemoryBytes: pid => {
+            try {
+              const metric = app.getAppMetrics().find(item => Number(item.pid) === Number(pid));
+              // Electron reports workingSetSize in kilobytes.
+              return metric && metric.memory ? Math.round(Number(metric.memory.workingSetSize || 0) * 1024) : 0;
+            } catch {
+              return 0;
+            }
+          },
+        });
         electronUtilityRuntimePool.subscribe(event => broadcastAgentWorkEvent(event));
         electronUtilityRuntimePool.setHostToolHandler(utilityHostToolHandler);
       }
@@ -2852,7 +2871,10 @@ if (isViewerArg) {
         flowSuspension: flowSuspensionForTarget(target),
       } as AgentWorkEvent;
     };
-    const runtimeSnapshotForTarget = async (target: ConversationRuntimeTarget, options: { window?: number; before?: number } = {}): Promise<Record<string, unknown>> => {
+    const runtimeSnapshotForTarget = async (
+      target: ConversationRuntimeTarget,
+      options: { window?: number; before?: number; transcript?: 'auto' | 'force'; transcriptRevision?: string } = {},
+    ): Promise<Record<string, unknown>> => {
       const key = activeFlowStateKey(target);
       let snapshot = mainConversationOwners.has(key)
         ? ensureConversationKernel(root)!.snapshot(target, options)
@@ -3808,6 +3830,17 @@ if (isViewerArg) {
       return (await applyConversationAction(target, 'goal_clear')).cleared;
     });
 
+    // dev-0.6.6: a renderer reports the transcript revision it just painted (or
+    // `''` to clear, e.g. on reload). Nothing else may set this value.
+    ipcMain.handle('conversation:ackTranscript', (event, targetInput?: ConversationTargetInput, revision?: string) => {
+      const target = conversationRuntimeTarget(targetInput || agent?.activeConversationId || 'default');
+      const key = `${event.sender.id}::${String(target.workspaceId || '')}::${String(target.conversationId || '')}`;
+      const value = typeof revision === 'string' ? revision.slice(0, 200) : '';
+      if (value) transcriptRevisionAcks.set(key, value);
+      else transcriptRevisionAcks.delete(key);
+      return true;
+    });
+
     ipcMain.handle('agent:getState', async (event, targetInput?: ConversationTargetInput) => {
       const startupPrewarmRequest = isStartupPrewarmSender(event);
       if (startupPrewarmRequest && !agent && startupAgentReady) await startupAgentReady;
@@ -3823,11 +3856,21 @@ if (isViewerArg) {
         : {});
       const requestedWindow = Math.max(1, Math.floor(Number(windowInput.window) || 0) || 200);
       const requestedBefore = windowInput.before == null ? undefined : Math.max(0, Math.floor(Number(windowInput.before) || 0));
+      // dev-0.6.6 long-run memory reclamation: attach the transcript revision
+      // this exact renderer acknowledged, so the runtime can answer with a slim
+      // snapshot instead of re-serializing the whole conversation. The revision
+      // is only ever set from that renderer's own acknowledgement, and a caller
+      // that holds nothing simply never matches.
+      const acknowledgedRevision = transcriptRevisionAcks.get(
+        `${event.sender.id}::${String(target.workspaceId || '')}::${String(target.conversationId || '')}`,
+      );
       let conversationSnapshot: Record<string, unknown>;
       try {
         conversationSnapshot = startupPrewarmRequest
           ? localConversationSnapshotForStartup(target, { window: requestedWindow, before: requestedBefore })
-          : await runtimeSnapshotForTarget(target, { window: requestedWindow, before: requestedBefore });
+          : await runtimeSnapshotForTarget(target, acknowledgedRevision
+            ? { window: requestedWindow, before: requestedBefore, transcript: 'auto', transcriptRevision: acknowledgedRevision }
+            : { window: requestedWindow, before: requestedBefore });
       } catch (error) {
         conversationSnapshot = {
           target,
@@ -3848,6 +3891,7 @@ if (isViewerArg) {
         modelLabel: agent.modelLabel(),
         resolvedDeployment: agent.activeDeployment(),
         routeDecision: agent.lastRouteDecision,
+        jevDecisionModel: agent.jevDecisionModelState(),
         intelligence: agent.intelligence,
         ...conversationSnapshot,
         chatMessages: conversationSnapshot.chatMessages || [],
@@ -4057,8 +4101,7 @@ if (isViewerArg) {
               case 'autoSwitch': agent.config.set('models', 'auto_switch', value === true || value === 'on'); break;
               case 'autoSwitchScope': agent.config.set('models', 'auto_switch_scope', value === 'provider' ? 'provider' : 'all'); break;
               case 'fallbackOnUnavailable': agent.config.set('models', 'fallback_on_unavailable', value === true || value === 'on'); break;
-              case 'switchTendency': agent.config.set('models', 'auto_switch_preference', value); break;
-              case 'clearLearnedAutoPreferences': if (value === true) agent.clearLearnedModelPreferences(); break;
+              case 'switchTendency': agent.config.set('models', 'auto_switch_preference', ['conservative', 'balanced', 'aggressive'].includes(String(value)) ? String(value) : 'balanced'); break;
               case 'openAIApiMode': agent.config.set('models', 'openai_api_mode', ['chat_stream', 'chat', 'responses'].includes(String(value)) ? value : 'chat_stream'); break;
               case 'nativeTools': agent.config.set('tools', 'enabled', normalizeNativeToolEnabled(value)); break;
               case 'providers': agent.updateProviders(value); break;
@@ -4265,15 +4308,35 @@ if (isViewerArg) {
         : await ensureElectronUtilityPool()!.contextCompress(target, options);
     });
 
-    ipcMain.handle('agent:rateAutoRoute', async (_event, request: { target?: ConversationTargetInput; score?: number; routeId?: string }) => {
-      if (!agent) return { ok: false, reason: 'no_active_auto_route' };
-      const target = conversationRuntimeTarget(request);
-      const score = Number(request?.score);
-      const routeId = String(request?.routeId || '');
-      if (mainConversationOwners.has(activeFlowStateKey(target))) return ensureConversationKernel(root)!.rateAutoRoute(target, score, routeId);
-      return wslBackendEnabled()
-        ? await ensureWslConversationPool()!.rateAutoRoute(target, score, routeId)
-        : await ensureElectronUtilityPool().rateAutoRoute(target, score, routeId);
+    /** Current-model JEV policy editor; the Agent remains authoritative. */
+    ipcMain.handle('agent:setJevDecisionModel', async (_event, request: Record<string, unknown>) => {
+      if (!agent) return { ok: false, reason: 'auto_disabled', state: null };
+      const patch = request && typeof request === 'object' ? request : {};
+      const result = agent.updateJevDecisionModel({
+        ...(patch.enabled === undefined ? {} : { enabled: patch.enabled === true }),
+        ...(patch.timeoutMs === undefined ? {} : { timeoutMs: Number(patch.timeoutMs) }),
+      });
+      if (result.ok) {
+        resetConversationKernel();
+        // Every runtime (main, Electron Utility, WSL) uses the same current
+        // conversation-model decision policy.
+        const propagated: Array<[string, unknown]> = [
+          ['jev_enabled', result.state.enabled],
+          ['jev_timeout_ms', result.state.timeoutMs],
+        ];
+        for (const pool of [electronUtilityRuntimePool, wslAgentRuntimePool]) {
+          if (!pool) continue;
+          for (const [key, value] of propagated) {
+            try {
+              await pool.updateSetting('models', key, value);
+            } catch {
+              // A runtime that is not currently running picks the value up from
+              // the shared config on its next start.
+            }
+          }
+        }
+      }
+      return result;
     });
 
     ipcMain.handle('agent:stopConversation', async (_event, request: { target?: ConversationTargetInput; runId?: string; force?: boolean }) => {
@@ -4414,18 +4477,38 @@ if (isViewerArg) {
         try {
           // Archive is a destructive lifecycle command. It intentionally
           // bypasses the normal mutation/active-prompt guard. Cancel the
-          // conversation-local Flow synchronously, then start the resident
-          // runtime hard-stop in the background so a stuck child cannot hold
-          // the archive click hostage.
+          // conversation-local Flow synchronously, then release the occupancy
+          // the conversation is holding -- the hard stop of its resident
+          // runtime plus the kernel's own abort bookkeeping -- and let those
+          // teardown paths run *in parallel* instead of one after the other.
+          //
+          // Releasing the occupancy is what ends the wait for a wedged run:
+          // the hard stop invalidates the in-flight request, so the run really
+          // settles instead of the archive giving up on it after some budget
+          // (and abandoning its transcript to a later resurrecting flush).
           const ownedFlow = activeFlowStateFor(normalized);
-          const mainOwnerPreparation = mainConversationOwners.has(normalized.runtimeKey)
-            ? ensureConversationKernel(root)!.prepareForArchive(normalized) : Promise.resolve(null);
-          interruptActiveFlowForArchive(normalized);
-          const mainArchiveOwner = await mainOwnerPreparation;
-          if (ownedFlow?.settlement) await ownedFlow.settlement;
-          void forceStopTargetRuntime(normalized).catch(error => {
+          const kernelOwned = mainConversationOwners.has(normalized.runtimeKey);
+          const targetRuntime = kernelOwned
+            ? { resident: true, running: false, stopping: false, connected: true }
+            : peekTargetRuntime(normalized);
+          // An idle runtime has nothing to settle, so its stop stays off the
+          // critical path; a running (or already stopping) one must be down and
+          // checkpointed before the writer snapshots the store.
+          const occupancyMustSettle = !kernelOwned && (targetRuntime.running === true || targetRuntime.stopping === true);
+          const occupancyRelease = forceStopTargetRuntime(normalized).catch(error => {
             console.error('[Newmark] archive runtime force-stop failed:', error instanceof Error ? error.message : String(error));
           });
+          const mainOwnerPreparation = kernelOwned
+            ? ensureConversationKernel(root)!.prepareForArchive(normalized, {
+              releaseOccupancy: () => occupancyRelease,
+            })
+            : Promise.resolve(null);
+          interruptActiveFlowForArchive(normalized);
+          const [mainArchiveOwner] = await Promise.all([
+            mainOwnerPreparation,
+            occupancyMustSettle ? occupancyRelease : Promise.resolve(),
+            ownedFlow?.settlement ?? Promise.resolve(),
+          ]);
           const currentWorkspacePath = path.resolve(agent!.workspace.current?.path || '');
           const targetWorkspacePath = path.resolve(normalized.workspace?.path || '');
           const ownsTargetWorkspace = !!normalized.workspace

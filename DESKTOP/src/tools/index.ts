@@ -415,10 +415,11 @@ export class ToolExecutor {
         capture_max_height: { type: 'number', minimum: 240, maximum: 2048, description: 'Maximum ephemeral screenshot height; defaults to 960. Aspect ratio is preserved and the source is never enlarged.' },
         max_chars: { type: 'number', minimum: 1000, maximum: 100000, description: 'Maximum returned semantic UI text characters.' },
       }, []),
-      t('computer_use', 'Native Windows desktop control with persistent observation/action helpers. Use observe/app_observe before acting. sequence may perform up to three stable low-risk move/click/scroll/wait/app_activate steps and stops when focus, window, menu, dialog, scene, or risk changes. Vision screenshots remain one-time inputs and are deleted immediately.', {
+      t('computer_use', 'Native Windows desktop control with persistent observation/action helpers. Use observe/app_observe before acting. For passive observe, sparse_wait_ms can wait up to 5 seconds on a coarse local pixel-change signal without a local perception model; after a signal or timeout it always captures a fresh full screenshot and UI Automation tree for the selected vision model. This low-resolution signal can miss small or brief changes and does not prove that no change occurred. sequence may perform up to three stable low-risk move/click/scroll/wait/app_activate steps and stops when focus, window, menu, dialog, scene, or risk changes. Vision screenshots remain one-time inputs and are deleted immediately.', {
         action: { type: 'string', enum: ['observe', 'app_list', 'app_observe', 'sequence', 'takeover_start', 'takeover_stop', 'move', 'click', 'scroll', 'type', 'key', 'wait', 'app_activate', 'app_click', 'app_scroll', 'app_type', 'app_key'] },
         capture_max_width: { type: 'number', minimum: 320, maximum: 2048, description: 'For observe/app_observe only. Maximum ephemeral screenshot width; defaults to 1280. Aspect ratio is preserved and the source is never enlarged.' },
         capture_max_height: { type: 'number', minimum: 240, maximum: 2048, description: 'For observe/app_observe only. Maximum ephemeral screenshot height; defaults to 960. Aspect ratio is preserved and the source is never enlarged.' },
+        sparse_wait_ms: { type: 'integer', minimum: 0, maximum: 5000, description: 'Optional for action=observe only; defaults to 0 (immediate capture). Wait this many milliseconds for a coarse 32×18 grayscale change signal with no local neural model, then capture a fresh full screenshot and UI Automation tree whether signaled or timed out. Small/transient changes can be missed.' },
         x: { type: 'number' },
         y: { type: 'number' },
         target_id: { type: 'string', description: 'Stable id from the latest observe perception.objects entry. Preferred over raw coordinates when available.' },
@@ -1066,6 +1067,8 @@ export class ToolExecutor {
             allowEphemeralVisionImage: context.allowEphemeralVisionImage === true,
             captureMaxWidth: Number((args as Record<string, unknown>).capture_max_width),
             captureMaxHeight: Number((args as Record<string, unknown>).capture_max_height),
+            sparseWaitMs: Number((args as Record<string, unknown>).sparse_wait_ms),
+            signal: context.signal,
             gradientColors: Array.isArray((args as Record<string, unknown>).gradient_colors) ? (args as Record<string, unknown>).gradient_colors as string[] : undefined,
             gradientSpeed: (args as Record<string, unknown>).gradient_speed !== undefined ? Number((args as Record<string, unknown>).gradient_speed) : undefined,
             gradientWidth: (args as Record<string, unknown>).gradient_width !== undefined ? Number((args as Record<string, unknown>).gradient_width) : undefined,

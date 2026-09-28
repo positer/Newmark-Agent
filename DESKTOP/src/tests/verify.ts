@@ -606,7 +606,7 @@ async function main() {
   assert(mainSource.includes('function broadcastAgentWorkEvent(event: unknown') && mainSource.includes('BrowserWindow.getAllWindows()') && mainSource.includes("win.webContents.send('agent:workEvent', event)") && mainSource.includes("ipcMain.handle('agent:getState', async (event, targetInput?: ConversationTargetInput)") && mainSource.includes('const startupPrewarmRequest = isStartupPrewarmSender(event)') && mainSource.includes("ipcMain.handle('agent:ensureConversation'") && mainSource.includes("ipcMain.handle('agent:activateConversation'") && mainSource.includes('persistActiveConversationSelection(target.conversationId, workspace)') && mainSource.includes('ensureWslConversationPool()!.snapshot(target, options)') && mainSource.includes('ensureElectronUtilityPool().snapshot(target, options)') && mainSource.includes('await runtimeSnapshotForTarget(target, { window: requestedWindow, before: requestedBefore })') && preloadSource.includes('ensureConversation: (target: string | Record<string, unknown>)') && preloadSource.includes('activateConversation: (target: string | Record<string, unknown>)') && preloadSource.includes('getState: (target?: string | Record<string, unknown>)'), 'backend sharing: all desktop windows receive one composite-target event stream, request read-only isolated snapshots, and explicitly persist foreground conversation activation');
   assert(mainSource.includes('const forceStopTargetRuntime = async')
     && mainSource.includes('interruptActiveFlowForArchive(normalized)')
-    && mainSource.includes('void forceStopTargetRuntime(normalized)')
+    && mainSource.includes('const occupancyRelease = forceStopTargetRuntime(normalized).catch(')
     && mainSource.includes('archiveOwner.clearStoredFlowSuspension(normalized.conversationId)')
     && mainSource.includes('archiveRequested')
     && mainSource.includes("win.webContents.on('unresponsive'")
@@ -616,11 +616,23 @@ async function main() {
     && !mainSource.includes('Cannot archive a conversation while its runtime is running or stopping.'),
   'archive IPC: running, stopping, and active-prompt targets are force-interrupted without a rejection gate');
   assert(mainSource.includes('const archiveOwner = mainArchiveOwner || (ownsTargetWorkspace ? agent! : isolatedConversationAgent(normalized))')
-    && mainSource.includes('const mainArchiveOwner = await mainOwnerPreparation;')
+    && mainSource.includes('releaseOccupancy: () => occupancyRelease')
+    && mainSource.includes('const occupancyMustSettle = !kernelOwned && (targetRuntime.running === true || targetRuntime.stopping === true)')
+    && mainSource.includes('const [mainArchiveOwner] = await Promise.all([')
+    && !mainSource.includes('ARCHIVE_RUN_SETTLE_MS')
     && mainSource.includes('archiveOwner.archiveConversationAsync(normalized.conversationId)')
     && mainSource.includes('finalizes deletion against the')
     && mainSource.includes('latest locked state snapshot'),
-  'archive IPC: host persistence ownership, async payload writes, and latest-state finalization prevent resurrection and lost sibling deletes');
+  'archive IPC: host persistence ownership, parallel occupancy release, async payload writes, and latest-state finalization prevent resurrection and lost sibling deletes');
+  assert(modePersistenceKernelTs.includes('releaseOccupancy?: () => Promise<void> | void')
+    && modePersistenceKernelTs.includes('await Promise.all([settled, occupancyRelease])')
+    && !modePersistenceKernelTs.includes('ARCHIVE_RUN_SETTLE_MS'),
+  'archive kernel: the wait for an in-flight run ends by releasing its occupancy, never by a timer budget');
+  const archiveStoreSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
+  assert(archiveStoreSource.includes('const cachedEntry = (cachedStored.conversations || {})[stateKey]')
+    && archiveStoreSource.includes('if (persisted && cachedEntry) {')
+    && archiveStoreSource.includes('const archivedShardFile = this.conversationShardPath(stateKey, ws);'),
+  'archive store: a shard-backed conversation archived by a process that never loaded it still captures its transcript and reclaims its shard');
   assert(mainSource.includes('const singleInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock()') && mainSource.includes("app.on('second-instance'") && mainSource.includes('const win = mainWindow && !mainWindow.isDestroyed()') && !mainSource.includes('const win = createDesktopWindow ? createDesktopWindow(!!agent) : mainWindow'), 'main process: production launches focus the existing window while explicitly isolated test instances skip lock coordination');
   assert(uiHtml.includes('function loadActiveConversationMessages(conversationId)') && uiHtml.includes('var requestedConversationId = String(conversationId || activeConversationId() ||') && uiHtml.includes('var requestedTarget = currentConversationTarget(requestedConversationId)') && uiHtml.includes('api.getState(lockedTarget)') && !uiHtml.includes('api.getState().then(function(s) {\n      if (s && s.contextCompression'), 'ui html: active window refreshes are bound to the owning workspace and conversation target');
   assert(uiHtml.includes('function setActiveWorkspaceConversationById(id)') && uiHtml.includes('var activeBeforeRender = (conversations.find(function(c)') && uiHtml.includes('if (activeBeforeRender) setActiveWorkspaceConversationById(activeBeforeRender);'), 'ui html: conversation list rerender preserves active conversation by id instead of stale cross-window index');
@@ -725,7 +737,7 @@ async function main() {
     && uiHtml.includes('var renderOnViewedBranch = !queuedRuntimeBranch'),
   'branch queue state machine: Next and Goal bind to the runtime branch while ordinary sends activate the viewed branch, and hidden runtime continuations do not render into the inspected page');
   assert(uiHtmlLf.includes("if (stillActive && r && Array.isArray(r.chatMessages)) {\n      hydrateConversationBranchState(r);\n      renderChatMessages(r.chatMessages);")
-    && uiHtmlLf.includes("if (stillActiveAfterRefresh && s && Array.isArray(s.workRuns)) {\n        applyAutoRouteRatingState(s);\n        hydrateConversationBranchState(s);"),
+    && uiHtmlLf.includes("if (stillActiveAfterRefresh && s && Array.isArray(s.workRuns)) {\n        hydrateConversationBranchState(s);"),
   'branch paging: completed sends and post-run state refresh hydrate the latest page anchor ids before destructive transcript redraw');
   assert(uiHtml.includes("Object.prototype.hasOwnProperty.call(s, 'branchGroups')") && uiHtml.includes("Object.prototype.hasOwnProperty.call(s, 'runtimeBranchNodePath')"),
     'branch paging: partial send responses preserve existing branch state instead of clearing the pager');
@@ -782,7 +794,9 @@ async function main() {
     && uiHtml.includes("if (state._conversationSwitchSeq !== switchSeq) return;")
     && uiHtml.includes("persistConversationDraftForKey(previousDraftKey)"),
   'UI input: draft writes bind to the restored conversation, debounced persists flush on exit, and stale fast-switch sync results are dropped');
-  assert(uiHtml.includes('var chatWasAtBottom = !!(els[\'chat-area\'] && shouldAutoScroll(els[\'chat-area\']))') && uiHtml.includes('var chatWasAtBottom = shouldAutoScroll(els[\'chat-area\']);'), 'UI scroll: rerenders preserve user position and only follow when already at bottom');
+  assert(uiHtml.includes("var chatWasAtBottom = !skipAutoScroll && !!(els['chat-area'] && shouldAutoScroll(els['chat-area']))")
+    && uiHtml.includes('if (!skipAutoScroll) autoScrollIfAtBottom();')
+    && uiHtml.includes('var chatWasAtBottom = shouldAutoScroll(els[\'chat-area\']);'), 'UI scroll: history batches preserve position and normal rerenders only follow when already at bottom');
   assert(agentKernelRunnerSource.includes('if (currentAgent.isLlmErrorText(token.text))') && agentKernelRunnerSource.includes('surface.definitions.length === 0'), 'Provider/UI error boundary: provider error text is withheld from live prose and broker remains available for tool provisioning');
   assert(flowRunnerSource.includes("visibleMode: 'flow-user-input'")
     && flowRunnerSource.includes("activityVisibility: 'result-only'")
@@ -1623,7 +1637,7 @@ async function main() {
   assert(packageJson.includes('"release:real-provider-stress"') && releaseRealProviderStress.includes('NEWMARK_REAL_STRESS_BASE_URL') && releaseRealProviderStress.includes('NEWMARK_REAL_STRESS_KEY') && releaseRealProviderStress.includes('ANTHROPIC_AUTH_TOKEN'), 'release real provider stress: npm entry and credential fallback exist');
   assert(releaseRealProviderStress.includes('cliRounds') && releaseRealProviderStress.includes('uiRounds') && releaseRealProviderStress.includes('goalRounds') && releaseRealProviderStress.includes('timeoutMs'), 'release real provider stress: configurable rounds and timeout exist');
   assert(releaseRealProviderStress.includes('runCliStress') && releaseRealProviderStress.includes('runUiStress') && releaseRealProviderStress.includes('runGoalStress') && releaseRealProviderStress.includes('runQueueStress') && releaseRealProviderStress.includes('runConversationIsolationStress') && releaseRealProviderStress.includes('runLongContextStress'), 'release real provider stress: covers CLI UI Goal queue conversation-isolation and long-context scenarios');
-  assert(releaseRealProviderStress.includes("window.setInputMode ? window.setInputMode('guide')") && releaseRealProviderStress.includes('queued prompt visible') && releaseRealProviderStress.includes('queued prompt drained through UI') && releaseRealProviderStress.includes('__realProviderQueueStressDebug'), 'release real provider stress: queue drain uses real UI input queue and records debug state');
+  assert(releaseRealProviderStress.includes("window.setInputMode ? window.setInputMode('guide')") && releaseRealProviderStress.includes('queued prompt ${index + 1} visible') && releaseRealProviderStress.includes('queued prompt drained through UI') && releaseRealProviderStress.includes('__realProviderQueueStressDebug'), 'release real provider stress: queue drain uses real UI input queue and records debug state');
   assert(releaseRealProviderStress.includes('conversation-isolation') && releaseRealProviderStress.includes('conversation histories isolated') && releaseRealProviderStress.includes('state leaked B marker') && releaseRealProviderStress.includes('state leaked A marker'), 'release real provider stress: verifies conversation histories do not leak across real-provider conversations');
   assert(releaseRealProviderStress.includes('tokens: sendA && sendA.tokens') && releaseRealProviderStress.includes('chatMessages: sendB && sendB.chatMessages'), 'release real provider stress: conversation response leak checks ignore cross-conversation title lists');
   assert(releaseRealProviderStress.includes('assistantMarkerExpression') && !releaseRealProviderStress.includes("document.body.innerText || '').includes"), 'release real provider stress: UI marker checks use assistant backend messages instead of echoed prompts');
@@ -4336,9 +4350,16 @@ async function main() {
   (titleGateReloaded as unknown as { engineModel: () => FakeProvider }).engineModel = () => titleGateProvider;
   const secondTitleGateTokens = await titleGateReloaded.process('SECOND_SEND must never become the title source');
   const titleGateStateFile = path.join(titleGateReloaded.workspace.current!.path, 'conversations', 'state.json');
-  const titleGateState = JSON.parse(fs.readFileSync(titleGateStateFile, 'utf-8')) as { conversations?: Record<string, { titleRequestMessageId?: string; firstAgentResponseStarted?: boolean; chatMessages?: Array<{ role?: string; messageId?: string }> }> };
-  const titleGateEntry = Object.values(titleGateState.conversations || {}).find(entry => entry.chatMessages?.some(message => message.role === 'user'));
-  const firstTitleGateMessageId = titleGateEntry?.chatMessages?.find(message => message.role === 'user')?.messageId || '';
+  const titleGateState = JSON.parse(fs.readFileSync(titleGateStateFile, 'utf-8')) as { conversations?: Record<string, { titleRequestMessageId?: string; firstAgentResponseStarted?: boolean; messageCount?: number }> };
+  // The workspace index no longer carries the transcript inline (it lives in a
+  // per-conversation shard), so resolve the persisted identity from the index
+  // and the first user message through the normal reload path.
+  const titleGateEntry = Object.values(titleGateState.conversations || {}).find(entry => !!entry.titleRequestMessageId);
+  const titleGateReader = new Agent(titleGateRoot, { agentOnly: true });
+  titleGateReader.workspace.current = { ...titleGateWorkspace };
+  titleGateReader.config.loadWorkspaceConfig(titleGateWorkspace.path);
+  titleGateReader.setConversationFromStorage('first-title-retry');
+  const firstTitleGateMessageId = String(titleGateReader.chatMessages.find(message => message.role === 'user')?.messageId || '');
   assert(titleGateChatCalls === 5
     && titleGatePrompts.every(prompt => prompt.includes('FIRST_TITLE_SOURCE') && !prompt.includes('SECOND_SEND')),
   'conversation title hard gate: a later send never reuses another prompt as the title source');
@@ -4372,8 +4393,12 @@ async function main() {
   legacyTitleGateAgent.flushConversationState();
   const legacyTitleGateStateFile = path.join(legacyTitleGateWorkspace.path, 'conversations', 'state.json');
   const legacyTitleGateState = JSON.parse(fs.readFileSync(legacyTitleGateStateFile, 'utf-8')) as { conversations?: Record<string, Record<string, unknown>> };
+  // Legacy migration is about the *absence* of the persisted gate flag while
+  // the conversation already has formal response history; the transcript may
+  // live in a shard now, so clear the flag on the index entry itself.
   const legacyTitleGateEntry = Object.values(legacyTitleGateState.conversations || {})
-    .find(entry => Array.isArray(entry.chatMessages) && entry.chatMessages.some((message: ChatMessage) => message.role === 'assistant'));
+    .find(entry => Number(entry.messageCount || 0) > 1
+      || (Array.isArray(entry.chatMessages) && entry.chatMessages.some((message: ChatMessage) => message.role === 'assistant')));
   if (legacyTitleGateEntry) delete legacyTitleGateEntry.firstAgentResponseStarted;
   fs.writeFileSync(legacyTitleGateStateFile, JSON.stringify(legacyTitleGateState, null, 2), 'utf-8');
   const legacyTitleGateReloaded = new Agent(legacyTitleGateRoot, { agentOnly: true });
@@ -5861,7 +5886,15 @@ async function main() {
   modelAgent.config.set('models', 'auto_switch_preference', 'speed');
   modelAgent.setModel('auto');
   const contextSafeSwitch = await modelAgent.evaluateAndSwitch('list files');
-  assert(contextSafeSwitch && modelAgent.model === 'auto' && modelAgent.activeModelName() === 'fast-mini', 'auto model: preserves Auto intent and skips a faster candidate whose context window is too small');
+  const autoDecisionFailedClosed = (switched: boolean) => !switched
+    && modelAgent.model === 'auto'
+    && !modelAgent.activeDeployment()
+    && modelAgent.lastRouteDecision?.finalStatus === 'no_candidate'
+    && !!modelAgent.lastRouteDecision?.decisionError;
+  assert(autoDecisionFailedClosed(contextSafeSwitch)
+    && modelAgent.lastRouteDecision?.excludedCandidates.some(candidate => candidate.deployment.modelId === 'other-flash'
+      && candidate.reasons.includes('context_too_small')),
+  'auto model: preserves Auto and fails closed on malformed current-model JSON after the context guard excludes an undersized model');
   modelAgent.history = [];
   modelAgent.config.updateModel('other-prov', 'other-flash', { max_tokens: 128000 });
   modelAgent.config.set('models', 'auto_switch', true);
@@ -5873,26 +5906,32 @@ async function main() {
   assert(modelAgent.allModelNames()[0] === 'auto', 'auto model: Auto is listed only while autonomous switching is enabled');
   modelAgent.setModel('auto');
   const switchedForSpeed = await modelAgent.evaluateAndSwitch('list files');
-  assert(switchedForSpeed && modelAgent.model === 'auto' && modelAgent.activeModelName() === 'other-flash', 'auto model: global scope resolves across providers without replacing Auto intent');
+  assert(autoDecisionFailedClosed(switchedForSpeed), 'auto model: does not use a local fallback when current-model JSON is malformed');
   modelAgent.setModel('deep-opus');
   modelAgent.config.set('models', 'auto_switch_scope', 'provider');
   modelAgent.setModel('auto');
   const providerScopedSwitch = await modelAgent.evaluateAndSwitch('list files');
-  assert(providerScopedSwitch && modelAgent.model === 'auto' && modelAgent.activeModelName() === 'fast-mini', 'auto model: provider-scoped mode stays within the anchor provider');
+  const anchorProviderId = modelAgent.config.findModel('deep-opus')?.provider_id;
+  const providerScopedSelection = modelAgent.lastRouteDecision?.requestedSelection;
+  assert(autoDecisionFailedClosed(providerScopedSwitch)
+    && !!anchorProviderId
+    && providerScopedSelection?.kind === 'auto'
+    && providerScopedSelection.scope.kind === 'provider',
+  'auto model: provider-scoped request stays scoped and fails closed when current-model JSON is malformed');
   modelAgent.config.set('models', 'auto_switch_preference', 'default');
   modelAgent.config.set('models', 'auto_switch_scope', 'all');
   modelAgent.setModel('auto');
   const switchedForDefault = await modelAgent.evaluateAndSwitch('list files');
-  assert(switchedForDefault && modelAgent.model === 'auto' && modelAgent.activeModelName() === 'fast-mini', 'auto model: Balanced quality band excludes a cheaper candidate beyond the 2% loss budget');
+  assert(autoDecisionFailedClosed(switchedForDefault), 'auto model: balanced mode does not select a deployment without valid current-model JSON');
   modelAgent.config.set('models', 'auto_switch_preference', 'performance');
   modelAgent.config.set('models', 'auto_switch_scope', 'all');
   modelAgent.setModel('auto');
   const switchedForPerformance = await modelAgent.evaluateAndSwitch('implement a complex refactor across modules');
-  assert(switchedForPerformance && modelAgent.model === 'auto' && modelAgent.activeModelName() === 'deep-opus', 'auto model: Quality mode selects the highest task-domain quality candidate');
+  assert(autoDecisionFailedClosed(switchedForPerformance), 'auto model: quality mode does not select a deployment without valid current-model JSON');
   modelAgent.config.set('models', 'auto_switch_preference', 'cheap_save');
   modelAgent.setModel('auto');
   const switchedForCost = await modelAgent.evaluateAndSwitch('list files');
-  assert(switchedForCost && modelAgent.model === 'auto' && modelAgent.activeModelName() === 'other-flash', 'auto model: Cost mode selects the cheapest candidate inside its 6% quality band');
+  assert(autoDecisionFailedClosed(switchedForCost), 'auto model: cost mode does not select a deployment without valid current-model JSON');
   modelAgent.config.addModelToProvider('other-prov', 'vision-pro', 'Vision Pro', 'High capability multimodal vision model');
   modelAgent.config.updateModel('other-prov', 'vision-pro', {
     vision: true,
@@ -5925,7 +5964,10 @@ async function main() {
   modelAgent.config.set('models', 'auto_switch_scope', 'all');
   modelAgent.setModel('auto');
   const switchedForVision = await modelAgent.evaluateAndSwitch('analyze this screenshot ![shot](C:/tmp/shot.png)');
-  assert(switchedForVision && modelAgent.model === 'auto' && !!modelAgent.activeModelConfig() && !modelAgent.lastRouteDecision?.excludedCandidates.some(candidate => candidate.reasons.some(reason => reason.includes('missing_capability:image_input'))), 'auto model: image input remains routable regardless of cached vision observations');
+  assert(autoDecisionFailedClosed(switchedForVision)
+    && !modelAgent.lastRouteDecision?.excludedCandidates.some(candidate => candidate.deployment.modelId === 'vision-pro'
+      && candidate.reasons.some(reason => reason.includes('missing_capability:image_input'))),
+  'auto model: vision-capable candidates remain eligible while malformed current-model JSON fails closed');
   modelAgent.config.set('models', 'auto_switch', false);
   assert(!modelAgent.allModelNames().includes('auto'), 'auto model: Auto is unavailable when autonomous switching is disabled');
   modelAgent.setModel('auto');

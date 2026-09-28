@@ -4,6 +4,8 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const crypto = require('crypto');
+const https = require('https');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const appRoot = path.resolve(__dirname, '..');
@@ -17,7 +19,9 @@ const goalRounds = numberEnv('NEWMARK_REAL_STRESS_GOAL_ROUNDS', 3);
 const timeoutMs = numberEnv('NEWMARK_REAL_STRESS_TIMEOUT_MS', 180000);
 const port = numberEnv('NEWMARK_REAL_STRESS_PORT', 49373);
 const contextMaxTokens = numberEnv('NEWMARK_REAL_STRESS_CONTEXT_MAX_TOKENS', 128000);
-const longContextPayloadRepeats = numberEnv('NEWMARK_REAL_STRESS_LONG_CONTEXT_REPEATS', 600);
+const longContextTurns = numberEnv('NEWMARK_REAL_STRESS_LONG_CONTEXT_TURNS', 12);
+const queueFirstResponseHoldMs = numberEnv('NEWMARK_REAL_STRESS_QUEUE_HOLD_MS', 0);
+const concurrentResponseHoldMs = numberEnv('NEWMARK_REAL_STRESS_CONCURRENT_HOLD_MS', 0);
 const escapeLineCount = numberEnv('NEWMARK_REAL_STRESS_ESCAPE_LINES', 20000);
 const selectedScenarios = new Set(String(process.env.NEWMARK_REAL_STRESS_SCENARIOS || '')
   .split(',')
@@ -27,6 +31,267 @@ const selectedScenarios = new Set(String(process.env.NEWMARK_REAL_STRESS_SCENARI
 const results = [];
 let activeSecretValues = [];
 let childDiagnostics = '';
+let activeReleaseProcessId = 0;
+let providerEvidence = { upstreamHost: '', upstreamBasePath: '', requests: [] };
+
+function extractRequestMarker(payload) {
+  const messages = Array.isArray(payload?.messages)
+    ? payload.messages
+    : Array.isArray(payload?.input)
+      ? payload.input
+      : [];
+  const latestUser = [...messages].reverse().find(message => message && message.role === 'user');
+  const content = latestUser?.content ?? payload?.input ?? payload?.prompt ?? '';
+  const fragments = [];
+  collectResponseText(content, fragments);
+  const text = fragments.join('\n');
+  const markers = text.match(/(?:NM_STRESS|真实_STRESS)_[A-Z0-9_]+_OK/g) || [];
+  return markers.at(-1) || '';
+}
+
+function collectResponseText(value, output, depth = 0) {
+  if (depth > 8 || value === null || value === undefined) return;
+  if (typeof value === 'string') {
+    output.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectResponseText(item, output, depth + 1);
+    return;
+  }
+  if (typeof value !== 'object') return;
+  for (const key of ['delta', 'content', 'text', 'output_text', 'message', 'choices', 'output', 'data', 'parts', 'response']) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) collectResponseText(value[key], output, depth + 1);
+  }
+}
+
+function inspectSseRecord(line, record) {
+  const value = String(line || '').trim();
+  if (!value.startsWith('data:')) return;
+  const data = value.slice(5).trim();
+  if (!data || data === '[DONE]') return;
+  try {
+    const event = JSON.parse(data);
+    if (typeof event.type === 'string') record.responseEventTypes.add(event.type.slice(0, 120));
+    for (const choice of Array.isArray(event.choices) ? event.choices : []) {
+      if (choice?.finish_reason !== undefined && choice.finish_reason !== null) {
+        record.finishReason = String(choice.finish_reason).slice(0, 80);
+      }
+    }
+    const response = event.response && typeof event.response === 'object' ? event.response : {};
+    if ((event.id || response.id) && !record.responseId) record.responseId = String(event.id || response.id).slice(0, 200);
+    if (event.model || response.model) record.responseModel = String(event.model || response.model).slice(0, 160);
+    if (event.type === 'response.completed' && response.status) record.finishReason = String(response.status).slice(0, 80);
+    const usageRecord = event.usage ?? response.usage;
+    if (usageRecord && typeof usageRecord === 'object') {
+      const usage = usageRecord;
+      record.responseUsage = {
+        input: Number(usage.prompt_tokens ?? usage.input_tokens ?? usage.inputTokens ?? 0) || 0,
+        output: Number(usage.completion_tokens ?? usage.output_tokens ?? usage.outputTokens ?? 0) || 0,
+        total: Number(usage.total_tokens ?? usage.totalTokens ?? 0) || 0,
+      };
+    }
+    const fragments = [];
+    if (typeof event.type === 'string') {
+      if (event.type.endsWith('.delta')) collectResponseText(event.delta ?? event.choices ?? '', fragments);
+      else if (event.type === 'response.output_text.delta') collectResponseText(event.delta ?? '', fragments);
+    } else {
+      collectResponseText(event, fragments);
+    }
+    const text = fragments.join('\n');
+    record.markerScanBuffer = `${record.markerScanBuffer || ''}${text}`.slice(-1024);
+    const markers = record.markerScanBuffer.match(/(?:NM_STRESS|真实_STRESS)_[A-Z0-9_]+_OK/g) || [];
+    for (const marker of markers) record.responseMarkers.add(marker);
+  } catch {}
+}
+
+async function createProviderEvidenceProxy(provider) {
+  const upstream = new URL(provider.baseUrl);
+  if (upstream.protocol !== 'https:') throw new Error(`real provider evidence proxy requires HTTPS upstream, received ${upstream.protocol}`);
+  const upstreamBasePath = upstream.pathname.replace(/\/+$/, '') || '';
+  const requests = [];
+  const server = http.createServer(async (incoming, outgoing) => {
+    const startMs = Date.now();
+    const requestId = crypto.randomUUID();
+    const record = {
+      requestId,
+      startedAtMs: startMs,
+      upstreamHost: upstream.host,
+      method: incoming.method || 'POST',
+      requestModel: '',
+      requestMarker: '',
+      requestStream: false,
+      responseHoldMs: 0,
+      statusCode: 0,
+      responseId: '',
+      responseModel: '',
+      responseUsage: null,
+      responseMarkers: new Set(),
+      responseEventTypes: new Set(),
+      finishReason: '',
+      firstByteMs: null,
+      clientFirstByteMs: null,
+      upstreamElapsedMs: null,
+      completedAtMs: null,
+      elapsedMs: null,
+      errorClass: '',
+    };
+    requests.push(record);
+    const finishProxyResponse = () => {
+      if (record.elapsedMs !== null) return;
+      record.completedAtMs = Date.now();
+      record.elapsedMs = record.completedAtMs - startMs;
+    };
+    outgoing.once('finish', finishProxyResponse);
+    try {
+      const chunks = [];
+      for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+      const requestBody = Buffer.concat(chunks);
+      let parsed = {};
+      try { parsed = JSON.parse(requestBody.toString('utf8')); } catch {}
+      record.requestModel = String(parsed.model || '').slice(0, 160);
+      record.requestMarker = extractRequestMarker(parsed);
+      record.requestStream = parsed.stream === true;
+      if (queueFirstResponseHoldMs > 0 && record.requestStream && record.requestMarker === 'NM_STRESS_QUEUE_FIRST_OK') {
+        record.responseHoldMs = queueFirstResponseHoldMs;
+      } else if (concurrentResponseHoldMs > 0 && record.requestStream && /^NM_STRESS_RUNNING_[AB]_[12]_OK$/.test(record.requestMarker)) {
+        record.responseHoldMs = concurrentResponseHoldMs;
+      }
+      const incomingUrl = new URL(incoming.url || '/', 'http://127.0.0.1');
+      const prefix = incomingUrl.pathname.startsWith(upstreamBasePath)
+        ? incomingUrl.pathname.slice(upstreamBasePath.length)
+        : incomingUrl.pathname;
+      const remotePath = `${upstreamBasePath}${prefix || '/'}${incomingUrl.search}`;
+      const headers = { ...incoming.headers };
+      for (const key of ['host', 'connection', 'content-length', 'transfer-encoding', 'accept-encoding']) delete headers[key];
+      headers['accept-encoding'] = 'identity';
+      headers['content-length'] = String(requestBody.length);
+      const remoteRequest = https.request({
+        protocol: upstream.protocol,
+        hostname: upstream.hostname,
+        port: upstream.port || 443,
+        method: incoming.method || 'POST',
+        path: remotePath,
+        headers,
+      }, remoteResponse => {
+        record.statusCode = Number(remoteResponse.statusCode || 0);
+        const responseHoldMs = record.statusCode >= 200 && record.statusCode < 300 ? record.responseHoldMs : 0;
+        if (record.firstByteMs === null) record.firstByteMs = Date.now() - startMs;
+        const responseHeaders = { ...remoteResponse.headers };
+        for (const key of ['connection', 'transfer-encoding']) delete responseHeaders[key];
+        outgoing.writeHead(record.statusCode || 502, responseHeaders);
+        let pendingLines = '';
+        let responseEnded = false;
+        let heldChunks = responseHoldMs > 0 ? [] : null;
+        let holdTimer = null;
+        const releaseHeldResponse = () => {
+          if (!heldChunks) return;
+          const chunksToWrite = heldChunks;
+          heldChunks = null;
+          if (holdTimer) clearTimeout(holdTimer);
+          if (chunksToWrite.length && record.clientFirstByteMs === null) {
+            record.clientFirstByteMs = Date.now() - startMs;
+          }
+          for (const chunk of chunksToWrite) {
+            if (outgoing.destroyed) break;
+            outgoing.write(chunk);
+          }
+          if (responseEnded && !outgoing.destroyed) outgoing.end();
+        };
+        if (responseHoldMs > 0) holdTimer = setTimeout(releaseHeldResponse, responseHoldMs);
+        remoteResponse.on('data', chunk => {
+          if (record.firstByteMs === null) record.firstByteMs = Date.now() - startMs;
+          const text = Buffer.from(chunk).toString('utf8');
+          pendingLines += text;
+          const lines = pendingLines.split(/\r?\n/);
+          pendingLines = lines.pop() || '';
+          for (const line of lines) inspectSseRecord(line, record);
+          if (heldChunks) heldChunks.push(Buffer.from(chunk));
+          else if (!outgoing.destroyed) {
+            if (record.clientFirstByteMs === null) record.clientFirstByteMs = Date.now() - startMs;
+            outgoing.write(chunk);
+          }
+        });
+        remoteResponse.on('end', () => {
+          if (pendingLines) inspectSseRecord(pendingLines, record);
+          record.upstreamElapsedMs = Date.now() - startMs;
+          responseEnded = true;
+          if (!heldChunks && !outgoing.destroyed) outgoing.end();
+        });
+        remoteResponse.on('error', error => {
+          if (record.elapsedMs !== null) return;
+          record.errorClass = error?.name || 'UpstreamResponseError';
+          record.upstreamElapsedMs = Date.now() - startMs;
+          if (holdTimer) clearTimeout(holdTimer);
+          heldChunks = null;
+          if (!outgoing.headersSent) outgoing.writeHead(502, { 'content-type': 'text/plain' });
+          if (!outgoing.destroyed) outgoing.end('upstream response stream failed');
+        });
+      });
+      remoteRequest.on('error', error => {
+        if (record.elapsedMs !== null) return;
+        record.errorClass = error?.name || 'UpstreamRequestError';
+        record.upstreamElapsedMs = Date.now() - startMs;
+        if (!outgoing.headersSent) outgoing.writeHead(502, { 'content-type': 'text/plain' });
+        if (!outgoing.destroyed) outgoing.end('upstream request failed');
+      });
+      outgoing.on('close', () => {
+        if (!outgoing.writableFinished) finishProxyResponse();
+        if (!outgoing.writableFinished && remoteRequest.destroy) remoteRequest.destroy();
+      });
+      remoteRequest.end(requestBody);
+    } catch (error) {
+      record.errorClass = error?.name || 'ProxyRequestError';
+      record.upstreamElapsedMs = Date.now() - startMs;
+      if (!outgoing.headersSent) outgoing.writeHead(502, { 'content-type': 'text/plain' });
+      if (!outgoing.destroyed) outgoing.end('provider evidence proxy failed');
+    }
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('provider evidence proxy did not bind a TCP port');
+  const localBaseUrl = `http://127.0.0.1:${address.port}${upstreamBasePath}`;
+  providerEvidence = {
+    upstreamHost: upstream.host,
+    upstreamBasePath,
+    expectedProviderId: provider.name,
+    expectedModelId: provider.model,
+    requests,
+  };
+  return {
+    localBaseUrl,
+    close: () => new Promise(resolve => server.close(() => resolve())),
+  };
+}
+
+function serializableProviderEvidence() {
+  return providerEvidence.requests.map(record => ({
+    requestId: record.requestId,
+    startedAtMs: record.startedAtMs,
+    completedAtMs: record.completedAtMs,
+    elapsedMs: record.elapsedMs,
+    upstreamElapsedMs: record.upstreamElapsedMs,
+    firstByteMs: record.firstByteMs,
+    clientFirstByteMs: record.clientFirstByteMs,
+    upstreamHost: record.upstreamHost,
+    method: record.method,
+    requestModel: record.requestModel,
+    requestMarker: record.requestMarker,
+    statusCode: record.statusCode,
+    responseId: record.responseId,
+    responseModel: record.responseModel,
+    responseUsage: record.responseUsage,
+    responseMarkers: [...record.responseMarkers],
+    responseEventTypes: [...record.responseEventTypes],
+    requestStream: record.requestStream,
+    responseHoldMs: record.responseHoldMs,
+    finishReason: record.finishReason,
+    errorClass: record.errorClass,
+  }));
+}
 
 function numberEnv(name, fallback) {
   const raw = Number(process.env[name] || '');
@@ -123,7 +388,9 @@ function classifyFailure(error) {
   const text = String(error && (error.stack || error.message || error) || '');
   if (error && error.failureClass) return error.failureClass;
   if (/conversation title generation failed|first Agent request was not started/i.test(text)) return 'conversation-title-failed';
-  if (/rate.?limit|quota|balance|insufficient|429|too many requests/i.test(text)) return 'provider-limit';
+  if (providerEvidence.requests.some(request => Number(request.statusCode) === 429)
+    || /rate.?limit|quota|balance|insufficient|too many requests/i.test(text)
+    || /\b(?:HTTP\s+(?:status(?:\s+code)?\s*)?|status(?:\s+code)?\s*[:=]?\s*)429\b/i.test(text)) return 'provider-limit';
   if (/\b(?:HTTP|status(?: code)?)\s*[:=]?\s*(?:401|403|5\d\d)\b|service unavailable|bad gateway/i.test(text)) return 'provider-http-error';
   if (/timed out|timeout|CDP timeout|waiting for/i.test(text)) return 'app-timeout-or-provider-timeout';
   if (/conversation [AB] (?:response contained [AB] marker|state leaked [AB] marker|response id mismatch)|backend send conversation mismatch|conversation[- ]leak|串话/i.test(text)) return 'conversation-leak';
@@ -139,7 +406,8 @@ async function recordScenario(name, fn) {
   try {
     const detail = await fn();
     const elapsedMs = Date.now() - started;
-    results.push({ name, status: 'pass', elapsedMs, detail: redact(detail || '') });
+    const detailText = typeof detail === 'string' ? detail : JSON.stringify(detail || {});
+    results.push({ name, status: 'pass', elapsedMs, detail: redact(detailText) });
     log(`${name} ok (${elapsedMs} ms)`);
   } catch (error) {
     const elapsedMs = Date.now() - started;
@@ -185,7 +453,7 @@ function writeConfig(root, provider) {
       goal_max_continuations: Math.max(2, goalRounds + 2),
     },
     terminal: { interrupt_timeout_ms: 0 },
-    context: { auto_compress: true, compress_threshold_tokens: 8000 },
+    context: { auto_compress: true },
     general: { language: 'en' },
     workspace: {
       auto_create_timestamp_workspace: true,
@@ -458,6 +726,7 @@ async function launchUi(root) {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  activeReleaseProcessId = child.pid || 0;
   const capture = chunk => {
     childDiagnostics = `${childDiagnostics}${String(chunk || '')}`.slice(-24000);
   };
@@ -549,7 +818,25 @@ async function sendBackendPrompt(cdp, prompt, marker, conversationId, waitTimeou
     tokens: result && result.tokens,
     chatMessages: (result && result.chatMessages || []).filter(m => m && m.role === 'assistant'),
   });
-  if ((result && result.conversationId) !== conversationId) throw new Error(`backend send conversation mismatch: ${result && result.conversationId}`);
+  if (result?.conversationId && result.conversationId !== conversationId) {
+    throw new Error(`backend send conversation mismatch: expected=${conversationId}; actual=${result.conversationId}`);
+  }
+  if (!result?.conversationId) {
+    const attempts = providerEvidence.requests
+      .filter(request => request.requestMarker === marker)
+      .map(request => ({ statusCode: request.statusCode, requestId: request.requestId, errorClass: request.errorClass }));
+    if (attempts.some(request => request.statusCode === 429)) {
+      const error = new Error(`provider rate limit HTTP 429 prevented completion for ${marker}; upstreamStatuses=${attempts.map(request => request.statusCode).join(',') || 'unknown'}`);
+      error.failureClass = 'provider-limit';
+      throw error;
+    }
+    if (attempts.some(request => request.statusCode >= 500)) {
+      const error = new Error(`provider HTTP failure prevented completion for ${marker}; upstreamStatuses=${attempts.map(request => request.statusCode).join(',') || 'unknown'}`);
+      error.failureClass = 'provider-http-error';
+      throw error;
+    }
+    throw new Error(`backend send returned no completion for ${marker}; expected conversation=${conversationId}; upstreamStatuses=${attempts.map(request => request.statusCode).join(',') || 'none'}`);
+  }
   if (!resultText.includes(marker)) throw new Error(`backend assistant marker missing ${marker}: ${redact(resultText).slice(0, 1200)}`);
   if (resultText.includes(activeSecretValues[0])) throw new Error('backend send leaked API key');
   return result;
@@ -876,41 +1163,55 @@ async function runQueueStress(cdp) {
   await waitFor(cdp, `(() => typeof activeConversationId === 'function' && activeConversationId() === ${jsString(conversationId)})()`, 30000, 'queue conversation activation');
   await evaluate(cdp, `window.setInputMode ? window.setInputMode('guide') : undefined`, 30000);
   const firstMarker = 'NM_STRESS_QUEUE_FIRST_OK';
-  const secondMarker = 'NM_STRESS_QUEUE_SECOND_OK';
+  const queuedMarkers = ['NM_STRESS_QUEUE_SECOND_OK', 'NM_STRESS_QUEUE_THIRD_OK', 'NM_STRESS_QUEUE_FOURTH_OK'];
   await evaluate(cdp, `(() => {
     const prompt = document.querySelector('#prompt');
     if (!prompt) throw new Error('prompt input missing');
-    prompt.value = ${jsString(`Reply with ${firstMarker} as the first line. Do not use tools. Context: ${'queue stress payload '.repeat(500)}`)};
+    prompt.focus();
+    prompt.value = ${jsString(`Reply with exactly ${firstMarker}. Do not use tools.`)};
+    prompt.dispatchEvent(new Event('input', { bubbles: true }));
     window.sendMessage();
     return true;
   })()`, 30000);
   await waitFor(cdp, `(() => window.state && window.state._sendInFlight === true)()`, 10000, 'first queue stress send in flight');
-  await evaluate(cdp, `(() => {
-    window.setInputMode && window.setInputMode('next');
-    const prompt = document.querySelector('#prompt');
-    if (!prompt) throw new Error('prompt input missing for queued send');
-    prompt.value = ${jsString(`Reply exactly ${secondMarker}. No tools.`)};
-    window.sendMessage();
-    return true;
-  })()`, 30000);
-  try {
-    await waitFor(cdp, `(() => {
-      const body = document.querySelector('#chat-area')?.innerText || '';
-      const label = document.querySelector('#queue-header-label');
-      const queue = window.state && (window.state.nextQueue || []);
-      const backendQueue = window.state && window.state.backendQueue && window.state.backendQueue.followUp || [];
-      return (queue.some(item => String(item || '').includes(${jsString(secondMarker)})) || backendQueue.some(item => String(item || '').includes(${jsString(secondMarker)})))
-        && label && /1/.test(label.textContent || '');
-    })()`, 15000, 'queued prompt visible');
-  } catch (error) {
-    const debug = await evaluate(cdp, `(() => ({
-      nextQueue: (window.state && window.state.nextQueue) || [],
-      nextQueueRequests: (window.state && window.state.nextQueueRequests || []).map(item => item && { text: String(item.text || '').slice(-600), target: item.target }),
-      backendQueue: (window.state && window.state.backendQueue) || null,
-      queueLabel: document.querySelector('#queue-header-label')?.textContent || '',
-      bodyTail: (document.querySelector('#chat-area')?.innerText || '').slice(-1200),
-    }))()`, 30000).catch(debugError => ({ debugError: debugError.message }));
-    throw new Error(`${error.message}; queueDebug=${redact(JSON.stringify(debug)).slice(0, 4000)}`);
+  for (let index = 0; index < queuedMarkers.length; index++) {
+    const marker = queuedMarkers[index];
+    await evaluate(cdp, `(() => {
+      window.setInputMode && window.setInputMode('next');
+      const prompt = document.querySelector('#prompt');
+      if (!prompt) throw new Error('prompt input missing for queued send');
+      prompt.focus();
+      prompt.value = ${jsString(`Reply exactly ${marker}. No tools.`)};
+      prompt.dispatchEvent(new Event('input', { bubbles: true }));
+      window.sendMessage();
+      return true;
+    })()`, 30000);
+    try {
+      const observation = await waitFor(cdp, `(() => {
+        const queue = window.state && (window.state.nextQueue || []);
+        const requests = window.state && (window.state.nextQueueRequests || []);
+        const backendQueue = window.state && window.state.backendQueue && window.state.backendQueue.followUp || [];
+        const text = JSON.stringify({ queue, requests, backendQueue });
+        const markers = ${JSON.stringify(queuedMarkers.slice(0, index + 1))};
+        const retained = markers.filter(item => text.includes(item)).length;
+        const label = document.querySelector('#queue-header-label');
+        const count = Number((String(label?.textContent || '').match(/\\d+/) || ['0'])[0]);
+        return retained >= markers.length && label && count >= markers.length
+          ? { retained, count, firstStillInFlight: window.state?._sendInFlight === true } : null;
+      })()`, 15000, `queued prompt ${index + 1} visible`);
+      if (index === queuedMarkers.length - 1 && (!observation.firstStillInFlight || observation.count !== queuedMarkers.length)) {
+        throw new Error(`queue did not hold all prompts concurrently before first completion: ${redact(JSON.stringify(observation))}`);
+      }
+    } catch (error) {
+      const debug = await evaluate(cdp, `(() => ({
+        nextQueue: (window.state && window.state.nextQueue) || [],
+        nextQueueRequests: (window.state && window.state.nextQueueRequests || []).map(item => item && { text: String(item.text || '').slice(-600), target: item.target }),
+        backendQueue: (window.state && window.state.backendQueue) || null,
+        queueLabel: document.querySelector('#queue-header-label')?.textContent || '',
+        bodyTail: (document.querySelector('#chat-area')?.innerText || '').slice(-1200),
+      }))()`, 30000).catch(debugError => ({ debugError: debugError.message }));
+      throw new Error(`${error.message}; queueDebug=${redact(JSON.stringify(debug)).slice(0, 4000)}`);
+    }
   }
   try {
     await waitFor(cdp, `(() => {
@@ -918,28 +1219,79 @@ async function runQueueStress(cdp) {
       const panel = document.querySelector('#queue-panel');
       const label = document.querySelector('#queue-header-label');
       const state = window.state || {};
-      const queueVisible = panel && panel.style.display !== 'none' && label && /1/.test(label.textContent || '');
-      const ok = body.includes(${jsString(firstMarker)}) && body.includes(${jsString(secondMarker)}) && !queueVisible && state._sendInFlight === false;
+      const allMarkers = [${[firstMarker, ...queuedMarkers].map(jsString).join(', ')}];
+      const bodyMarkers = allMarkers.filter(marker => body.includes(marker));
+      const bodyPositions = allMarkers.map(marker => body.indexOf(marker));
+      const queueVisible = panel && panel.style.display !== 'none' && label && /[1-9]/.test(label.textContent || '');
+      const queueArrays = [state.nextQueue, state.nextQueueRequests, state.backendQueue?.followUp, state.backendQueue?.steering].filter(Array.isArray);
+      const queueCount = queueArrays.reduce((sum, items) => sum + items.length, 0);
+      const ok = bodyMarkers.length === allMarkers.length
+        && bodyPositions.every((position, index) => position >= 0 && (index === 0 || bodyPositions[index - 1] < position))
+        && queueCount === 0
+        && !queueVisible && state._sendInFlight === false;
       if (!ok) {
         window.__realProviderQueueStressDebug = {
-          hasFirst: body.includes(${jsString(firstMarker)}),
-          hasSecond: body.includes(${jsString(secondMarker)}),
+          allMarkers,
+          bodyPositions,
           queueLabel: label ? label.textContent : '',
           sendInFlight: state._sendInFlight,
           runningKeys: Object.keys(state.runningConversations || {}),
           backendQueue: state.backendQueue || null,
           nextQueue: state.nextQueue || [],
-          bodyTail: body.slice(-1400),
+          bodyMarkers,
+          queueCount,
         };
       }
       return ok;
     })()`, timeoutMs, 'queued prompt drained through UI');
   } catch (error) {
     const debug = await evaluate(cdp, 'window.__realProviderQueueStressDebug || null', 30000).catch(debugError => ({ debugError: debugError.message }));
-    throw new Error(`${error.message}; queueDebug=${redact(JSON.stringify(debug)).slice(0, 4000)}`);
+    const backend = await evaluate(cdp, `(async () => {
+      await window.api.ackTranscript(${jsString(conversationId)}, '');
+      const state = await window.api.getState(${jsString(conversationId)});
+      const markers = ${JSON.stringify([firstMarker, ...queuedMarkers])};
+      return {
+        conversationId: state?.conversationId || '',
+        status: state?.status || '',
+        runtime: state?.runtime ? { running: state.runtime.running, stopRequested: state.runtime.stopRequested, runId: state.runtime.runId } : null,
+        chatMessages: (state?.chatMessages || []).slice(-10).map(item => ({ role: item.role, runId: item.runId || '', marker: markers.find(marker => String(item.content || '').includes(marker)) || '', contentChars: String(item.content || '').length })),
+        workRuns: (state?.workRuns || []).slice(-8).map(run => ({
+          runId: run.runId,
+          status: run.status,
+          targetConversationId: run.target?.conversationId || '',
+          promptMarker: markers.find(marker => String(run.primaryPrompt || '').includes(marker)) || '',
+          finalMarker: markers.find(marker => String(run.finalResponse || '').includes(marker)) || '',
+          eventTypes: (run.events || []).slice(-12).map(event => ({ type: event.type, toolName: event.toolName || '' })),
+          error: String(run.error || '').slice(0, 500),
+        })),
+      };
+    })()`, 30000).catch(debugError => ({ debugError: debugError.message }));
+    throw new Error(`${error.message}; queueDebug=${redact(JSON.stringify({ renderer: debug, backend })).slice(0, 5000)}`);
   }
   await waitFor(cdp, stateIdleExpression(conversationId), 60000, 'queue idle');
-  return 'queued prompt drained';
+  await evaluate(cdp, `window.api.ackTranscript(${jsString(conversationId)}, '')`, 10000);
+  const finalState = await evaluate(cdp, `window.api.getState(${jsString(conversationId)})`, 20000);
+  const allMarkers = [firstMarker, ...queuedMarkers];
+  const completedQueueRuns = allMarkers.map(marker => {
+    const run = (finalState.workRuns || []).find(item => String(item.primaryPrompt || '').includes(marker));
+    if (!run || run.status !== 'completed' || run.target?.conversationId !== conversationId) {
+      throw new Error(`queued marker ${marker} did not finish on ${conversationId}: ${redact(JSON.stringify(run || null))}`);
+    }
+    return { marker, runId: run.runId, status: run.status, targetConversationId: run.target.conversationId };
+  });
+  const assistantMessages = (finalState.chatMessages || []).filter(message => message && message.role === 'assistant');
+  const assistantMarkerOrder = assistantMessages
+    .map(message => allMarkers.findIndex(marker => String(message.content || '').includes(marker)))
+    .filter(index => index >= 0);
+  if (assistantMarkerOrder.length !== allMarkers.length || assistantMarkerOrder.some((value, index) => value !== index)) {
+    throw new Error(`backend transcript assistant markers are not complete and ordered: ${redact(JSON.stringify({ conversationId, assistantMarkerOrder, messages: assistantMessages.map(message => ({ runId: message.runId, marker: allMarkers.find(marker => String(message.content || '').includes(marker)) || '' })) }))}`);
+  }
+  const followUpQueue = finalState.queued?.followUp || finalState.backendQueue?.followUp || [];
+  const steeringQueue = finalState.queued?.steering || finalState.backendQueue?.steering || [];
+  if (followUpQueue.length || steeringQueue.length || finalState.status !== 'idle' || finalState.runtime?.running === true) {
+    throw new Error(`queue state did not fully settle after transcript verification: ${redact(JSON.stringify({ status: finalState.status, runtime: finalState.runtime, followUpQueue, steeringQueue }))}`);
+  }
+  return { conversationId, markers: allMarkers, completedQueueRuns, assistantMarkerOrder, queueEmpty: true, finalStatus: finalState.status };
 }
 
 async function runConversationIsolationStress(cdp) {
@@ -976,45 +1328,473 @@ async function runConversationIsolationStress(cdp) {
   return 'conversation histories isolated';
 }
 
+async function runConcurrentConversationSwitchStress(cdp) {
+  await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
+  await waitFor(cdp, `window.api.getState().then(s => s && s.status === 'idle' ? true : false)`, 60000, 'concurrent conversation initial idle');
+  const created = await evaluate(cdp, `(async () => {
+    const ids = [];
+    for (let i = 0; i < 2; i++) {
+      if (typeof window.newConversation !== 'function') throw new Error('newConversation is unavailable');
+      await window.newConversation();
+      const state = await window.api.getState();
+      if (state && state.conversationId) ids.push(String(state.conversationId));
+    }
+    return ids;
+  })()`, 60000);
+  const ids = Array.isArray(created) ? [...new Set(created.map(String))] : [];
+  if (ids.length !== 2) throw new Error(`could not create two target conversations: ${redact(JSON.stringify(created))}`);
+  const [conversationA, conversationB] = ids;
+  const titleAssignments = [[conversationA, 'Stress Conversation A'], [conversationB, 'Stress Conversation B']];
+  const renamed = await evaluate(cdp, `Promise.all(${JSON.stringify(titleAssignments)}.map(async ([id, title]) => ({ id, ok: await window.api.renameConversation(id, title) })))`, 30000);
+  if (!Array.isArray(renamed) || renamed.some(item => !item?.ok)) {
+    throw new Error(`could not pre-name conversations before concurrent first responses: ${redact(JSON.stringify(renamed))}`);
+  }
+  const initialStates = await Promise.all(ids.map(id => evaluate(cdp, `window.api.getState(${jsString(id)})`, 30000)));
+  const initialById = new Map(initialStates.map(state => [String(state.conversationId || ''), state]));
+  const deploymentProviderIds = [...new Set(initialStates.map(state => String(state?.resolvedDeployment?.providerId || '')).filter(Boolean))];
+  if (deploymentProviderIds.length !== 1) {
+    throw new Error(`two targets did not resolve to the same single configured provider id: ${redact(JSON.stringify(initialStates.map(state => ({ conversationId: state?.conversationId, deployment: state?.resolvedDeployment }))))}`);
+  }
+  providerEvidence.resolvedProviderId = deploymentProviderIds[0];
+  for (const id of ids) {
+    const state = initialById.get(id);
+    const deployment = state?.resolvedDeployment;
+    if (!state || deployment?.providerId !== providerEvidence.resolvedProviderId || deployment?.modelId !== providerEvidence.expectedModelId) {
+      throw new Error(`target ${id} did not resolve to the single configured remote deployment: ${redact(JSON.stringify({ conversationId: id, deployment }))}`);
+    }
+  }
+
+  async function selectExactTarget(conversationId, label) {
+    const selected = await evaluate(cdp, `(() => {
+      const rows = typeof currentWorkspaceConversations === 'function' ? currentWorkspaceConversations() : [];
+      const index = rows.findIndex(row => String(row && row.id || '') === ${jsString(conversationId)});
+      if (index < 0 || typeof window.switchConversation !== 'function') throw new Error('conversation row is unavailable: ' + ${jsString(conversationId)});
+      window.switchConversation(index);
+      const target = currentConversationTarget();
+      return { target, bound: state._promptBoundKey, expected: conversationDraftKey(target), runtimeKey: runtimeKeyFor(target.workspaceId, target.conversationId) };
+    })()`, 15000);
+    if (selected.target?.conversationId !== conversationId || selected.bound !== selected.expected) {
+      throw new Error(`${label} switch target/draft binding mismatch: ${redact(JSON.stringify(selected))}`);
+    }
+    await waitFor(cdp, `(() => {
+      const target = currentConversationTarget();
+      return target.conversationId === ${jsString(conversationId)}
+        && state._promptBoundKey === conversationDraftKey(target)
+        && state.renderedChatTargetKey === runtimeKeyFor(target.workspaceId, target.conversationId);
+    })()`, 20000, `${label} renderer target hydration`);
+    return selected;
+  }
+
+  async function runOverlappingRound(round, markerA, markerB) {
+    await selectExactTarget(conversationA, `round ${round} A`);
+    const prompts = [
+      { conversationId: conversationA, marker: markerA },
+      { conversationId: conversationB, marker: markerB },
+    ].map(item => ({
+      conversationId: item.conversationId,
+      marker: item.marker,
+      prompt: `Reply with exactly ${item.marker} on one line. Do not use tools.`,
+    }));
+    await evaluate(cdp, `(() => {
+      const prompts = ${JSON.stringify(prompts)};
+      window.__newmarkConcurrentConversationPromises = prompts.map(item => window.api.sendMessage(item.prompt, item.conversationId).then(result => ({
+        ok: true,
+        conversationId: result && result.conversationId,
+        hasMarker: JSON.stringify({ chatMessages: result && result.chatMessages, workRuns: result && result.workRuns }).includes(item.marker),
+        text: JSON.stringify({ chatMessages: result && result.chatMessages, workRuns: result && result.workRuns }).slice(-5000),
+      }), error => ({ ok: false, conversationId: item.conversationId, error: String(error && error.message || error) })));
+      return true;
+    })()`, 30000);
+
+    let overlap;
+    try {
+      overlap = await waitFor(cdp, `(async () => {
+      await Promise.all([${jsString(conversationA)}, ${jsString(conversationB)}].map(id => window.api.ackTranscript(id, '')));
+      const states = await Promise.all([
+        window.api.getState(${jsString(conversationA)}),
+        window.api.getState(${jsString(conversationB)})
+      ]);
+      const targets = states.map((state, index) => {
+        const expectedId = index === 0 ? ${jsString(conversationA)} : ${jsString(conversationB)};
+        const expectedMarker = index === 0 ? ${jsString(markerA)} : ${jsString(markerB)};
+        const run = (state?.workRuns || []).find(item => item.runId === state?.runtime?.runId);
+        const requestContext = state?.contextWindow?.requestContext;
+        const deployment = state?.resolvedDeployment;
+        return {
+          conversationId: state?.conversationId,
+          runId: state?.runtime?.runId,
+          running: state?.runtime?.running === true,
+          runStatus: run?.status,
+          runTarget: run?.target?.conversationId,
+          runPromptHasMarker: String(run?.primaryPrompt || '').includes(expectedMarker),
+          contextRequestId: requestContext?.requestId || '',
+          contextAt: requestContext?.at || '',
+          contextRunId: requestContext?.runId || '',
+          contextModel: requestContext?.model || '',
+          providerId: deployment?.providerId || '',
+          modelId: deployment?.modelId || '',
+          baselineRequestCount: Number(state?.contextWindow?.providerUsageRequests || 0),
+        };
+      });
+      return targets.every((item, index) => {
+        const expectedId = index === 0 ? ${jsString(conversationA)} : ${jsString(conversationB)};
+        const expectedModel = ${jsString(providerEvidence.expectedModelId)};
+        const expectedProvider = ${jsString(providerEvidence.resolvedProviderId)};
+        return item.conversationId === expectedId
+          && item.running === true
+          && item.runStatus === 'running'
+          && item.runTarget === expectedId
+          && item.runPromptHasMarker
+          && !!item.contextRequestId
+          && item.contextRunId === item.runId
+          && item.contextModel === expectedModel
+          && item.providerId === expectedProvider
+          && item.modelId === expectedModel;
+      }) ? { observedAtMs: Date.now(), targets } : null;
+      })()`,
+      Math.min(timeoutMs, 30000), `both conversations running in round ${round}`, 100);
+    } catch (error) {
+      const diagnostics = await Promise.all(ids.map(async id => evaluate(cdp, `(async () => {
+        await window.api.ackTranscript(${jsString(id)}, '');
+        const state = await window.api.getState(${jsString(id)});
+        return {
+          conversationId: state?.conversationId || '',
+          status: state?.status || '',
+          runtime: state?.runtime ? { running: state.runtime.running, runId: state.runtime.runId } : null,
+          providerId: state?.resolvedDeployment?.providerId || '',
+          modelId: state?.resolvedDeployment?.modelId || '',
+          requestContext: state?.contextWindow?.requestContext ? { requestId: state.contextWindow.requestContext.requestId, runId: state.contextWindow.requestContext.runId, at: state.contextWindow.requestContext.at } : null,
+          runs: (state?.workRuns || []).slice(-3).map(run => ({ runId: run.runId, status: run.status, targetConversationId: run.target?.conversationId || '', promptMarker: ['${markerA}', '${markerB}'].find(marker => String(run.primaryPrompt || '').includes(marker)) || '', eventTypes: (run.events || []).slice(-8).map(event => event.type) })),
+        };
+      })()`, 20000).catch(readError => ({ conversationId: id, readError: readError.message }))));
+      const remoteCalls = serializableProviderEvidence().filter(call => call.requestMarker === markerA || call.requestMarker === markerB);
+      throw new Error(`${error.message}; overlapState=${redact(JSON.stringify({ diagnostics, remoteCalls }))}`);
+    }
+
+    const overlapTargets = overlap.targets || [];
+    if (overlapTargets.length !== 2) throw new Error(`round ${round} overlap observation is incomplete`);
+    const overlapRunIds = Object.fromEntries(overlapTargets.map(item => [item.conversationId, item.runId]));
+
+    const switches = [];
+    for (let index = 0; index < 10; index++) {
+      const targetId = index % 2 === 0 ? conversationA : conversationB;
+      const startedAt = Date.now();
+      const selected = await selectExactTarget(targetId, `round ${round} switch ${index + 1}`);
+      switches.push({ conversationId: targetId, elapsedMs: Date.now() - startedAt, runtimeKey: selected.runtimeKey });
+      const states = await Promise.all(ids.map(id => evaluate(cdp, `(async () => { await window.api.ackTranscript(${jsString(id)}, ''); return window.api.getState(${jsString(id)}); })()`, 20000)));
+      const statesById = new Map(states.map(state => [String(state.conversationId || ''), state]));
+      const state = statesById.get(targetId);
+      const expectedMarker = targetId === conversationA ? markerA : markerB;
+      const forbiddenMarker = targetId === conversationA ? markerB : markerA;
+      const serialized = JSON.stringify({ chatMessages: state?.chatMessages || [], workRuns: state?.workRuns || [] });
+      if (state?.conversationId !== targetId || !serialized.includes(expectedMarker) || serialized.includes(forbiddenMarker)) {
+        const snapshotDiagnostics = ids.map(id => {
+          const sampled = statesById.get(id);
+          return {
+            requestedConversationId: id,
+            returnedConversationId: sampled?.conversationId || '',
+            workspaceId: sampled?.workspaceId || '',
+            runtimeStatus: sampled?.runtimeStatus || '',
+            runtimeError: sampled?.runtimeError || '',
+            status: sampled?.status || '',
+            totalMessages: sampled?.totalMessages,
+            chatMessageCount: Array.isArray(sampled?.chatMessages) ? sampled.chatMessages.length : null,
+            runtime: sampled?.runtime ? { running: sampled.runtime.running, runId: sampled.runtime.runId } : null,
+            workRuns: (sampled?.workRuns || []).slice(-4).map(item => ({
+              runId: item.runId,
+              status: item.status,
+              targetConversationId: item.target?.conversationId || '',
+              primaryPrompt: String(item.primaryPrompt || '').slice(0, 180),
+            })),
+          };
+        });
+        throw new Error(`round ${round} switch snapshot leaked or missed target ${targetId}: ${redact(JSON.stringify({ snapshot: serialized, diagnostics: snapshotDiagnostics })).slice(-6000)}`);
+      }
+      for (const run of state.workRuns || []) {
+        if (run.target?.conversationId !== targetId) throw new Error(`round ${round} workRun ${run.runId} is bound to ${run.target?.conversationId}, expected ${targetId}`);
+      }
+      const bothRunning = ids.every(id => {
+        const live = statesById.get(id);
+        const expectedRunId = overlapRunIds[id];
+        return live?.runtime?.running === true
+          && live.runtime.runId === expectedRunId
+          && live.workRuns?.some(run => run.runId === expectedRunId && run.status === 'running' && run.target?.conversationId === id);
+      });
+      switches[switches.length - 1].bothOriginalRunsStillRunning = bothRunning;
+      switches[switches.length - 1].runIds = overlapRunIds;
+      switches[switches.length - 1].attemptContexts = ids.map(id => {
+        const sampled = statesById.get(id);
+        const requestContext = sampled?.contextWindow?.requestContext;
+        return {
+          conversationId: id,
+          runId: sampled?.runtime?.runId || '',
+          requestId: requestContext?.requestId || '',
+          at: requestContext?.at || '',
+          model: requestContext?.model || '',
+          providerId: sampled?.resolvedDeployment?.providerId || '',
+          modelId: sampled?.resolvedDeployment?.modelId || '',
+          running: sampled?.runtime?.running === true,
+          marker: id === conversationA ? markerA : markerB,
+        };
+      });
+    }
+    const liveSwitches = switches.filter(item => item.bothOriginalRunsStillRunning).length;
+    if (liveSwitches < 6) throw new Error(`round ${round} had only ${liveSwitches}/10 target switches while both exact runs were still active`);
+
+    const settlements = await evaluate(cdp, `Promise.all(window.__newmarkConcurrentConversationPromises)`, timeoutMs);
+    if (!Array.isArray(settlements) || settlements.length !== 2) throw new Error(`round ${round} did not settle both target requests`);
+    for (let index = 0; index < settlements.length; index++) {
+      const expectedId = index === 0 ? conversationA : conversationB;
+      const expectedMarker = index === 0 ? markerA : markerB;
+      const forbiddenMarker = index === 0 ? markerB : markerA;
+      const result = settlements[index];
+      if (!result?.ok || result.conversationId !== expectedId || !result.hasMarker || String(result.text || '').includes(forbiddenMarker)) {
+        throw new Error(`round ${round} completion target mismatch: ${redact(JSON.stringify(result)).slice(-2400)}`);
+      }
+    }
+
+    const attempts = [
+      ...overlapTargets.map(item => ({
+        conversationId: item.conversationId,
+        runId: item.runId,
+        requestId: item.contextRequestId,
+        at: item.contextAt,
+        model: item.contextModel,
+        providerId: item.providerId,
+        modelId: item.modelId,
+        running: item.running,
+        marker: item.conversationId === conversationA ? markerA : markerB,
+      })),
+      ...switches.flatMap(item => item.attemptContexts || []),
+    ];
+    const correlatedCalls = {};
+    for (const [targetId, expectedMarker] of [[conversationA, markerA], [conversationB, markerB]]) {
+      const targetAttempts = attempts.filter(item => item.conversationId === targetId
+        && item.runId === overlapRunIds[targetId]
+        && item.marker === expectedMarker
+        && item.model === providerEvidence.expectedModelId
+        && item.providerId === providerEvidence.resolvedProviderId
+        && item.modelId === providerEvidence.expectedModelId
+        && item.requestId
+        && Date.parse(item.at));
+      const usedRequestIds = new Set();
+      correlatedCalls[expectedMarker] = providerEvidence.requests
+        .filter(call => call.requestMarker === expectedMarker
+          && call.statusCode >= 200 && call.statusCode < 300
+          && call.elapsedMs !== null
+          && call.responseMarkers.has(expectedMarker)
+          && call.requestModel === providerEvidence.expectedModelId)
+        .map(call => {
+          const context = targetAttempts
+            .map(item => ({ item, deltaMs: call.startedAtMs - Date.parse(item.at) }))
+            .filter(row => row.deltaMs >= 0 && row.deltaMs <= 30000 && !usedRequestIds.has(row.item.requestId))
+            .sort((left, right) => left.deltaMs - right.deltaMs)[0];
+          if (!context) return null;
+          usedRequestIds.add(context.item.requestId);
+          return {
+            conversationId: targetId,
+            workRunId: overlapRunIds[targetId],
+            contextRequestId: context.item.requestId,
+            contextAt: context.item.at,
+            contextToUpstreamMs: context.deltaMs,
+            marker: expectedMarker,
+            upstreamRequestId: call.requestId,
+            providerResponseId: call.responseId,
+            upstreamHost: call.upstreamHost,
+            requestModel: call.requestModel,
+            responseModel: call.responseModel,
+            statusCode: call.statusCode,
+             startedAtMs: call.startedAtMs,
+            completedAtMs: call.completedAtMs,
+            elapsedMs: call.elapsedMs,
+            upstreamElapsedMs: call.upstreamElapsedMs,
+            responseUsage: call.responseUsage,
+          };
+        })
+        .filter(Boolean);
+      if (!correlatedCalls[expectedMarker].length) {
+        throw new Error(`no same-run requestContext could be time-correlated to a successful remote request for ${expectedMarker}: ${redact(JSON.stringify({ attempts: targetAttempts, calls: serializableProviderEvidence().filter(item => item.requestMarker === expectedMarker) }))}`);
+      }
+    }
+    let overlappingPair = null;
+    for (const candidateA of correlatedCalls[markerA]) {
+      for (const candidateB of correlatedCalls[markerB]) {
+        const completedAtA = Number(candidateA.completedAtMs || candidateA.startedAtMs + candidateA.elapsedMs);
+        const completedAtB = Number(candidateB.completedAtMs || candidateB.startedAtMs + candidateB.elapsedMs);
+        const overlapped = Math.max(candidateA.startedAtMs, candidateB.startedAtMs)
+          < Math.min(completedAtA, completedAtB);
+        if (overlapped && candidateA.contextRequestId !== candidateB.contextRequestId) {
+          overlappingPair = { [markerA]: candidateA, [markerB]: candidateB };
+          break;
+        }
+      }
+      if (overlappingPair) break;
+    }
+    if (!overlappingPair) {
+      const error = new Error(`round ${round} no same-run correlated remote request pair overlapped: ${redact(JSON.stringify(correlatedCalls))}`);
+      error.failureClass = 'concurrency-not-observed';
+      throw error;
+    }
+
+    const finalStates = [];
+    for (const [targetId, expectedMarker, forbiddenMarker] of [
+      [conversationA, markerA, markerB],
+      [conversationB, markerB, markerA],
+    ]) {
+      await evaluate(cdp, `window.api.ackTranscript(${jsString(targetId)}, '')`, 10000);
+      const state = await evaluate(cdp, `window.api.getState(${jsString(targetId)})`, 20000);
+      const serialized = JSON.stringify({ chatMessages: state?.chatMessages || [], workRuns: state?.workRuns || [] });
+      if (state?.conversationId !== targetId || !serialized.includes(expectedMarker) || serialized.includes(forbiddenMarker)) {
+        throw new Error(`round ${round} final persisted state mismatch: ${redact(serialized).slice(-2400)}`);
+      }
+      for (const run of state.workRuns || []) {
+        if (run.target?.conversationId !== targetId) throw new Error(`round ${round} final run ${run.runId} target mismatch`);
+      }
+      const baselineRequests = Number(initialById.get(targetId)?.contextWindow?.providerUsageRequests || 0);
+      const reportedRequests = Number(state.contextWindow?.providerUsageRequests || 0);
+      if (reportedRequests <= baselineRequests) throw new Error(`provider request accounting did not advance for ${targetId}: before=${baselineRequests}, after=${reportedRequests}`);
+      finalStates.push({ conversationId: targetId, messageCount: state.chatMessages?.length || 0, runIds: (state.workRuns || []).map(run => run.runId), providerUsageRequests: reportedRequests });
+    }
+    return { markers: [markerA, markerB], overlap, switches, liveSwitches, correlatedProviderCalls: correlatedCalls, overlappingPair, remoteIntervalsOverlapped: true, finalStates };
+  }
+
+  await runOverlappingRound(1, 'NM_STRESS_RUNNING_A_1_OK', 'NM_STRESS_RUNNING_B_1_OK');
+  await runOverlappingRound(2, 'NM_STRESS_RUNNING_A_2_OK', 'NM_STRESS_RUNNING_B_2_OK');
+  return { conversations: [conversationA, conversationB], overlappingRounds: 2, eachRoundSwitches: 10, configuredRemoteDeployment: { providerName: providerEvidence.expectedProviderId, providerId: providerEvidence.resolvedProviderId, modelId: providerEvidence.expectedModelId, upstreamHost: providerEvidence.upstreamHost }, continuationMarkers: ['NM_STRESS_RUNNING_A_2_OK', 'NM_STRESS_RUNNING_B_2_OK'] };
+}
+
 async function runLongContextStress(cdp) {
   const conversationId = 'stress-long-context';
-  const seedMarker = 'NM_STRESS_LONG_CONTEXT_SEED_OK';
-  const marker = 'NM_STRESS_LONG_CONTEXT_OK';
-  const payload = 'Long context stress payload. '.repeat(longContextPayloadRepeats);
+  const continuationRounds = 3;
+  const payloadUnit = 'Long context stress payload. ';
   await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
   await waitFor(cdp, stateIdleExpression(), 60000, 'long-context initial idle');
-  await sendBackendPrompt(cdp, `Reply with this exact marker as the first line: ${seedMarker}\nDo not use tools.\n\n${payload}`, seedMarker, conversationId, timeoutMs);
-  const result = await sendBackendPrompt(cdp, `Reply with this exact marker as the first line: ${marker}\nDo not use tools.`, marker, conversationId, timeoutMs);
-  const compression = result && (result.contextCompression || result.compression || null);
-  if (contextMaxTokens < 128000 && !compression) throw new Error(`long-context compression did not trigger at configured max_tokens=${contextMaxTokens}`);
-  return `longPayloadChars=${payload.length}; compressionState=${redact(JSON.stringify(compression || {})).slice(0, 500)}`;
+  let currentState = await evaluate(cdp, `window.api.getState(${jsString(conversationId)})`, 30000);
+  const initialWindow = currentState?.contextWindow || {};
+  const reportedMaxTokens = Number(initialWindow.maxTokens || 0);
+  const runtimeMaxTokens = reportedMaxTokens >= 8000 ? reportedMaxTokens : contextMaxTokens;
+  const reportedTriggerTokens = Number(initialWindow.longHistoryTriggerTokens || 0);
+  const runtimeTriggerTokens = reportedTriggerTokens >= 128 ? reportedTriggerTokens : Math.max(128, Math.floor(runtimeMaxTokens * 0.20));
+  const turns = Math.max(12, Math.min(40, longContextTurns));
+  const requiredPayloadChars = Math.ceil(runtimeTriggerTokens * 4 * 1.25);
+  const payloadCharsPerTurn = Math.max(1200, Math.ceil(requiredPayloadChars / Math.min(turns, 12)));
+  const payload = payloadUnit.repeat(Math.ceil(payloadCharsPerTurn / payloadUnit.length));
+  const turnMarkers = [];
+  const startCompressionAt = currentState?.contextCompression?.at || '';
+  let beforeCompressionWindow = currentState?.contextWindow || {};
+  let afterCompressionWindow = beforeCompressionWindow;
+  let compression = null;
+  let compressionRound = 0;
+  const compressionEventsByKey = new Map();
+  const initialEntries = Number(beforeCompressionWindow.cacheEntries || 0) + Number(beforeCompressionWindow.archiveEntries || 0);
+  for (let index = 1; index <= turns; index += 1) {
+    const turnMarker = `NM_STRESS_LONG_CONTEXT_TURN_${index}_OK`;
+    const previousState = currentState;
+    await sendBackendPrompt(cdp, `Reply with this exact marker as the first line: ${turnMarker}\nDo not use tools.\n\n${payload}`, turnMarker, conversationId, timeoutMs);
+    currentState = await evaluate(cdp, `(async () => {
+      await window.api.ackTranscript(${jsString(conversationId)}, '');
+      return window.api.getState(${jsString(conversationId)});
+    })()`, 30000);
+    if (currentState?.conversationId !== conversationId) throw new Error(`long-context turn ${index} returned a different conversation`);
+    const stateText = JSON.stringify({ chatMessages: currentState?.chatMessages || [], workRuns: currentState?.workRuns || [] });
+    if (!stateText.includes(turnMarker)) throw new Error(`long-context transcript lost ${turnMarker}: ${redact(stateText).slice(-1200)}`);
+    turnMarkers.push(turnMarker);
+    const priorWindow = previousState?.contextWindow || {};
+    const nextWindow = currentState?.contextWindow || {};
+    const priorCompressionAt = previousState?.contextCompression?.at || '';
+    const nextCompression = currentState?.contextCompression || null;
+    const events = (currentState?.workRuns || []).flatMap(run => run.events || [])
+      .filter(event => event?.toolName === 'context_compression' || String(event?.content || '').toLowerCase().includes('context compression completed'))
+      .map(event => ({ type: event.type, toolName: event.toolName || '' }));
+    for (const event of events) compressionEventsByKey.set(JSON.stringify(event), event);
+    const nextEntries = Number(nextWindow.cacheEntries || 0) + Number(nextWindow.archiveEntries || 0);
+    const didCompress = !!(nextCompression?.at && nextCompression.at !== startCompressionAt && nextCompression.at !== priorCompressionAt)
+      || events.length > 0
+      || nextEntries > initialEntries;
+    if (didCompress && !compressionRound) {
+      compressionRound = index;
+      compression = nextCompression;
+      beforeCompressionWindow = priorWindow;
+      afterCompressionWindow = nextWindow;
+    }
+  }
+  const compressionEvents = [...compressionEventsByKey.values()];
+  const entriesBefore = initialEntries;
+  const entriesAfter = Number(afterCompressionWindow.cacheEntries || 0) + Number(afterCompressionWindow.archiveEntries || 0);
+  const compressionObserved = !!(compression?.at || compressionEvents.length || entriesAfter > entriesBefore);
+  const metrics = {
+    turns,
+    payloadCharsPerTurn: payload.length,
+    totalPayloadChars: payload.length * turns,
+    compressionEnabled: currentState?.contextWindow?.compressionEnabled,
+    runtimeMaxTokens,
+    runtimeLongHistoryTriggerTokens: runtimeTriggerTokens,
+    before: {
+      maxTokens: beforeCompressionWindow.maxTokens,
+      estimatedTokens: beforeCompressionWindow.estimatedTokens,
+      longHistoryTokens: beforeCompressionWindow.longHistoryTokens,
+      longHistoryTriggerTokens: beforeCompressionWindow.longHistoryTriggerTokens,
+      thresholdReached: beforeCompressionWindow.thresholdReached,
+      cacheEntries: beforeCompressionWindow.cacheEntries,
+      archiveEntries: beforeCompressionWindow.archiveEntries,
+    },
+    after: {
+      maxTokens: afterCompressionWindow.maxTokens,
+      estimatedTokens: afterCompressionWindow.estimatedTokens,
+      longHistoryTokens: afterCompressionWindow.longHistoryTokens,
+      longHistoryTriggerTokens: afterCompressionWindow.longHistoryTriggerTokens,
+      thresholdReached: afterCompressionWindow.thresholdReached,
+      cacheEntries: afterCompressionWindow.cacheEntries,
+      archiveEntries: afterCompressionWindow.archiveEntries,
+    },
+    compressionAt: compression?.at || currentState?.contextCompression?.at || '',
+    compressionRound,
+    compressionEvents,
+  };
+  const continuationMarkers = [];
+  for (let index = 1; index <= continuationRounds; index += 1) {
+    const continuationMarker = `NM_STRESS_LONG_CONTEXT_CONTINUE_${index}_OK`;
+    const continuationResult = await sendBackendPrompt(cdp, `Continue this conversation and reply with exactly ${continuationMarker}. Do not use tools.`, continuationMarker, conversationId, timeoutMs);
+    const returnedText = JSON.stringify({ chatMessages: continuationResult?.chatMessages || [], workRuns: continuationResult?.workRuns || [] });
+    if (!returnedText.includes(continuationMarker)) throw new Error(`post-compression continuation ${index} lost its exact marker: ${redact(returnedText).slice(-900)}`);
+    continuationMarkers.push(continuationMarker);
+  }
+  const finalState = await evaluate(cdp, `(async () => {
+    await window.api.ackTranscript(${jsString(conversationId)}, '');
+    return window.api.getState(${jsString(conversationId)});
+  })()`, 30000);
+  const finalTranscript = JSON.stringify(finalState?.chatMessages || []);
+  for (const expectedMarker of [...turnMarkers, ...continuationMarkers]) {
+    if (!finalTranscript.includes(expectedMarker)) throw new Error(`single conversation transcript lost a post-compression marker ${expectedMarker}`);
+  }
+  if (!compressionObserved) throw new Error(`long-context compression not observed after ${turns} accumulated turns: ${redact(JSON.stringify(metrics))}`);
+  return { ...metrics, compressionObserved, continuationRounds, continuationMarkers, transcriptMessages: finalState?.chatMessages?.length || 0, providerUsageRequests: finalState?.contextWindow?.providerUsageRequests || 0 };
 }
 
 function shouldRunScenario(name) {
   return selectedScenarios.size === 0 || selectedScenarios.has(name);
 }
 
-function stopReleaseProcesses(root = '') {
-  const target = path.resolve(exePath);
-  const rootPath = String(root || '').trim();
-  // Electron's main process owns child GPU/renderer/utility processes whose
-  // executable is the console runtime, not exePath.  Kill the exact process
-  // tree by root first; only fall back to the exact packaged GUI executable
-  // when no isolated root was supplied.  Never sweep unrelated Newmark roots.
-  const command = rootPath
-    ? `$root = ${psQuote(rootPath)}; $ids = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { [string]$_.CommandLine -like "*$root*" } | Select-Object -ExpandProperty ProcessId); foreach ($id in $ids) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }; Write-Output 'STOP_REAL_STRESS_ROOT_PROCESSES_OK'`
-    : `$target = ${psQuote(target)}; Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $target } | Stop-Process -Force; Write-Output 'STOP_REAL_STRESS_PROCESSES_OK'`;
-  spawnSync('powershell.exe', [
-    '-NoProfile',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-Command',
-    command,
-  ], { windowsHide: true, encoding: 'utf8' });
+function sha256File(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return '';
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex').toUpperCase();
 }
 
-function releaseProcessCount() {
-  const command = `$target = ${psQuote(exePath)}; (@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $target })).Count`;
+function stopReleaseProcesses(_root = '', processId = activeReleaseProcessId) {
+  const pid = Number(processId || 0);
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  // Terminate only the stress launch's process tree. Never sweep every
+  // installed Newmark process: the user may already have their own app open.
+  spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+    windowsHide: true,
+    encoding: 'utf8',
+  });
+}
+
+function releaseProcessCount(processId = activeReleaseProcessId) {
+  const pid = Number(processId || 0);
+  if (!Number.isInteger(pid) || pid <= 0) return 0;
+  const command = `if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { 1 } else { 0 }`;
   const running = spawnSync('powershell.exe', [
     '-NoProfile',
     '-ExecutionPolicy',
@@ -1032,6 +1812,14 @@ function writeReport(provider, root, skippedReason = '') {
     .replace(/[^A-Za-z0-9._-]+/g, '-')
     .slice(0, 80) || 'debug';
   const reportPath = path.join(repoRoot, 'archive', `${date}-real-provider-stress-${reportTag}.md`);
+  const evidencePath = reportPath.replace(/\.md$/i, '.json');
+  const packagedAppAsarPath = path.join(path.dirname(exePath), 'resources', 'app.asar');
+  const artifactIdentity = {
+    exePath,
+    exeSha256: sha256File(exePath),
+    appAsarPath: packagedAppAsarPath,
+    appAsarSha256: sha256File(packagedAppAsarPath),
+  };
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   const failCount = results.filter(r => r.status === 'fail').length;
   const passCount = results.filter(r => r.status === 'pass').length;
@@ -1045,8 +1833,9 @@ function writeReport(provider, root, skippedReason = '') {
     ? results.map(r => `| ${r.name} | ${r.status} | ${r.rootCause || ''} | ${r.elapsedMs} | ${String(r.detail || '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|').slice(0, 700)} |`).join('\n')
     : '| real-provider-stress | skip | missing-credentials | 0 | 未执行真实重压：缺少凭据 |';
   const providerLine = provider
-    ? `source=${provider.source}; protocol=${provider.protocol}; model=${provider.model}`
+    ? `source=${provider.source}; protocol=${provider.protocol}; model=${provider.model}; upstreamHost=${providerEvidence.upstreamHost || new URL(provider.baseUrl).host}; forwardingProxy=enabled`
     : 'provider=missing';
+  const upstreamRows = serializableProviderEvidence().map(item => `| ${item.requestMarker || ''} | ${item.requestModel || ''} | ${item.statusCode || ''} | ${item.responseId || ''} | ${item.responseModel || ''} | ${item.firstByteMs ?? ''} | ${item.clientFirstByteMs ?? ''} | ${item.elapsedMs ?? ''} | ${item.upstreamElapsedMs ?? ''} | ${item.responseUsage ? `${item.responseUsage.input}/${item.responseUsage.output}` : ''} | ${item.responseMarkers.join(',')} |`).join('\n');
   const content = `# ${date} Real Provider Stress Debug
 
 ## Scope
@@ -1061,14 +1850,19 @@ Implemented and/or ran the opt-in real-provider stress harness for the packaged 
 
 ## Stress Parameters
 
+- packagedExe=${artifactIdentity.exePath} (sha256=${artifactIdentity.exeSha256 || 'missing'})
+- packagedAppAsar=${artifactIdentity.appAsarPath} (sha256=${artifactIdentity.appAsarSha256 || 'missing'})
 - ${providerLine}
+- realUpstreamCalls=${providerEvidence.requests.length}; the local forwarding proxy records sanitized request/response metadata only (no key, prompt body, or raw response).
 - scenarios=${selectedScenarios.size ? [...selectedScenarios].join(',') : 'all'}
 - cliRounds=${cliRounds}
 - uiRounds=${uiRounds}
 - goalRounds=${goalRounds}
   - timeoutMs=${timeoutMs}
   - contextMaxTokens=${contextMaxTokens}
-  - longContextPayloadRepeats=${longContextPayloadRepeats}
+  - longContextTurns=${longContextTurns}
+  - queueFirstResponseHoldMs=${queueFirstResponseHoldMs}
+  - concurrentResponseHoldMs=${concurrentResponseHoldMs}
   - skipped=${skipped}
 - tempRoot=${keepRoot ? root : '<removed>'}
 
@@ -1078,9 +1872,15 @@ Implemented and/or ran the opt-in real-provider stress harness for the packaged 
 | --- | --- | --- | ---: | --- |
 ${scenarioRows}
 
+## Remote Upstream Request Evidence
+
+| Request marker | Requested model | HTTP status | Provider response ID | Returned model | Upstream headers ms | Client first byte ms | Proxy response complete ms | Upstream response complete ms | Reported input/output tokens | Response markers |
+| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | --- | --- |
+${upstreamRows || '| none | | | | | | | | |'}
+
 ## Failure Classification
 
-Failures are classified as conversation-title-failed, provider-limit, provider-http-error, run-terminal-error, run-interrupted, app-timeout-or-provider-timeout, conversation-leak, encoding-error, process-leak, secret-leak, or app-or-provider-error. A title-gate failure does not establish conversation leakage or identify an upstream HTTP status unless that status was observed separately. UI marker/idle waits stop on a new matching run's terminal error; old runs and other targets cannot trigger this check. Error text is redacted before it is written here.
+Failures are classified as conversation-title-failed, provider-limit, provider-http-error, concurrency-not-observed, run-terminal-error, run-interrupted, app-timeout-or-provider-timeout, conversation-leak, encoding-error, process-leak, secret-leak, or app-or-provider-error. A title-gate failure does not establish conversation leakage or identify an upstream HTTP status unless that status was observed separately. UI marker/idle waits stop on a new matching run's terminal error; old runs and other targets cannot trigger this check. Error text is redacted before it is written here.
 
 ## Final Verdict
 
@@ -1093,8 +1893,32 @@ Failures are classified as conversation-title-failed, provider-limit, provider-h
 - If this report was skipped, run \`cd DESKTOP && npm.cmd run release:real-provider-stress\` with \`NEWMARK_REAL_STRESS_*\` or \`ANTHROPIC_*\` credentials to collect live evidence.
 `;
   fs.writeFileSync(reportPath, content, 'utf8');
+  fs.writeFileSync(evidencePath, JSON.stringify({
+    generatedAt: new Date().toISOString(),
+    artifact: artifactIdentity,
+    provider: provider ? {
+      source: provider.source,
+      name: provider.name,
+      resolvedDeploymentProviderId: providerEvidence.resolvedProviderId || '',
+      protocol: provider.protocol,
+      model: provider.model,
+      upstreamHost: providerEvidence.upstreamHost || new URL(provider.baseUrl).host,
+    } : null,
+    parameters: {
+      scenarios: [...selectedScenarios],
+      uiRounds,
+      timeoutMs,
+      contextMaxTokens,
+      longContextTurns,
+      queueFirstResponseHoldMs,
+      concurrentResponseHoldMs,
+    },
+    results,
+    upstreamRequests: serializableProviderEvidence(),
+  }, null, 2), 'utf8');
   log(`report ${reportPath}`);
-  return { reportPath, verdict, failCount, passCount, skipped };
+  log(`evidence ${evidencePath}`);
+  return { reportPath, evidencePath, verdict, failCount, passCount, skipped };
 }
 
 async function main() {
@@ -1116,8 +1940,10 @@ async function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'NewmarkRealProviderStress-'));
   let child;
   let cdp;
+  let providerProxy;
   try {
-    writeConfig(root, provider);
+    providerProxy = await createProviderEvidenceProxy(provider);
+    writeConfig(root, { ...provider, baseUrl: providerProxy.localBaseUrl });
     if (shouldRunScenario('cli-rounds')) await recordScenario('cli-rounds', () => runCliStress(root, provider));
 
     const launched = await launchUi(root);
@@ -1132,25 +1958,27 @@ async function main() {
     if (shouldRunScenario('web-fetch-reachability')) await recordScenario('web-fetch-reachability', () => runWebFetchReachabilityStress(cdp));
     if (shouldRunScenario('queue-drain')) await recordScenario('queue-drain', () => runQueueStress(cdp));
     if (shouldRunScenario('conversation-isolation')) await recordScenario('conversation-isolation', () => runConversationIsolationStress(cdp));
+    if (shouldRunScenario('multi-conversation-running')) await recordScenario('multi-conversation-running', () => runConcurrentConversationSwitchStress(cdp));
     if (shouldRunScenario('long-context')) await recordScenario('long-context', () => runLongContextStress(cdp));
   } finally {
     try { if (cdp?.ws) cdp.ws.close(); } catch {}
     try { if (child && !child.killed) child.kill(); } catch {}
     await sleep(1000);
-    stopReleaseProcesses(root);
-    const remaining = releaseProcessCount();
+    stopReleaseProcesses(root, child?.pid || activeReleaseProcessId);
+    const remaining = releaseProcessCount(child?.pid || activeReleaseProcessId);
     results.push({
       name: 'release-process-cleanup',
       status: remaining === 0 ? 'pass' : 'fail',
       rootCause: remaining === 0 ? '' : 'process-leak',
       elapsedMs: 0,
-      detail: `remaining=${remaining}`,
+      detail: `rootPid=${child?.pid || activeReleaseProcessId}; rootProcessRemaining=${remaining}`,
     });
     if (keepRoot) log(`kept root: ${root}`);
     else {
       try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 }); }
       catch (error) { log(`warning: could not remove isolated stress root after process cleanup: ${error.message}`); }
     }
+    try { await providerProxy?.close(); } catch {}
     const report = writeReport(provider, root);
     if (report.failCount > 0) process.exitCode = 1;
   }
@@ -1168,7 +1996,6 @@ if (require.main === module) main().catch(error => {
   });
   console.error(`[release-real-provider-stress] ${redact(error && (error.stack || error.message) || error)}`);
   try {
-    stopReleaseProcesses();
     writeReport(providerFromEnv(), '');
   } catch {}
   process.exit(1);

@@ -173,6 +173,8 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
         dryRun: args.dry_run === true || args.dryRun === true,
         captureMaxWidth: Number(args.capture_max_width || args.captureMaxWidth),
         captureMaxHeight: Number(args.capture_max_height || args.captureMaxHeight),
+        sparseWaitMs: Number(args.sparse_wait_ms ?? args.sparseWaitMs),
+        signal,
         gradientColors: Array.isArray(args.gradient_colors) ? args.gradient_colors as string[] : undefined,
         gradientSpeed: Number(args.gradient_speed || 0) || undefined,
         gradientWidth: Number(args.gradient_width || 0) || undefined,

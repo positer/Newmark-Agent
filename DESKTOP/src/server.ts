@@ -14,13 +14,24 @@ import { WorkspaceFileRouter } from './core/workspaceFileRouter';
 import { WorkspaceInfo } from './core/workspace';
 import { executeWorkspaceBash } from './core/nativeBash';
 import { currentAppVersion } from './core/installUpdate';
-import { confirmPairing, ensureMobileToken, lanIpv4, pairingStatus, tailscaleIpv4 } from './core/mobilePairing';
+import { confirmPairing, ensureMobileToken, lanIpv4, MOBILE_PORT, pairingStatus, tailscaleIpv4 } from './core/mobilePairing';
 import { WorkEventCoalescer } from './core/workEventCoalescer';
 import { conversationListEvent } from './core/conversationListEvent';
 import { publicSearchMcpManifest } from './core/searchMcpPool';
 import type { AgentPromptMessage } from './core/conversationKernel';
 
 const PORT = 47890;
+/**
+ * Effective listen/advertised port. Production and every existing harness use
+ * `PORT` untouched (the isolated-server gates patch that literal); the
+ * `NEWMARK_MOBILE_PORT` override exists so a second, isolated dev/test instance
+ * can host a paired client without taking the production port away from the
+ * instance the user is already running. It stays in sync with the pairing
+ * URL/QR, which resolves the same override through `MOBILE_PORT`.
+ */
+const HOSTED_PORT = Number(process.env.NEWMARK_MOBILE_PORT) > 0
+  ? Math.trunc(Number(process.env.NEWMARK_MOBILE_PORT))
+  : PORT;
 let agent: Agent | null = null;
 let automation: AutomationManager | null = null;
 let workspaceFileRouter: WorkspaceFileRouter | null = null;
@@ -103,7 +114,7 @@ function mobileAuthorized(req: http.IncomingMessage): boolean {
   const bearer = String(req.headers.authorization || '');
   if (bearer.startsWith('Bearer ')) return bearer.slice('Bearer '.length).trim() === mobileToken;
   try {
-    const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+    const url = new URL(req.url || '/', `http://localhost:${HOSTED_PORT}`);
     const queryToken = url.searchParams.get('token') || '';
     return queryToken === mobileToken;
   } catch {
@@ -228,7 +239,7 @@ async function handleMobileWorkspaceUpload(req: http.IncomingMessage, res: http.
     return;
   }
 
-  const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+  const url = new URL(req.url || '/', `http://localhost:${HOSTED_PORT}`);
   const workspaceId = url.searchParams.get('workspaceId') || '';
   const directory = url.searchParams.get('directory') || '';
   const fileName = url.searchParams.get('fileName') || '';
@@ -385,12 +396,16 @@ function mobileScopedAgent(ws: WorkspaceInfo, conversationId: string): Agent {
 
 function mobileConversationRuntimeBusy(current: Agent, ws: WorkspaceInfo, conversationId: string): boolean {
   const scoped = mobileScopedRuntimes.get(mobileRuntimeKey(String(ws.id || ''), conversationId));
-  if (scoped && scoped.agent.status !== 'idle') return true;
+  // Only an in-flight run blocks a mobile mutation. `goal_paused` (a goal the
+  // user paused) and `error` (a terminal failure) are not running work, yet
+  // treating them as busy refused archiving the conversation the user is
+  // actually looking at, which is the common case for a paused goal.
+  if (scoped && scoped.agent.status === 'working') return true;
   const currentWs = current.workspace.current;
   return !!currentWs
     && path.resolve(currentWs.path) === path.resolve(ws.path)
     && current.activeConversationId === conversationId
-    && current.status !== 'idle';
+    && current.status === 'working';
 }
 
 function handleMobileEvents(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -494,8 +509,7 @@ function applyConfigPatch(cfg: Record<string, unknown>): void {
     case 'autoSwitch': agent.config.set('models', 'auto_switch', value === true || value === 'on'); break;
     case 'autoSwitchScope': agent.config.set('models', 'auto_switch_scope', value === 'provider' ? 'provider' : 'all'); break;
     case 'fallbackOnUnavailable': agent.config.set('models', 'fallback_on_unavailable', value === true || value === 'on'); break;
-    case 'switchTendency': agent.config.set('models', 'auto_switch_preference', value); break;
-    case 'clearLearnedAutoPreferences': if (value === true) agent.clearLearnedModelPreferences(); break;
+    case 'switchTendency': agent.config.set('models', 'auto_switch_preference', ['conservative', 'balanced', 'aggressive'].includes(String(value)) ? String(value) : 'balanced'); break;
     case 'openAIApiMode': agent.config.set('models', 'openai_api_mode', ['chat_stream', 'chat', 'responses'].includes(String(value)) ? value : 'chat_stream'); break;
     case 'providers': agent.updateProviders(value); break;
     case 'defaultFlow': agent.config.set('flow', 'default_flow', value); break;
@@ -559,7 +573,7 @@ function jsonResponse(res: http.ServerResponse, data: unknown, code = 200): void
 }
 
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, body: string): Promise<void> {
-  const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+  const url = new URL(req.url || '/', `http://localhost:${HOSTED_PORT}`);
   const pathname = url.pathname;
 
   if (pathname.startsWith('/api/mobile/')) {
@@ -584,6 +598,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         jsonResponse(res, {
           mode: agent.mode, model: agent.modelSelectionValue(), modelLabel: agent.modelLabel(),
           resolvedDeployment: agent.activeDeployment(), routeDecision: agent.lastRouteDecision,
+          jevDecisionModel: agent.jevDecisionModelState(),
           intelligence: agent.intelligence, status: agent.status, goal: agent.goal,
           models: agent.allModelNames(), inputMode: agent.inputMode,
           conversationId: agent.activeConversationId,
@@ -1582,7 +1597,7 @@ function startServer(root: string, options: HostedMobileServerOptions = {}): htt
       return;
     }
 
-    const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+    const url = new URL(req.url || '/', `http://localhost:${HOSTED_PORT}`);
 
     if (url.pathname === '/api/mobile/events') {
       handleMobileEvents(req, res);
@@ -1638,15 +1653,15 @@ function startServer(root: string, options: HostedMobileServerOptions = {}): htt
     hostedServerError = error instanceof Error ? error.message : String(error);
     if (hostedServer === server) hostedServer = null;
   });
-  server.listen(PORT, bindHost, () => {
+  server.listen(HOSTED_PORT, bindHost, () => {
     console.log(`\n  Newmark Agent v1.0 - Server Mode`);
-    console.log(`  Bind: ${bindHost}:${PORT}`);
-    console.log(`  GUI: http://localhost:${PORT}`);
+    console.log(`  Bind: ${bindHost}:${HOSTED_PORT}`);
+    console.log(`  GUI: http://localhost:${HOSTED_PORT}`);
     console.log(`  Tailscale IPv4: ${tailscale || 'not detected'}`);
     console.log(`  LAN IPv4: ${lan || 'not detected'}`);
-    console.log(`  Mobile endpoint: http://${accessHost}:${PORT}/api/mobile/hello?token=<token>`);
+    console.log(`  Mobile endpoint: http://${accessHost}:${HOSTED_PORT}/api/mobile/hello?token=<token>`);
     console.log(`  Mobile token file: ${tokenPath}`);
-    console.log(`  Mobile events (SSE): http://${accessHost}:${PORT}/api/mobile/events?token=<token>`);
+    console.log(`  Mobile events (SSE): http://${accessHost}:${HOSTED_PORT}/api/mobile/events?token=<token>`);
     console.log(`  Press Ctrl+C to stop\n`);
   });
   return server;
@@ -1679,7 +1694,7 @@ async function probeHostedServer(host: string): Promise<{ ok: boolean; error: st
   return await new Promise(resolve => {
     const request = http.get({
       hostname: host,
-      port: PORT,
+      port: HOSTED_PORT,
       path: `/api/mobile/hello?token=${encodeURIComponent(mobileToken)}`,
       timeout: 1800,
     }, response => {
@@ -1746,7 +1761,7 @@ export async function hostedServerStatus(enabled = true, probeHost = ''): Promis
     reachable,
     state,
     host,
-    port: PORT,
+    port: HOSTED_PORT,
     error: state === 'error' ? (error || 'Mobile server is not reachable') : '',
     checkedAt: new Date().toISOString(),
     startedAt: hostedServerStartedAt,

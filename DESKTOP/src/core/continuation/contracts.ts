@@ -193,6 +193,7 @@ export interface ContinuationEvent {
     | 'BranchPaused'
     | 'BranchResumed'
     | 'BuildQueueRepaired'
+    | 'AttemptOrphanRecovered'
     | 'StaleWriteRejected';
   workspaceId: WorkspaceId;
   rootId: RootId;

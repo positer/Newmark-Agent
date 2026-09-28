@@ -17,6 +17,7 @@ const consoleLauncherSource = fs.readFileSync(path.join(desktopRoot, 'scripts', 
 const consoleWrapperSource = fs.readFileSync(path.join(desktopRoot, 'scripts', 'newmark-console-wrapper.c'), 'utf8');
 const afterPackSource = fs.readFileSync(path.join(desktopRoot, 'scripts', 'after-pack-win-icon.cjs'), 'utf8');
 const msiHookSource = fs.readFileSync(path.join(desktopRoot, 'scripts', 'patch-msi-project.cjs'), 'utf8');
+const buildDriverSource = fs.readFileSync(path.join(desktopRoot, 'scripts', 'build-driver.cjs'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(desktopRoot, 'package.json'), 'utf8')) as {
   bin?: Record<string, string>;
   scripts?: Record<string, string>;
@@ -80,7 +81,9 @@ assert(packageJson.scripts?.['release:safe-shared-root-restart-stress']
   && fs.existsSync(path.join(desktopRoot, 'scripts', 'release-safe-shared-root-restart-stress.cjs')),
   'release gates must retain the protected-cwd shared GUI/TUI/CLI restart stress probe');
 assert(packageJson.bin?.newmark === 'dist/launcher.js', 'npm global command must route newmark to dist/launcher.js');
-assert(packageJson.scripts?.build?.includes('build-tui.cjs'), 'normal build must include the TUI copy step');
+assert(packageJson.scripts?.build?.includes('build-driver.cjs')
+  && buildDriverSource.includes("['TUI copy', [path.join(root, 'scripts', 'build-tui.cjs')]]"),
+'normal build driver must include the TUI copy step');
 assert(packageJson.scripts?.['test:full-release']?.includes('test:desktop:built')
   && packageJson.scripts?.['test:full-release']?.includes('test:tui:built')
   && packageJson.scripts?.['test:full-release']?.includes('test:ssh-tui-stress:built')

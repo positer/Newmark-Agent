@@ -6,7 +6,6 @@ import { TerminalTakeoverEvent, TerminalTakeoverOwnerFilter, TerminalTakeoverSta
 import {
   WslAgentPromptRequest,
   WslAgentPromptResult,
-  WslAutoRouteRatingResult,
   WslAgentRequest,
   WslAgentResponse,
   WslAgentWorkspace,
@@ -343,19 +342,6 @@ export class WslAgentClient {
   async contextCompress(target: ConversationRuntimeTarget, options: { keepRecent?: number; force?: boolean } = {}): Promise<Record<string, unknown>> {
     await this.start();
     return await this.request('context_compress', { target: await this.mapTarget(target), options }, 120_000) as Record<string, unknown>;
-  }
-
-  async rateAutoRoute(
-    target: ConversationRuntimeTarget,
-    score: number,
-    routeId = '',
-  ): Promise<WslAutoRouteRatingResult> {
-    await this.start();
-    return await this.request('rate_auto_route', {
-      target: await this.mapTarget(target),
-      score,
-      routeId: String(routeId || ''),
-    }, 5_000) as WslAutoRouteRatingResult;
   }
 
   async setWorkRunExpanded(target: ConversationRuntimeTarget, runId: string, expanded: boolean): Promise<boolean> {

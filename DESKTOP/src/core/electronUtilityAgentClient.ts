@@ -9,7 +9,6 @@ import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } fr
 import { ConversationQueueAction, ConversationQueueActionInput } from './conversationKernel';
 import {
   UtilityAgentPromptResult,
-  UtilityAutoRouteRatingResult,
   UtilityAgentRequest,
   UtilityAgentResponse,
   UtilityAgentSnapshotResult,
@@ -21,6 +20,23 @@ import {
 } from './utilityAgentProtocol';
 
 type UtilityChild = ReturnType<typeof utilityProcess.fork>;
+
+/**
+ * Explicit heap ceiling for one conversation host: half of what the machine has
+ * free right now, clamped to a range that is useful on an 8 GB laptop and still
+ * generous on a workstation. Reclamation (idle recycle + the snapshot/visual
+ * budgets) is what keeps the host below this; the ceiling only makes the failure
+ * mode predictable instead of a silent ~3 GB V8 abort.
+ */
+function hostHeapLimitMiB(): number {
+  let freeMiB = 0;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const os = require('node:os') as typeof import('node:os');
+    freeMiB = Math.floor(os.freemem() / 1024 ** 2);
+  } catch { /* fall back to the lower bound */ }
+  return Math.max(1024, Math.min(4096, Math.floor(freeMiB / 2) || 1024));
+}
 // PowerShell startup can be slow on a cold or busy Windows host even though
 // the precompiled Toolhelp helper itself is healthy.
 const WINDOWS_TREE_SNAPSHOT_TIMEOUT_MS = 12_000;
@@ -1082,6 +1098,21 @@ export class ElectronUtilityAgentClient {
   private async startNewChild(): Promise<void> {
     const child = utilityProcess.fork(this.hostScript, [], {
       cwd: this.root,
+      /**
+       * dev-0.6.6 long-run stability: give the per-conversation Agent host an
+       * explicit heap ceiling derived from the machine's available memory
+       * instead of relying on the process default (the field crash aborted at
+       * ~3017 MB with no ceiling policy at all). Recycling an idle host that is
+       * over its budget is handled by the pool.
+       *
+       * `NEWMARK_HOST_HEAP_SNAPSHOT=1` additionally enables
+       * `--heapsnapshot-near-heap-limit` for diagnosis; it is off by default so
+       * no snapshot capability is active in normal runs.
+       */
+      execArgv: [
+        `--max-old-space-size=${hostHeapLimitMiB()}`,
+        ...(process.env.NEWMARK_HOST_HEAP_SNAPSHOT === '1' ? ['--heapsnapshot-near-heap-limit=1'] : []),
+      ],
       env: {
         ...process.env,
         NEWMARK_RUNTIME_ROOT: this.root,
@@ -1151,7 +1182,7 @@ export class ElectronUtilityAgentClient {
     return await this.request('prompt', { ...params, target: this.checkedTarget(params.target) }, 0) as UtilityAgentPromptResult;
   }
 
-  async snapshot(options: { window?: number; before?: number } = {}): Promise<UtilityAgentSnapshotResult> {
+  async snapshot(options: { window?: number; before?: number; transcript?: 'auto' | 'force'; transcriptRevision?: string } = {}): Promise<UtilityAgentSnapshotResult> {
     await this.start();
     return await this.requestTargetSnapshot(options);
   }
@@ -1192,15 +1223,6 @@ export class ElectronUtilityAgentClient {
   async contextCompress(options: { keepRecent?: number; force?: boolean } = {}): Promise<Record<string, unknown>> {
     await this.start();
     return await this.request('context_compress', { target: this.target, options }, 120_000) as Record<string, unknown>;
-  }
-
-  async rateAutoRoute(score: number, routeId = ''): Promise<UtilityAutoRouteRatingResult> {
-    await this.start();
-    return await this.request('rate_auto_route', {
-      target: this.target,
-      score,
-      routeId: String(routeId || ''),
-    }, 5_000) as UtilityAutoRouteRatingResult;
   }
 
   async setWorkRunExpanded(runId: string, expanded: boolean): Promise<boolean> {

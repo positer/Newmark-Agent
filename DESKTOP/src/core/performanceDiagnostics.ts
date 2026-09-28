@@ -2,6 +2,7 @@ export type AgentPerformanceStage =
   | 'runtime_acquire'
   | 'context_prepare'
   | 'persistence'
+  | 'jev_route_decision'
   | 'provider_request'
   | 'first_token'
   | 'tool_execution'

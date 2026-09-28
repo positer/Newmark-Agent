@@ -261,6 +261,12 @@ export class LLMProvider {
   }
 
   private reasoningEffort(model: string, tier?: string): string | undefined {
+    // JEV route decisions explicitly request the lowest native reasoning mode.
+    // This bypasses per-model tier maps so a configured map cannot silently
+    // turn a "no thinking" decision request back into medium effort.
+    if (tier === 'none') {
+      return this.supportsNativeNoReasoningEffort(model) ? 'none' : undefined;
+    }
     const mapped = this.mappedNativeEffort(model, tier);
     if (mapped !== undefined) return mapped;
     if (!/^(?:gpt-5|o[134](?:-|$)|codex)|(?:reasoner|reasoning|deepseek-r1|deepseek-reasoner|\br1\b)/i.test(model)) return undefined;
@@ -439,10 +445,23 @@ export class LLMProvider {
     // several isolated workers concurrently call a plain-HTTP local provider.
     // Node's HTTP client owns the full body lifecycle and is deterministic for
     // loopback transports, while remote HTTPS providers retain fetch semantics.
+    /**
+     * dev-0.6.6: serialize the request body **once** per attempt and reuse that
+     * same string for the loopback transport and for the Node-HTTP fallback.
+     * Re-serializing the whole context on the fallback path held a second full
+     * copy of a potentially very large payload (the heap snapshot showed an
+     * 84 MiB serialized request body) for no behavioural difference — the bytes
+     * are identical.
+     */
+    let serializedBody = '';
+    const bodyText = (): string => {
+      if (!serializedBody) serializedBody = JSON.stringify(body);
+      return serializedBody;
+    };
     if (this.isPlainHttpLoopback(url)) {
       const pathname = (() => { try { return new URL(url).pathname; } catch { return ''; } })();
       this.transportDiagnostic('loopback:start', pathname);
-      const local = await this.nodeHttpJson('POST', url, headers, JSON.stringify(body), signal, effectiveTimeout);
+      const local = await this.nodeHttpJson('POST', url, headers, bodyText(), signal, effectiveTimeout);
       this.transportDiagnostic('loopback:complete', `status=${local.status} bytes=${Buffer.byteLength(local.body || '')}`);
       return {
         ok: local.status >= 200 && local.status < 300,
@@ -463,7 +482,7 @@ export class LLMProvider {
       const response = await this.providerFetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body: bodyText(),
         signal: abort.signal,
       }, true);
       // Keep the caller's cancellation and explicit deadline attached through
@@ -480,7 +499,7 @@ export class LLMProvider {
       if (signal?.aborted) throw abortFailure(signal);
       if (abort.signal.aborted) throw abortFailure(abort.signal);
       if (!this.shouldUseNodeHttpFallback(e)) throw e;
-      const fallback = await this.nodeHttpJson('POST', url, headers, JSON.stringify(body), signal, effectiveTimeout);
+      const fallback = await this.nodeHttpJson('POST', url, headers, bodyText(), signal, effectiveTimeout);
       return {
         ok: fallback.status >= 200 && fallback.status < 300,
         status: fallback.status,
@@ -904,7 +923,7 @@ export class LLMProvider {
       max_output_tokens: maxTokens,
     };
     const effort = this.reasoningEffort(model, reasoningTier);
-    if (effort) body.reasoning = { effort, summary: 'auto' };
+    if (effort) body.reasoning = effort === 'none' ? { effort } : { effort, summary: 'auto' };
     if (systemPrompt) body.instructions = systemPrompt;
     const convertedTools = this.responsesTools(tools);
     if (convertedTools.length) {
@@ -1535,8 +1554,18 @@ export class LLMProvider {
     maxTokens: number,
     schema: Readonly<Record<string, unknown>>,
     signal?: AbortSignal,
+    reasoningTier?: string,
+    schemaName = 'newmark_validation_probe',
+    onUsage?: (usage: NonNullable<StreamToken['usage']>) => void,
+    reasoningControlRequired = false,
   ): Promise<string> {
-    const schemaName = 'newmark_validation_probe';
+    if (reasoningTier === 'none' && this.protocol() !== 'anthropic'
+      && (reasoningControlRequired || this.requiresNativeReasoningControl(model))) {
+      const supportsNone = this.protocol() !== 'github_models' && this.supportsNativeNoReasoningEffort(model);
+      if (!supportsNone) {
+        throw new Error('The current model does not expose a native no-reasoning mode; JEV requires thinking off.');
+      }
+    }
     if (this.protocol() === 'anthropic') {
       const { system, messages: anthropicMessages } = this.anthropicMessages(messages, systemPrompt);
       const body: Record<string, unknown> = {
@@ -1548,10 +1577,16 @@ export class LLMProvider {
           format: { type: 'json_schema', schema },
         },
       };
+      if (reasoningTier === 'none') {
+        // Fail closed if the provider rejects disabled thinking for this
+        // request; Auto routing has no alternate decision selector.
+        body.thinking = { type: 'disabled' };
+      }
       if (system) body.system = system;
       const response = await this.postJsonWithFetchFallback(providerEndpoint(this.cleanBaseUrl(), '/messages'), this.anthropicHeaders(), body, 120000, signal);
       if (!response.ok) throw new Error(this.llmErrorText(response, await response.text()));
-      const json = await response.json() as { content?: Array<Record<string, unknown>> };
+      const json = await response.json() as Record<string, unknown> & { content?: Array<Record<string, unknown>> };
+      onUsage?.(extractProviderUsage(json, { protocol: 'anthropic' }));
       return (json.content || [])
         .filter(block => block.type === 'text' && block.text)
         .map(block => this.extractTextValue(block.text))
@@ -1559,13 +1594,15 @@ export class LLMProvider {
     }
 
     if (this.protocol() !== 'github_models' && this.openAITransportMode() === 'responses') {
-      const body = this.responsesBody(model, messages, systemPrompt, temperature, maxTokens);
+      const body = this.responsesBody(model, messages, systemPrompt, temperature, maxTokens, [], reasoningTier);
       body.text = {
         format: { type: 'json_schema', name: schemaName, strict: true, schema },
       };
       const response = await this.postJsonWithFetchFallback(providerEndpoint(this.cleanBaseUrl(), '/responses'), this.openAIHeaders(), body, 120000, signal);
       if (!response.ok) throw new Error(this.llmErrorText(response, await response.text()));
-      return this.extractResponsesText(this.normalizeResponsesPayload(await response.json()));
+      const json = this.normalizeResponsesPayload(await response.json());
+      onUsage?.(extractProviderUsage(json));
+      return this.extractResponsesText(json);
     }
 
     const isGitHubModels = this.protocol() === 'github_models';
@@ -1585,6 +1622,7 @@ export class LLMProvider {
         json_schema: { name: schemaName, strict: true, schema },
       },
     };
+    if (!isGitHubModels) this.applyChatReasoningEffort(body, model, reasoningTier);
     const response = await this.postJsonWithFetchFallback(
       url,
       isGitHubModels ? this.githubModelsHeaders() : this.openAIHeaders(),
@@ -1593,7 +1631,17 @@ export class LLMProvider {
       signal,
     );
     if (!response.ok) throw new Error(this.llmErrorText(response, await response.text()));
-    return this.extractChatCompletionText(await response.json() as Record<string, unknown>);
+    const json = await response.json() as Record<string, unknown>;
+    onUsage?.(extractProviderUsage(json));
+    return this.extractChatCompletionText(json);
+  }
+
+  private requiresNativeReasoningControl(model: string): boolean {
+    return /(?:^|[/:])(?:gpt-5(?:[-.]|$)|o[134](?:[-.]|$))|(?:reasoner|reasoning|deepseek-r1|deepseek-reasoner|\br1\b)/i.test(model);
+  }
+
+  private supportsNativeNoReasoningEffort(model: string): boolean {
+    return /(?:^|[/:])gpt-5\.(?:[1-9]\d*)(?:[-.]|$)/i.test(model);
   }
 
   /**

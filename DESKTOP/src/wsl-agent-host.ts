@@ -183,13 +183,6 @@ async function handle(request: WslAgentRequest): Promise<unknown> {
   if (request.method === 'context_compress') {
     return kernel.compressContext(requestTarget(request.params), request.params.options);
   }
-  if (request.method === 'rate_auto_route') {
-    return kernel.rateAutoRoute(
-      requestTarget(request.params),
-      request.params.score,
-      request.params.routeId,
-    );
-  }
   if (request.method === 'set_work_run_expanded') {
     return kernel.setWorkRunExpanded(requestTarget(request.params), request.params.runId, request.params.expanded);
   }

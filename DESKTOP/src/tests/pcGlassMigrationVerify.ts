@@ -160,7 +160,7 @@ function main(): void {
   check(!!doc.getElementById('chat-area'), 'JSDOM：核心布局元素 #chat-area 保留');
   check(!!doc.getElementById('model-select-menu'), 'JSDOM：核心布局元素 #model-select-menu 保留');
   check(!!doc.getElementById('conversation-action-menu'), 'JSDOM：核心布局元素 #conversation-action-menu 保留');
-  check(/button::after\s*\{[^}]*backdrop-filter:\s*blur\(calc\(var\(--glass-blur-3\) \* 4\)\)[^}]*saturate\(145%\)/s.test(html), 'PC button 交互玻璃模糊接入统一强度变量');
+  check(/button:active:not\(:disabled\)::after\s*\{[^}]*backdrop-filter:\s*blur\(calc\(var\(--glass-blur-3\) \* 4\)\)\s+saturate\(145%\)/s.test(html), 'PC button 按下态玻璃模糊接入统一强度变量');
   check(/button:active:not\(:disabled\)::after\s*\{\s*opacity:\s*1/.test(html), 'PC button 按下时浮起玻璃层');
   check(!/button\s*\{[^}]*backdrop-filter/s.test(html), 'PC button 静态不常驻玻璃');
   check(/\.work-run-message,[\s\S]*\.conversation-work-run-body\s*\{[^}]*background:\s*transparent\s*!important[^}]*backdrop-filter:\s*none\s*!important[^}]*border-radius:\s*0\s*!important[^}]*box-shadow:\s*none\s*!important/s.test(html)

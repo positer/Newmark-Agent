@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as os from 'os';
-import { computerUsePowerShellLaneReady, runPersistentPowerShell } from './computerUsePowerShellHost';
+import { computerUsePowerShellLaneReady, prepareComputerUsePowerShellLane, runPersistentPowerShell, stopComputerUsePowerShellLane } from './computerUsePowerShellHost';
 
 export interface ComputerUseSequenceStep {
   action: 'move' | 'click' | 'scroll' | 'wait' | 'app_activate';
@@ -37,6 +37,8 @@ export interface ComputerUseOptions {
   allowEphemeralVisionImage?: boolean;
   captureMaxWidth?: number;
   captureMaxHeight?: number;
+  sparseWaitMs?: number;
+  signal?: AbortSignal;
   gradientColors?: string[];
   gradientSpeed?: number;
   gradientWidth?: number;
@@ -98,7 +100,7 @@ function psQuote(value: string): string {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-type ComputerUsePowerShellLane = 'action' | 'uia' | 'windows' | 'uia_advisory' | 'windows_advisory';
+type ComputerUsePowerShellLane = 'action' | 'uia' | 'windows' | 'uia_advisory' | 'windows_advisory' | 'sparse';
 
 async function runPowerShell(script: string, timeout = 30000, lane: ComputerUsePowerShellLane = 'action'): Promise<{ ok: boolean; output: string; elapsedMs: number }> {
   return await runPersistentPowerShell(script, timeout, lane);
@@ -124,6 +126,7 @@ const DEFAULT_CAPTURE_MAX_HEIGHT = 960;
 const MIN_CAPTURE_MAX_WIDTH = 320;
 const MIN_CAPTURE_MAX_HEIGHT = 240;
 const MAX_CAPTURE_DIMENSION = 2048;
+const MAX_SPARSE_WAIT_MS = 5000;
 let lastScreenshotCleanupAt = 0;
 
 interface ScreenshotCleanupOptions {
@@ -263,6 +266,178 @@ function jpegCaptureScript(outPath: string, boundsScript: string[], requestedMax
     `if (-not $imageAvailable -and [System.IO.File]::Exists(${psQuote(outPath)})) { [System.IO.File]::Delete(${psQuote(outPath)}) }`,
     'Write-Output (@{ ok=$true; left=$x; top=$y; width=$w; height=$h; capture_max_width=$maxWidth; capture_max_height=$maxHeight; image_width=$imageWidth; image_height=$imageHeight; image_bytes=$fileSize; image_quality=$qualityUsed; image_available=$imageAvailable; image_mime="image/jpeg" } | ConvertTo-Json -Compress)',
   ].join('\r\n');
+}
+
+interface SparseMeasurement {
+  ok: boolean;
+  triggered: boolean;
+  geometryChanged: boolean;
+  sampleCount: number | null;
+  changedCells: number | null;
+  elapsedMs: number;
+  reason: string;
+  error?: string;
+}
+
+function boundedSparseWait(value: number | undefined): number {
+  const requested = Number(value);
+  if (!Number.isFinite(requested) || requested <= 0) return 0;
+  return Math.min(MAX_SPARSE_WAIT_MS, Math.floor(requested));
+}
+
+function sparseMeasurementSampleBudget(waitMs: number): number {
+  const boundedWait = Math.max(1, Math.floor(Number(waitMs) || 1));
+  // A live PowerShell process handshake does not mean its first GDI capture,
+  // script execution and IPC response are warm. Reserve completion time on
+  // every call so the lane's own wait-elapsed result beats the outer fallback.
+  const completionMarginMs = Math.min(
+    Math.max(0, boundedWait - 1),
+    Math.min(1500, Math.max(500, Math.floor(boundedWait * 0.3))),
+  );
+  return Math.max(1, boundedWait - completionMarginMs);
+}
+
+function sparseMeasurementScript(waitMs: number): string {
+  const boundedWait = Math.min(MAX_SPARSE_WAIT_MS, Math.max(1, Math.floor(waitMs)));
+  return [
+    '$ErrorActionPreference = "Stop"',
+    '$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen',
+    '$x=[int]$bounds.Left; $y=[int]$bounds.Top; $w=[int]$bounds.Width; $h=[int]$bounds.Height',
+    'if ($w -le 0 -or $h -le 0) { throw "Virtual screen geometry is unavailable." }',
+    '$gridWidth=32; $gridHeight=18; $pollMs=200; $cellThreshold=24; $strongThreshold=64',
+    '$watch = [System.Diagnostics.Stopwatch]::StartNew(); $sampleCount=0; $changedCells=0; $triggered=$false; $geometryChanged=$false',
+    '$thumbnail = [NewmarkSparseCapture]::CaptureScaled($x,$y,$w,$h,$gridWidth,$gridHeight)',
+    '$baseline = [byte[]]::new($gridWidth * $gridHeight)',
+    'try {',
+    '  for ($row=0; $row -lt $gridHeight; $row++) { for ($column=0; $column -lt $gridWidth; $column++) { $index=$row*$gridWidth+$column; $baseline[$index]=$thumbnail.GetLuma($column,$row) } }',
+    '  $sampleCount=1',
+    `  while ($watch.ElapsedMilliseconds -lt ${boundedWait}) {`,
+    `    $remaining=[Math]::Max(1, ${boundedWait} - [int]$watch.ElapsedMilliseconds); Start-Sleep -Milliseconds ([Math]::Min($pollMs,$remaining))`,
+    '    $nextBounds=[System.Windows.Forms.SystemInformation]::VirtualScreen',
+    '    if ($nextBounds.Left -ne $x -or $nextBounds.Top -ne $y -or $nextBounds.Width -ne $w -or $nextBounds.Height -ne $h) { $geometryChanged=$true; break }',
+    '    $nextThumbnail=[NewmarkSparseCapture]::CaptureScaled($x,$y,$w,$h,$gridWidth,$gridHeight); $thumbnail.Dispose(); $thumbnail=$nextThumbnail',
+    '    $changedCells=0; $strongCells=0',
+    '    for ($row=0; $row -lt $gridHeight; $row++) { for ($column=0; $column -lt $gridWidth; $column++) { $index=$row*$gridWidth+$column; $luma=[int]$thumbnail.GetLuma($column,$row); $delta=[Math]::Abs($luma-$baseline[$index]); if ($delta -ge $cellThreshold) { $changedCells++ }; if ($delta -ge $strongThreshold) { $strongCells++ } } }',
+    '    $sampleCount++',
+    '    if ($changedCells -ge 4 -or $strongCells -ge 2) { $triggered=$true; break }',
+    '  }',
+  ].join('\r\n') + [
+    '} finally { $watch.Stop(); $thumbnail.Dispose() }',
+    '$reason = if ($geometryChanged) { "screen_geometry_changed" } elseif ($triggered) { "coarse_change" } else { "wait_elapsed" }',
+    'Write-Output (@{ ok=$true; triggered=$triggered; geometry_changed=$geometryChanged; sample_count=$sampleCount; changed_cells=$changedCells; elapsed_ms=[int]$watch.ElapsedMilliseconds; reason=$reason } | ConvertTo-Json -Compress)',
+  ].join('\r\n');
+}
+
+function sparseAbortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  return new Error(signal.reason ? String(signal.reason) : 'Computer Use sparse observation was cancelled.');
+}
+
+async function waitForSparseChange(waitMs: number, signal?: AbortSignal): Promise<SparseMeasurement> {
+  if (signal?.aborted) throw sparseAbortError(signal);
+  return await new Promise<SparseMeasurement>((resolve, reject) => {
+    let settled = false;
+    let phase: 'preparing' | 'sampling' = 'preparing';
+    const deadlineAt = Date.now() + waitMs;
+    let deadlineTimer: NodeJS.Timeout | undefined;
+    const cleanup = () => {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      stopComputerUsePowerShellLane('sparse');
+      reject(sparseAbortError(signal!));
+    };
+    deadlineTimer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      // A normal wait deadline during helper startup must not kill the shared
+      // lane. Its initialization can finish in the background and serve the
+      // next observation. Once a sample has actually been submitted, however,
+      // stop a worker that failed to return before its bounded sampling window.
+      if (phase === 'sampling') stopComputerUsePowerShellLane('sparse');
+      const error = phase === 'preparing'
+        ? 'Sparse helper did not become ready before the observation deadline; its startup continues for the next observation.'
+        : 'Sparse sample did not return before the observation deadline; continuing with a fresh full observation.';
+      resolve({ ok: false, triggered: false, geometryChanged: false, sampleCount: null, changedCells: null, elapsedMs: waitMs, reason: 'wait_elapsed', error });
+    }, waitMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    const parseResult = (result: { ok: boolean; output: string; elapsedMs: number }) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (!result.ok) {
+        resolve({ ok: false, triggered: false, geometryChanged: false, sampleCount: null, changedCells: null, elapsedMs: result.elapsedMs, reason: 'sampling_failed', error: result.output.slice(0, 500) });
+        return;
+      }
+      try {
+        const parsed = JSON.parse(result.output) as Record<string, unknown>;
+        resolve({
+          ok: parsed.ok === true,
+          triggered: parsed.triggered === true,
+          geometryChanged: parsed.geometry_changed === true,
+          sampleCount: Math.max(0, Number(parsed.sample_count) || 0),
+          changedCells: Math.max(0, Number(parsed.changed_cells) || 0),
+          elapsedMs: Math.max(0, Number(parsed.elapsed_ms) || result.elapsedMs),
+          reason: String(parsed.reason || 'sampling_failed'),
+          ...(parsed.ok === true ? {} : { error: 'Sparse measurement returned an invalid result.' }),
+        });
+      } catch {
+        resolve({ ok: false, triggered: false, geometryChanged: false, sampleCount: null, changedCells: null, elapsedMs: result.elapsedMs, reason: 'sampling_failed', error: 'Sparse measurement result was not valid JSON.' });
+      }
+    };
+    const prepareAndSample = async () => {
+      const preparation = await prepareComputerUsePowerShellLane('sparse', waitMs);
+      if (settled) return;
+      if (!preparation.ready) {
+        settled = true;
+        cleanup();
+        resolve({
+          ok: false,
+          triggered: false,
+          geometryChanged: false,
+          sampleCount: null,
+          changedCells: null,
+          elapsedMs: Math.max(preparation.elapsedMs, Date.now() - (deadlineAt - waitMs)),
+          reason: 'wait_elapsed',
+          error: 'Sparse helper initialization exceeded the observation deadline; the lane remains available to finish startup.',
+        });
+        return;
+      }
+      const remainingMs = Math.max(0, deadlineAt - Date.now());
+      if (remainingMs < 100) {
+        settled = true;
+        cleanup();
+        resolve({ ok: false, triggered: false, geometryChanged: false, sampleCount: null, changedCells: null, elapsedMs: waitMs, reason: 'wait_elapsed', error: 'Sparse helper became ready without enough time left to capture a bounded sample.' });
+        return;
+      }
+      const sampleBudgetMs = sparseMeasurementSampleBudget(remainingMs);
+      phase = 'sampling';
+      try {
+        const result = await runPersistentPowerShell(sparseMeasurementScript(sampleBudgetMs), remainingMs, 'sparse');
+        parseResult(result);
+      } catch (error) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve({ ok: false, triggered: false, geometryChanged: false, sampleCount: null, changedCells: null, elapsedMs: Date.now() - (deadlineAt - waitMs), reason: 'sampling_failed', error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) });
+      }
+    };
+    void prepareAndSample().catch(error => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve({ ok: false, triggered: false, geometryChanged: false, sampleCount: null, changedCells: null, elapsedMs: Date.now() - (deadlineAt - waitMs), reason: 'sampling_failed', error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) });
+    });
+  });
 }
 
 function gradientPalette(_input?: string[]): string[] {
@@ -942,8 +1117,29 @@ async function screenshot(
   includeRawUi = false,
   captureMaxWidth?: number,
   captureMaxHeight?: number,
+  sparseWaitMs?: number,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const totalStarted = Date.now();
+  const sparseDurationMs = boundedSparseWait(sparseWaitMs);
+  const sparseStarted = Date.now();
+  const sparse = sparseDurationMs > 0 ? await waitForSparseChange(sparseDurationMs, signal) : undefined;
+  const sparseWallMs = sparse ? Date.now() - sparseStarted : 0;
+  if (signal?.aborted) throw sparseAbortError(signal);
+  const sparseDetails = sparse ? {
+    method: 'coarse-grid-luminance-change-wakeup',
+    grid_width: 32,
+    grid_height: 18,
+    sample_count: sparse.sampleCount,
+    changed_cells: sparse.changedCells,
+    triggered: sparse.triggered,
+    reason: sparse.reason,
+    elapsed_ms: sparse.elapsedMs,
+    wall_elapsed_ms: sparseWallMs,
+    fresh_full_observation_follows: true,
+    interpretation: 'Wake signal only. A timeout or no detected change is not evidence that the screen stayed unchanged; small, brief, or color-only changes can be missed.',
+    ...(sparse.error ? { warning: sparse.error } : {}),
+  } : undefined;
   const outPath = ephemeralScreenshotPath('observe');
   let retainedForVision = false;
   try {
@@ -957,9 +1153,10 @@ async function screenshot(
       observeUiAutomation(30000, foreground.handle, 750, 'uia_advisory'),
       observeAppWindows(30000, 750, 'windows_advisory'),
     ]);
-    if (!result.ok) return captureFailure('observe');
+    if (signal?.aborted) throw sparseAbortError(signal);
+    if (!result.ok) return { ...captureFailure('observe'), ...(sparseDetails ? { sparse_measurement: sparseDetails } : {}) };
     let parsed: Record<string, unknown> = {};
-    try { parsed = JSON.parse(result.output); } catch { return captureFailure('observe'); }
+    try { parsed = JSON.parse(result.output); } catch { return { ...captureFailure('observe'), ...(sparseDetails ? { sparse_measurement: sparseDetails } : {}) }; }
     const screenWidth = Number(parsed.width || 1);
     const screenHeight = Number(parsed.height || 1);
     const objects = semanticObjects(ui.elements, screenWidth, screenHeight, workspacePath, ownerId);
@@ -982,6 +1179,7 @@ async function screenshot(
         scene_generation: generation,
         scene_summary: buildSceneSummary(objects, screenWidth, screenHeight),
         objects: compactSemanticObjects(objects),
+        ...(sparseDetails ? { sparse_measurement: sparseDetails } : {}),
         object_usage: 'Prefer target_id from scene_summary.high_priority_objects or objects for click/move/scroll when available; it resolves to the latest observed center coordinate and keeps actions tied to a semantic UI object.',
         warning: foreground.error || ui.error || apps.error || undefined,
         note: 'Inspired by capture-parse-decide-act and MCP-style Computer Control agents: screenshot capture plus native Windows UI Automation text/control bounding boxes, semantic target objects, stable target IDs, high-priority object summaries, normalized bboxes, allowed actions, and risk hints. It does not copy third-party code.',
@@ -994,6 +1192,13 @@ async function screenshot(
         total_ms: Date.now() - totalStarted,
         element_count: ui.elements.length,
         visited_count: ui.visited,
+        ...(sparse ? {
+          sparse_sampling_ms: sparse.elapsedMs,
+          sparse_wall_ms: sparseWallMs,
+          sparse_configured_wait_ms: sparseDurationMs,
+          sparse_sample_count: sparse.sampleCount,
+          sparse_triggered: sparse.triggered,
+        } : {}),
       },
       ...parsed,
     };
@@ -1200,6 +1405,7 @@ function stringifyComputerUseResult(result: Record<string, unknown>): string {
 export const computerUseInternals = {
   cleanupStaleScreenshots,
   ephemeralScreenshotPath,
+  sparseMeasurementSampleBudget,
   stringifyComputerUseResult,
 };
 
@@ -1228,6 +1434,8 @@ export async function runComputerUse(options: ComputerUseOptions): Promise<strin
       !!options.includeRawUi,
       options.captureMaxWidth,
       options.captureMaxHeight,
+      options.sparseWaitMs,
+      options.signal,
     );
   } else if (action === 'app_list') {
     const first = await observeAppWindows(Number(options.maxChars || 60000));

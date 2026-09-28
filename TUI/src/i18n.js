@@ -73,12 +73,13 @@ const ZH = Object.freeze({
   "Type a message · Shift+Enter newline · Enter send": "输入消息 · Shift+Enter 换行 · Enter 发送",
   "Select a conversation · Enter to edit": "选择对话 · Enter 编辑",
 
-  // Settings categories
+// Settings categories
   "General": "通用",
   "Personalization": "个性化",
   "Runtime": "运行时",
   "Providers": "服务商",
   "Models": "模型",
+  "JEV Auto routing": "JEV 自动路由",
   "Archive": "归档",
   "Updates": "更新",
 
@@ -103,6 +104,16 @@ const ZH = Object.freeze({
   "Retention": "保留期",
   "Include Memory Lab": "包含记忆实验室",
   "Export format": "导出格式",
+  "Current-model decision": "当前模型决策",
+  "Decision source": "决策来源",
+  "Current eligible model": "当前符合条件的模型",
+  "Thinking mode": "思考模式",
+  "Off": "关闭",
+  "Output format": "输出格式",
+  "Strict JSON Schema": "严格 JSON Schema",
+  "Decision timeout": "决策超时",
+  "Deterministic fallback": "确定性回退",
+  "Auto routing": "自动路由",
   "Update channel": "更新通道",
   "Automatic checks": "自动检查",
   "Automatic download": "自动下载",

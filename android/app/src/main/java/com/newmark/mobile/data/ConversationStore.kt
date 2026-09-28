@@ -10,6 +10,7 @@ import java.io.OutputStream
 import java.util.concurrent.CancellationException
 
 internal const val CONVERSATION_SAVE_FAILURE_MESSAGE = "本地对话保存失败，请检查可用存储空间后重试。"
+internal const val CONVERSATION_ARCHIVE_FAILURE_MESSAGE = "本地对话归档失败，请检查可用存储空间后重试。"
 
 /** Same-directory rename is atomic on Android; never delete the previous snapshot to retry it. */
 internal fun writeConversationSnapshotAtomically(file: File, write: (OutputStream) -> Unit): Result<Unit> {
@@ -86,11 +87,20 @@ class ConversationStore(context: Context) {
         }.getOrDefault(emptyList())
     }
 
-    fun saveArchived(conversations: List<LocalConversation>) {
-        runCatching {
-            dir.mkdirs()
-            archivedFile.writeText(gson.toJson(conversations))
-        }
+    /**
+     * Rewrites the whole archive. It runs off the caller's thread (the UI thread
+     * used to freeze for over a second once the archive grew: `writeText(gson
+     * .toJson(...))` both allocates the full JSON string and blocks on the file
+     * write) and it stages/renames like the live store, so an interrupted write
+     * can no longer truncate every archived conversation.
+     */
+    @Synchronized
+    fun saveArchived(conversations: List<LocalConversation>): Result<Unit> = runCatching {
+        writeConversationSnapshotAtomically(archivedFile) { output ->
+            val writer = output.writer(Charsets.UTF_8).buffered()
+            gson.toJson(conversations, writer)
+            writer.flush()
+        }.getOrThrow()
     }
 
     /**

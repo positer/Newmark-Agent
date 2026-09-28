@@ -185,7 +185,7 @@ try {
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --duration-fast: 150ms;
   --duration-normal: 250ms;
-  --duration-slow: 400ms;
+  --duration-slow: 300ms;
 
   /* Stable Newmark semantic layers. Components depend on meaning, not on an
      upstream developer-preview framework's private tokens or brand palette. */
@@ -208,6 +208,17 @@ try {
   --right-width: 380px;
   --bottom-height: 200px;
   --topbar-height: 38px;
+
+  /* Component aliases. These names are referenced by existing component rules
+     but were never defined, which silently dropped fills, borders and danger
+     colors. Map them onto the theme tokens so both themes resolve them. */
+  --control-bg: var(--glass-bg-1);
+  --panel: var(--glass-bg-1);
+  --panel-2: var(--modal-surface);
+  --bg-panel: rgb(var(--glass-rgb-2));
+  --text-primary: var(--text);
+  --accent-border: color-mix(in srgb, var(--accent) 30%, transparent);
+  --danger: var(--nm-state-danger);
 }
 
 /* Light theme */
@@ -371,7 +382,7 @@ html, body {
   50% { transform: scale(1.04); filter: saturate(1.25); }
 }
 
-::selection { background: rgba(91,120,255,0.35); color: var(--text-bright); }
+::selection { background: var(--editor-selection); color: var(--text-bright); }
 
 /* Open-source icon system: lucide-static sprite is copied into dist/ui at build time. */
 .nm-icon {
@@ -413,7 +424,10 @@ html, body {
   white-space: nowrap;
   border: 0;
 }
-button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus { outline: none; }
+/* Pointer focus stays quiet. The button reset goes through :where() so it keeps
+   (0,1,0) specificity and the keyboard :focus-visible ring below can win. */
+:where(button):focus { outline: none; }
+select:focus, input:focus, textarea:focus, [contenteditable]:focus { outline: none; }
 /* Liquid-glass controls use one continuous capsule edge. Equal-width icon
    buttons naturally become circles; wider controls become end-rounded pills. */
 button { border-radius: var(--radius-full) !important; }
@@ -435,6 +449,7 @@ button { border-radius: var(--radius-full) !important; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.10); border-radius: var(--radius-full); }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
 [data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); }
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.2); }
 
 /* ============================================================
    LAYER 1 - App Shell
@@ -444,7 +459,7 @@ button { border-radius: var(--radius-full) !important; }
   flex-direction: column;
   height: 100vh;
   background:
-    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(91,120,255,0.06) 0%, transparent 60%),
+    radial-gradient(ellipse 80% 60% at 50% 0%, color-mix(in srgb, var(--accent) 6%, transparent) 0%, transparent 60%),
     radial-gradient(ellipse 60% 50% at 80% 80%, rgba(56,212,160,0.04) 0%, transparent 50%),
     var(--app-bg);
 }
@@ -516,11 +531,11 @@ button { border-radius: var(--radius-full) !important; }
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo);
+  transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo), transform 90ms var(--ease-out-expo);
 }
 
 .top-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); }
-.top-btn:active { transform: scale(0.92) translateZ(0); }
+.top-btn:active { transform: scale(0.92); }
 .top-btn.close-btn:hover { background: rgba(255,68,68,0.2); color: var(--nm-state-danger); }
 
 /* ============================================================
@@ -598,7 +613,7 @@ button { border-radius: var(--radius-full) !important; }
   font-size: 0;
   cursor: pointer;
   color: var(--text-dim);
-  transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo), transform var(--duration-fast) var(--ease-out-back);
+  transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo), transform var(--duration-fast) var(--ease-out-expo);
   flex-shrink: 0;
 }
 
@@ -729,7 +744,7 @@ button.left-nav-icon { width: calc(100% - 12px); }
 }
 
 .left-nav-icon:hover { background: var(--control-hover-bg); color: var(--text-bright); }
-.left-nav-icon:active { transform: scale(0.96) translateZ(0); }
+.left-nav-icon:active { transform: scale(0.96); }
 .left-nav-icon .icon { width: 24px; height: 20px; text-align: center; flex-shrink: 0; font-size: 0; }
 .left-nav-icon span:not(.icon) {
   display: inline-block;
@@ -939,7 +954,9 @@ button.left-ws-item {
   color: var(--text-dim);
   font-size: 11px;
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out-expo);
+  transition-property: color, background-color, border-color, filter, opacity, visibility, max-height, margin-top, margin-bottom, padding-top, padding-bottom;
+  transition-duration: var(--duration-fast);
+  transition-timing-function: var(--ease-out-expo);
   flex-shrink: 0;
   max-height: 30px;
   opacity: 1;
@@ -949,7 +966,7 @@ button.left-ws-item {
 #left-ws-add:hover {
   border-color: var(--accent);
   color: var(--accent);
-  background: rgba(91,120,255,0.06);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 
 #left.collapsed #left-ws-add {
@@ -990,7 +1007,7 @@ button.left-ws-item {
 }
 
 .left-collapse-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); }
-.left-collapse-btn:active { transform: scale(0.92) translateZ(0); }
+.left-collapse-btn:active { transform: scale(0.92); }
 
 /* ============================================================
    LEFT SECONDARY SIDEBAR
@@ -1041,10 +1058,11 @@ button.left-ws-item {
 }
 
 .sec-btn:hover { background: var(--control-hover-bg); border-color: var(--border-hover); }
-.sec-btn:active { transform: scale(0.96) translateZ(0); }
+.sec-btn:active { transform: scale(0.96); }
 .sec-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .sec-btn.primary:hover { filter: brightness(1.1); }
 .sec-btn:focus-visible {
+  outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
@@ -1075,7 +1093,7 @@ button.left-ws-item {
 }
 
 .conv-item:hover { background: var(--glass-bg-2); border-color: var(--border-hover); }
-.conv-item.active { border-color: var(--accent); background: rgba(91,120,255,0.1); }
+.conv-item.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .conv-item.marquee-border::before {
   border-radius: var(--radius-full);
 }
@@ -1378,13 +1396,13 @@ button.left-ws-item {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo), transform var(--duration-fast) var(--ease-out-back);
+  transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo), transform var(--duration-fast) var(--ease-out-expo);
   position: relative;
 }
 
 .tab-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); }
-.tab-btn.active { background: rgba(91,120,255,0.12); color: var(--accent); border-color: rgba(91,120,255,0.2); }
-.tab-btn:active { transform: scale(0.92) translateZ(0); }
+.tab-btn.active { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 20%, transparent); }
+.tab-btn:active { transform: scale(0.92); }
 .tab-btn .label { display: none; }
 
 .tab-divider {
@@ -1438,8 +1456,8 @@ button.left-ws-item {
   white-space: nowrap;
 }
 
-.ft-item:hover { background: rgba(255,255,255,0.05); color: var(--text); }
-.ft-item.selected { background: rgba(91,120,255,0.12); color: var(--text-bright); }
+.ft-item:hover { background: var(--control-hover-bg); color: var(--text); }
+.ft-item.selected { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text-bright); }
 .ft-item .ft-icon { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; text-align: center; flex-shrink: 0; font-size: 0; }
 .ft-item .ft-name { overflow: hidden; text-overflow: ellipsis; }
 .ft-item .ft-toggle { width: 14px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0; color: var(--text-dim); transform: rotate(90deg); transition: transform var(--duration-fast) var(--ease-out-expo); }
@@ -1479,7 +1497,7 @@ button.left-ws-item {
 }
 
 .et-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); }
-.et-btn.active { background:rgba(91,120,255,.16); color:var(--accent2); border-color:rgba(91,120,255,.55); }
+.et-btn.active { background:color-mix(in srgb, var(--accent) 16%, transparent); color:var(--accent2); border-color:color-mix(in srgb, var(--accent) 55%, transparent); }
 .et-btn .nm-icon { width:15px; height:15px; }
 .et-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .et-btn.primary:hover { filter: brightness(1.1); }
@@ -1712,7 +1730,6 @@ button.left-ws-item {
   line-height: 0;
 }
 .math-symbol { display: inline-block; }
-}
 
 /* Subagent panel */
 .subagent-item {
@@ -2117,7 +2134,7 @@ button.left-ws-item {
 }
 
 .shell-btn:hover { background: var(--control-hover-bg); color: var(--text-bright); }
-.shell-btn:active { transform: scale(0.95) translateZ(0); }
+.shell-btn:active { transform: scale(0.95); }
 
 .shell-toggle-btn {
   margin-left: auto;
@@ -2220,7 +2237,6 @@ button.left-ws-item {
 .conversation-load-earlier:hover,
 .conversation-load-earlier:focus-visible { background: var(--glass-bg-2); border-color: var(--border-hover); outline: none; }
 .conversation-load-earlier:disabled { opacity: 0.6; cursor: default; }
-}
 
 #chat-area:has(> .chat-msg) {
   background-image:
@@ -2331,9 +2347,16 @@ button.left-ws-item {
   line-height: 1.6;
   word-wrap: break-word;
   overflow-wrap: break-word;
-  transform: translateZ(0);
   animation: msg-in 250ms var(--ease-out-expo);
   position: relative;
+}
+
+/* Restored transcript rows are already present in the conversation. Avoid
+   animating a large history batch or pinning every row to its own compositor
+   layer; only newly arriving live messages use the entrance motion. */
+.chat-msg.history-static {
+  animation: none;
+  transform: none;
 }
 
 .chat-msg::after {
@@ -2350,8 +2373,8 @@ button.left-ws-item {
 }
 
 @keyframes msg-in {
-  from { opacity: 0; transform: translateY(8px) translateZ(0); }
-  to { opacity: 1; transform: translateY(0) translateZ(0); }
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .chat-msg.user {
@@ -2467,7 +2490,6 @@ button.left-ws-item {
 }
 
 .msg-action-btn:hover { color: var(--text); background: var(--glass-bg-2); }
-.msg-action-btn.route-rating-selected { color: var(--accent); background: var(--glass-bg-2); }
 .msg-action-btn:disabled { cursor: default; opacity: 0.62; }
 
 .message-inline-editor { display: grid; gap: 8px; margin-top: 4px; }
@@ -2487,7 +2509,7 @@ button.left-ws-item {
 .conversation-branch-pager { display:flex; justify-content:flex-end; align-items:center; gap:0; margin-top:7px; color:var(--text-dim); font-size:11px; }
 .branch-page-arrow { cursor:pointer; color:var(--text-dim); padding:1px 3px; transition:color var(--duration-fast) var(--ease-out-expo), background var(--duration-fast) var(--ease-out-expo); border-radius:var(--radius-sm); }
 .branch-page-arrow:hover { color:var(--text-bright); background:var(--control-hover-bg); }
-.branch-page-arrow:active { transform:scale(0.92) translateZ(0); }
+.branch-page-arrow:active { transform:scale(0.92); }
 
 .chat-msg .msg-body .md-rendered {
   padding: 0;
@@ -2919,8 +2941,8 @@ button.todo-item { background: transparent; }
   margin: 8px 0;
   padding: 10px 14px;
   border-radius: var(--radius-md);
-  background: rgba(91,120,255,0.08);
-  border: 1px solid rgba(91,120,255,0.2);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .option-question {
@@ -2945,9 +2967,9 @@ button.todo-item { background: transparent; }
   transition: background var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo);
 }
 
-.option-btn:hover { background: rgba(91,120,255,0.15); border-color: var(--accent); color: var(--text-bright); }
-.option-btn:active { transform: scale(0.96) translateZ(0); }
-.option-btn.selected { background:rgba(91,120,255,.24); border-color:var(--accent); color:var(--text-bright); }
+.option-btn:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); border-color: var(--accent); color: var(--text-bright); }
+.option-btn:active { transform: scale(0.96); }
+.option-btn.selected { background:color-mix(in srgb, var(--accent) 24%, transparent); border-color:var(--accent); color:var(--text-bright); }
 .option-btn:disabled { cursor:default; opacity:.55; }
 .option-btn.selected:disabled { opacity:1; }
 .option-desc {
@@ -2986,14 +3008,14 @@ button.todo-item { background: transparent; }
   padding: 0 12px;
   border: 1px solid var(--accent);
   border-radius: var(--radius-md);
-  background: rgba(91,120,255,0.14);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--text-bright);
   font: 12px var(--font-ui);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out-expo);
 }
 
-.option-manual-submit:hover { background: rgba(91,120,255,0.24); }
+.option-manual-submit:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 .option-manual-submit:disabled { opacity: .55; cursor: default; }
 
 /* ============================================================
@@ -3043,7 +3065,7 @@ button.todo-item { background: transparent; }
   border-radius: 8px;
   box-shadow: 0 6px 18px rgba(0,0,0,0.12);
   overflow: hidden;
-  transform: translateY(0) translateZ(0);
+  transform: translateY(0);
   animation: fade-in-up 180ms var(--ease-out-expo);
 }
 [data-theme="light"] .stack-card {
@@ -3115,6 +3137,7 @@ button.todo-item { background: transparent; }
 .stack-icon-btn.warn { color: var(--nm-state-warning); }
 .stack-icon-btn.danger { color: var(--nm-state-danger); }
 .stack-icon-btn:focus-visible {
+  outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
@@ -3127,12 +3150,12 @@ button.todo-item { background: transparent; }
 #goal-bar {
   border-bottom: none;
   border-radius: 8px 8px 0 0;
-  border-color: rgba(91,120,255,0.24);
-  background: linear-gradient(90deg, rgba(91,120,255,0.10), rgba(24,24,24,0.94) 34%);
+  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), rgba(24,24,24,0.94) 34%);
   box-shadow: none;
 }
 [data-theme="light"] #goal-bar {
-  background: linear-gradient(90deg, rgba(91,120,255,0.13), rgba(255,255,255,0.82) 36%, rgba(255,255,255,0.72) 100%);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 13%, transparent), rgba(255,255,255,0.82) 36%, rgba(255,255,255,0.72) 100%);
   border-color: rgba(74,104,223,0.2);
 }
 [data-theme="light"] #goal-bar.goal-paused {
@@ -3140,7 +3163,7 @@ button.todo-item { background: transparent; }
 }
 
 #goal-bar .stack-row { grid-template-columns: auto minmax(0,1fr) auto; }
-#goal-bar .stack-row::before { content:""; width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 3px rgba(91,120,255,.12); }
+#goal-bar .stack-row::before { content:""; width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
 #goal-bar.goal-paused .stack-row::before { background:#f4c95d; box-shadow:0 0 0 3px rgba(244,201,93,.12); }
 
 #goal-bar .goal-text {
@@ -3222,7 +3245,7 @@ button.todo-item { background: transparent; }
   transition: background var(--duration-fast) var(--ease-out-expo), opacity var(--duration-fast) var(--ease-out-expo);
 }
 
-.todo-item:hover { background: rgba(255,255,255,0.05); }
+.todo-item:hover { background: var(--control-hover-bg); }
 
 .todo-check {
   width: 14px;
@@ -3809,6 +3832,18 @@ button.todo-item { background: transparent; }
   position: relative;
   z-index: 1;
 }
+/* Carried content wrappers are the destination label itself, not a bare
+   stacking child. They author their own inset box, and the fallback rule above
+   outranks them (.liquid-selection-float > :not(...) is two class-level
+   selectors against one), so their authored position has to be restated with
+   the same selector weight and a later source order. Without it a pressed
+   fixed control (left rail New row, rail collapse button) and a carried
+   conversation row lose inset:0 / inset:9px, become shrink-to-fit flex items
+   and paint left-flush inside the glass instead of staying centered. */
+.liquid-selection-float > .liquid-fixed-control-content,
+.liquid-selection-float > .conversation-drag-content {
+  position: absolute;
+}
 @keyframes model-menu-in { from { opacity: 0; transform: translateY(5px) scale(.985); } to { opacity: 1; transform: none; } }
 
 .newmark-select-shell {
@@ -3917,6 +3952,9 @@ button.todo-item { background: transparent; }
 
 .tool-select:hover { border-color: var(--border-hover); }
 .tool-select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+/* The enhanced native <select> is still a Tab stop but is transparent; mirror its
+   keyboard focus on the proxy button that immediately follows it. */
+.newmark-select-native:focus-visible + .newmark-select-button { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
 
 .context-token-wrap {
   position: relative;
@@ -3980,6 +4018,20 @@ button.todo-item { background: transparent; }
   opacity: 1;
   transform: scale(1.08);
 }
+/* The ring's donut mask clips its own outline/box-shadow, so the keyboard ring is
+   painted by the wrapper: 2px wide, 2px outside the 16px ring (global indicator). */
+.context-token-wrap:has(> #context-token-ring:focus-visible)::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--accent);
+  pointer-events: none;
+}
 
 #context-token-tooltip {
   display: none;
@@ -4026,9 +4078,9 @@ button.todo-item { background: transparent; }
   transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo);
 }
 
-.mode-toggle-btn:hover { background: rgba(255,255,255,0.05); color: var(--text); }
-.mode-toggle-btn.active { background: rgba(91,120,255,0.15); color: var(--accent); border-radius: var(--radius-full); }
-.mode-toggle-btn:active { transform: scale(0.95) translateZ(0); }
+.mode-toggle-btn:hover { background: var(--control-hover-bg); color: var(--text); }
+.mode-toggle-btn.active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); border-radius: var(--radius-full); }
+.mode-toggle-btn:active { transform: scale(0.95); }
 
 .workspace-type-pager {
   display: grid;
@@ -4059,11 +4111,11 @@ button.todo-item { background: transparent; }
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform var(--duration-fast) var(--ease-out-back), box-shadow var(--duration-fast) var(--ease-out-expo);
+  transition: transform var(--duration-fast) var(--ease-out-expo), box-shadow var(--duration-fast) var(--ease-out-expo);
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
-#submit-btn:hover { transform: scale(1.08); box-shadow: 0 4px 20px rgba(91,120,255,0.5); }
+#submit-btn:hover { transform: scale(1.08); box-shadow: 0 4px 20px color-mix(in srgb, var(--accent) 50%, transparent); }
 #submit-btn:active { transform: scale(0.92); transition: transform 80ms var(--ease-out-expo); }
 #submit-btn::after { display: none !important; }
 #submit-btn:active { transform: none; scale: 1; }
@@ -4189,13 +4241,13 @@ button.todo-item { background: transparent; }
 
 .working-glow {
   animation: none;
-  box-shadow: 0 0 16px var(--accent-glow), 0 0 40px rgba(91,120,255,0.1);
-  border-color: rgba(91,120,255,0.4) !important;
+  box-shadow: 0 0 16px var(--accent-glow), 0 0 40px color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent) !important;
 }
 
 @keyframes working-border-glow {
-  0%, 100% { box-shadow: 0 0 12px var(--accent-glow), 0 0 30px rgba(91,120,255,0.08); }
-  50% { box-shadow: 0 0 24px rgba(91,120,255,0.5), 0 0 60px rgba(91,120,255,0.15); }
+  0%, 100% { box-shadow: 0 0 12px var(--accent-glow), 0 0 30px color-mix(in srgb, var(--accent) 8%, transparent); }
+  50% { box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 50%, transparent), 0 0 60px color-mix(in srgb, var(--accent) 15%, transparent); }
 }
 
 /* ============================================================
@@ -4456,8 +4508,8 @@ button.todo-item { background: transparent; }
   transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo);
 }
 
-.stab-btn:hover { background: rgba(255,255,255,0.05); color: var(--text); }
-.stab-btn.active { background: rgba(91,120,255,0.12); color: var(--accent); border-color: rgba(91,120,255,0.25); }
+.stab-btn:hover { background: var(--control-hover-bg); color: var(--text); }
+.stab-btn.active { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
 .stab-btn:focus-visible { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-glow); color:var(--text-bright); }
 
 .plugin-tabs { overflow-x:auto; scrollbar-width:thin; }
@@ -4772,6 +4824,10 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
   background: var(--accent);
   box-shadow: 0 2px 6px rgba(0,0,0,.3);
   transition: width 120ms var(--ease-out-expo), height 120ms var(--ease-out-expo), transform 120ms var(--ease-out-expo), box-shadow 120ms var(--ease-out-expo);
+}
+.setting-control input[type="range"]:focus-visible::-webkit-slider-thumb,
+#settings-glass-opacity:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent), 0 2px 6px rgba(0,0,0,.3);
 }
 #settings-glass-opacity.liquid-range-dragging::-webkit-slider-thumb {
   width: 26px;
@@ -5110,9 +5166,9 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
 .memory-lab-node.selected {
   min-height: 52px;
   border-color: var(--accent);
-  background: rgba(91,120,255,0.16);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--text-bright);
-  box-shadow: 0 0 0 1px rgba(91,120,255,0.08);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .memory-lab-node-label {
   min-width: 0;
@@ -5316,8 +5372,8 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
 }
 .memory-lab-overview-node.focus {
   border-color: var(--accent);
-  background: rgba(91, 120, 255, 0.2);
-  box-shadow: 0 0 0 5px rgba(91, 120, 255, 0.11), 0 12px 28px rgba(0,0,0,0.24);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 11%, transparent), 0 12px 28px rgba(0,0,0,0.24);
 }
 .memory-lab-overview-node.dim { opacity: 0.18; }
 .memory-lab-overview-stage.zoom-dots .memory-lab-overview-node {
@@ -5422,9 +5478,9 @@ html.newmark-memory-overview-viewer body {
 }
 [data-theme="light"] .memory-lab-node.selected,
 [data-theme="light"] .memory-lab-overview-node.focus {
-  background: rgba(91,120,255,0.1);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--text-bright);
-  box-shadow: 0 0 0 3px rgba(91,120,255,0.08);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 8%, transparent);
 }
 [data-theme="light"] .memory-lab-overview-grid {
   opacity: 0.34;
@@ -5442,15 +5498,15 @@ html.newmark-memory-overview-viewer body {
 .model-chip {
   display:flex; align-items:center; gap:12px; box-sizing:border-box;
   width:100%; min-width:0; margin:6px 0; padding:10px 12px;
-  border-radius:var(--radius-sm); background:rgba(91,120,255,0.1);
-  border:1px solid rgba(91,120,255,0.2); font-size:11px; color:var(--text-accent);
+  border-radius:var(--radius-sm); background:color-mix(in srgb, var(--accent) 10%, transparent);
+  border:1px solid color-mix(in srgb, var(--accent) 20%, transparent); font-size:11px; color:var(--text-accent);
 }
 .model-chip-info { flex:1; min-width:0; text-align:left; overflow-wrap:anywhere; }
 .model-chip-actions { display:flex; flex:0 0 auto; align-items:center; gap:6px; margin-left:auto; }
 .model-response-warning { color:var(--text-dim); font-size:inherit; margin-left:4px; font-weight:400; }
 .model-enable-switch { width:38px; height:22px; padding:2px; border-radius:999px; border:1px solid var(--glass-border-1); background:var(--glass-bg-1); cursor:pointer; flex:none; }
 .model-enable-thumb { display:block; width:16px; height:16px; border-radius:50%; background:rgba(255,255,255,.55); transform:translateX(0); transition:transform 180ms var(--ease-out-expo); }
-.model-enable-switch[aria-checked="true"] { background:rgba(91,120,255,.35); }
+.model-enable-switch[aria-checked="true"] { background:color-mix(in srgb, var(--accent) 35%, transparent); }
 .model-enable-switch[aria-checked="true"] .model-enable-thumb { transform:translateX(16px); }
 .model-enable-switch:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .model-enable-switch:disabled { opacity:.6; }
@@ -5524,7 +5580,7 @@ html.newmark-memory-overview-viewer body {
   padding: 8px 20px;
   border: 1px solid var(--accent);
   border-radius: var(--radius-md);
-  background: rgba(91,120,255,0.1);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
   font-size: 12px;
   font-family: var(--font-ui);
@@ -5532,7 +5588,7 @@ html.newmark-memory-overview-viewer body {
   transition: background var(--duration-fast) var(--ease-out-expo);
 }
 
-.fuzzy-inject-btn:hover { background: rgba(91,120,255,0.2); }
+.fuzzy-inject-btn:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 
 /* Archive list */
 .archive-item {
@@ -5729,14 +5785,14 @@ html.newmark-memory-overview-viewer body {
   transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo);
 }
 
-.flow-new-btn:hover { background: rgba(91,120,255,0.08); color: var(--accent); border-color: var(--accent); }
+.flow-new-btn:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--accent); border-color: var(--accent); }
 
 /* ============================================================
    ANIMATIONS & UTILITY
    ============================================================ */
 @keyframes fade-in-up {
-  from { opacity: 0; transform: translateY(12px) translateZ(0); }
-  to { opacity: 1; transform: translateY(0) translateZ(0); }
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .hidden { display: none !important; }
@@ -5962,8 +6018,12 @@ html.newmark-memory-overview-viewer body {
   .liquid-glass-popup,
   .liquid-glass-popup.liquid-popup-exit,
   .liquid-menu-color-block,
-  .liquid-selection-float { transition-duration: 1ms !important; animation-duration: 1ms !important; }
+  .liquid-selection-float { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
   .liquid-glass-popup::before { opacity: 0; }
+  /* These two-class / id !important transitions outrank the rules above. */
+  .liquid-selection-float.liquid-selection-landing,
+  .conversation-selection-float.conversation-drag-following { transition-duration: 0.01ms !important; }
+  #left.width-animating { transition-duration: 0.01ms !important; }
 }
 @media (max-width: 900px), (max-height: 680px) {
   .liquid-glass-popup { --liquid-popup-blur: calc(var(--glass-blur-3) * 3); }
@@ -6058,7 +6118,7 @@ html.newmark-memory-overview-viewer body {
 }
 .liquid-glass-popup[data-liquid-popup-feedback='outward']::after { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
-  .liquid-popup-feedback-surface { transition-duration: 1ms !important; }
+  .liquid-popup-feedback-surface { transition-duration: 0.01ms !important; }
 }
 .model-select-menu-option,
 .newmark-select-option,
@@ -6168,10 +6228,12 @@ button::after {
   border-radius: inherit;
   opacity: 0;
   background: var(--liquid-refraction);
-  backdrop-filter: blur(calc(var(--glass-blur-3) * 4)) saturate(145%) brightness(1.04);
-  -webkit-backdrop-filter: blur(calc(var(--glass-blur-3) * 4)) saturate(145%) brightness(1.04);
   box-shadow: var(--liquid-top-highlight), var(--liquid-inner-shadow), 0 4px 14px rgba(0,0,0,0.18);
-  transition: opacity 90ms var(--ease-out-expo);
+  /* The backdrop blur is attached only while the plate can be seen. Chromium
+     still paints and composites an opacity-0 layer that has a backdrop-filter,
+     so a resting blur cost one backdrop layer per visible button. The delayed
+     step keeps the blur through the 90ms release fade. */
+  transition: opacity 90ms var(--ease-out-expo), backdrop-filter 0s linear 90ms;
 }
 button:hover:not(:disabled) {
   filter: brightness(1.06);
@@ -6182,7 +6244,12 @@ button:active:not(:disabled) {
   background-color: transparent !important;
   box-shadow: none;
 }
-button:active:not(:disabled)::after { opacity: 1; }
+button:active:not(:disabled)::after {
+  opacity: 1;
+  backdrop-filter: blur(calc(var(--glass-blur-3) * 4)) saturate(145%) brightness(1.04);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur-3) * 4)) saturate(145%) brightness(1.04);
+  transition: opacity 90ms var(--ease-out-expo);
+}
 button:disabled { opacity: 0.5; }
 
 /* Unified glass controls are rendered by a real top-layer float. Their local
@@ -6220,6 +6287,21 @@ button.conversation-work-run-head::after,
 button.shell-block-header::after,
 button.diff-block-header::after,
 button.work-review-head::after { display: none !important; }
+/* Without a press plate, a held utility action keeps its own hover wash
+   instead of dropping back to the bare row, and it does not take the
+   plate's outward lift. */
+.top-btn:active:not(:disabled),
+.conv-more-btn:active:not(:disabled),
+.provider-icon-btn:active:not(:disabled),
+.work-review-toggle:active:not(:disabled) {
+  scale: 1;
+  background-color: var(--control-hover-bg) !important;
+}
+.msg-action-btn:active:not(:disabled) {
+  scale: 1;
+  background-color: var(--glass-bg-2) !important;
+}
+.top-btn.close-btn:active:not(:disabled) { background-color: rgba(255,68,68,0.2) !important; }
 button.conversation-work-run-head:active:not(:disabled),
 button.shell-block-header:active:not(:disabled),
 button.diff-block-header:active:not(:disabled),
@@ -6764,12 +6846,15 @@ var state = {
   feedbackLevel: 'default',
   autoSwitch: 'off',
   autoSwitchScope: 'all',
+  /**
+   * Auto decision model ("JEV") slot as reported by the backend. `locked`
+   * means Auto is off, so the decision model can neither be edited nor move a
+   * model; every control in the JEV card is disabled while it is true.
+   */
+  jevDecisionModel: null,
   openAIApiMode: 'chat_stream',
   fallbackOnUnavailable: 'off',
   switchTendency: 'balanced',
-  autoRouteRatingAvailable: false,
-  autoRouteRatingRouteId: '',
-  autoRouteRatingScore: 0,
   workspaces: [],
   currentWorkspace: '',
   currentWorkspaceId: '',
@@ -6781,6 +6866,10 @@ var state = {
   pendingOptionAnswers: {},
   pendingOptionBatchKey: '',
   pendingOptionsByTarget: {},
+  // Runtime key of the conversation whose transcript is currently in #chat-area.
+  // The pending-option block is appended to that transcript, so an async
+  // snapshot may only (re)paint it while it still owns the on-screen area.
+  renderedChatTargetKey: '',
   pendingOptionAnswersByTarget: {},
   promptAttachments: [],
   nextQueue: [],
@@ -7170,15 +7259,21 @@ var NEWMARK_I18N = {
     'model.openAIChat': 'Chat Completions',
     'model.openAIResponses': 'Responses API',
     'model.fallback': 'Fallback unavailable model',
-    'model.preference': 'Switch preference',
+    'model.preference': 'Model decision tendency',
+    'model.preferenceDesc': 'The current eligible model makes each Auto choice. This setting guides how readily it favors a different eligible model; it does not select a model or set a numeric cutoff.',
     'model.costSaving': 'Cost saving',
     'model.performance': 'Quality',
-    'model.qualityPolicy': 'Quality · 0% loss band',
-    'model.balancedPolicy': 'Balanced · 2% loss band',
-    'model.costPolicy': 'Cost · 6% loss band',
-    'model.speedPolicy': 'Speed · 4% loss band',
-    'model.learnedPreference': 'Adaptive preference',
-    'model.clearLearnedPreference': 'Clear learned preference',
+    'model.conservativeTendency': 'Conservative',
+    'model.balancedTendency': 'Balanced',
+    'model.aggressiveTendency': 'Aggressive',
+    'model.jevTitle': 'Auto decision policy',
+    'model.jevDesc': 'Uses the current eligible conversation model with native thinking disabled and strict JSON Schema output. Invalid output, unsupported controls, or timeout stops Auto routing.',
+    'model.jevEnabled': 'Current-model decision enabled',
+    'model.jevCurrentModelStatus': 'Current eligible model · thinking off · strict JSON Schema',
+    'model.jevTimeout': 'Decision timeout (ms)',
+    'model.jevLocked': 'Auto is off: current-model decision settings are locked and no model may change.',
+    'model.jevSaved': 'Auto decision policy updated.',
+    'model.jevRefused': 'The Auto decision policy was not changed.',
     'model.validationTitle': 'Model validation',
     'model.validating': 'Validating model latency and capabilities...',
     'model.validationProgress': 'Validation progress',
@@ -7914,15 +8009,21 @@ var NEWMARK_I18N = {
     'model.openAIChat': 'Chat Completions',
     'model.openAIResponses': 'Responses API',
     'model.fallback': '模型不可用时回退',
-    'model.preference': '切换倾向',
+    'model.preference': '模型决策倾向',
+    'model.preferenceDesc': '每次 Auto 选择均由当前符合条件的模型决策。此设置只影响模型的决策倾向，不替模型选择部署，也不设数值阈值。',
     'model.costSaving': '节省优先',
     'model.performance': '质量优先',
-    'model.qualityPolicy': '质量 · 0% 损失带',
-    'model.balancedPolicy': '均衡 · 2% 损失带',
-    'model.costPolicy': '成本 · 6% 损失带',
-    'model.speedPolicy': '速度 · 4% 损失带',
-    'model.learnedPreference': '自适应偏好',
-    'model.clearLearnedPreference': '清空学习偏好',
+    'model.conservativeTendency': '保守',
+    'model.balancedTendency': '均衡',
+    'model.aggressiveTendency': '激进',
+    'model.jevTitle': 'Auto 决策策略',
+    'model.jevDesc': '仅使用当前符合条件的对话模型，并原生关闭思考、要求严格 JSON Schema 输出。输出无效、关闭思考不受支持或请求超时都会停止 Auto 路由。',
+    'model.jevEnabled': '启用当前模型决策',
+    'model.jevCurrentModelStatus': '当前符合条件的模型 · 已关闭思考 · 严格 JSON Schema',
+    'model.jevTimeout': '决策超时（毫秒）',
+    'model.jevLocked': 'Auto 已关闭：当前模型决策设置已锁定，任何模型都不会变动。',
+    'model.jevSaved': '已更新 Auto 决策策略。',
+    'model.jevRefused': 'Auto 决策策略未做任何修改。',
     'model.validationTitle': '模型校验',
     'model.validating': '正在校验模型延迟和能力...',
     'model.validationProgress': '校验进度',
@@ -9210,87 +9311,6 @@ window.copyMessageText = async function(button) {
 var branchApiOverride = null;
 window.__setBranchApiForTest = function(nextApi) { branchApiOverride = nextApi || null; };
 
-function applyAutoRouteRatingState(snapshot) {
-  snapshot = snapshot || {};
-  var decision = snapshot.routeDecision && typeof snapshot.routeDecision === 'object' ? snapshot.routeDecision : null;
-  var routeId = decision ? String(decision.routeId || '') : '';
-  var selection = decision && decision.requestedSelection;
-  var available = !!routeId && !!decision.resolvedDeployment && selection && selection.kind === 'auto'
-    && snapshot.autoRouteRatingAvailable !== false;
-  if (routeId !== state.autoRouteRatingRouteId) state.autoRouteRatingScore = 0;
-  state.autoRouteRatingAvailable = !!available;
-  state.autoRouteRatingRouteId = available ? routeId : '';
-  if (!available) state.autoRouteRatingScore = 0;
-}
-
-function autoRouteRatingLabel(score) {
-  if (currentLang() === 'zh') return score > 0 ? '此 Auto 路由有帮助' : '此 Auto 路由没有帮助';
-  return score > 0 ? 'This Auto route was helpful' : 'This Auto route was not helpful';
-}
-
-function attachAutoRouteRatingControls(message) {
-  if (!message || !api.rateAutoRoute || !state.autoRouteRatingAvailable || !state.autoRouteRatingRouteId) return;
-  var actions = message.querySelector('.msg-actions');
-  if (!actions) return;
-  var old = actions.querySelectorAll('.route-rating-btn');
-  for (var i = 0; i < old.length; i++) old[i].remove();
-  [1, -1].forEach(function(score) {
-    var label = autoRouteRatingLabel(score);
-    var selected = Number(state.autoRouteRatingScore || 0) === score;
-    var button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'msg-action-btn route-rating-btn' + (selected ? ' route-rating-selected' : '');
-    button.title = label;
-    button.setAttribute('aria-label', label);
-    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
-    button.setAttribute('data-route-id', state.autoRouteRatingRouteId);
-    button.innerHTML = iconSvg(score > 0 ? 'thumbs-up' : 'thumbs-down', label, 'tiny');
-    button.disabled = !!state.autoRouteRatingScore;
-    button.addEventListener('click', function() { window.rateAutoRoute(button, score); });
-    actions.appendChild(button);
-  });
-}
-
-function renderAutoRouteRatingControls() {
-  if (!els['chat-area']) return;
-  var existing = els['chat-area'].querySelectorAll('.route-rating-btn');
-  for (var i = 0; i < existing.length; i++) existing[i].remove();
-  if (!state.autoRouteRatingAvailable) return;
-  var messages = els['chat-area'].querySelectorAll('.chat-msg.assistant:not(.work-run-message)');
-  attachAutoRouteRatingControls(messages.length ? messages[messages.length - 1] : null);
-}
-
-window.rateAutoRoute = async function(button, score) {
-  if (!api.rateAutoRoute || !button) return;
-  var message = button.closest ? button.closest('.chat-msg') : null;
-  var buttons = message ? message.querySelectorAll('.route-rating-btn') : [];
-  for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
-  var routeId = String(button.getAttribute('data-route-id') || '');
-  try {
-    var result = await api.rateAutoRoute({
-      target: currentConversationTarget(),
-      score: score,
-      routeId: routeId
-    });
-    if (result && (result.ok || result.reason === 'already_rated')) {
-      state.autoRouteRatingScore = Number(result.score) === -1 || Number(result.score) === 1 ? Number(result.score) : score;
-      renderAutoRouteRatingControls();
-      showUiNotice(currentLang() === 'zh' ? '已记录 Auto 路由反馈。' : 'Auto route feedback recorded.', 'info', 'auto-route-rating-' + routeId);
-      return;
-    }
-    for (var j = 0; j < buttons.length; j++) buttons[j].disabled = false;
-    var reason = result && result.reason ? String(result.reason) : 'no_active_auto_route';
-    showUiNotice(
-      currentLang() === 'zh' ? '无法记录 Auto 路由反馈：' + reason : 'Unable to record Auto route feedback: ' + reason,
-      'error',
-      'auto-route-rating-' + routeId
-    );
-  } catch (error) {
-    for (var k = 0; k < buttons.length; k++) buttons[k].disabled = false;
-    showUiNotice(error && error.message ? error.message : String(error), 'error', 'auto-route-rating-' + routeId);
-  }
-};
-
 window.editUserMessage = function(button, messageIndex) {
   var message = button && button.closest ? button.closest('.chat-msg') : null;
   if (!message || message.querySelector('.message-inline-editor')) return;
@@ -9743,7 +9763,8 @@ function appendConversationImageAttachments(container, input) {
 }
 
 function addMsg(role, text, mode, model, messageIndex, messageMeta) {
-  var chatWasAtBottom = !!(els['chat-area'] && shouldAutoScroll(els['chat-area']));
+  var skipAutoScroll = !!(messageMeta && messageMeta.skipAutoScroll);
+  var chatWasAtBottom = !skipAutoScroll && !!(els['chat-area'] && shouldAutoScroll(els['chat-area']));
   text = redactSensitiveText(text);
   var owningRunId = messageMeta && String(messageMeta.runId || '');
   if (owningRunId && role === 'assistant' && els['chat-area']) {
@@ -9774,6 +9795,7 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
   }
   var div = document.createElement('div');
   div.className = 'chat-msg ' + role;
+  if (messageMeta && messageMeta.skipEntryAnimation) div.classList.add('history-static');
   var metaLabel = role === 'user'
     ? (String(mode || '').toLowerCase() === 'flow-user-input' ? t('flow.userInput') : t('message.user'))
     : (role === 'workflow' ? t('message.workflow') : (role === 'system' ? t('message.system') : t('message.agent')));
@@ -9790,7 +9812,11 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
   if (model) metaInfo += (metaInfo ? ' | ' : '') + t('message.model') + ': ' + model;
   div.innerHTML = '<div class="meta"><span class="msg-role">' + metaLabel + '</span><span> | ' + esc(displayTimestamp) + '</span>' +
     (metaInfo ? '<span class="meta-extra"> | ' + esc(metaInfo) + '</span>' : '') + messageActionsHtml(role, text, messageIndex) + '</div><div class="msg-body">' + renderMessageContent(text) + '</div>';
+  var msgActions = role === 'user' ? div.querySelector('.msg-actions') : null;
+  div._newmarkEditUserButton = msgActions && msgActions.children.length > 1 ? msgActions.children[1] : null;
   div._newmarkMessageText = String(text || '');
+  div._newmarkMessageMode = String(mode || '');
+  div._newmarkMessageModel = String(model || '');
   div._newmarkMessageAttachments = appendConversationImageAttachments(div.querySelector('.msg-body'), messageMeta && messageMeta.attachments);
   div._newmarkDisplayImages = role === 'assistant' && owningRunId
     ? appendWorkDisplayImages(div.querySelector('.msg-body'), owningRunId, messageMeta && messageMeta.target)
@@ -9813,7 +9839,7 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
     else els['chat-area'].appendChild(div);
   } else els['chat-area'].appendChild(div);
   if (chatWasAtBottom) _chatShouldAutoScroll = true;
-  autoScrollIfAtBottom();
+  if (!skipAutoScroll) autoScrollIfAtBottom();
   return div;
 }
 
@@ -10031,6 +10057,8 @@ function updateMsg(div, text, role, mode, model, options) {
   if (preserveRunFinalResponse) div.classList.add('run-final-response');
   text = redactSensitiveText(text);
   div._newmarkMessageText = String(text || '');
+  if (mode !== undefined && mode !== null) div._newmarkMessageMode = String(mode || '');
+  if (model !== undefined && model !== null) div._newmarkMessageModel = String(model || '');
   var body = div.querySelector('.msg-body');
   var streaming = !!(options && options.streaming);
   if (body) {
@@ -10519,6 +10547,7 @@ function setConversationRuntimeState(target, status, runId, extra) {
   if (!state.runningConversations) state.runningConversations = {};
   if (['running', 'stopping', 'force_restarting'].indexOf(next.status) >= 0) state.runningConversations[key] = next;
   else delete state.runningConversations[key];
+  if (typeof ensureRuntimeReconcileWatchdog === 'function') ensureRuntimeReconcileWatchdog();
   var branchIds = conversationBranchIdsForTarget(target);
   var runs = workRunsForBranch(target, branchIds.runtime || branchIds.viewed);
   var matchingRun = next.runId && runs.find(function(item) { return String(item.runId || '') === next.runId; });
@@ -11538,7 +11567,10 @@ function updateConversationWorkRunElement(run, element) {
   // 重建/增量更新前后保持聊天视窗滚动位置：贴底时跟随最新，未贴底时
   // 精确恢复 scrollTop，避免内容高度变化把视窗“强制拖向最新”。
   var chatEl = els['chat-area'];
-  var wasAtBottom = !!(chatEl && shouldAutoScroll(chatEl));
+  // The passive scroll listener keeps this sticky-bottom bit current. Re-read
+  // scrollHeight here would force layout immediately before the DOM patch on
+  // every incremental update, then the restoration below would force it again.
+  var wasAtBottom = !!(chatEl && _chatShouldAutoScroll);
   var scrollTopBefore = chatEl ? chatEl.scrollTop : 0;
   var activityOpenStates = {};
   var priorActivities = element.querySelectorAll ? element.querySelectorAll('details.conversation-work-activity[data-activity-key], details[data-work-detail-key]') : [];
@@ -12186,6 +12218,9 @@ function renderChatMessagesUnsafe(messages, target) {
   var chatWasAtBottom = shouldAutoScroll(els['chat-area']);
   els['chat-area'].innerHTML = '';
   if (chatWasAtBottom) _chatShouldAutoScroll = true;
+  // This target now owns the transcript on screen; an async snapshot for it may
+  // repaint its held option block, and a snapshot for any other target may not.
+  state.renderedChatTargetKey = runtimeKeyFor(renderTarget.workspaceId, renderTarget.conversationId);
   var renderConversationId = renderTarget.conversationId;
   var guideMessages = guideMessagesForTarget(renderTarget);
   var persistedGuideIds = {};
@@ -12202,6 +12237,10 @@ function renderChatMessagesUnsafe(messages, target) {
   });
   var persistedRunsById = {};
   var persistedRunIndexes = {};
+  // dev-0.6.6: the transcript loop below asks "is this message owned by a
+  // persisted work run?" once per message. A linear scan there is O(rounds²)
+  // for a long conversation, so resolve it through a lookup table instead.
+  var persistedRunIdSet = {};
   var renderedRunIds = {};
   var recoveredAssistantRunIds = {};
   var messageRunRoles = {};
@@ -12211,6 +12250,7 @@ function renderChatMessagesUnsafe(messages, target) {
     if (runId) {
       persistedRunsById[runId] = run;
       persistedRunIndexes[runId] = runIndex;
+      persistedRunIdSet[runId] = true;
     }
   });
   normalizedMessages.forEach(function(message, messageIndex) {
@@ -12271,7 +12311,7 @@ function renderChatMessagesUnsafe(messages, target) {
     finishToolBatch(renderConversationId);
     var clientMessageId = String(m.clientMessageId || '');
     if (clientMessageId) persistedGuideIds[clientMessageId] = true;
-    if (clientMessageId && m.runId && persistedRuns.some(function(run) { return String(run.runId || '') === String(m.runId || ''); })) {
+    if (clientMessageId && m.runId && persistedRunIdSet[String(m.runId || '')]) {
       delete guideMessages[clientMessageId];
       continue;
     }
@@ -12290,7 +12330,9 @@ function renderChatMessagesUnsafe(messages, target) {
       guideId: m.guideId || '',
       attachments: m.attachments || [],
       target: renderTarget,
-      timestamp: m.timestamp || ''
+      timestamp: m.timestamp || '',
+      skipAutoScroll: true,
+      skipEntryAnimation: true
     });
     if (associatedRun && String(m.role || '') === 'user') renderOwnedWorkRun(associatedRun, false);
     if (clientMessageId) delete guideMessages[clientMessageId];
@@ -12303,7 +12345,6 @@ function renderChatMessagesUnsafe(messages, target) {
   });
   if (pendingWorkReview) addWorkReview(pendingWorkReview.diffs || pendingWorkReview, pendingWorkReview.runId || '');
   renderConversationBranchPagers();
-  renderAutoRouteRatingControls();
   if (typeof renderPendingOptionsInChat === 'function') renderPendingOptionsInChat(state.pendingOptions || []);
 }
 
@@ -12312,6 +12353,153 @@ function renderChatMessagesUnsafe(messages, target) {
 // the preceding window via conversation:loadEarlier and prepends it, so a
 // long-running conversation can be browsed without ever transferring the whole
 // transcript in one snapshot.
+function canPrependHistoryMessages(messages, existingMessages, target, liveArea, previousStart, pageStart) {
+  if (!Array.isArray(messages) || !messages.length || !Array.isArray(existingMessages) || !existingMessages.length || !liveArea) return false;
+  if (!Number.isFinite(Number(previousStart)) || !Number.isFinite(Number(pageStart))
+    || Number(pageStart) < 0 || Number(pageStart) + messages.length !== Number(previousStart)) return false;
+  var targetKey = runtimeKeyFor(target.workspaceId, target.conversationId);
+  if (state.renderedChatTargetKey !== targetKey) return false;
+  var persistedRuns = workRunsForTarget(target).slice();
+  var persistedRunIds = Object.create(null);
+  var stableRunStatuses = ['completed', 'interrupted', 'force_interrupted', 'error'];
+  for (var runIndex = 0; runIndex < persistedRuns.length; runIndex++) {
+    var persistedRun = persistedRuns[runIndex] || {};
+    var persistedRunId = String(persistedRun.runId || '');
+    if (!persistedRunId || stableRunStatuses.indexOf(String(persistedRun.status || '')) < 0) return false;
+    persistedRunIds[persistedRunId] = true;
+  }
+  if ((state.conversationBranchGroups || []).length || (state.conversationBranches || []).length > 1
+    || state.activeConversationBranchId || (state.viewedConversationBranchNodePath || []).length) return false;
+  var workUi = state.agentWorkUiByConversation && state.agentWorkUiByConversation[targetKey];
+  if (workUi && (workUi.pendingWorkReview || (workUi.workReviews || []).length)) return false;
+  if (pendingOptionsForTarget(target).length) return false;
+
+  function isPlainHistoryMessage(message, allowPersistedRun) {
+    if (!message || (message.role !== 'user' && message.role !== 'assistant')) return false;
+    var messageMode = String(message.mode || '').trim().toLowerCase();
+    if (messageMode && messageMode !== 'chat' && messageMode !== 'build') return false;
+    if (message.clientMessageId || message.guideId || isHiddenWorkflowMessage(message)) return false;
+    if (Array.isArray(message.attachments) && message.attachments.length) return false;
+    var runId = String(message.runId || '');
+    if (runId && persistedRunIds[runId] && !allowPersistedRun) return false;
+    return true;
+  }
+  if (!messages.every(function(message) { return isPlainHistoryMessage(message, false); })
+    || !existingMessages.every(function(message) { return isPlainHistoryMessage(message, true); })) return false;
+
+  var contentNodes = Array.prototype.filter.call(liveArea.children, function(node) {
+    return !node.classList.contains('conversation-load-earlier');
+  });
+  var messageNodes = contentNodes.filter(function(node) {
+    return node.classList.contains('chat-msg')
+      && !node.classList.contains('work-run-message')
+      && node.hasAttribute('data-message-index');
+  });
+  if (messageNodes.length !== existingMessages.length) return false;
+  var auxiliaryNodes = contentNodes.filter(function(node) {
+    return !node.classList.contains('chat-msg')
+      || node.classList.contains('work-run-message')
+      || !node.hasAttribute('data-message-index');
+  });
+  if (!auxiliaryNodes.every(function(node) {
+    if (!node.classList.contains('chat-msg')) return false;
+    if (node.classList.contains('work-run-message')) {
+      var runElement = node.querySelector('.conversation-work-run[data-run-id]');
+      return !!runElement && !!persistedRunIds[String(runElement.getAttribute('data-run-id') || '')];
+    }
+    return node.classList.contains('run-final-response')
+      && !!persistedRunIds[String(node.getAttribute('data-run-id') || '')];
+  })) return false;
+  var assistantRunIds = Object.create(null);
+  var orderedMessages = messages.concat(existingMessages);
+  for (var i = 0; i < orderedMessages.length; i++) {
+    var message = orderedMessages[i];
+    var runId = String(message && message.runId || '');
+    if (message && message.role === 'assistant' && runId) {
+      if (assistantRunIds[runId]) return false;
+      assistantRunIds[runId] = true;
+    }
+  }
+  return messageNodes.every(function(node, index) {
+    var message = existingMessages[index] || {};
+    var expectedId = String(message.messageId || '');
+    var nodeTarget = node._newmarkMessageTarget;
+    return node.classList.contains('chat-msg')
+      && node.classList.contains(String(message.role || ''))
+      && Number(node.getAttribute('data-message-index')) === index
+      && String(node.getAttribute('data-message-id') || '') === expectedId
+      && String(node.getAttribute('data-run-id') || '') === String(message.runId || '')
+      && String(node._newmarkMessageMode || '').trim().toLowerCase() === String(message.mode || '').trim().toLowerCase()
+      && String(node._newmarkMessageModel || '').trim() === String(message.model || '').trim()
+      && String(node._newmarkMessageText || '') === String(message.content || '')
+      && !!nodeTarget && nodeTarget.workspaceId === String(target.workspaceId || '')
+      && nodeTarget.conversationId === String(target.conversationId || 'default');
+  });
+}
+
+function prependHistoryMessagesIncrementally(messages, existingMessages, target, previousStart, pageStart) {
+  var liveArea = els['chat-area'];
+  if (!canPrependHistoryMessages(messages, existingMessages, target, liveArea, previousStart, pageStart)) return false;
+
+  var contentNodes = Array.prototype.filter.call(liveArea.children, function(node) {
+    return !node.classList.contains('conversation-load-earlier');
+  });
+  var anchor = contentNodes[0] || null;
+  var anchorTop = anchor ? anchor.getBoundingClientRect().top : 0;
+  var wasAtBottom = shouldAutoScroll(liveArea);
+  var previousAutoScroll = _chatShouldAutoScroll;
+  var stagingArea = document.createElement('div');
+  var priorArea = els['chat-area'];
+  var renderFailed = false;
+  try {
+    els['chat-area'] = stagingArea;
+    messages.forEach(function(message, index) {
+      addMsg(message.role, message.content || '', message.mode || '', message.model || '', index, {
+        runId: message.runId || '',
+        messageId: message.messageId || '',
+        target: target,
+        timestamp: message.timestamp || '',
+        skipAutoScroll: true,
+        skipEntryAnimation: true
+      });
+    });
+  } catch (error) {
+    renderFailed = true;
+    console.warn('[ui_history_prepend_failed]', error);
+  } finally {
+    els['chat-area'] = priorArea;
+    _chatShouldAutoScroll = previousAutoScroll;
+  }
+  if (renderFailed || stagingArea.childNodes.length !== messages.length) return false;
+
+  var shiftedBy = messages.length;
+  contentNodes.forEach(function(node) {
+    if (!node.classList.contains('chat-msg') || !node.hasAttribute('data-message-index')) return;
+    var nextIndex = Number(node.getAttribute('data-message-index')) + shiftedBy;
+    node.setAttribute('data-message-index', String(nextIndex));
+    var editButton = node._newmarkEditUserButton;
+    if (editButton) editButton.setAttribute('onclick', 'window.editUserMessage(this,' + nextIndex + ')');
+  });
+  var fragment = document.createDocumentFragment();
+  while (stagingArea.firstChild) fragment.appendChild(stagingArea.firstChild);
+  liveArea.insertBefore(fragment, anchor);
+
+  var runAnchorIndexes = workRunAnchorIndexStore(target);
+  Object.keys(runAnchorIndexes).forEach(function(runId) {
+    var anchorIndex = Number(runAnchorIndexes[runId]);
+    if (Number.isFinite(anchorIndex) && anchorIndex >= 0) runAnchorIndexes[runId] = anchorIndex + shiftedBy;
+  });
+
+  var targetKey = runtimeKeyFor(target.workspaceId, target.conversationId);
+  state.renderedChatMessages = cacheConversationMessages(messages.concat(existingMessages), target);
+  state.renderedChatTargetKey = targetKey;
+  _chatShouldAutoScroll = wasAtBottom;
+  renderLoadEarlierButton();
+  if (wasAtBottom) liveArea.scrollTop = liveArea.scrollHeight;
+  else if (anchor) liveArea.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+  return true;
+}
+
 function renderLoadEarlierButton() {
   if (!els['chat-area']) return;
   Array.prototype.forEach.call(els['chat-area'].querySelectorAll('.conversation-load-earlier'), function(button) { button.remove(); });
@@ -12342,9 +12530,12 @@ function renderLoadEarlierButton() {
       var mergedMessages = result.chatMessages.concat(newer);
       state.conversationLoadedBefore[loadKey] = Math.max(0, Number(result.windowStart) || 0);
       var chatWasAtBottom = shouldAutoScroll(els['chat-area']);
-      renderChatMessages(mergedMessages, loadTarget);
-      if (!chatWasAtBottom && els['chat-area']) els['chat-area'].scrollTop = 0;
-      renderLoadEarlierButton();
+      var prepended = prependHistoryMessagesIncrementally(result.chatMessages, newer, loadTarget, loadBefore, result.windowStart);
+      if (!prepended) {
+        renderChatMessages(mergedMessages, loadTarget);
+        if (!chatWasAtBottom && els['chat-area']) els['chat-area'].scrollTop = 0;
+        renderLoadEarlierButton();
+      }
     }).catch(function() { button.disabled = false; });
   });
   els['chat-area'].insertBefore(button, els['chat-area'].firstChild);
@@ -12964,6 +13155,15 @@ function applyConversationModelSelection(snapshot) {
   }
 }
 
+/**
+ * dev-0.6.6 长程内存回收：渲染端启动时清掉主进程记住的修订号（页面重载后内存里
+ * 的转录已不存在，必须重新取全量）。之后每次真正画完一份转录都会 ack。
+ */
+(function clearTranscriptRevisionsOnBoot() {
+  if (!api || !api.ackTranscript) return;
+  try { api.ackTranscript(currentConversationTarget(), ''); } catch (e) {}
+})();
+
 function applyConversationSnapshot(s, requestedConversationId, options) {
   if (!s) return;
   if (s.computerUse) {
@@ -12983,23 +13183,34 @@ function applyConversationSnapshot(s, requestedConversationId, options) {
     var preserveReadableHistory = !!(options && options.preserveReadableHistory
       && !snapshotHasReadableConversationHistory(s)
       && (!options.allowEmptyHistory || conversationHasReadableHistory(snapshotTarget)));
+    // dev-0.6.6 长程内存回收：宿主可能只回传"转录未变"的瘦快照（仅当本渲染端此前
+    // 通过 ackTranscript 声明过同一修订号）。瘦快照只对"当前正画着这条对话"有效；
+    // 其它情况必须取一次全量，绝不能用别的对话的画面顶替。
+    var transcriptUnchanged = !!(s && s.transcriptUnchanged === true);
     if (s && s.runtimeKey) registerRuntimeKey(snapshotTarget, s.runtimeKey);
+    if (transcriptUnchanged && !preserveReadableHistory) {
+      var unchangedKey = runtimeKeyFor(snapshotTarget.workspaceId, snapshotTarget.conversationId);
+      if (String(state.renderedChatTargetKey || '') !== unchangedKey && api.getState) {
+        api.getState(snapshotTarget, { transcript: 'force' }).then(function(full) {
+          if (full && isActiveConversationTarget(snapshotTarget)) applyConversationSnapshot(full, snapshotTarget.conversationId, options);
+        }).catch(function() {});
+      }
+    }
     hydrateConversationDraftSnapshot(s, snapshotTarget);
-    hydrateConversationBranchState(s);
+    if (!transcriptUnchanged) hydrateConversationBranchState(s);
     var modelRevisionMatches = !options || options.modelRevision === undefined
       || Number(state.modelSelectionRevision || 0) === Number(options.modelRevision || 0);
     if (modelRevisionMatches && isActiveConversationTarget(snapshotTarget)) {
       applyConversationModelSelection(s);
     }
     rebindQueueToRuntimeBranch(snapshotTarget);
-    if (s && Array.isArray(s.workRuns) && !preserveReadableHistory) {
+    if (s && Array.isArray(s.workRuns) && !preserveReadableHistory && !transcriptUnchanged) {
       var viewedBranchIdForSync = Array.isArray(s.viewedBranchNodePath) && s.viewedBranchNodePath.length
         ? String(s.viewedBranchNodePath[s.viewedBranchNodePath.length - 1])
         : '';
       syncWorkRunsSnapshot(s.workRuns, snapshotTarget, viewedBranchIdForSync || undefined);
     }
-    applyAutoRouteRatingState(s);
-    if (s && Number.isFinite(Number(s.totalMessages))) {
+    if (s && Number.isFinite(Number(s.totalMessages)) && Array.isArray(s.chatMessages)) {
       if (!state.conversationLoadedBefore) state.conversationLoadedBefore = {};
       var windowKey = runtimeKeyFor(snapshotTarget.workspaceId, s.conversationId || requestedConversationId || 'default');
       state.conversationLoadedBefore[windowKey] = Math.max(0, Number(s.totalMessages) - (Array.isArray(s.chatMessages) ? s.chatMessages.length : 0));
@@ -13011,9 +13222,16 @@ function applyConversationSnapshot(s, requestedConversationId, options) {
       window.renderContextWindow();
     }
     if (state.rightTab === 'status') window.renderRightStatusPanel();
-    if (s && Array.isArray(s.chatMessages) && !preserveReadableHistory) {
+    if (s && Array.isArray(s.chatMessages) && !preserveReadableHistory && !transcriptUnchanged) {
       renderChatMessages(s.chatMessages, snapshotTarget);
       renderLoadEarlierButton();
+      // 声明"我已画好该修订"，宿主下一次轮询才会回瘦快照。只在真正画到屏幕上
+      // （或该目标就是当前渲染目标）时声明。
+      if (typeof s.transcriptRevision === 'string' && s.transcriptRevision
+        && String(state.renderedChatTargetKey || '') === runtimeKeyFor(snapshotTarget.workspaceId, snapshotTarget.conversationId)
+        && api.ackTranscript) {
+        try { api.ackTranscript(snapshotTarget, s.transcriptRevision); } catch (e) {}
+      }
     }
     if (s && s.conversationId) {
       state.activeBackendConversationId = s.conversationId;
@@ -13025,6 +13243,17 @@ function applyConversationSnapshot(s, requestedConversationId, options) {
       if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, snapshotTarget);
     }
     syncQueueItemsFromSnapshot(s, snapshotTarget);
+    // The transcript above is painted from state.pendingOptions, but the
+    // per-target option store is only refreshed by the line just executed.
+    // A conversation that asked its question while another conversation was
+    // focused therefore has to be repainted here, otherwise the held question
+    // never appears when the user returns to the conversation that asked it.
+    if (isActiveConversationTarget(snapshotTarget)
+      && state.renderedChatTargetKey === runtimeKeyFor(snapshotTarget.workspaceId, snapshotTarget.conversationId)) {
+      // Paint from the same projection renderChatMessages uses, so an already
+      // answered question (cleared optimistically) is never resurrected.
+      renderPendingOptionsInChat(state.pendingOptions || []);
+    }
     if (s && Array.isArray(s.workEvents)) {
       var eventConversationId = runtimeKeyFor(snapshotTarget.workspaceId, s.conversationId || requestedConversationId || 'default');
       if (!state.agentWorkEventsByConversation) state.agentWorkEventsByConversation = {};
@@ -13044,13 +13273,29 @@ function applyConversationSnapshot(s, requestedConversationId, options) {
     if (s && s.subagents) state.subagents = s.subagents;
     if (s && s.linkedPlan) state.linkedPlan = s.linkedPlan;
     replayActiveAgentWorkEvents();
-    // Ensure running state reflects work runs from snapshot for freshly loaded conversations
+    // Ensure running state reflects work runs from snapshot for freshly loaded
+    // conversations. dev-0.6.6: a persisted `running` work run is NOT evidence
+    // that the conversation is still running — a crashed utility host leaves the
+    // record behind forever. Only a snapshot that reports a live run may
+    // resurrect the running state; otherwise close the stale record locally so
+    // the timer stops and the next input is a new send instead of a queued Next
+    // (the reported "timestamp keeps running but nothing works" state).
+    var runtimeSnapshot = s && s.runtime ? s.runtime : null;
+    var snapshotStatusText = String(s && s.status || '').toLowerCase();
+    var backendStillRunning = !!(runtimeSnapshot && (runtimeSnapshot.running || runtimeSnapshot.stopRequested))
+      || ['running', 'stopping', 'force_restarting'].indexOf(snapshotStatusText) >= 0;
     var runs = state.workRunsByTarget && state.workRunsByTarget[runtimeKeyFor(snapshotTarget.workspaceId, snapshotTarget.conversationId)] || [];
     for (var ri = 0; ri < runs.length; ri++) {
-      if (runs[ri].status === 'running') {
+      if (runs[ri].status !== 'running') continue;
+      if (backendStillRunning) {
         setConversationRuntimeState(snapshotTarget, 'running', runs[ri].runId);
+        continue;
       }
+      runs[ri].status = 'interrupted';
+      if (!runs[ri].endedAt) runs[ri].endedAt = new Date().toISOString();
+      if (typeof updateConversationWorkRunElement === 'function') updateConversationWorkRunElement(runs[ri]);
     }
+    if (typeof reconcileLocalRuntimeFromSnapshot === 'function') reconcileLocalRuntimeFromSnapshot(s, snapshotTarget);
     var isRunning = !!runningConversationRecord(snapshotTarget.conversationId, snapshotTarget.workspaceId);
     setWorking(isRunning);
 }
@@ -13483,6 +13728,66 @@ async function reconcileStaleLocalRuntimeBeforeSend(target) {
   updateSubmitButtonState();
   if (window.renderInputStack) window.renderInputStack();
   return true;
+}
+
+/**
+ * dev-0.6.6: 用权威快照纠正「本地还在跑、后端其实已经死了」的状态。
+ *
+ * 真实现场：utility host 进程被 V8 OOM 杀死后不会再发终态事件，渲染端于是永远
+ * 停在「运行中」——计时一直在走、输入被当成 Next 排进队列、队列也永远等不到执行者。
+ * 这里用已经在手的快照做纠正（不额外请求 IPC），并且绝不与渲染端在飞的发送抢状态。
+ */
+function reconcileLocalRuntimeFromSnapshot(snapshot, target) {
+  if (!snapshot || typeof snapshot !== 'object') return false;
+  var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  if (!owner) return false;
+  var key = runtimeKeyFor(owner.workspaceId, owner.conversationId);
+  if (state.activeSendCallsByTarget && state.activeSendCallsByTarget[key]) return false;
+  if (!runningConversationRecord(owner.conversationId, owner.workspaceId)) return false;
+  var runtimeSnapshot = snapshot.runtime || null;
+  var snapshotStatus = String(snapshot.status || '').toLowerCase();
+  var backendStillRunning = !!(runtimeSnapshot && (runtimeSnapshot.running || runtimeSnapshot.stopRequested))
+    || ['running', 'stopping', 'force_restarting'].indexOf(snapshotStatus) >= 0;
+  if (backendStillRunning) return false;
+  if (['idle', 'completed', 'interrupted', 'force_interrupted', 'error'].indexOf(snapshotStatus) < 0) return false;
+  var runId = String((runtimeSnapshot && runtimeSnapshot.runId) || snapshot.runId || '');
+  var generation = Number((runtimeSnapshot && runtimeSnapshot.generation) || snapshot.generation || 0);
+  setConversationRuntimeState(owner, snapshotStatus, runId, { provisional: false, generation: generation });
+  if (state.nextQueueSchedulesByTarget) {
+    delete state.nextQueueSchedulesByTarget[key];
+    delete state.nextQueueSchedulesByTarget[runtimeKeyFor('', owner.conversationId)];
+  }
+  state._sendInFlight = Object.keys(state.runningConversations || {}).length > 0;
+  setWorking(state._sendInFlight);
+  updateSubmitButtonState();
+  if (window.renderInputStack) window.renderInputStack();
+  return true;
+}
+
+/**
+ * While the renderer believes a conversation is running, verify that belief
+ * against the backend. A crashed host cannot publish its own terminal event, so
+ * the watchdog is the only thing that can clear the phantom "running" state.
+ */
+var _runtimeReconcileWatchdog = null;
+function ensureRuntimeReconcileWatchdog() {
+  if (_runtimeReconcileWatchdog || !api.getState) return;
+  _runtimeReconcileWatchdog = setInterval(function() {
+    var records = Object.keys(state.runningConversations || {});
+    if (!records.length) {
+      clearInterval(_runtimeReconcileWatchdog);
+      _runtimeReconcileWatchdog = null;
+      return;
+    }
+    records.forEach(function(key) {
+      var record = (state.runningConversations || {})[key];
+      var target = record && record.target ? record.target : null;
+      if (!target || !target.conversationId) return;
+      Promise.resolve(api.getState(target)).then(function(snapshot) {
+        reconcileLocalRuntimeFromSnapshot(snapshot, target);
+      }).catch(function() {});
+    });
+  }, 15000);
 }
 
 function setSubmitButtonVisual(icon, label, running, stopMode) {
@@ -18067,8 +18372,6 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       addMsg('user', displayText, opts.fromQueue ? 'next-build' : requestedMode, state.model, opts.optimisticMessageIndex, { attachments: optimisticAttachments });
     }
     renderConversationBranchPagers();
-    applyAutoRouteRatingState(null);
-    renderAutoRouteRatingControls();
   }
   var responseMsg = null;
   var sendFailure = '';
@@ -18112,7 +18415,6 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       setConversationRuntimeState(lockedTarget, receivedSendStatus, r.runId, { provisional: false, generation: r.generation || 0, runtimeKey: r.runtimeKey || '' });
     }
     var stillActive = sendResultOwnsRuntime && sendLoadGeneration === state.conversationLoadGeneration && isActiveConversationTarget(lockedTarget) && isViewingRuntimeConversationBranch(lockedTarget);
-    if (stillActive) applyAutoRouteRatingState(r);
     if (stillActive && r && Array.isArray(r.workRuns)) syncWorkRunsSnapshot(r.workRuns, lockedTarget);
     var responseOwnedByRun = !!(r && Array.isArray(r.workRuns) && r.workRuns.some(function(run) {
       return (run.events || []).some(function(event) { return ['response', 'final_response'].indexOf(String(event.type || '').toLowerCase()) >= 0; });
@@ -18215,7 +18517,6 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       }
       if (stillActiveAfterRefresh && s && s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
       if (stillActiveAfterRefresh && s && Array.isArray(s.workRuns)) {
-        applyAutoRouteRatingState(s);
         hydrateConversationBranchState(s);
         syncWorkRunsSnapshot(s.workRuns, lockedTarget);
         if (Array.isArray(s.chatMessages)) renderChatMessages(s.chatMessages, lockedTarget);
@@ -18808,8 +19109,6 @@ window.refreshRightStatus = function(options) {
   var statusContextRequest = captureContextWindowSnapshotRequest(statusTarget);
   return api.getState(statusTarget).then(function(s) {
     if (!isActiveConversationTarget(statusTarget) || statusLoadGeneration !== state.conversationLoadGeneration) return null;
-    applyAutoRouteRatingState(s);
-    renderAutoRouteRatingControls();
     applyConversationCommandSnapshot(s, statusTarget);
     if (s && s.model !== undefined) state.model = s.model;
     if (s && s.modelLabel) state.modelLabel = s.modelLabel;
@@ -20083,6 +20382,29 @@ function renderGeneralSettings() {
 '</div>';
 }
 
+/**
+ * Current-conversation-model decision policy. No separate JEV model, runtime,
+ * model ID, artifact path, or selector is exposed here. When Auto is off every
+ * policy control is locked.
+ */
+function jevDecisionModelSettingsHtml() {
+  var jev = state.jevDecisionModel && typeof state.jevDecisionModel === 'object' ? state.jevDecisionModel : {};
+  var locked = jev.locked === true || state.autoSwitch === 'off';
+  var disabled = locked ? ' disabled' : '';
+  var enabled = jev.enabled !== false;
+  var currentModelStatus = t('model.jevCurrentModelStatus');
+  return '<div class="provider-card" id="jev-decision-model-card" data-jev-locked="' + (locked ? 'true' : 'false') + '" style="margin-top:12px;">' +
+    '<div id="jev-decision-model-title" style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px;">' + esc(t('model.jevTitle')) + '</div>' +
+    '<div id="jev-decision-model-desc" style="font-size:11px;color:var(--text-dim);line-height:1.45;margin-bottom:6px;">' + esc(t('model.jevDesc')) + '</div>' +
+    (locked ? '<div id="jev-decision-model-lock" class="model-eval-pending" style="font-size:11px;margin-bottom:6px;">' + esc(t('model.jevLocked')) + '</div>' : '') +
+    '<div class="setting-row"><span class="setting-label">' + esc(t('model.jevEnabled')) + '</span><div class="setting-control">' +
+    '<input type="checkbox" id="jev-field-enabled" data-jev-field="enabled" role="switch"' + (enabled ? ' checked' : '') + disabled + ' onchange="window.setJevDecisionModel({enabled:this.checked})"></div></div>' +
+    '<div class="setting-row"><span class="setting-label">' + esc(t('model.jevTimeout')) + '</span><div class="setting-control">' +
+    '<input type="number" id="jev-field-timeout" data-jev-field="timeout-ms" min="100" max="30000" step="100" style="width:90px;" value="' + escAttr(String(Number(jev.timeoutMs) || 3000)) + '"' + disabled + ' onchange="window.setJevDecisionModel({timeoutMs:Number(this.value)})"></div></div>' +
+    '<div id="jev-decision-model-status" data-jev-model="current-eligible-model" data-jev-thinking="off" data-jev-output="strict-json-schema" style="font-size:11px;color:var(--text-dim);margin-top:4px;">' + esc(currentModelStatus) + '</div>' +
+    '</div>';
+}
+
 function renderModelSettings() {
   var providersHtml = '';
   for (var i = 0; i < state.providers.length; i++) {
@@ -20158,11 +20480,11 @@ function renderModelSettings() {
     '<option value="off"' + (state.fallbackOnUnavailable === 'off' ? ' selected' : '') + '>' + esc(t('common.off')) + '</option>' +
     '<option value="on"' + (state.fallbackOnUnavailable === 'on' ? ' selected' : '') + '>' + esc(t('common.on')) + '</option></select></div></div>' +
     '<div class="setting-row"><span class="setting-label">' + esc(t('model.preference')) + '</span><div class="setting-control"><select onchange="window.setSwitchTendency(this.value)">' +
-    '<option value="quality"' + (state.switchTendency === 'quality' ? ' selected' : '') + '>' + esc(t('model.qualityPolicy')) + '</option>' +
-    '<option value="balanced"' + (state.switchTendency === 'balanced' ? ' selected' : '') + '>' + esc(t('model.balancedPolicy')) + '</option>' +
-    '<option value="cost"' + (state.switchTendency === 'cost' ? ' selected' : '') + '>' + esc(t('model.costPolicy')) + '</option>' +
-    '<option value="speed"' + (state.switchTendency === 'speed' ? ' selected' : '') + '>' + esc(t('model.speedPolicy')) + '</option></select></div></div>' +
-    '<div class="setting-row"><span class="setting-label">' + esc(t('model.learnedPreference')) + '</span><div class="setting-control"><button type="button" class="sec-btn settings-action-btn" onclick="window.clearLearnedAutoPreferences()">' + esc(t('model.clearLearnedPreference')) + '</button></div></div>' +
+    '<option value="conservative"' + (state.switchTendency === 'conservative' ? ' selected' : '') + '>' + esc(t('model.conservativeTendency')) + '</option>' +
+    '<option value="balanced"' + (state.switchTendency === 'balanced' ? ' selected' : '') + '>' + esc(t('model.balancedTendency')) + '</option>' +
+    '<option value="aggressive"' + (state.switchTendency === 'aggressive' ? ' selected' : '') + '>' + esc(t('model.aggressiveTendency')) + '</option></select></div></div>' +
+    '<div class="setting-desc" style="margin:4px 0 12px;">' + esc(t('model.preferenceDesc')) + '</div>' +
+    jevDecisionModelSettingsHtml() +
     '</div>' +
     '<div class="provider-card" style="margin-top:12px;">' +
     '<label for="global-agent-prompt" style="display:block;font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px;">' + esc(t('model.globalAgentPrompt')) + '</label>' +
@@ -20643,6 +20965,47 @@ window.setAutoSwitchMode = function(v) {
   state.autoSwitchScope = v === 'provider' ? 'provider' : 'all';
   api.saveConfig({ autoSwitch: state.autoSwitch, autoSwitchScope: state.autoSwitchScope });
   window.refreshModelSelect();
+  // Auto off locks the decision-model editor; Auto on unlocks it again. Ask the
+  // backend for the authoritative lock state instead of guessing locally.
+  window.refreshJevDecisionModel();
+};
+
+window.refreshJevDecisionModel = function() {
+  return api.getState().then(function(s) {
+    window.applyJevDecisionModelState(s);
+    var panel = document.getElementById('stab-models');
+    if (panel && panel.getAttribute('data-lazy') !== '1') panel.innerHTML = renderModelSettings();
+    return state.jevDecisionModel;
+  }).catch(function() { return state.jevDecisionModel; });
+};
+
+window.applyJevDecisionModelState = function(snapshot) {
+  if (snapshot && typeof snapshot === 'object' && snapshot.jevDecisionModel && typeof snapshot.jevDecisionModel === 'object') {
+    state.jevDecisionModel = snapshot.jevDecisionModel;
+  }
+};
+
+/**
+ * Persist one decision-model field. The backend is authoritative: it refuses
+ * every edit while Auto is off (`auto_disabled`) and rejects invalid values, so
+ * the UI never claims a change that did not happen.
+ */
+window.setJevDecisionModel = function(patch) {
+  if (!api.setJevDecisionModel) return Promise.resolve(null);
+  return api.setJevDecisionModel(patch || {}).then(function(result) {
+    if (result && result.state) state.jevDecisionModel = result.state;
+    var panel = document.getElementById('stab-models');
+    if (panel) panel.innerHTML = renderModelSettings();
+    if (!result || result.ok === false) {
+      showUiNotice(result && result.reason === 'auto_disabled' ? t('model.jevLocked') : t('model.jevRefused'), 'error', 'jev-decision-model');
+    } else {
+      showUiNotice(t('model.jevSaved'), 'info', 'jev-decision-model');
+    }
+    return result;
+  }).catch(function(error) {
+    showUiNotice(t('model.jevRefused') + ' ' + (error && error.message ? error.message : String(error)), 'error', 'jev-decision-model');
+    return null;
+  });
 };
 
 var systemColorScheme = window.matchMedia('(prefers-color-scheme: dark)');
@@ -20785,12 +21148,8 @@ window.setFallbackOnUnavailable = function(v) {
 };
 
 window.setSwitchTendency = function(v) {
-  state.switchTendency = ['quality', 'balanced', 'cost', 'speed'].indexOf(v) >= 0 ? v : 'balanced';
+  state.switchTendency = ['conservative', 'balanced', 'aggressive'].indexOf(v) >= 0 ? v : 'balanced';
   api.saveConfig({ switchTendency: state.switchTendency });
-};
-
-window.clearLearnedAutoPreferences = function() {
-  api.saveConfig({ clearLearnedAutoPreferences: true }).catch(function(){});
 };
 
 window.setNativeToolEnabled = function(name, enabled) {
@@ -24189,6 +24548,34 @@ window.activateConversationWithGlass = function(idx, row) {
   } });
 };
 
+/**
+ * dev-0.6.6 hotfix: 拖动排序期间，行的顺序归用户所有。
+ *
+ * 拖动过程中任何权威列表推送（重命名、跑马灯状态、其他窗口或移动端）都会走到
+ * renderConversations()。旧实现无条件把行重排回 state 顺序，用户刚刚让出来的落点
+ * 会被抹掉，松手时提交的就是被重置后的位置——「拖到哪就落在哪」因此失效。
+ * 拖动期间以 DOM 现有顺序为准，只把刚出现的新行按 state 位置插进去。
+ */
+function conversationRowOrderDuringDrag(orderedRows, list) {
+  var dragRow = conversationNativeDrag.row;
+  if (!dragRow || dragRow.parentNode !== list) return orderedRows;
+  var domRows = Array.prototype.slice.call(list.querySelectorAll('.conv-item'));
+  var stateIndex = new Map();
+  orderedRows.forEach(function(row, index) { stateIndex.set(row, index); });
+  var sequence = domRows.filter(function(row) { return stateIndex.has(row); });
+  if (!sequence.length) return orderedRows;
+  orderedRows.forEach(function(row) {
+    if (sequence.indexOf(row) >= 0) return;
+    var index = stateIndex.get(row);
+    var insertAt = sequence.length;
+    for (var i = 0; i < sequence.length; i++) {
+      if (stateIndex.get(sequence[i]) > index) { insertAt = i; break; }
+    }
+    sequence.splice(insertAt, 0, row);
+  });
+  return sequence;
+}
+
 function renderConversations() {
   var list = els['conversation-list'];
   if (!list) return;
@@ -24349,7 +24736,8 @@ function renderConversations() {
     var stale = existingRows[id];
     if (stale && stale.parentNode === list) stale.parentNode.removeChild(stale);
   });
-  orderedRows.forEach(function(row, idx) {
+  var rowsToPlace = conversationRowOrderDuringDrag(orderedRows, list);
+  rowsToPlace.forEach(function(row, idx) {
     var current = list.children[idx];
     if (current === row) return;
     list.insertBefore(row, current || null);
@@ -24438,6 +24826,7 @@ window.newConversation = function(workspaceReference, branchCommunication) {
   state._promptBoundKey = conversationDraftKey();
   renderConversations();
   els['chat-area'].innerHTML = '';
+  state.renderedChatTargetKey = '';
   var target = currentConversationTarget(id);
   var modelRevisionAtActivation = Number(state.modelSelectionRevision || 0);
   var activation = api.activateConversation ? api.activateConversation(target) : (api.ensureConversation ? api.ensureConversation(target) : Promise.resolve(null));
@@ -24525,6 +24914,11 @@ window.switchConversation = function(idx) {
   setActiveWorkspaceConversation(idx);
   var activeId = activeConversationId();
   var activeBrowserTarget = currentConversationTarget(activeId);
+  // Rebind the visible composer to the selected conversation before any async
+  // backend hydration. Users can type as soon as the row is selected; leaving
+  // _promptBoundKey on the previous conversation would persist that input to
+  // the wrong target while syncBackendConversation is still in flight.
+  restoreConversationDraft(activeBrowserTarget);
   var activeBrowserView = browserGuestForTarget(activeBrowserTarget);
   if (activeBrowserView) setActiveBrowserGuest(activeBrowserView, activeBrowserTarget);
   else if (state.rightTab === 'browser') window.ensureBrowserPanel({ target: activeBrowserTarget, activate: true }).catch(function(error) {
@@ -24651,6 +25045,7 @@ window.archiveConv = function(conversationId) {
         if (priorActiveId === targetId) {
           state.activeBackendConversationId = '';
           if (els['chat-area']) els['chat-area'].innerHTML = '';
+          state.renderedChatTargetKey = '';
           if (window.renderFlowTakeover) window.renderFlowTakeover(false, '', { target: targetRuntime });
         }
       } else {
@@ -24663,6 +25058,7 @@ window.archiveConv = function(conversationId) {
         if (priorActiveId === targetId) {
           state.activeBackendConversationId = nextActiveId;
           if (els['chat-area']) els['chat-area'].innerHTML = '';
+          state.renderedChatTargetKey = '';
         }
       }
       if (state.flowTakeovers) {
@@ -26542,7 +26938,15 @@ window.commitConversationDomOrder = function() {
   var ids = Array.from(list.querySelectorAll('.conv-item')).map(function(row) {
     return String(row.getAttribute('data-conversation-id') || '');
   }).filter(function(id) { return !!byId[id]; });
-  if (ids.length !== convs.length) return renderConversations();
+  if (!ids.length) return renderConversations();
+  // dev-0.6.6 hotfix: 拖动期间权威列表可能新增/删除会话（重命名、其他窗口、
+  // 移动端）。旧实现一旦发现行数与 state 不一致就整表重渲染，用户刚拖出来的落点
+  // 会被丢弃。这里以 DOM 顺序为准，把没有出现在 DOM 里的会话按 state 顺序补在末尾，
+  // 保证提交的永远是一份完整、且以用户拖动结果为准的顺序。
+  var missingIds = convs
+    .filter(function(item) { return ids.indexOf(String(item.id)) < 0; })
+    .map(function(item) { return String(item.id); });
+  ids = ids.concat(missingIds);
   var activeId = activeConversationId();
   convs.splice.apply(convs, [0, convs.length].concat(ids.map(function(id) { return byId[id]; })));
   setActiveWorkspaceConversationById(activeId);
@@ -28017,7 +28421,6 @@ function schedulePostStartupUiRendering() {
       if (Array.isArray(s.wslDistros)) state.wslDistros = s.wslDistros;
       if (s.conversationId) state.activeBackendConversationId = s.conversationId;
       if (s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
-      applyAutoRouteRatingState(s);
       if (s.chatMessages) {
         hydrateConversationBranchState(s);
         renderChatMessages(s.chatMessages);
@@ -28025,10 +28428,11 @@ function schedulePostStartupUiRendering() {
       if (s.defaultFlow) state.defaultFlow = s.defaultFlow;
       if (s.autoSwitch !== undefined) state.autoSwitch = s.autoSwitch ? 'on' : 'off';
       if (s.autoSwitchScope) state.autoSwitchScope = s.autoSwitchScope === 'provider' ? 'provider' : 'all';
+      window.applyJevDecisionModelState(s);
       if (s.openAIApiMode) state.openAIApiMode = (s.openAIApiMode === 'chat' || s.openAIApiMode === 'responses') ? s.openAIApiMode : 'chat_stream';
       if (s.fallbackOnUnavailable !== undefined) state.fallbackOnUnavailable = s.fallbackOnUnavailable ? 'on' : 'off';
       if (s.switchTendency) {
-        state.switchTendency = s.switchTendency === 'performance' ? 'quality' : (s.switchTendency === 'cheap_save' ? 'cost' : (s.switchTendency === 'default' ? 'balanced' : s.switchTendency));
+        state.switchTendency = ['conservative', 'balanced', 'aggressive'].indexOf(s.switchTendency) >= 0 ? s.switchTendency : 'balanced';
       }
       if (s.providers) {
         state.providers = s.providers;

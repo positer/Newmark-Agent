@@ -49,6 +49,7 @@ export function verifyDev009SourceContracts(): Assertion[] {
     scripts?: Record<string, string>;
     build?: { asarUnpack?: string[] };
   };
+  const buildDriver = fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'build-driver.cjs'), 'utf-8');
   const windowsProcessTreeHelper = fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'windows-process-tree-helper.cs'), 'utf-8');
   const windowsProcessTreeBuild = fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'build-windows-process-tree-helper.cjs'), 'utf-8');
   const typeboxBuild = fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'build-typebox-compile.cjs'), 'utf-8');
@@ -385,8 +386,8 @@ export function verifyDev009SourceContracts(): Assertion[] {
   check(packageJson.includes('release:dev009-features-smoke') && packageJson.includes('release:dev010-features-smoke'), 'dev009 release: compatibility gates remain registered in the current package', results);
 
   check(
-    String(packageConfig.scripts?.build || '').includes('node scripts/build-windows-process-tree-helper.cjs')
-      && String(packageConfig.scripts?.build || '').includes('node scripts/build-typebox-compile.cjs')
+    String(packageConfig.scripts?.build || '').includes('node scripts/build-driver.cjs')
+      && hasAll(buildDriver, ['build-windows-process-tree-helper.cjs', 'build-typebox-compile.cjs'])
       && Array.isArray(packageConfig.build?.asarUnpack)
       && packageConfig.build.asarUnpack.includes('dist/windows-process-tree-helper.dll')
       && packageConfig.build.asarUnpack.includes('dist/typebox-compile.bundle.cjs')

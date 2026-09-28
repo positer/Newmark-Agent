@@ -1,4 +1,4 @@
-import { Agent, AutoRouteRatingResult } from './agent';
+import { Agent } from './agent';
 import { GuardedContinuationStore } from './continuation/store';
 import { ContinuationError, type ExecutionScope } from './continuation/contracts';
 import {
@@ -12,6 +12,7 @@ import {
 } from './types';
 import { AutomationManager } from './automation';
 import { randomUUID } from 'crypto';
+import * as path from 'path';
 import {
   ConversationRuntimeTarget,
   NormalizedConversationTarget,
@@ -20,6 +21,18 @@ import {
 } from './conversationTarget';
 
 export type ConversationQueueMode = 'steer' | 'followUp';
+
+/**
+ * dev-0.6.6 recovery policy for orphaned queue attempts.
+ *
+ * A live owner renews its lease every `leaseRenewalMs` (20s), so a lease that
+ * has been expired for this grace window means the owner stopped renewing (it
+ * was killed, crashed or lost its event loop). Dead-owner PIDs are reclaimed
+ * immediately; the grace window only guards against PID reuse and clock skew.
+ */
+const ORPHAN_RECOVERY_GRACE_MS = 120_000;
+const ORPHAN_SWEEP_INTERVAL_MS = 5_000;
+
 export interface ConversationQueueItemSnapshot {
   id: string;
   /** Authoritative continuation-v1 build id (null for legacy/in-memory rows). */
@@ -100,8 +113,7 @@ export interface AgentPromptMessage {
     attachments?: ConversationImageAttachment[];
   }>;
   routePolicy?: {
-    mode?: 'quality' | 'balanced' | 'cost' | 'speed';
-    maxQualityLoss?: number;
+    mode?: 'conservative' | 'balanced' | 'aggressive';
     maxExpectedCostUsd?: number;
     allowPreview?: boolean;
     privacy?: 'default' | 'no_training' | 'zdr';
@@ -153,7 +165,6 @@ export interface ConversationKernelRunResult {
   workRuns: Agent['workRuns'];
   routeDecision?: Agent['lastRouteDecision'];
   resolvedDeployment?: ReturnType<Agent['activeDeployment']>;
-  autoRouteRatingAvailable?: boolean;
 }
 
 export type ConversationTargetInput = string | ConversationRuntimeTarget;
@@ -235,6 +246,94 @@ export class ConversationKernel {
   private listeners = new Set<WorkListener>();
   private readonly eventLimit = 500;
   private generations = new Map<string, number>();
+  /**
+   * Durable continuation ledgers are read on every queue projection and state
+   * snapshot. Building a fresh store each time re-parsed (and previously also
+   * re-wrote) the whole JSON ledger, so a long conversation became slower with
+   * every turn. The store revalidates its cache through the ledger file
+   * fingerprint on each read, so one instance per branch stays authoritative.
+   */
+  private readonly continuationStores = new Map<string, GuardedContinuationStore>();
+  /** Throttles orphan sweeps per branch so snapshots stay read-only and cheap. */
+  private readonly orphanSweepAt = new Map<string, number>();
+
+  /**
+   * dev-0.6.6: is the process that owns an attempt still alive?
+   *
+   * Attempts record their owner as `kernel:<pid>`. A dead owner can never write
+   * a terminal state, so its build/guard must be reclaimed by a live reader
+   * instead of waiting for a claim that nobody will ever make.
+   */
+  private workerCapabilityAlive(capability: string): boolean {
+    const match = /:(\d+)$/.exec(String(capability || ''));
+    if (!match) return true; // Unknown owners (for example flow-external) are never stolen by liveness.
+    const pid = Number(match[1]);
+    if (!Number.isFinite(pid) || pid <= 0) return true;
+    if (pid === process.pid) return true;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      const code = error && typeof error === 'object' ? String((error as NodeJS.ErrnoException).code || '') : '';
+      return code !== 'ESRCH';
+    }
+  }
+
+  /**
+   * Reclaim an orphaned queued turn (dead owner / long-expired lease) and, when
+   * the conversation is idle and its queue is not paused, let the queue run
+   * again. Field evidence: a utility host died of V8 OOM mid-turn and left the
+   * build RUNNING with an expired guard, so every later queued row entered the
+   * panel but never executed.
+   */
+  private maybeRecoverOrphanedAttempt(runtime: ConversationRuntime, reason: string): boolean {
+    const continuation = this.continuationStore(runtime);
+    if (!continuation) return false;
+    let active: ReturnType<GuardedContinuationStore['activeAttempt']> = null;
+    try {
+      active = continuation.store.activeAttempt({
+        workspaceId: continuation.workspaceId,
+        rootId: continuation.rootId,
+        branchId: continuation.branchId,
+      });
+    } catch {
+      return false;
+    }
+    if (!active || !active.buildId) return false;
+    const now = Date.now();
+    const ownerAlive = this.workerCapabilityAlive(active.workerCapability);
+    const leaseExpiredLongAgo = active.leaseUntil > 0 && active.leaseUntil + ORPHAN_RECOVERY_GRACE_MS <= now;
+    const danglingAttempt = active.status !== 'RUNNING';
+    if (!danglingAttempt && ownerAlive && !leaseExpiredLongAgo) return false;
+    const sweepKey = `${continuation.workspaceId}::${continuation.rootId}::${continuation.branchId}`;
+    if (!danglingAttempt && (this.orphanSweepAt.get(sweepKey) || 0) + ORPHAN_SWEEP_INTERVAL_MS > now) return false;
+    this.orphanSweepAt.set(sweepKey, now);
+    let outcome: ReturnType<GuardedContinuationStore['recoverOrphanedAttempt']> = { recovered: false };
+    try {
+      outcome = continuation.store.recoverOrphanedAttempt({
+        workspaceId: continuation.workspaceId,
+        rootId: continuation.rootId,
+        branchId: continuation.branchId,
+        graceMs: ORPHAN_RECOVERY_GRACE_MS,
+        reason,
+        ownerAlive: capability => this.workerCapabilityAlive(capability),
+      });
+    } catch {
+      return false;
+    }
+    if (!outcome.recovered) return false;
+    runtime.runner.recordWorkStatus(`Recovered an orphaned queued turn (${outcome.reason || reason}).`);
+    this.emitQueueUpdate(runtime);
+    // The reclaim only helps if the queue actually moves again.
+    if (runtime.pendingNextTurn.length
+      && !runtime.queuePaused
+      && !runtime.preparingArchive
+      && !runtime.externalOwner?.active) {
+      runtime.runId ||= randomUUID();
+      this.schedulePendingRuntimeContinuation(runtime, runtime.runId);
+    }
+    return true;
+  }
 
   constructor(
     private readonly root: string,
@@ -502,7 +601,28 @@ export class ConversationKernel {
     this.setQueuePaused(target, paused);
   }
 
-  async prepareForArchive(target: ConversationTargetInput): Promise<Agent | null> {
+  /**
+   * Start an archive for one conversation.
+   *
+   * An archive has to wait for the conversation's own run to settle before the
+   * writer takes its payload snapshot and deletes the state entry: a run that
+   * is still writing would otherwise append to a conversation that no longer
+   * exists (silently losing the tail), and its trailing state flush would
+   * resurrect the archived entry. That wait is not a budget to be truncated —
+   * it is real work, and the way to end it is to *release the occupancy* the
+   * run is holding, not to give up on it.
+   *
+   * So the caller passes the hard stop of the resident runtime as
+   * `releaseOccupancy`. It runs concurrently with the settle below: the hard
+   * stop invalidates the in-flight request (the client rejects every pending
+   * request of the evicted generation), which is exactly what makes a wedged
+   * run finish. Both teardown paths therefore overlap instead of serializing,
+   * and no timer exists to mask a runtime that refuses to end.
+   */
+  async prepareForArchive(
+    target: ConversationTargetInput,
+    options: { releaseOccupancy?: () => Promise<void> | void } = {},
+  ): Promise<Agent | null> {
     const runtime = this.findRuntime(target);
     if (!runtime) return null;
     if (runtime.runner.subagents.hasPendingWork()) throw new Error('Cannot archive a conversation with running or queued subagents');
@@ -511,9 +631,29 @@ export class ConversationKernel {
     if (runtime.goalContinuationTimer) clearTimeout(runtime.goalContinuationTimer);
     runtime.goalContinuationTimer = undefined;
     runtime.runner.abortActiveKernelRun('user_stop');
+    // The release is deliberately started before the settle is awaited so the
+    // two never serialize. A failing hard stop must not turn the archive into a
+    // failure on its own; the archived state is still derived from the locked
+    // writer, and the settle below stays authoritative.
+    const occupancyRelease = (async (): Promise<void> => {
+      if (!options.releaseOccupancy) return;
+      try {
+        await options.releaseOccupancy();
+      } catch (error) {
+        console.error(
+          '[Newmark] archive occupancy release failed:',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    })();
     if (runtime.activePromise) {
       runtime.stopRequestedRunId = runtime.runId;
-      try { await runtime.activePromise; } catch { /* archive owns the terminal outcome */ }
+      // `catch` the settle so a throwing run still lets the parallel release
+      // finish; the archive owns the terminal outcome either way.
+      const settled = runtime.activePromise.catch(() => undefined);
+      await Promise.all([settled, occupancyRelease]);
+    } else {
+      await occupancyRelease;
     }
     runtime.runner.flushWorkspaceConversationState();
     return runtime.runner;
@@ -599,14 +739,14 @@ export class ConversationKernel {
     const continuation = this.continuationStore(runtime);
     if (continuation) {
       try {
-        const snapshot = continuation.store.snapshot({
+        // Only the queued rows matter here; the full snapshot would clone every
+        // build of the conversation on every state read.
+        const reasons = continuation.store.queuedBlockedReasons({
           workspaceId: continuation.workspaceId,
           rootId: continuation.rootId,
           branchId: continuation.branchId,
         });
-        waitingByBuildId = new Map(snapshot.builds
-          .filter(build => !!build.waitingReason)
-          .map(build => [build.buildId, String(build.waitingReason)]));
+        waitingByBuildId = new Map(Object.entries(reasons).map(([buildId, reason]) => [buildId, String(reason)]));
       } catch { /* the projection stays usable without ledger diagnostics */ }
     }
     return runtime.pendingNextTurn.flatMap(item => {
@@ -678,7 +818,12 @@ export class ConversationKernel {
     const branchId = branchNodeIdOverride.includes('::')
       ? branchNodeIdOverride
       : `${rootId}::${branchNodeIdOverride || branchIdentity.branchNodeId || 'main'}`;
-    const store = new GuardedContinuationStore(workspace.path, workspaceId);
+    const storeKey = `${path.resolve(workspace.path)}::${workspaceId}::${rootId}::${branchId}`;
+    let store = this.continuationStores.get(storeKey);
+    if (!store) {
+      store = new GuardedContinuationStore(workspace.path, workspaceId);
+      this.continuationStores.set(storeKey, store);
+    }
     store.ensureRoot(rootId, branchId);
     return { store, workspaceId, rootId, branchId };
   }
@@ -789,6 +934,10 @@ export class ConversationKernel {
     }]);
     this.trackQueuedMessage(runtime, prompt, 'followUp');
     this.emitQueueUpdate(runtime);
+    // A new queue command is also an explicit "make the queue work" signal: if
+    // the branch guard is still held by a crashed owner, reclaim it now instead
+    // of silently piling the new row behind a dead attempt.
+    this.maybeRecoverOrphanedAttempt(runtime, 'queue-enqueue');
     if (!runtime.activePromise && !runtime.externalOwner && !runtime.queuePaused) this.schedulePendingRuntimeContinuation(runtime, runtime.runId);
     return this.queueItems(runtime.target).find(item => item.id === id)!;
   }
@@ -1100,7 +1249,6 @@ export class ConversationKernel {
     conversationLocked: false;
     routeDecision: Agent['lastRouteDecision'];
     resolvedDeployment: ReturnType<Agent['activeDeployment']>;
-    autoRouteRatingAvailable: boolean;
   } {
     const normalized = this.normalizeTarget(target);
     let runtime = this.findRuntime(normalized);
@@ -1112,6 +1260,10 @@ export class ConversationKernel {
       runtime.queuePaused = true;
       runtime.runId ||= randomUUID();
     }
+    // Every state projection is a chance to notice that the durable queue is
+    // held by a dead owner (host crash) and reclaim it. The sweep is throttled
+    // and read-only unless an orphan actually exists.
+    if (runtime) this.maybeRecoverOrphanedAttempt(runtime, 'state-projection');
     const conversationSnapshot = runner.getConversationSnapshot(normalized.conversationId, options);
     return {
       ...conversationSnapshot,
@@ -1141,9 +1293,6 @@ export class ConversationKernel {
       conversationLocked: false,
       routeDecision: runner.lastRouteDecision,
       resolvedDeployment: runner.activeDeployment(),
-      autoRouteRatingAvailable: runner.model === 'auto'
-        && runner.lastRouteDecision?.requestedSelection.kind === 'auto'
-        && !!runner.lastRouteDecision.resolvedDeployment,
     };
   }
 
@@ -1382,12 +1531,6 @@ export class ConversationKernel {
       contextCompression: runner.lastCompression,
       displayHistory: { untouched: true, messageCount: runner.chatMessages.length },
     };
-  }
-
-  rateAutoRoute(target: ConversationTargetInput, score: number, expectedRouteId = ''): AutoRouteRatingResult {
-    const runtime = this.findRuntime(target);
-    if (!runtime) return { ok: false, reason: 'no_active_auto_route' };
-    return runtime.runner.rateActiveAutoRoute(score, expectedRouteId);
   }
 
   setWorkRunExpanded(target: ConversationTargetInput, runId: string, expanded: boolean): boolean {
@@ -1717,7 +1860,22 @@ export class ConversationKernel {
       this.mirrorHostIfTargetActive(runtime);
       return this.result(runtime, lastTokens);
     }
+    // Wedge guard: this loop owns the root-subagent-inbox follow-up handoff. A
+    // root message whose prompt is already pending produces no state change on
+    // the next iteration; without a guard that becomes an unbounded busy loop
+    // (observed: a single gate burning a full core with the turn never settling).
+    let stalledIterations = 0;
+    let lastLoopSignature = '';
     for (;;) {
+      const loopSignature = `${runtime.pendingNextTurn.length}:${runtime.runId}:${runtime.queuePaused ? 1 : 0}`;
+      if (loopSignature === lastLoopSignature) stalledIterations += 1;
+      else { lastLoopSignature = loopSignature; stalledIterations = 0; }
+      if (stalledIterations > 250) {
+        if (process.env.NEWMARK_KERNEL_LOOP_DIAGNOSTICS === '1') {
+          console.error(`[NewmarkKernel] run loop yielded after ${stalledIterations} stalled iterations (runId=${runtime.runId}, pending=${runtime.pendingNextTurn.length}, queuePaused=${!!runtime.queuePaused})`);
+        }
+        break;
+      }
       while (!runtime.queuePaused) {
         if (runtime.stopRequestedRunId === runtime.runId) return this.result(runtime, lastTokens);
         // Only intervening Guides run inside the current Build. A Next item
@@ -2055,6 +2213,10 @@ export class ConversationKernel {
     // An already-read inbox entry is not replayed by the mailbox listener.
     // Reconcile saved result receipts after hydrating its continuation copy.
     runner.acknowledgeSubagentSettlementReceipts();
+    // A runtime is rebuilt after every host restart (including a crash). If the
+    // previous host died mid-turn, its durable attempt is still RUNNING: heal it
+    // here so the conversation can continue instead of sitting on a dead guard.
+    this.maybeRecoverOrphanedAttempt(runtime, 'runtime-created');
     return runtime;
   }
 
@@ -2113,6 +2275,54 @@ export class ConversationKernel {
           : { ...delivery, runId: undefined };
         const continuation = this.continuationStore(runtime);
         let scope: ExecutionScope | null = null;
+        let leaseHeartbeat: ReturnType<typeof setInterval> | undefined;
+        let scopeSettled = false;
+        const stopLeaseHeartbeat = () => {
+          if (leaseHeartbeat) clearInterval(leaseHeartbeat);
+          leaseHeartbeat = undefined;
+        };
+        /**
+         * dev-0.6.6: an admitted queued turn must settle its durable scope on
+         * every exit path. Field evidence: when the utility host process died
+         * (V8 OOM) mid-turn, the build stayed RUNNING and the guard kept
+         * pointing at the dead attempt, so the queue never ran again and could
+         * not be repaired from the UI. Commit / fail / requeue now converge on
+         * one idempotent settlement that also stops the lease heartbeat.
+         */
+        const settleLedgerScope = (
+          outcome: 'commit' | 'fail' | 'requeue',
+          detail: { text?: string; error?: unknown },
+        ) => {
+          if (!continuation || !scope || scopeSettled) return;
+          scopeSettled = true;
+          stopLeaseHeartbeat();
+          const owned = scope;
+          const requeue = () => continuation.store.requeueBuild({
+            workspaceId: continuation.workspaceId,
+            rootId: continuation.rootId,
+            branchId: continuation.branchId,
+            buildId: owned.buildId,
+          });
+          try {
+            if (outcome === 'commit') {
+              continuation.store.commitFinal({ scope: owned, text: String(detail.text || '') });
+              return;
+            }
+            if (outcome === 'fail') {
+              continuation.store.failBuild({
+                scope: owned,
+                reason: detail.error instanceof Error ? detail.error.message : String(detail.error || 'queued turn failed'),
+              });
+              return;
+            }
+            requeue();
+          } catch {
+            // Ownership may have been recovered elsewhere (dead-owner recovery
+            // or an explicit repair). Never leave the durable scope RUNNING;
+            // requeue is idempotent and a no-op for terminal builds.
+            try { requeue(); } catch { /* already terminal or owned elsewhere */ }
+          }
+        };
         void this.runPendingQueueItem(runtime, next, async () => {
           this.bindQueuedTurnBranch(runtime, queued);
           if (queued?.modelSelection) runtime.options.model = queued.modelSelection;
@@ -2153,37 +2363,37 @@ export class ConversationKernel {
               this.emitQueueUpdate(runtime);
               return this.result(runtime, []);
             }
+            // The lease is a crash detector, not a wall-clock budget: renew it
+            // while the attempt is genuinely alive. Without this every turn
+            // longer than the 60s lease could be taken over mid-run, and the
+            // real owner's terminal write was rejected as STALE_EXECUTION.
+            leaseHeartbeat = setInterval(() => {
+              if (!continuation || !scope) return;
+              try {
+                if (!continuation.store.heartbeat(scope)) stopLeaseHeartbeat();
+              } catch {
+                stopLeaseHeartbeat();
+              }
+            }, continuation.store.leaseRenewalMs);
+            if (typeof leaseHeartbeat.unref === 'function') leaseHeartbeat.unref();
           }
           const result = await this.prompt(message, runtime.target, runtime.options, 'followUp');
-          if (continuation && scope) {
-            continuation.store.commitFinal({
-              scope,
-              text: result.tokens.map(token => token.text || '').join(''),
-            });
-          }
+          settleLedgerScope('commit', { text: result.tokens.map(token => token.text || '').join('') });
           return result;
         }, (accepted, error) => {
-          if (!continuation || !scope) return;
-          const reason = error instanceof Error ? error.message : String(error);
-          if (accepted) {
-            try {
-              continuation.store.failBuild({ scope, reason });
-            } catch { /* stop/archive may have already released the guard */ }
-          } else {
-            // The input was never accepted. Stop/archive may already have
-            // released the guard, so use the idempotent requeue path: the same
-            // durable build id stays available for an explicit resume.
-            try {
-              continuation.store.requeueBuild({
-                workspaceId: continuation.workspaceId,
-                rootId: continuation.rootId,
-                branchId: continuation.branchId,
-                buildId: scope.buildId,
-              });
-            } catch { /* the build may already be committed or explicitly cancelled */ }
-          }
+          // A provider failure after acceptance must never replay the already
+          // submitted user input; an unaccepted row stays available for resume.
+          settleLedgerScope(accepted ? 'fail' : 'requeue', { error });
         }).catch(() => {
           // Agent.process and the work-run finalizer already publish the error.
+        }).finally(() => {
+          stopLeaseHeartbeat();
+          // Safety net: an execution that resolved without any terminal ledger
+          // write (for example a cooperative stop resolving outside the error
+          // path) must still leave the scope recoverable instead of RUNNING.
+          if (continuation && scope && !scopeSettled) {
+            settleLedgerScope('requeue', { error: 'queued turn settled without a terminal ledger write' });
+          }
         });
         return;
       }
@@ -2385,9 +2595,6 @@ export class ConversationKernel {
       ),
       routeDecision: runtime.runner.lastRouteDecision,
       resolvedDeployment: runtime.runner.activeDeployment(),
-      autoRouteRatingAvailable: runtime.runner.model === 'auto'
-        && runtime.runner.lastRouteDecision?.requestedSelection.kind === 'auto'
-        && !!runtime.runner.lastRouteDecision.resolvedDeployment,
     };
   }
 

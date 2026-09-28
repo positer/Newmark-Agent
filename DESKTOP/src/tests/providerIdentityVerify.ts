@@ -2,8 +2,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Agent } from '../core/agent';
-import { AutoRouteCandidate, AutoRouter, defaultRoutePolicy } from '../core/autoRouter';
+import { AutoRouteCandidate, classifyTaskClasses, defaultRoutePolicy } from '../core/autoRouter';
 import { ConfigManager, mergeProviderSecrets, ProviderConfig, stableProviderId } from '../core/config';
+import { LocalJevDecisionEngine } from './fixtures/localJevDecisionEngine';
+import { resolveAutoRouteDecision } from '../core/routeDecisionValidator';
 
 type Check = { ok: boolean; label: string };
 
@@ -55,7 +57,6 @@ function routeCandidate(provider: ProviderConfig): AutoRouteCandidate {
     expectedOutputCostUsdPerM: 4,
     latencyMs: 1_000,
     reliability: 0.95,
-    qualityByTask: { chat: { successes: 8, attempts: 10 } },
   };
 }
 
@@ -110,20 +111,21 @@ export async function verifyProviderIdentity(): Promise<Check[]> {
       && JSON.stringify(reloadedIds) === JSON.stringify(ids),
     'load migration persists provider ids and remains stable after reload', checks);
 
-    const router = new AutoRouter({ now: () => Date.parse('2026-07-15T00:00:00.000Z') });
-    const scoped = router.route(
-      { kind: 'auto', scope: { kind: 'provider', providerId: ids[1] }, policyId: 'balanced' },
-      defaultRoutePolicy('balanced'),
-      providers.slice(0, 2).map(routeCandidate),
-      {
+    const scoped = await resolveAutoRouteDecision({
+      selection: { kind: 'auto', scope: { kind: 'provider', providerId: ids[1] }, policyId: 'balanced' },
+      policy: defaultRoutePolicy('balanced'),
+      taskText: 'Explain this result',
+      request: {
         transactionId: 'provider-scope-turn',
-        affinityKey: 'provider-scope-conversation',
         taskText: 'Explain this result',
         estimatedInputTokens: 100,
         expectedOutputTokens: 100,
         requiredCapabilities: ['text_input', 'text_output'],
       },
-    );
+      candidates: providers.slice(0, 2).map(routeCandidate),
+      taskClasses: classifyTaskClasses('Explain this result', ['text_input', 'text_output'], 100),
+      engine: new LocalJevDecisionEngine(),
+    });
     check(scoped.resolvedDeployment?.providerId === ids[1]
       && scoped.resolvedDeployment.modelId === 'shared-model'
       && scoped.excludedCandidates.some(item => item.deployment.providerId === ids[0]

@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld('api', {
   queueAction: (action: string, input: Record<string, unknown>, target: string | Record<string, unknown>) => ipcRenderer.invoke('agent:queueAction', action, input, target),
   checkpointConversation: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:checkpointConversation', request),
   compressContext: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:compressContext', request),
-  rateAutoRoute: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:rateAutoRoute', request),
+  setJevDecisionModel: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:setJevDecisionModel', request),
   stopConversation: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:stopConversation', request),
   setWorkRunExpanded: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:setWorkRunExpanded', request),
   sendPrompt: (message: string, _model?: string) => ipcRenderer.invoke('agent:sendPrompt', message),
@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('api', {
   clearGoal: (target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:clearGoal', target),
   ensureConversation: (target: string | Record<string, unknown>) => ipcRenderer.invoke('agent:ensureConversation', target),
   getState: (target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:getState', target),
+  /** dev-0.6.6: report (or clear with '') the transcript revision this renderer holds. */
+  ackTranscript: (target?: string | Record<string, unknown>, revision?: string) => ipcRenderer.invoke('conversation:ackTranscript', target, revision),
   getConversationDraft: (conversationId?: string) => ipcRenderer.invoke('conversation:getDraft', conversationId),
   saveConversationDraft: (conversationId: string, draft: string | null) => ipcRenderer.invoke('conversation:saveDraft', conversationId, draft),
   getConversationPlan: (conversationId?: string) => ipcRenderer.invoke('agent:getConversationPlan', conversationId),

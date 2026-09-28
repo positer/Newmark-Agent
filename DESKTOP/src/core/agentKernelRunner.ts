@@ -13,6 +13,14 @@ import { emitPerformanceEvent, performanceTimer } from './performanceDiagnostics
 import { agentKernelDiagnosticsRequested, emitProviderUsageDiagnostic, emitRequestContextDiagnostic } from './agentKernelDiagnostics';
 import { ToolExposurePlanner, type ToolchainCore } from '../toolchain';
 import {
+  conversationVisualBudget,
+  describeVisualBudget,
+  planVisualRetention,
+  visualDataUrlBytes,
+  type ConversationVisualBudget,
+} from './conversationVisualBudget';
+import { downscaleDataUrlToBytes } from './visualDownscale';
+import {
   MAX_EMPTY_RESPONSE_RETRIES,
   observeEmptyResponseOutcome,
   emptyResponseRetryDelayMs,
@@ -29,6 +37,9 @@ interface PublicStreamFilterState {
 }
 
 const publicStreamFilters = new WeakMap<Agent, PublicStreamFilterState>();
+/** dev-0.6.6: throttles the "screenshots released" work-status line. */
+let visualReleaseReportedAt = 0;
+const VISUAL_MIB = 1024 ** 2;
 const brokerOnlyAssistantBuffers = new WeakMap<Agent, { brokerOnly: boolean; pending: string[]; released: boolean }>();
 const BROKER_PREFACE_BUFFER_CHARS = 96;
 const HIDDEN_LINE_PREFIXES = [
@@ -553,7 +564,11 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
           agent.chatMessages.push({ role: 'user', content: KernelMessageText(msg), mode: agent.modeName(), model: agent.model, timestamp: agent.nowLabel() });
           agent.history.push(toHistoryMessage(msg));
         }
-        agent.saveWorkspaceConversationState();
+        // Mid-turn persistence is coalesced (see Agent.scheduleStoredConversationState):
+        // the terminal save at the end of the run still writes synchronously, so
+        // durability at turn boundaries is unchanged while per-turn full-document
+        // rewrites drop from one-per-event to at most one per throttle window.
+        agent.saveWorkspaceConversationState(false);
       }
       await kernel.prompt(promptMessages);
       const assistant = lastAssistant as Extract<KernelMessage, { role: 'assistant' }> | null;
@@ -610,7 +625,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         agent.emitWorkEvent({ type: 'final_response', content: visualFallback });
         agent.chatMessages.push({ role: 'assistant', content: visualFallback, mode: agent.modeName(), model: agent.model, timestamp: agent.nowLabel(), runId: agent.currentWorkRunId() || undefined });
         agent.history.push({ role: 'assistant', content: visualFallback, run_id: agent.currentWorkRunId() || undefined });
-        agent.saveWorkspaceConversationState();
+        agent.saveWorkspaceConversationState(false);
         agent.recordWorkStatus('Final visual fallback used: local mini OCR plus conservative text correction.');
         lastTurn = { ...lastTurn, text: visualFallback, errorMessage: '', stopReason: 'stop' };
       }
@@ -743,7 +758,9 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
     agent.attachAgentKernelRuntime(null);
   }
   agent.status = 'idle';
-  agent.saveWorkspaceConversationState();
+  // Coalesced: the caller (Agent.process) flushes synchronously right after,
+  // and every in-memory reader already sees this status.
+  agent.saveWorkspaceConversationState(false);
   return agent.sanitizeVisibleTokens(tokens);
 
   function streamWithNewmarkProvider(currentAgent: Agent, compat: KernelStreamCompat) {
@@ -781,7 +798,16 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
           // endpoint owns its real limit; protocols that require a positive
           // max_tokens resolve one internally.
           const maxTokens = 0;
-          const newmarkMessages = fromKernelMessages(context.messages).map(message => message.role === 'assistant'
+          const requestVisualBudget = visualBudgetForAgent(currentAgent);
+          const newmarkMessages = fromKernelMessages(context.messages, true, requestVisualBudget, info => {
+            // Observable, throttled: one status line per run so the user learns
+            // that screenshots were reclaimed instead of silently losing them.
+            if (visualReleaseReportedAt && Date.now() - visualReleaseReportedAt < 60_000) return;
+            visualReleaseReportedAt = Date.now();
+            currentAgent.recordWorkStatus(
+              `Released ${info.releasedImages} older ComputerUse/BrowserControl screenshot(s) (~${Math.round(info.releasedBytes / VISUAL_MIB)} MiB) to stay within the ${describeVisualBudget(info.budget)} budget.`,
+            );
+          }).map(message => message.role === 'assistant'
             // Use the same public-content boundary on its first provider
             // submission and after persistence. Trimming only the durable
             // copy changes earlier tool-call envelopes on mailbox recovery.
@@ -1140,7 +1166,7 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
           // Otherwise a cold continuation loses an already-read instruction
           // and deletes that message from the provider's retained prefix.
           agent.history.push({ ...toHistoryMessage(event.message), run_id: agent.currentWorkRunId() || undefined });
-          agent.saveWorkspaceConversationState(true);
+          agent.saveWorkspaceConversationState(false);
         }
         agent.notifyAgentKernelUserMessageStart(text, event.message.clientMessageId);
       } else if (event.message.role === 'assistant') {
@@ -1237,7 +1263,7 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
           historyMessage.content = text;
           historyMessage.run_id = agent.currentWorkRunId() || undefined;
           agent.history.push(historyMessage);
-          agent.saveWorkspaceConversationState();
+          agent.saveWorkspaceConversationState(false);
         }
         resetPublicAssistantDeltaFilter(agent);
         resetAssistantToolVisibility(agent);
@@ -1247,6 +1273,9 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
           ...(!event.message.isError && receipt ? { subagent_settlement_receipt: { ...receipt } } : {}),
         };
         agent.history.push(historyMessage);
+        // Kept synchronous on purpose: the catch below clears the settlement
+        // receipt so a later notification cannot mistake an unsaved result for a
+        // committed one, which requires the write failure to surface here.
         try { agent.saveWorkspaceConversationState(); }
         catch (error) {
           // A later notification must not mistake this unsaved in-memory
@@ -1874,8 +1903,16 @@ function visualFallbackImageInput(agent: Agent, name: string, text: string): { i
       : parsed;
     if (name !== 'pdf_read' && nested.action !== 'observe' && nested.action !== 'app_observe') return {};
     const directImage = String(nested.vision_image_data_url || '');
-    if (/^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/i.test(directImage) && directImage.length <= 2 * 1024 * 1024) {
-      return { image: directImage, mimeType: directImage.slice(5, directImage.indexOf(';')).toLowerCase() };
+    if (/^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/i.test(directImage)) {
+      // dev-0.6.6: ComputerUse/BrowserControl screenshots are the dominant
+      // memory consumer of a long conversation, so the accepted single-image
+      // size follows the machine's available memory instead of a fixed 2 MiB.
+      const budget = visualBudgetForAgent(agent);
+      const fitted = visualDataUrlBytes(directImage) <= budget.maxSingleImageBytes
+        ? directImage
+        : downscaleDataUrlToBytes(directImage, budget.maxSingleImageBytes);
+      if (fitted) return { image: fitted, mimeType: fitted.slice(5, fitted.indexOf(';')).toLowerCase() };
+      return {};
     }
     const screenshotPath = String(nested.vision_image_path || '');
     if (!screenshotPath) return {};
@@ -1883,6 +1920,41 @@ function visualFallbackImageInput(agent: Agent, name: string, text: string): { i
     return image ? { image, mimeType: image.slice(5, image.indexOf(';')).toLowerCase() } : {};
   } catch {
     return {};
+  }
+}
+
+const visualBudgetCache = new WeakMap<Agent, { at: number; budget: ConversationVisualBudget }>();
+
+/**
+ * The conversation's visual budget for right now. Sampled at most once per
+ * second per agent so a tool-heavy round does not re-read OS memory state on
+ * every screenshot.
+ */
+function visualBudgetForAgent(agent: Agent): ConversationVisualBudget {
+  const cached = visualBudgetCache.get(agent);
+  const now = Date.now();
+  if (cached && now - cached.at < 1000) return cached.budget;
+  const usage = (() => {
+    try { return process.memoryUsage(); } catch { return { rss: 0 } as NodeJS.MemoryUsage; }
+  })();
+  const budget = conversationVisualBudget({ rssBytes: Number(usage?.rss || 0) });
+  visualBudgetCache.set(agent, { at: now, budget });
+  return budget;
+}
+
+/** Bytes an image part costs when materialized into the provider request. */
+function imagePartBytes(part: { image?: string; imagePath?: string }): number {
+  const inline = String(part.image || '');
+  if (inline.startsWith('data:')) return visualDataUrlBytes(inline);
+  const imagePath = String(part.imagePath || '');
+  if (!imagePath) return 0;
+  try {
+    // Materializing a path-based screenshot produces `data:<mime>;base64,<...>`;
+    // budget the base64 payload length the request will actually hold.
+    const size = fs.statSync(imagePath).size;
+    return 4 * Math.ceil(size / 3);
+  } catch {
+    return 0;
   }
 }
 
@@ -2002,7 +2074,10 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
   if (signal?.aborted) throw abortError();
   trackFileDiff(agent, name, args);
   const objectiveResult = toolResultObjectiveOutcome(result);
-  if (objectiveResult !== undefined) agent.recordObjectiveRouteResult(objectiveResult);
+  // Objective postconditions are operational health evidence only. Auto Router
+  // v2 keeps tool outcomes out of model preference: the observation can demote
+  // an endpoint's live health, and it can never teach a future route.
+  if (objectiveResult !== undefined) agent.recordRouteToolOutcome(objectiveResult);
   return result;
   } finally {
     stopToolTimer();
@@ -2123,9 +2198,53 @@ function toProviderToolDefinitions(tools: KernelTool[]): unknown[] {
   }));
 }
 
-function fromKernelMessages(messages: KernelMessage[], includeEphemeralImages = true): Array<Record<string, unknown>> {
-  return messages.flatMap(message => {
-    const projected = toHistoryMessage(message, includeEphemeralImages);
+function fromKernelMessages(
+  messages: KernelMessage[],
+  includeEphemeralImages = true,
+  visualBudget?: ConversationVisualBudget,
+  onVisualRelease?: (info: { releasedImages: number; releasedBytes: number; retainedBytes: number; budget: ConversationVisualBudget }) => void,
+): Array<Record<string, unknown>> {
+  const budget = visualBudget || conversationVisualBudget();
+  // dev-0.6.6: a late-stage ComputerUse/BrowserControl conversation stores one
+  // screenshot per observation. Materializing all of them per request is what
+  // pushed the utility host to a 3 GB V8 abort, so the newest screenshots are
+  // kept within this machine's visual budget and older ones are released
+  // (text/tool results stay untouched).
+  const candidates: Array<{ key: string; bytes: number }> = [];
+  messages.forEach((message, index) => {
+    if (message.role !== 'toolResult') return;
+    const image = message.content.find((part): part is KernelImageContent => part.type === 'image');
+    if (!image) return;
+    candidates.push({ key: String(index), bytes: imagePartBytes(image) });
+  });
+  const plan = planVisualRetention(candidates, budget);
+  if (plan.released.length && onVisualRelease) {
+    onVisualRelease({
+      releasedImages: plan.released.length,
+      releasedBytes: plan.releasedBytes,
+      retainedBytes: plan.retainedBytes,
+      budget,
+    });
+  }
+  return messages.flatMap((message, index) => {
+    const key = String(index);
+    const hadImage = message.role === 'toolResult'
+      && message.content.some(part => part.type === 'image');
+    const imageAllowed = !hadImage || plan.keep.has(key);
+    const projected = toHistoryMessage(message, includeEphemeralImages && imageAllowed, budget);
+    if (hadImage && !imageAllowed) {
+      // Tell the model the screenshot existed but was released, so it can
+      // re-observe instead of assuming the picture was empty.
+      // Kept to one short line: a long conversation can release hundreds of
+      // historic screenshots, and the note must not become its own payload.
+      const releaseNote = `[visual_memory_budget] screenshot released (${budget.pressure} memory budget); re-run observe if you need it again.`;
+      if (typeof projected.content === 'string') projected.content = `${projected.content}\n${releaseNote}`;
+      else if (Array.isArray(projected.content)) {
+        const textPart = (projected.content as Array<Record<string, unknown>>).find(part => part?.type === 'text');
+        if (textPart) textPart.text = `${String(textPart.text || '')}\n${releaseNote}`;
+        else (projected.content as Array<Record<string, unknown>>).unshift({ type: 'text', text: releaseNote });
+      }
+    }
     if (message.role !== 'toolResult' || !Array.isArray(projected.content)) return [projected];
     const parts = projected.content as Array<Record<string, unknown>>;
     const images = parts.filter(part => part?.type === 'image_url');
@@ -2160,7 +2279,7 @@ function publicHistoryFromKernelMessages(messages: KernelMessage[]): Array<Recor
   });
 }
 
-function toHistoryMessage(message: KernelMessage, includeEphemeralImages = false): Record<string, unknown> {
+function toHistoryMessage(message: KernelMessage, includeEphemeralImages = false, visualBudget?: ConversationVisualBudget): Record<string, unknown> {
   if (message.role === 'user') {
     if (typeof message.content === 'string') return {
       role: 'user',
@@ -2189,13 +2308,7 @@ function toHistoryMessage(message: KernelMessage, includeEphemeralImages = false
   const ephemeralImage = message.content.find((c): c is KernelImageContent => c.type === 'image');
   const imagePath = ephemeralImage?.imagePath || '';
   const directImage = ephemeralImage?.image || '';
-  const imagePart = includeEphemeralImages
-    ? (imagePath
-        ? imagePathToOpenAIContentPart(imagePath)
-        : directImage.startsWith('data:image/')
-          ? { type: 'image_url', image_url: { url: directImage } }
-          : null)
-    : null;
+  const imagePart = includeEphemeralImages ? materializeVisualImagePart(imagePath, directImage, visualBudget) : null;
   if (imagePart && ephemeralImage) {
     // Tool-result images are one provider-input capability, not history. Once
     // this request has materialized the image part, consume it from the live
@@ -2220,6 +2333,30 @@ function imagePathToOpenAIContentPart(imagePath: string): Record<string, unknown
   } catch {
     return null;
   }
+}
+
+/**
+ * dev-0.6.6: materialize one screenshot into a provider image part while
+ * respecting the conversation's per-image cap. Oversized screenshots are
+ * downscaled (PNG, then JPEG) instead of being dropped, so a memory-tight
+ * machine keeps vision and the agent keeps working.
+ */
+function materializeVisualImagePart(
+  imagePath: string,
+  directImage: string,
+  visualBudget?: ConversationVisualBudget,
+): Record<string, unknown> | null {
+  const budget = visualBudget || conversationVisualBudget();
+  let dataUrl = '';
+  if (String(directImage || '').startsWith('data:image/')) dataUrl = String(directImage);
+  else if (imagePath) dataUrl = imagePathToDataUrl(imagePath) || '';
+  if (!dataUrl) return null;
+  if (visualDataUrlBytes(dataUrl) > budget.maxSingleImageBytes) {
+    const fitted = downscaleDataUrlToBytes(dataUrl, budget.maxSingleImageBytes);
+    if (!fitted) return null;
+    dataUrl = fitted;
+  }
+  return { type: 'image_url', image_url: { url: dataUrl } };
 }
 
 export const agentKernelRunnerInternals = {

@@ -110,14 +110,14 @@
       "value": "builtin"
     },
     "auto_switch": {
-      "_description": "Enable auditable single-model Auto routing",
+      "_description": "Enable JEV-controlled auditable Auto routing",
       "_type": "boolean",
       "value": false
     },
     "auto_switch_preference": {
-      "_description": "Auto routing policy",
+      "_description": "Qualitative tendency for current-model Auto decisions",
       "_type": "choice",
-      "_values": ["quality", "balanced", "cost", "speed"],
+      "_values": ["conservative", "balanced", "aggressive"],
       "value": "balanced"
     },
     "auto_switch_scope": {
@@ -161,6 +161,16 @@
       "_description": "Hard per-request cost ceiling; 0 disables it",
       "_type": "number",
       "value": 0
+    },
+    "jev_enabled": {
+      "_description": "Use the current eligible conversation model for strict-JSON Auto decisions",
+      "_type": "boolean",
+      "value": true
+    },
+    "jev_timeout_ms": {
+      "_description": "Hard timeout for one current-model JEV decision in milliseconds",
+      "_type": "number",
+      "value": 3000
     },
     "fallback_on_unavailable": {
       "_description": "Use the scope-safe retry/fallback ladder",

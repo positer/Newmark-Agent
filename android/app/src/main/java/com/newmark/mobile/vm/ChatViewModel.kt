@@ -16,6 +16,7 @@ import com.newmark.mobile.data.ApiConfig
 import com.newmark.mobile.data.ChatResponse
 import com.newmark.mobile.data.ChatMessage
 import com.newmark.mobile.data.ConversationStore
+import com.newmark.mobile.data.CONVERSATION_ARCHIVE_FAILURE_MESSAGE
 import com.newmark.mobile.data.LocalConversation
 import com.newmark.mobile.data.LocalBuildHistoryContract
 import com.newmark.mobile.data.LocalContextCompression
@@ -895,11 +896,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun archiveConversation(id: String) {
         val target = conversations.find { it.id == id } ?: return
+        // 立即打断该对话正在运行的本地运行（同一套 stop 收尾：取消 job、关闭
+        // Guide 通道、写入 interrupted 记录）。归档不能把一条仍在写的工作留在
+        // 列表之外 —— 那些写入会无处落地，归档快照也会缺一截。
+        interruptLocalConversation(id)
+        // 被打断的那一轮已经以 interrupted 记录写回会话对象，这里取最新快照。
+        val latest = conversations.find { it.id == id } ?: target
         // 从本地对话区移出（§7-2：本地归档 = 从列表删除），数据移入 archived.json 保留
         conversations = conversations.filter { it.id != id }
         persist()
-        archived.add(0, target.copy(archived = true, updatedAt = System.currentTimeMillis()))
-        conversationStore.saveArchived(archived)
+        archived.add(0, latest.copy(archived = true, updatedAt = System.currentTimeMillis()))
+        archivedRevision += 1
+        // archived.json 是「全部归档对话 × 完整转录（含图片附件）」的整文件重写。
+        // 之前在调用线程（UI 线程）上直接 saveArchived() 会整帧卡住：55 MiB 归档实测
+        // 单帧 1386 ms，用户看到的就是「点了归档之后一直不动」。
+        persistArchived()
         if (currentId == id) {
             currentId = conversations.firstOrNull()?.id
             conversationStore.saveActiveId(currentId)
@@ -934,8 +945,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stop() {
         val targetConversationId = currentId ?: return
-        val runtime = localRuntimes[targetConversationId] ?: return
-        val activeRun = localLiveRuns[targetConversationId]
+        interruptLocalConversation(targetConversationId)
+    }
+
+    /**
+     * Cancels the local run that owns [conversationId], if any, and returns its
+     * job so the caller can wait for the interruption to settle.
+     *
+     * Shared by the user-facing Stop button and by Archiving: an archive must
+     * never leave a run writing into a conversation that has left the list (its
+     * writes would go nowhere, and the archived snapshot would stay incomplete).
+     * Returns null when nothing was running.
+     */
+    private fun interruptLocalConversation(conversationId: String): Job? {
+        val runtime = localRuntimes[conversationId] ?: return null
+        val activeRun = localLiveRuns[conversationId]
         val interrupted = activeRun?.copy(
             status = "interrupted",
             endedAt = System.currentTimeMillis(),
@@ -946,14 +970,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 sequence = activeRun.events.size.toLong(),
             ),
         )
-        runtime.job?.cancel()
+        val job = runtime.job
+        job?.cancel()
         runtime.acceptingGuide = false
         runtime.guideChannel.close()
-        localRuntimes.remove(targetConversationId)
-        localLiveRuns.remove(targetConversationId)
+        localRuntimes.remove(conversationId)
+        localLiveRuns.remove(conversationId)
         updateLocalAgentService()
         if (interrupted != null) {
-            updateConversation(targetConversationId) { conversation ->
+            updateConversation(conversationId) { conversation ->
                 val assistant = ChatMessage(
                     role = "assistant",
                     content = "",
@@ -972,7 +997,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
-        drainLocalQueueIfReady(targetConversationId)
+        drainLocalQueueIfReady(conversationId)
+        return job
     }
 
     fun enqueueLocal(text: String) {
@@ -2305,6 +2331,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
     private var persistenceJob: Job? = null
+    private var archivedPersistenceJob: Job? = null
+    /**
+     * Bumped whenever `archived` changes. The archive writer compares it before
+     * and after one write, exactly like the live store's `persist()`, so two
+     * archives in a row can never be reordered: the last state always wins and
+     * the loop stops as soon as the written revision is current.
+     */
+    private var archivedRevision = 0
 
     private fun persist() {
         if (!loaded || persistenceJob?.isActive == true) return
@@ -2319,5 +2353,42 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             } while (conversations !== before)
         }
     }
+
+    /**
+     * Persists `archived.json` off the UI thread, coalescing bursts. The write
+     * itself is a whole-archive rewrite, so it must never run on the main thread;
+     * the launch lives in the foreground runtime scope so the archive still
+     * lands after the user leaves the screen.
+     *
+     * A failed archive is retried until it succeeds: archived conversations are
+     * user data that cannot be regenerated, so a transient failure (storage
+     * pressure, a killed process, IO contention) must not silently drop them.
+     * Backoff caps at 30s so a permanently full disk does not spin the battery.
+     */
+    private fun persistArchived() {
+        if (!loaded) return
+        if (archivedPersistenceJob?.isActive == true) return
+        archivedPersistenceJob = LocalAgentForegroundService.launchRuntime {
+            do {
+                val before = archivedRevision
+                val snapshot = archived.toList()
+                var attempt = 0
+                while (true) {
+                    val saved = withContext(Dispatchers.IO) { conversationStore.saveArchived(snapshot) }
+                    if (saved.isSuccess) {
+                        if (error == CONVERSATION_ARCHIVE_FAILURE_MESSAGE) error = null
+                        break
+                    }
+                    attempt += 1
+                    error = CONVERSATION_ARCHIVE_FAILURE_MESSAGE
+                    delay(archiveRetryDelayMs(attempt))
+                }
+            } while (archivedRevision != before)
+        }
+    }
+
+    /** 500ms → 1s → 2s … capped at 30s, so a full disk retries without hammering. */
+    private fun archiveRetryDelayMs(attempt: Int): Long =
+        (500L shl (attempt - 1).coerceIn(0, 6)).coerceAtMost(30_000L)
 
 }

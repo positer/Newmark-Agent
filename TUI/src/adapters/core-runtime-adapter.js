@@ -213,7 +213,10 @@ function createCoreRuntimeAdapter(options = {}) {
     status: agent.status,
     connected: true,
     runtimeRoot: root,
-    remoteTouchEnabled: agent.config.getBool('remote', 'touch_enabled')
+    remoteTouchEnabled: agent.config.getBool('remote', 'touch_enabled'),
+    autoSwitchEnabled: agent.config.autoSwitchEnabled(),
+    autoSwitchScope: agent.config.autoSwitchScope(),
+    jevDecisionModel: agent.jevDecisionModelState()
   });
 
   const snapshotFor = (requested = currentTarget()) => {
@@ -257,6 +260,7 @@ function createCoreRuntimeAdapter(options = {}) {
   };
 
   const applyConfig = (config) => {
+    let refused = null;
     for (const [key, value] of Object.entries(config || {})) {
       switch (key) {
         case "theme": agent.config.set("ui", "dark_mode", value); break;
@@ -268,10 +272,18 @@ function createCoreRuntimeAdapter(options = {}) {
         case "dialogStyle": agent.config.set("ui", "dialog_style", value); break;
         case "nativeTools": agent.config.set("tools", "enabled", value); break;
         case "providers": agent.updateProviders(mergeProviderConfig(agent.config.providers(), value)); break;
+        case "jevDecisionModel": {
+          // The Agent owns the Auto/decision-model contract: while Auto is off
+          // it refuses every edit, so the TUI cannot unlock a model change.
+          const result = agent.updateJevDecisionModel(value || {});
+          if (!result.ok) refused = { ok: false, reason: result.reason, state: result.state };
+          break;
+        }
         default: agent.config.set("ui", key, value);
       }
     }
     agent.config.save();
+    if (refused) return refused;
     return { ok: true };
   };
 

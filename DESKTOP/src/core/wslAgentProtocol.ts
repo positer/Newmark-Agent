@@ -4,7 +4,7 @@ import { ConversationRuntimeTarget } from './conversationTarget';
 import { TerminalTakeoverEvent, TerminalTakeoverOwnerFilter, TerminalTakeoverState } from '../tools/terminalTakeover';
 import { BrowserUseRequest } from './browserUse';
 import { BrowserControlRequest } from './browserControl';
-import type { AutoRouteRatingResult, ConversationSnapshot } from './agent';
+import type { ConversationSnapshot } from './agent';
 
 export interface WslAgentWorkspace {
   id?: string;
@@ -71,7 +71,6 @@ export type WslAgentRequest =
   | { id: string; method: 'queue_action'; params: { target: ConversationRuntimeTarget; action: ConversationQueueAction; input?: ConversationQueueActionInput } }
   | { id: string; method: 'checkpoint'; params: { target: ConversationRuntimeTarget } }
   | { id: string; method: 'context_compress'; params: { target: ConversationRuntimeTarget; options?: ConversationContextCompressOptions } }
-  | { id: string; method: 'rate_auto_route'; params: { target: ConversationRuntimeTarget; score: number; routeId?: string } }
   | { id: string; method: 'set_work_run_expanded'; params: { target: ConversationRuntimeTarget; runId: string; expanded: boolean } }
   | { id: string; method: 'set_mode'; params: { target: ConversationRuntimeTarget; mode: AgentMode } }
   | { id: string; method: 'set_model'; params: { target: ConversationRuntimeTarget; model: string } }
@@ -107,5 +106,4 @@ export interface WslAgentPromptResult extends ConversationKernelRunResult {
 
 export type WslAgentStopResult = ConversationStopResult & { backend: 'wsl'; distro: string };
 export type WslGuideResult = GuideReceipt;
-export type WslAutoRouteRatingResult = AutoRouteRatingResult;
 export type WslConversationRewindResult = ConversationSnapshot;

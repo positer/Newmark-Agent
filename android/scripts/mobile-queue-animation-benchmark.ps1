@@ -21,9 +21,10 @@ $formalComponent = 'com.newmark.mobile/com.newmark.mobile.MainActivity'
 $apkPath = Join-Path $repoRoot 'android\app\build\outputs\apk\benchmark\app-benchmark.apk'
 $fixtureScript = Join-Path $repoRoot 'DESKTOP\scripts\mobile-mock-server.cjs'
 $token = 'mobile-stress-token'
-$pairUrl = "newmark-pair://10.0.2.2:${Port}?token=$token"
+$pairUrl = "newmark-pair://127.0.0.1:${Port}?token=$token"
 $fixtureProcess = $null
 $batteryWhitelistInstalled = $false
+$reverseInstalled = $false
 $result = [ordered]@{
     timestamp = (Get-Date).ToString('o')
     serial = $Serial
@@ -120,6 +121,27 @@ function Find-QueueToggleCoordinates {
     return [pscustomobject]@{ expand = $expand; collapse = $collapse }
 }
 
+function Enter-RemoteConversation {
+    $deadline = (Get-Date).AddSeconds(30)
+    $connectTapped = $false
+    do {
+        $xml = Read-QueueUiXml
+        if ($null -eq $xml) { Start-Sleep -Milliseconds 250; continue }
+        $conversation = @($xml.SelectNodes("//*[@text='Mobile stress fixture']")) | Select-Object -First 1
+        if ($null -ne $conversation) { return }
+        if (-not $connectTapped) {
+            $connect = @($xml.SelectNodes("//*[@content-desc='连接桌面端']")) | Select-Object -First 1
+            if ($null -ne $connect) {
+                $center = Get-BoundsCenter ([string]$connect.bounds) 'Connect remote control'
+                Invoke-Adb @('shell', 'input', 'tap', "$($center.x)", "$($center.y)") | Out-Null
+                $connectTapped = $true
+            }
+        }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    throw 'Paired remote conversation did not become the selected mobile surface'
+}
+
 try {
     $device = & $adb devices | Where-Object { $_ -match "^$([regex]::Escape($Serial))\s+device$" } | Select-Object -First 1
     if (-not $device) { throw "Device $Serial is not connected" }
@@ -143,9 +165,13 @@ try {
     } while ($null -eq $health -and (Get-Date) -lt $deadline)
     if ($null -eq $health) { throw 'Fixture did not become ready' }
 
+    # The host fixture listens on 127.0.0.1. Keep the same adb reverse path
+    # used by the remote stress suite for deterministic emulator reachability.
+    Invoke-Adb @('reverse', "tcp:$Port", "tcp:$Port") | Out-Null
+    $reverseInstalled = $true
+
     Invoke-Adb @('shell', 'am', 'force-stop', $packageName) | Out-Null
-    $remoteStart = 'am start -W -a android.intent.action.VIEW -d "' + $pairUrl + '" -n "' + $component + '"'
-    $launch = (Invoke-Adb @('shell', $remoteStart)) -join "`n"
+    $launch = (Invoke-Adb @('shell', 'am', 'start', '-W', '-a', 'android.intent.action.VIEW', '-d', $pairUrl, '-n', $component)) -join "`n"
     $result.launchMs = [int]([regex]::Match($launch, 'TotalTime:\s*(\d+)').Groups[1].Value)
     $deadline = (Get-Date).AddSeconds(35)
     do {
@@ -153,6 +179,10 @@ try {
         $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 2
     } while ($health.sseConnections -lt 1 -and (Get-Date) -lt $deadline)
     if ($health.sseConnections -lt 1) { throw 'Benchmark package did not establish SSE ownership' }
+    # Pairing preserves the user's local-chat surface; enter the paired remote
+    # fixture through the same visible connection control used in the stress
+    # suite before measuring its queue.
+    Enter-RemoteConversation
     Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/burst?count=600&intervalMs=100" -TimeoutSec 5 | Out-Null
 
     # This benchmark owns one variable: queue expand/collapse animation cost.
@@ -184,6 +214,7 @@ try {
     # the host. Only fixed-coordinate input events drive the 150 ms animation.
     Invoke-Adb @('logcat', '-c') | Out-Null
     Reset-GfxStats
+    $graphicsWindow = [System.Diagnostics.Stopwatch]::StartNew()
     for ($i = 0; $i -lt $Cycles; $i++) {
         Invoke-Adb @('shell', 'input', 'tap', "$($toggleCoordinates.expand.x)", "$($toggleCoordinates.expand.y)") | Out-Null
         Start-Sleep -Milliseconds 220
@@ -191,7 +222,13 @@ try {
         Start-Sleep -Milliseconds 220
     }
     Start-Sleep -Milliseconds 500
+    $graphicsWindow.Stop()
     $result.graphics = Get-GfxStatsSince
+    $result.graphics.sampleWindowMs = [int]$graphicsWindow.ElapsedMilliseconds
+    $result.graphics.deliveredFramesPerSecond = if ($graphicsWindow.Elapsed.TotalSeconds -gt 0) {
+        [math]::Round($result.graphics.totalFrames / $graphicsWindow.Elapsed.TotalSeconds, 2)
+    } else { 0 }
+    $result.graphics.sampleScope = 'observer-free fixed-coordinate queue expand/collapse actions plus 500 ms settle'
     $result.pid = ((Invoke-Adb @('shell', 'pidof', $packageName)) | Select-Object -First 1).Trim()
     $mem = (Invoke-Adb @('shell', 'dumpsys', 'meminfo', $packageName)) -join "`n"
     $result.memory = [ordered]@{
@@ -220,6 +257,7 @@ catch {
 }
 finally {
     if ($fixtureProcess -and -not $fixtureProcess.HasExited) { Stop-Process -Id $fixtureProcess.Id -Force -ErrorAction SilentlyContinue }
+    if ($reverseInstalled) { & $adb -s $Serial reverse --remove "tcp:$Port" | Out-Null }
     if ($batteryWhitelistInstalled) {
         & $adb -s $Serial shell dumpsys deviceidle whitelist "-$packageName" | Out-Null
     }

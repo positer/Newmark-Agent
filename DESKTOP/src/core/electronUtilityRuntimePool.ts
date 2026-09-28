@@ -1,11 +1,15 @@
 import { runtimeMemoryBudget } from './runtimeMemoryBudget';
+import {
+  conversationVisualBudget,
+  shouldRecycleIdleHost,
+  type ConversationVisualBudget,
+} from './conversationVisualBudget';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
 import { ConversationQueueAction, ConversationQueueActionInput } from './conversationKernel';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, normalizeConversationTarget } from './conversationTarget';
 import { drainWindowsProcessHelpers, ElectronUtilityAgentClient, UtilityHostToolHandler } from './electronUtilityAgentClient';
 import {
   UtilityAgentPromptResult,
-  UtilityAutoRouteRatingResult,
   UtilityConversationRewindResult,
   UtilityAgentSnapshotResult,
   UtilityAgentStopResult,
@@ -17,14 +21,13 @@ export interface ElectronTargetRuntimeClient {
   subscribe(listener: (event: AgentWorkEvent) => void): () => void;
   setHostToolHandler(handler: UtilityHostToolHandler | null): void;
   prompt(params: UtilityPromptRequest): Promise<UtilityAgentPromptResult>;
-  snapshot(options?: { window?: number; before?: number }): Promise<UtilityAgentSnapshotResult>;
+  snapshot(options?: { window?: number; before?: number; transcript?: 'auto' | 'force'; transcriptRevision?: string }): Promise<UtilityAgentSnapshotResult>;
   rewind(messageIndex: number): Promise<UtilityConversationRewindResult>;
   requestStop(runId?: string): Promise<UtilityAgentStopResult>;
   enqueueGuide(envelope: ConversationInputEnvelope): Promise<GuideReceipt>;
   queueAction?(action: ConversationQueueAction, input?: ConversationQueueActionInput): Promise<Record<string, unknown>>;
   checkpoint(): Promise<Record<string, unknown>>;
   contextCompress?(options?: { keepRecent?: number; force?: boolean }): Promise<Record<string, unknown>>;
-  rateAutoRoute?(score: number, routeId?: string): Promise<UtilityAutoRouteRatingResult>;
   setWorkRunExpanded(runId: string, expanded: boolean): Promise<boolean>;
   setMode?(mode: AgentMode): Promise<AgentMode>;
   setModel?(model: string): Promise<string>;
@@ -77,6 +80,15 @@ export interface ElectronUtilityRuntimePoolOptions {
   stopRequestTimeoutMs?: number;
   forceStopAckTimeoutMs?: number;
   maxResidentRuntimes?: number;
+  /** Resident bytes of a host process, supplied by the Electron main process. */
+  sampleProcessMemoryBytes?: (pid: number) => number;
+  /**
+   * dev-0.6.6: per-conversation visual budget. Hosts that exceed its RSS
+   * watermark are recycled when idle instead of being reused, so a conversation
+   * that flooded memory through ComputerUse/BrowserControl observations starts
+   * from a clean process next time.
+   */
+  visualBudget?: () => ConversationVisualBudget;
 }
 
 /** One real Electron utilityProcess per active ConversationTarget. */
@@ -121,11 +133,46 @@ export class ElectronUtilityRuntimePool {
       return result;
     } finally {
       this.release(entry, true);
+      // dev-0.6.6: a long turn can leave the host far above its budget even
+      // after it settles. Recycling right after settlement (never mid-turn — the
+      // promise has already resolved here) gives the next turn a clean process
+      // instead of waiting for the idle TTL.
+      void this.recycleAfterSettlementIfOverBudget(entry);
     }
   }
 
-  async snapshot(target: ConversationRuntimeTarget, options: { window?: number; before?: number } = {}): Promise<UtilityAgentSnapshotResult> {
-    const entry = await this.acquire(normalizeConversationTarget(target));
+  /**
+   * Stop an idle host whose resident memory is still above the machine-derived
+   * watermark after its turn settled. Safe by construction: it only runs after
+   * `release()` and skips anything that is busy, stopping, restarting or
+   * disposing, and the runtime pool rebuilds a fresh host on the next request.
+   */
+  private async recycleAfterSettlementIfOverBudget(entry: RuntimeEntry): Promise<void> {
+    const runtimeKey = entry.target.runtimeKey;
+    if (this.entries.get(runtimeKey) !== entry) return;
+    if (entry.activeOperations > 0 || entry.stopIntent || this.restarting.has(runtimeKey) || this.disposing.has(runtimeKey)) return;
+    if (!this.hostOverMemoryBudget(entry)) return;
+    try {
+      await this.stopEntry(entry);
+    } catch { /* a host that refuses to stop is left to the idle sweep */ }
+  }
+
+  async snapshot(target: ConversationRuntimeTarget, options: { window?: number; before?: number; transcript?: 'auto' | 'force'; transcriptRevision?: string } = {}): Promise<UtilityAgentSnapshotResult> {
+    const normalized = normalizeConversationTarget(target);
+    const wantsDefaultWindow = options.before == null && (options.window == null || options.window === 200);
+    // A read must survive the runtime's own teardown. Clients poll this on a
+    // timer (the paired mobile client polls conversation-ui-state every second)
+    // and an archive deliberately force-stops the target for several seconds;
+    // answering 500 for that window makes the remote UI drop the conversation
+    // it is looking at. Earlier pages really are unavailable mid-teardown, so
+    // only the default window is served from the supervisor's cached view.
+    if (wantsDefaultWindow) {
+      const pending = this.entries.get(normalized.runtimeKey);
+      if (pending && (this.disposing.has(normalized.runtimeKey) || this.restarting.has(normalized.runtimeKey))) {
+        return this.supervisorSnapshot(pending);
+      }
+    }
+    const entry = await this.acquire(normalized);
     let scheduleIdle = false;
     try {
       const customWindow = options.before != null || (options.window != null && options.window !== 200);
@@ -297,23 +344,6 @@ export class ElectronUtilityRuntimePool {
       if (!entry.client.contextCompress) return { ok: false, error: 'Context compression is unavailable in this runtime.' };
       entry.lastSnapshot = null;
       return await entry.client.contextCompress(options);
-    } finally {
-      this.release(entry, true);
-    }
-  }
-
-  async rateAutoRoute(
-    target: ConversationRuntimeTarget,
-    score: number,
-    routeId = '',
-  ): Promise<UtilityAutoRouteRatingResult> {
-    const normalized = normalizeConversationTarget(target);
-    const entry = await this.acquireExisting(normalized);
-    if (!entry || !entry.client.rateAutoRoute) {
-      return { ok: false, reason: 'no_active_auto_route' };
-    }
-    try {
-      return await entry.client.rateAutoRoute(score, routeId);
     } finally {
       this.release(entry, true);
     }
@@ -726,6 +756,13 @@ export class ElectronUtilityRuntimePool {
         this.scheduleIdle(entry);
         return;
       }
+      // dev-0.6.6: an idle host that grew past this machine's visual budget
+      // (long ComputerUse/BrowserControl conversations) is recycled rather than
+      // reused, so the next turn starts from a clean process.
+      if (this.hostOverMemoryBudget(entry)) {
+        await this.stopEntry(entry);
+        return;
+      }
       let snapshot: UtilityAgentSnapshotResult;
       try {
         snapshot = await entry.client.snapshot();
@@ -742,6 +779,38 @@ export class ElectronUtilityRuntimePool {
       }
       await this.stopEntry(entry);
     });
+  }
+
+  /**
+   * Recycle every idle host whose resident memory is over the machine's visual
+   * budget. Returns the runtime keys that were recycled.
+   */
+  async reclaimIdleHostsOverMemory(): Promise<string[]> {
+    const recycled: string[] = [];
+    for (const entry of Array.from(this.entries.values())) {
+      const runtimeKey = entry.target.runtimeKey;
+      if (entry.activeOperations > 0 || entry.stopIntent || this.restarting.has(runtimeKey) || this.disposing.has(runtimeKey)) continue;
+      if (!this.hostOverMemoryBudget(entry)) continue;
+      try {
+        await this.stopEntry(entry);
+        recycled.push(runtimeKey);
+      } catch { /* a host that cannot be stopped stays until it exits by itself */ }
+    }
+    return recycled;
+  }
+
+  private hostOverMemoryBudget(entry: RuntimeEntry): boolean {
+    const sampler = this.options.sampleProcessMemoryBytes;
+    if (!sampler) return false;
+    const pid = Number(entry.client.status().pid || 0);
+    if (!pid) return false;
+    let rssBytes = 0;
+    try {
+      rssBytes = Number(sampler(pid) || 0);
+    } catch {
+      return false;
+    }
+    return shouldRecycleIdleHost(rssBytes, (this.options.visualBudget || conversationVisualBudget)());
   }
 
   private findEntry(target: { workspaceId: string; conversationId: string }): RuntimeEntry | undefined {
@@ -872,17 +941,20 @@ export class ElectronUtilityRuntimePool {
   }
 
   private supervisorSnapshot(entry: RuntimeEntry): UtilityAgentSnapshotResult {
-    const intent = entry.stopIntent!;
+    // `stopIntent` is present for a requested stop; a force stop run driven by
+    // the archive path may reach here purely through `disposing`/`restarting`.
+    const intent = entry.stopIntent;
     const cached = entry.lastSnapshot;
     return {
       ...cached,
       target: entry.target,
       runtime: {
+        ...(cached?.runtime || {}),
         target: entry.target,
         workspaceKey: entry.target.workspaceKey,
         runtimeKey: entry.target.runtimeKey,
-        runId: intent.runId,
-        generation: intent.generation,
+        runId: intent?.runId || entry.lastRunId,
+        generation: intent?.generation || entry.lastGeneration,
         running: true,
         stopRequested: true,
         workRuns: cached?.runtime?.workRuns || [],

@@ -6,7 +6,6 @@ import { WslAgentClient, WslHostToolHandler } from './wslAgentClient';
 import {
   WslAgentPromptRequest,
   WslAgentPromptResult,
-  WslAutoRouteRatingResult,
   WslAgentStopResult,
   WslConversationRewindResult,
 } from './wslAgentProtocol';
@@ -23,7 +22,6 @@ export interface WslTargetRuntimeClient {
   queueAction?(target: ConversationRuntimeTarget, action: ConversationQueueAction, input?: ConversationQueueActionInput): Promise<Record<string, unknown>>;
   checkpoint(target: ConversationRuntimeTarget): Promise<Record<string, unknown>>;
   contextCompress?(target: ConversationRuntimeTarget, options?: { keepRecent?: number; force?: boolean }): Promise<Record<string, unknown>>;
-  rateAutoRoute?(target: ConversationRuntimeTarget, score: number, routeId?: string): Promise<WslAutoRouteRatingResult>;
   setWorkRunExpanded(target: ConversationRuntimeTarget, runId: string, expanded: boolean): Promise<boolean>;
   setMode?(target: ConversationRuntimeTarget, mode: AgentMode): Promise<AgentMode>;
   setModel?(target: ConversationRuntimeTarget, model: string): Promise<string>;
@@ -129,6 +127,15 @@ export class WslAgentRuntimePool {
 
   async snapshot(target: ConversationRuntimeTarget, options: { window?: number; before?: number } = {}): Promise<Record<string, unknown>> {
     const normalized = normalizeConversationTarget(target);
+    const wantsDefaultWindow = options.before == null && (options.window == null || options.window === 200);
+    // Same contract as the Electron pool: a timed status poll must not 500
+    // while the target's runtime is being force-stopped by an archive.
+    if (wantsDefaultWindow) {
+      const pending = this.entries.get(normalized.runtimeKey);
+      if (pending && (this.disposing.has(normalized.runtimeKey) || this.restarting.has(normalized.runtimeKey))) {
+        return this.supervisorSnapshot(pending);
+      }
+    }
     const entry = await this.acquire(normalized);
     let scheduleIdle = false;
     try {
@@ -297,23 +304,6 @@ export class WslAgentRuntimePool {
       if (!entry.client.contextCompress) return { ok: false, error: 'Context compression is unavailable in this runtime.' };
       entry.lastSnapshot = null;
       return await entry.client.contextCompress(normalized, options);
-    } finally {
-      this.release(entry, true);
-    }
-  }
-
-  async rateAutoRoute(
-    target: ConversationRuntimeTarget,
-    score: number,
-    routeId = '',
-  ): Promise<WslAutoRouteRatingResult> {
-    const normalized = normalizeConversationTarget(target);
-    const entry = await this.acquireExisting(normalized);
-    if (!entry || !entry.client.rateAutoRoute) {
-      return { ok: false, reason: 'no_active_auto_route' };
-    }
-    try {
-      return await entry.client.rateAutoRoute(normalized, score, routeId);
     } finally {
       this.release(entry, true);
     }
@@ -798,7 +788,7 @@ export class WslAgentRuntimePool {
   }
 
   private supervisorSnapshot(entry: RuntimeEntry): Record<string, unknown> {
-    const intent = entry.stopIntent!;
+    const intent = entry.stopIntent;
     const cached = entry.lastSnapshot || {};
     const cachedRuntime = cached.runtime as { workRuns?: unknown[] } | null | undefined;
     const cachedQueued = cached.queued as { steering?: string[]; followUp?: string[] } | undefined;
@@ -806,11 +796,12 @@ export class WslAgentRuntimePool {
       ...cached,
       target: entry.target,
       runtime: {
+        ...((cached.runtime as Record<string, unknown> | null | undefined) || {}),
         target: entry.target,
         workspaceKey: entry.target.workspaceKey,
         runtimeKey: entry.target.runtimeKey,
-        runId: intent.runId,
-        generation: intent.generation,
+        runId: intent?.runId || entry.lastRunId,
+        generation: intent?.generation || entry.lastGeneration,
         running: true,
         stopRequested: true,
         workRuns: cachedRuntime?.workRuns || [],

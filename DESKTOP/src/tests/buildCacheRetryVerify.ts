@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Agent } from '../core/agent';
+import { CURRENT_MODEL_JEV_VERSION } from '../core/jevDecision';
 import type { StreamToken } from '../core/types';
 
 type Request = { model: string; system: string; messages: Array<Record<string, unknown>>; tools: Array<Record<string, any>> };
@@ -22,8 +23,8 @@ function model(name: string, vision = false) {
     name, display: name, description: 'Local cache retry fixture', max_tokens: 128000,
     vision, image_output: vision, thinking: false, speed_rating: 'fast', capability_rating: 'high',
     validation: { level: 'standard', status: 'verified', checked_at: '2026-09-06T00:00:00.000Z',
-      capabilities: { text_input: true, text_output: true, tool_use: true, image_input: vision, image_output: vision } },
-    capabilities: ['text_input', 'text_output', 'tool_use', ...(vision ? ['image_input', 'image_output'] : [])],
+      capabilities: { text_input: true, text_output: true, tool_use: true, image_input: vision, image_output: vision, json_schema: true } },
+    capabilities: ['text_input', 'text_output', 'tool_use', 'json_schema', ...(vision ? ['image_input', 'image_output'] : [])],
   };
 }
 
@@ -50,6 +51,7 @@ async function sameDeployment(root: string, alwaysFail: boolean): Promise<void> 
   const agent = fixture(root, alwaysFail ? 'retry-exhausted' : 'retry-guide', true);
   const calls: Request[] = [];
   const routeKinds: string[] = [];
+  const jevRequests: Array<{ model: string; responseFormat: any }> = [];
   const guide = 'Guide: search the web for documentation; preserve the original code task.';
   let guideAccepted = false;
   const provider = {
@@ -74,11 +76,51 @@ async function sameDeployment(root: string, alwaysFail: boolean): Promise<void> 
   (agent as unknown as { forcedProvider: typeof provider }).forcedProvider = provider;
   let output = '';
   let thrown = '';
+  const nativeFetch = globalThis.fetch;
   try {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const requestUrl = input instanceof Request
+        ? new URL(input.url)
+        : input instanceof URL
+          ? input
+          : new URL(String(input));
+      if (requestUrl.hostname !== 'cache-retry.invalid') return nativeFetch(input, init);
+
+      const body = JSON.parse(String(init?.body ?? '{}')) as {
+        model?: string;
+        response_format?: any;
+        messages?: Array<{ role?: string; content?: unknown }>;
+      };
+      jevRequests.push({ model: String(body.model ?? ''), responseFormat: body.response_format });
+      const userMessage = body.messages?.find(message => message.role === 'user');
+      const decisionRequest = JSON.parse(String(userMessage?.content ?? '{}')) as {
+        candidates?: Array<{ deployment: { providerId: string; modelId: string; logicalModelGroupId?: string } }>;
+      };
+      const candidate = decisionRequest.candidates?.find(item => item.deployment.modelId === 'same-deployment');
+      if (!candidate) {
+        return new Response(JSON.stringify({ error: { message: 'No same-deployment JEV candidate in retry fixture' } }), {
+          status: 422,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      const content = JSON.stringify({
+        primary: { ...candidate.deployment, logicalModelGroupId: candidate.deployment.logicalModelGroupId ?? '' },
+        alternates: [],
+        reasonCodes: ['fixture_current_model_retry'],
+        confidence: null,
+        modelVersion: CURRENT_MODEL_JEV_VERSION,
+      });
+      return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content }, finish_reason: 'stop' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
     output = (await agent.process('Fix the code repository without making external changes.')).map(token => token.text || '').join('');
   } catch (error) {
     thrown = error instanceof Error ? error.message : String(error);
     if (!alwaysFail) throw error;
+  } finally {
+    globalThis.fetch = nativeFetch;
   }
   const label = alwaysFail ? 'exhausted' : 'recovered';
   console.log(`  TRACE ${JSON.stringify({ label, requests: calls.length, routeKinds,
@@ -87,6 +129,11 @@ async function sameDeployment(root: string, alwaysFail: boolean): Promise<void> 
   check(guideAccepted && calls.length >= 2 && calls[1].messages.some(message => message.role === 'user' && message.content === guide), `${label}: real kernel steering delivers Guide before failing request`);
   check(calls.length === 3 && routeKinds[2] === 'retry_same_deployment', `${label}: real Auto router performs exactly one same-deployment retry`);
   check(calls.every(call => call.model === 'same-deployment'), `${label}: retry stays on the initial deployment`);
+  check(jevRequests.length === 1
+    && jevRequests[0].responseFormat?.type === 'json_schema'
+    && jevRequests[0].responseFormat?.json_schema?.strict === true
+    && jevRequests[0].responseFormat?.json_schema?.name === 'newmark_jev_route_decision',
+  `${label}: current model selects Auto through one strict typed-JSON JEV request`);
   check(calls.every(call => call.system === calls[0].system), `${label}: Guide plus retry preserves complete initialized system bytes`);
   check(calls.length >= 3 && JSON.stringify(calls[2].tools) === JSON.stringify(calls[1].tools), `${label}: retry retains provisioned schemas in exact order`);
   check(calls.length >= 2 && names(calls[1]).includes('git_status')

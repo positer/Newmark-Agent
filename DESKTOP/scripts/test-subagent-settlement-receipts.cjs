@@ -148,7 +148,22 @@ async function run() {
   const inbox = item => item.subagents.serialize().rootInbox || [];
   function durable(item) {
     const filename = item.workspaceConversationStorePath();
-    return filename && fs.existsSync(filename) ? JSON.parse(fs.readFileSync(filename, 'utf8')) : null;
+    if (!filename || !fs.existsSync(filename)) return null;
+    // Conversation state is indexed per workspace with each transcript in a
+    // per-conversation shard; merge the shard payload so this raw read keeps
+    // seeing the same documents it did before the split.
+    const store = JSON.parse(fs.readFileSync(filename, 'utf8'));
+    const shardDir = path.join(path.dirname(filename), 'shards');
+    const conversations = {};
+    for (const [key, entry] of Object.entries(store.conversations || {})) {
+      const shardFile = entry && entry.shard ? path.join(shardDir, String(entry.shard)) : '';
+      if (shardFile && fs.existsSync(shardFile)) {
+        try { conversations[key] = { ...entry, ...JSON.parse(fs.readFileSync(shardFile, 'utf8')) }; continue; }
+        catch { /* fall through to the index entry */ }
+      }
+      conversations[key] = entry;
+    }
+    return { ...store, conversations };
   }
   function receiptHistory(item) { return item.history.filter(message => message.subagent_settlement_receipt); }
   function delivered(scenario, id) { return scenario.requests.at(-1)?.messages.filter(message => message.role === 'user' && JSON.stringify(message.content).includes(`id=${id} `)).length || 0; }

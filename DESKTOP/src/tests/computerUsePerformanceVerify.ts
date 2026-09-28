@@ -84,6 +84,20 @@ function verifyCompactedVisionTransport(): void {
   }
 }
 
+function verifySparseSamplingLeavesLaneCompletionMargin(): void {
+  const budget = computerUseInternals.sparseMeasurementSampleBudget;
+  assert.strictEqual(budget(5_000), 3_500,
+    'cold sparse sampling reserves up to 1.5 seconds for capture-helper startup and IPC result delivery');
+  assert.strictEqual(budget(900), 400,
+    'short sparse waits retain a completion margin instead of treating process liveness as sampler readiness');
+  assert.strictEqual(budget(1), 1, 'the minimum valid wait still performs one bounded sample');
+  for (const waitMs of [1, 100, 900, 1_200, 5_000]) {
+    const sampleBudget = budget(waitMs);
+    assert.ok(sampleBudget >= 1 && sampleBudget <= waitMs,
+      `sparse sample budget ${sampleBudget} remains inside configured wait ${waitMs}`);
+  }
+}
+
 async function verifyWslComputerUseStringTransport(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-computer-use-wsl-transport-'));
   const previousDistro = process.env.NEWMARK_WSL_DISTRO;
@@ -198,6 +212,7 @@ function verifyCrashResidueCleanup(): void {
 
 async function main(): Promise<void> {
   verifyCompactedVisionTransport();
+  verifySparseSamplingLeavesLaneCompletionMargin();
   await verifyWslComputerUseStringTransport();
   verifyCrashResidueCleanup();
   if (process.platform !== 'win32') {
@@ -240,6 +255,31 @@ async function main(): Promise<void> {
       console.log('computer_use performance checks skipped: native screenshot capture unavailable (' + String(capabilityProbe.error || 'unknown') + ')');
       return;
     }
+
+    const coldSparse = JSON.parse(await runComputerUse({
+      action: 'observe',
+      workspacePath: process.cwd(),
+      ownerId,
+      allowEphemeralVisionImage: false,
+      sparseWaitMs: 5000,
+    })) as Record<string, any>;
+    const coldSparseMeasurement = coldSparse.perception?.sparse_measurement;
+    assert.strictEqual(coldSparse.ok, true, 'cold sparse observation continues into a fresh full screenshot');
+    assert.ok(Number(coldSparseMeasurement?.sample_count) >= 1, 'cold sparse helper returns at least one real coarse-grid sample');
+    assert.ok(Number(coldSparseMeasurement?.wall_elapsed_ms) > 0, `cold sparse observation records its startup-plus-sampling interval: ${JSON.stringify(coldSparseMeasurement)}`);
+    assert.ok(Number(coldSparseMeasurement?.wall_elapsed_ms) <= 5500, `cold sparse observation respects its five-second budget: ${JSON.stringify(coldSparseMeasurement)}`);
+
+    const warmSparse = JSON.parse(await runComputerUse({
+      action: 'observe',
+      workspacePath: process.cwd(),
+      ownerId,
+      allowEphemeralVisionImage: false,
+      sparseWaitMs: 900,
+    })) as Record<string, any>;
+    const warmSparseMeasurement = warmSparse.perception?.sparse_measurement;
+    assert.strictEqual(warmSparse.ok, true, 'warm sparse observation continues into a fresh full screenshot');
+    assert.ok(Number(warmSparseMeasurement?.sample_count) >= 1, 'warm sparse helper returns a real coarse-grid sample');
+    assert.ok(Number(warmSparseMeasurement?.wall_elapsed_ms) > 0 && Number(warmSparseMeasurement?.wall_elapsed_ms) <= 1200, `warm sparse observation respects its 900 ms budget: ${JSON.stringify(warmSparseMeasurement)}`);
 
     await runComputerUse({ action: 'app_list', workspacePath: process.cwd(), ownerId });
     await runComputerUse({ action: 'observe', workspacePath: process.cwd(), ownerId, allowEphemeralVisionImage: false });
@@ -332,6 +372,8 @@ async function main(): Promise<void> {
       maxTextBytes: Math.max(...desktopSamples.concat(appSamples).map(sample => sample.textBytes)),
       maxImageBytes: Math.max(...desktopSamples.concat(appSamples).map(sample => sample.imageBytes)),
       visibleApplications: appList.applications.length,
+      sparseCold: { wallMs: coldSparseMeasurement.wall_elapsed_ms, sampleMs: coldSparseMeasurement.elapsed_ms, sampleCount: coldSparseMeasurement.sample_count, reason: coldSparseMeasurement.reason },
+      sparseWarm: { wallMs: warmSparseMeasurement.wall_elapsed_ms, sampleMs: warmSparseMeasurement.elapsed_ms, sampleCount: warmSparseMeasurement.sample_count, reason: warmSparseMeasurement.reason },
     }));
   } finally {
     clearInterval(eventLoopProbe);

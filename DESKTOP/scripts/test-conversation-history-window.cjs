@@ -57,29 +57,36 @@ async function run(reportPath, sourceRoot) {
       sanitizeProvidersForState:()=>[],flowSuspensionForTarget:()=>null,flowRunningForTarget:()=>null,utilityHostToolHandler:{computerUseState:()=>null},
       normalizeUiBackgroundColor:x=>x,normalizeUiFontFamily:x=>x,resolveTerminalShell:()=>({id:'fixture'}),defaultTerminalShell:()=>'',availableTerminalShells:()=>[],
       nativeToolCatalogForState:()=>[],automation:null,electronUtilityRuntimePool:pool,activeAgentBackendMode:'windows'};
+    // getState reads the per-renderer transcript-revision acknowledgements
+    // (dev-0.6.6 slim-snapshot handshake); a caller that acknowledged nothing
+    // simply never matches a revision.
+    context.transcriptRevisionAcks=new Map();
     vm.createContext(context); vm.runInContext(ts.transpileModule(pieces.join('\n')+'\nglobalThis.callbacks={getState,loadEarlier,runtimeSnapshotForTarget};',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText,context);
     const c=context.callbacks;
-    const initial=await c.getState({},targets.a), middle=await c.loadEarlier({}, {...targets.a,window:200,before:250}), first=await c.loadEarlier({}, {...targets.a,window:200,before:50});
+    // The IPC handlers read the calling renderer's identity; every fixture call
+    // comes from one stable fake webContents.
+    const hostEvent=(extra={})=>({sender:{id:1},...extra});
+    const initial=await c.getState(hostEvent(),targets.a), middle=await c.loadEarlier(hostEvent(), {...targets.a,window:200,before:250}), first=await c.loadEarlier(hostEvent(), {...targets.a,window:200,before:50});
     pageCheck('PC getState retains owner total and cursor',initial,'a',250,450,450);
     pageCheck('PC earlier returns exact middle 200',middle,'a',50,250,450);
     pageCheck('PC earlier returns exact first 50',first,'a',0,50,450);
     check('PC 200+200+50 reconstructs every ID once',same([...ids(first),...ids(middle),...ids(initial)],expected('a',0,450)));
     receipt.captures.push({route:'PC',pages:[initial,middle,first].map(s=>({ids:ids(s),windowStart:s.windowStart,totalMessages:s.totalMessages}))});
-    pageCheck('PC getState supports explicit custom window',await c.getState({}, {...targets.a,window:37,before:111}),'a',74,111,450);
-    pageCheck('PC getState exhausted cursor matches HTTP empty page',await c.getState({}, {...targets.a,before:0}),'a',0,0,450);
-    pageCheck('PC earlier exhausted cursor never repeats recent messages',await c.loadEarlier({}, {...targets.a,before:0}),'a',0,0,450);
-    pageCheck('Startup hydration retains full cursor',await c.getState({startup:true},targets.a),'a',250,450,450);
-    pageCheck('Startup explicit exhausted cursor remains empty',await c.getState({startup:true},{...targets.a,before:0}),'a',0,0,450);
-    pageCheck('Other target retains its own page',await c.getState({},targets.b),'b',30,230,230);
+    pageCheck('PC getState supports explicit custom window',await c.getState(hostEvent(), {...targets.a,window:37,before:111}),'a',74,111,450);
+    pageCheck('PC getState exhausted cursor matches HTTP empty page',await c.getState(hostEvent(), {...targets.a,before:0}),'a',0,0,450);
+    pageCheck('PC earlier exhausted cursor never repeats recent messages',await c.loadEarlier(hostEvent(), {...targets.a,before:0}),'a',0,0,450);
+    pageCheck('Startup hydration retains full cursor',await c.getState(hostEvent({startup:true}),targets.a),'a',250,450,450);
+    pageCheck('Startup explicit exhausted cursor remains empty',await c.getState(hostEvent({startup:true}),{...targets.a,before:0}),'a',0,0,450);
+    pageCheck('Other target retains its own page',await c.getState(hostEvent(),targets.b),'b',30,230,230);
     context.mainConversationOwners.add(targets.a.runtimeKey);
-    pageCheck('Main-owned Flow target uses the same window contract',await c.loadEarlier({}, {...targets.a,before:250}),'a',50,250,450);
+    pageCheck('Main-owned Flow target uses the same window contract',await c.loadEarlier(hostEvent(), {...targets.a,before:250}),'a',50,250,450);
     kernel.queueAction(targets.a,'set_pause',{paused:false});
     context.conversationSelections.set(targets.a.runtimeKey,{queuePaused:true});
-    pageCheck('Queue policy resnapshot retains the requested earlier cursor',await c.loadEarlier({}, {...targets.a,before:250}),'a',50,250,450);
+    pageCheck('Queue policy resnapshot retains the requested earlier cursor',await c.loadEarlier(hostEvent(), {...targets.a,before:250}),'a',50,250,450);
     check('History resnapshot retains authoritative queue pause',kernel.snapshot(targets.a).queuePaused===true);
     owners.a.chatMessages.push({id:'a-450',role:'assistant',content:'LIVE NOT SAVED',timestamp:'2026-09-06T00:00:01.000Z'});
-    pageCheck('Live owner includes unpersisted append',await c.getState({},targets.a),'a',251,451,451);
-    pageCheck('Earlier page remains stable after live append',await c.loadEarlier({}, {...targets.a,before:250}),'a',50,250,451);
+    pageCheck('Live owner includes unpersisted append',await c.getState(hostEvent(),targets.a),'a',251,451,451);
+    pageCheck('Earlier page remains stable after live append',await c.loadEarlier(hostEvent(), {...targets.a,before:250}),'a',50,250,451);
     check('Reading a page does not change owner selection or history',host.activeConversationId==='a'&&owners.b.activeConversationId==='b'&&owners.a.chatMessages.length===451);
     for(const kind of ['electron','wsl']) {
       const clientFile=kind==='electron'?'core/electronUtilityAgentClient.ts':'core/wslAgentClient.ts';
@@ -91,8 +98,30 @@ async function run(reportPath, sourceRoot) {
       let snapshotBranch;
       function find(n){if(ts.isIfStatement(n)&&/request\.method === 'snapshot'/.test(n.expression.getText(hostAst)))snapshotBranch=n.getText(hostAst);ts.forEachChild(n,find);}
       find(hostAst);if(!snapshotBranch)throw Error('Snapshot host dispatch seam missing');
-      const hostContext={kernel,checkedTarget:normalizeConversationTarget,requestTarget:p=>normalizeConversationTarget(p.target),distro:'fixture'};
-      vm.createContext(hostContext);vm.runInContext(ts.transpileModule(`globalThis.dispatch=request=>{${snapshotBranch}};`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText,hostContext);
+      // The host's snapshot branch applies the transcript-revision policy
+      // (dev-0.6.6 slim-snapshot handshake). Provide the file's own top-level
+      // helpers so the real implementation runs instead of a stub.
+      const helperSources=[];
+      for(const statement of hostAst.statements){
+        if(ts.isFunctionDeclaration(statement)&&statement.name)helperSources.push(statement.getText(hostAst));
+        if(ts.isVariableStatement(statement)){
+          for(const declaration of statement.declarationList.declarations){
+            const initializer=declaration.initializer;
+            if(!initializer||!declaration.name)continue;
+            if(ts.isArrowFunction(initializer)||ts.isFunctionExpression(initializer))helperSources.push(`const ${declaration.name.getText(hostAst)} = ${initializer.getText(hostAst)};`);
+          }
+        }
+      }
+      // The Electron host applies the transcript-revision policy; the WSL host
+      // branch does not, so only require the helper when the branch uses it.
+      if(snapshotBranch.includes('applyTranscriptPolicy')&&!helperSources.some(source=>source.includes('applyTranscriptPolicy')))throw Error('Transcript policy helper seam missing');
+      const hostContext={kernel,checkedTarget:normalizeConversationTarget,normalizeConversationTarget,requestTarget:p=>normalizeConversationTarget(p.target),distro:'fixture',
+        // The host module binds its identity from the runtime environment.
+        expectedRuntimeKey:targets.a.runtimeKey,root,
+        // Module-level host state the snapshot branch reads (transcript revision
+        // ledger); the fixture starts with an empty ledger like a fresh host.
+        transcriptRevisions:new Map()};
+      vm.createContext(hostContext);vm.runInContext(ts.transpileModule(`${helperSources.join('\n')}\nglobalThis.dispatch=request=>{${snapshotBranch}};`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText,hostContext);
       const requests=[];
       const client=Object.create(Client.prototype);
       Object.assign(client,{target:targets.a,start:async()=>{},subscribe:()=>()=>{},setHostToolHandler:()=>{},mapTarget:async t=>t,status:()=>({connected:true,quarantined:false}),

@@ -3,7 +3,15 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Agent } from '../core/agent';
-import { AutoRouteCandidate, AutoRouter, classifyRouteFailure, defaultRoutePolicy } from '../core/autoRouter';
+import {
+  AutoRouteCandidate,
+  RouteExecutionController,
+  classifyRouteFailure,
+  classifyTaskClasses,
+  defaultRoutePolicy,
+} from '../core/autoRouter';
+import { LocalJevDecisionEngine } from './fixtures/localJevDecisionEngine';
+import { resolveAutoRouteDecision } from '../core/routeDecisionValidator';
 
 function model(name: string, cost: number): Record<string, unknown> {
   return {
@@ -144,14 +152,17 @@ async function main(): Promise<void> {
       '配额超限，请充值',
     ];
     for (let round = 0; round < 2000; round += 1) {
-      const router = new AutoRouter();
+      const router = new RouteExecutionController();
       const candidates = [candidate('primary', 0.1), candidate('backup', 0.2), candidate('backup-two', 0.3)];
-      const decision = router.route(
-        { kind: 'auto', scope: { kind: 'provider', providerId: 'stress-provider' }, policyId: 'balanced' },
-        defaultRoutePolicy('balanced'),
+      const decision = await resolveAutoRouteDecision({
+        selection: { kind: 'auto', scope: { kind: 'provider', providerId: 'stress-provider' }, policyId: 'balanced' },
+        policy: defaultRoutePolicy('balanced'),
+        taskText: 'chat',
+        request: { transactionId: `quota-${round}`, taskText: 'chat', estimatedInputTokens: 64, expectedOutputTokens: 64, requiredCapabilities: [] },
         candidates,
-        { transactionId: `quota-${round}`, affinityKey: `quota-${round}`, taskText: 'chat', estimatedInputTokens: 64, expectedOutputTokens: 64, requiredCapabilities: [] },
-      );
+        taskClasses: classifyTaskClasses('chat', [], 64),
+        engine: new LocalJevDecisionEngine(),
+      });
       assert.equal(decision.resolvedDeployment?.modelId, 'primary', `route round ${round} did not select primary fixture`);
       const failure = classifyRouteFailure(failureMessages[round % failureMessages.length]);
       assert.equal(failure.type, 'balance_exhausted', `route round ${round} misclassified quota failure`);

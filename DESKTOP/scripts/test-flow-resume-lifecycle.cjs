@@ -64,6 +64,11 @@ function createHarness(parts, reason = 'interrupted') {
   const agent = {
     activeConversationId: targetA.conversationId,
     pendingOptions: [],
+    model: 'flow-fixture-model',
+    intelligence: 'high',
+    inputMode: 'guide',
+    engine: 'builtin',
+    modelSelectionValue: () => 'deployment:flow-fixture-provider:flow-fixture-model',
     getStoredFlowSuspension: id => stored.get(id) || null,
     clearStoredFlowSuspension: id => stored.delete(id),
     saveStoredFlowSuspension: (record, id) => stored.set(id, structuredClone(record)),
@@ -102,7 +107,8 @@ function createHarness(parts, reason = 'interrupted') {
   const stateA = seed(targetA, reason);
   const stateB = seed(targetB, 'question');
   const context = {
-    AbortController, Error, Date, console, activeFlowsByRuntimeKey: states, agent, conversationKernel: null,
+    AbortController, Error, Date, console, randomUUID: crypto.randomUUID, crypto,
+    activeFlowsByRuntimeKey: states, agent, conversationKernel: null,
     normalizeConversationTarget: target => ({ ...target, runtimeKey: key(target) }),
     conversationRuntimeTarget: target => target,
     isolatedConversationAgent: owner,

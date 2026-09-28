@@ -19,7 +19,7 @@ type FuzzyEnvDefaults = {
   models?: string[];
 };
 
-export const CLI_COMMANDS = ['state', 'tool', 'send', 'validate-models', 'fuzzy-inject', 'skills-market', 'memory-lab', 'install-update', 'compat', 'compat-tool', 'pair', 'remote'] as const;
+export const CLI_COMMANDS = ['state', 'tool', 'send', 'validate-models', 'fuzzy-inject', 'skills-market', 'memory-lab', 'install-update', 'compat', 'compat-tool', 'pair', 'remote', 'jev'] as const;
 type CliCommand = typeof CLI_COMMANDS[number];
 
 const CLI_COMMAND_HELP: Record<CliCommand, string[]> = {
@@ -72,6 +72,11 @@ const CLI_COMMAND_HELP: Record<CliCommand, string[]> = {
     'Usage: Newmark.exe compat-tool --list | --name <opencode-tool> [json-args | --args-file path] [--root <dir>]',
     'List or run one compatible OpenCode tool.',
   ],
+  jev: [
+    'Usage: Newmark.exe jev [--json] [--root <dir>]',
+    '       Newmark.exe jev --enable|--disable [--timeout <ms>]',
+    'Read or edit current-model Auto routing policy. Decisions use only the current eligible conversation model with thinking off and strict JSON Schema output; failures stop Auto routing.',
+  ],
 };
 
 export function cliHelpRequested(args: string[]): boolean {
@@ -87,12 +92,13 @@ const CLI_VALUE_FLAGS = new Set<string>([
   '--remove-source', '--enable-source', '--disable-source', '--source', '--target', '--target-file',
   '--expected-version', '--preserve', '--repo', '--tag', '--asset', '--version', '--content-file',
   '--content', '--description', '--tags', '--msi', '--log-dir',
+  '--timeout',
 ]);
 const CLI_BOOLEAN_FLAGS = new Set<string>([
   '--persist', '--agent-only', '--list', '--preview-only', '--sources', '--add-source', '--check-github',
   '--from-github', '--dry-run', '--read', '--index', '--reindex', '--update', '--version', '--folder', '--help', '-h',
   '--branch-communication', '--yes', '--confirm-stop', '--confirm-remove-legacy', '--no-uninstall-previous', '--no-elevate',
-  '--on', '--off',
+  '--on', '--off', '--json', '--enable', '--disable',
 ]);
 
 function invalidCliCommandArgument(args: string[]): string | undefined {
@@ -203,6 +209,7 @@ function positionalAfter(args: string[], commandName: string): string[] {
       '--tag',
       '--asset',
       '--list',
+      '--timeout',
     ].includes(arg)) { i++; continue; }
     if (!arg.startsWith('--')) values.push(arg);
   }
@@ -739,6 +746,48 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
 
   if (command === 'state') {
     printJson(safeState(agent, root));
+    return true;
+  }
+
+  /** Current-model JEV policy editor; there is no separate decision runtime. */
+  if (command === 'jev') {
+    const patch: Record<string, unknown> = {};
+    if (args.includes('--enable')) patch.enabled = true;
+    if (args.includes('--disable')) patch.enabled = false;
+    const timeout = argValue(args, '--timeout');
+    if (timeout !== undefined) patch.timeoutMs = Number(timeout);
+    let update: { ok: boolean; reason?: string; state: ReturnType<Agent['jevDecisionModelState']> } | null = null;
+    if (Object.keys(patch).length) {
+      update = agent.updateJevDecisionModel(patch);
+      if (!update.ok) {
+        const message = update.reason === 'auto_disabled'
+          ? 'Auto routing is off: current-model decision settings are locked and no model may change. Turn Auto on first.'
+          : 'Rejected: invalid current-model JEV setting.';
+        safeStderr(`${message}\n`);
+        process.exitCode = 2;
+        if (!args.includes('--json')) return true;
+      }
+    }
+
+    const state = update?.state || agent.jevDecisionModelState();
+    if (args.includes('--json')) {
+      printJson({
+        ok: update ? update.ok : true,
+        ...(update?.reason ? { reason: update.reason } : {}),
+        root,
+        autoDecisionModel: state,
+      });
+      return true;
+    }
+    safeStdout([
+      `Auto routing: ${state.autoEnabled ? 'on' : 'off'}`,
+      `Current-model decision: ${state.enabled ? 'enabled' : 'disabled'}${state.locked ? ' (locked: Auto is off)' : ''}`,
+      `Decision source: ${state.decisionModel}`,
+      `Thinking mode: ${state.thinkingMode}`,
+      `Output format: ${state.outputFormat}`,
+      `Decision timeout: ${state.timeoutMs} ms`,
+      '',
+    ].join('\n'));
     return true;
   }
 

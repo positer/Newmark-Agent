@@ -7,7 +7,15 @@ import * as QRCode from 'qrcode';
 
 export const MOBILE_TOKEN_FILENAME = '.newmark-mobile-token';
 export const MOBILE_PAIRING_FILENAME = '.newmark-mobile-pairing.json';
-export const MOBILE_PORT = 47890;
+/**
+ * Hosted mobile server port. Production always uses 47890; the environment
+ * override exists so an isolated dev/test instance can host a paired client
+ * without taking the production port away from the instance the user is
+ * already running. Unset (the normal case) keeps the historical value.
+ */
+export const MOBILE_PORT = Number(process.env.NEWMARK_MOBILE_PORT) > 0
+  ? Math.trunc(Number(process.env.NEWMARK_MOBILE_PORT))
+  : 47890;
 export const MOBILE_PAIRING_TTL_MS = 120_000;
 
 export interface PairingSession {

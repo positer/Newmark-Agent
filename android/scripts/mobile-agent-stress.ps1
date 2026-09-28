@@ -309,6 +309,7 @@ try {
         return $null
     } -Label '已选择远端 fixture 对话' -TimeoutMs 30000 | Out-Null
     Reset-GfxMetrics
+    $graphicsWindow = [System.Diagnostics.Stopwatch]::StartNew()
     Start-Sleep -Seconds 1
 
     # SSE burst includes deliberate duplicate start/text/done messages.
@@ -390,6 +391,10 @@ try {
         # Back is only valid once the popup is proven visible.  This keeps a
         # locator failure from navigating the fixture Activity to the launcher.
         Invoke-Adb @('shell', 'input', 'keyevent', '4')
+        # The popup owns a sidebar-gesture lock until its Compose exit animation
+        # disposes the overlay.  ADB Back returns before that 190–210ms exit is
+        # finished; an immediate swipe can be correctly rejected as locked.
+        Start-Sleep -Milliseconds 400
         Assert-AppForeground "UI loop $i model menu"
         if (($i % 3) -eq 0) {
             Invoke-Adb @('shell', 'input', 'swipe', '900', '1180', '200', '1180', '110')
@@ -430,7 +435,13 @@ try {
     Save-PressureScreenshot 'completed-stale-event-rejected'
 
     $result.mock = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 5
+    $graphicsWindow.Stop()
     $result.graphics = Read-GfxMetrics
+    $result.graphics.sampleWindowMs = [int]$graphicsWindow.ElapsedMilliseconds
+    $result.graphics.deliveredFramesPerSecond = if ($graphicsWindow.Elapsed.TotalSeconds -gt 0) {
+        [math]::Round($result.graphics.totalFrames / $graphicsWindow.Elapsed.TotalSeconds, 2)
+    } else { 0 }
+    $result.graphics.sampleScope = 'entire mixed-pressure window from post-hydration gfxinfo reset through stale-event rejection; includes harness waits and UI actions'
     $mem = (& $adb -s $Serial shell dumpsys meminfo $packageName) -join "`n"
     $result.memory.totalPssKb = [int]([regex]::Match($mem, 'TOTAL PSS:\s*(\d+)').Groups[1].Value)
     # `uiautomator dump` itself runs through AndroidRuntime and logs a normal
@@ -469,6 +480,21 @@ catch {
     throw
 }
 finally {
+    # Preserve partial runtime and graphics evidence when a UI locator fails.
+    # The app is force-stopped below, after which dumpsys gfxinfo has no process
+    # entry and the sample window can no longer be recovered.
+    if (-not $result.mock) {
+        try { $result.mock = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 3 } catch { }
+    }
+    if (-not $result.graphics.totalFrames) {
+        try { $result.graphics = Read-GfxMetrics } catch { }
+    }
+    if (-not $result.memory.totalPssKb) {
+        try {
+            $mem = (& $adb -s $Serial shell dumpsys meminfo $packageName) -join "`n"
+            $result.memory.totalPssKb = [int]([regex]::Match($mem, 'TOTAL PSS:\s*(\d+)').Groups[1].Value)
+        } catch { }
+    }
     if ($mockProcess -and -not $mockProcess.HasExited) { Stop-Process -Id $mockProcess.Id -Force -ErrorAction SilentlyContinue }
     if ($reverseInstalled) {
         & $adb -s $Serial reverse --remove "tcp:$Port" | Out-Null

@@ -3,7 +3,11 @@
 const data = require("./data");
 const { createMockNewmarkAdapter } = require("./adapters/mock-newmark-adapter");
 const { targetKey, validateSnapshot } = require("./adapters/newmark-contract");
-const { SETTINGS_CATEGORIES, settingsRows } = require("./settings-schema");
+const {
+  JEV_TIMEOUT_PRESETS,
+  SETTINGS_CATEGORIES,
+  settingsRows
+} = require("./settings-schema");
 const INTELLIGENCE_TIERS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const THEME_APPEARANCE_DEFAULTS = Object.freeze({
@@ -92,6 +96,17 @@ function applySnapshot(state, snapshot) {
   }
   if (state.runningConversationKeys) {
     state.busy = state.runningConversationKeys.has(targetKey(valid.target));
+  }
+  // Current-model decision settings + Auto master switch drive the locked state of the JEV
+  // settings rows, so they must follow every authoritative snapshot.
+  if (valid.jevDecisionModel && state.settings) {
+    state.jevDecisionModel = valid.jevDecisionModel;
+    state.settings.jev = {
+      autoEnabled: valid.jevDecisionModel.autoEnabled !== false,
+      locked: valid.jevDecisionModel.locked === true || valid.jevDecisionModel.autoEnabled === false,
+      enabled: valid.jevDecisionModel.enabled !== false,
+      timeoutMs: Number(valid.jevDecisionModel.timeoutMs || 3000)
+    };
   }
   return state;
 }
@@ -280,6 +295,12 @@ function createState(options = {}) {
         autoCheck: true,
         autoDownload: false,
         source: "GitHub"
+      },
+      jev: {
+        autoEnabled: snapshot.autoSwitchEnabled !== false,
+        locked: snapshot.autoSwitchEnabled === false,
+        enabled: snapshot.jevDecisionModel ? snapshot.jevDecisionModel.enabled !== false : true,
+        timeoutMs: Number(snapshot.jevDecisionModel?.timeoutMs || 3000)
       }
     }
   };
@@ -1072,6 +1093,9 @@ function toggleSelected(state) {
     }
     const row = settingsRows(state)[state.selected];
     if (!row) return;
+    if (typeof row.action === "string" && row.action.startsWith("jev-")) {
+      return applyJevDecisionRow(state, row);
+    }
     if (row.action === "pair-mobile") {
       state.overlay = "pair";
       state.pairingQrLines = ["Loading pairing QR…"];
@@ -1110,6 +1134,50 @@ function toggleSelected(state) {
     }
     state.notice = `${row.label}: ${formatSettingNotice(next)} · ${state.adapterKind === "mock" ? "mock" : "persisted"}`;
   }
+}
+
+/**
+ * Current-model JEV settings rows.
+ *
+ * The Agent is authoritative: while Auto is off it refuses every edit, so the
+ * TUI reports the lock instead of pretending a change happened. The decision
+ * source is always the current eligible conversation model.
+ */
+function applyJevDecisionRow(state, row) {
+  const jev = state.jevDecisionModel && typeof state.jevDecisionModel === "object" ? state.jevDecisionModel : {};
+  if (row.action === "jev-report-auto") {
+    state.notice = jev.autoEnabled === false
+      ? "Auto routing is off: current-model decision settings are locked and no model may change."
+      : "Auto routing is on: JEV uses the current eligible conversation model with thinking off and strict JSON Schema output.";
+    return true;
+  }
+  if (row.action === "jev-report-current-model") {
+    state.notice = "JEV sends a strict JSON Schema decision request to the current eligible conversation model with thinking disabled.";
+    return true;
+  }
+  if (jev.locked === true || jev.autoEnabled === false) {
+    state.notice = "Auto is off: current-model decision settings are locked. Turn Auto on first — no model may change while Auto is off.";
+    return true;
+  }
+  const patch = {};
+  if (row.action === "jev-toggle-enabled") patch.enabled = jev.enabled === false;
+  if (row.action === "jev-cycle-timeout") {
+    const index = JEV_TIMEOUT_PRESETS.indexOf(Number(jev.timeoutMs));
+    patch.timeoutMs = JEV_TIMEOUT_PRESETS[(index + 1 + JEV_TIMEOUT_PRESETS.length) % JEV_TIMEOUT_PRESETS.length];
+  }
+  if (!Object.keys(patch).length) return true;
+  const result = state.adapter.saveConfig({ jevDecisionModel: patch });
+  if (result && typeof result.then === "function") throw new TypeError("TUI settings adapter must be synchronous");
+  if (!result || result.ok === false) {
+    state.notice = result && result.reason === "auto_disabled"
+      ? "Auto is off: current-model decision settings are locked and no model may change."
+      : "The current-model decision settings were not changed.";
+    if (result && result.state) state.jevDecisionModel = result.state;
+    return true;
+  }
+  state.jevDecisionModel = result.state || jev;
+  state.notice = `JEV current-model settings updated · ${state.adapterKind === "mock" ? "mock" : "persisted"}`;
+  return true;
 }
 
 function selectedSettingChoiceRow(state) {

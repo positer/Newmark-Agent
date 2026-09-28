@@ -3,6 +3,7 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const args = process.argv.slice(2), option = name => args.includes(name) ? args[args.indexOf(name) + 1] : '';
 const desktop = path.resolve(__dirname, '..');
 const { Agent } = require('../dist/core/agent');
+const { CURRENT_MODEL_JEV_VERSION } = require('../dist/core/jevDecision');
 if (option('--kernel-source')) {
   const ts = require('typescript'), Module = require('node:module'), filename = path.join(desktop, 'dist/core/agentKernelRunner.js');
   const controlled = new Module(filename, module); controlled.filename = filename; controlled.paths = Module._nodeModulePaths(path.dirname(filename));
@@ -48,8 +49,9 @@ const specs = [
   { name: 'real tool progress renews the no-progress allowance', repeatedTools: true, step: round => round > 12 ? text : round % 2 ? empty : { kind: 'tool' }, calls: 13, tools: 6, waits: [200, 200, 200, 200, 200, 200] },
 ];
 const model = name => ({ name, display: name, description: 'Recovery fixture', enabled: true, max_tokens: 128000,
-  thinking: true, speed_rating: 'fast', capability_rating: 'high', capabilities: ['text_input', 'text_output', 'tool_use'],
-  validation: { level: 'standard', status: 'verified', checked_at: '2026-09-06T00:00:00.000Z', capabilities: { text_input: true, text_output: true, tool_use: true } } });
+  // Auto recovery uses the real current-model JEV gate, which requires an explicit native no-reasoning mode.
+  thinking: false, speed_rating: 'fast', capability_rating: 'high', capabilities: ['text_input', 'text_output', 'tool_use', 'json_schema'],
+  validation: { level: 'standard', status: 'verified', checked_at: '2026-09-06T00:00:00.000Z', capabilities: { text_input: true, text_output: true, tool_use: true, json_schema: true } } });
 
 async function run() {
   const report = { at: new Date().toISOString(), cases: [], checks: [], boundary: 'Actual Agent/Native Kernel with controlled in-process providers; retry waits recorded but skipped. No HTTP, paid request, user state or upstream cache-hit claim.' };
@@ -58,7 +60,7 @@ async function run() {
     if (option('--case') && option('--case') !== spec.name) continue;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-build-recovery-'));
     let agent;
-    const requests = [], waits = [], actualWaits = [], toolEvents = [];
+    const requests = [], waits = [], actualWaits = [], toolEvents = [], jevRequests = [];
     let failure, output = '', watchdog = false, guideAccepted = false;
     try {
       fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ models: {
@@ -98,12 +100,47 @@ async function run() {
           }
         },
       };
-      try { output = (await agent.process('Complete this isolated recovery test.')).map(token => token.text || '').join(''); }
-      catch (error) { failure = { name: error.name, message: error.message }; }
-      report.cases.push({ name: spec.name, requests: requests.map(({ messages, ...rest }) => rest), waits, actualWaits, toolEvents, failure, output, watchdog, totals: copy(agent.providerUsageTotals) });
+      const nativeFetch = globalThis.fetch;
+      try {
+        if (spec.auto) {
+          globalThis.fetch = async (input, init) => {
+            const requestUrl = input instanceof Request ? new URL(input.url) : input instanceof URL ? input : new URL(String(input));
+            if (requestUrl.hostname !== 'fixture.invalid') return nativeFetch(input, init);
+            const body = JSON.parse(String(init?.body || '{}'));
+            jevRequests.push({ model: body.model, responseFormat: body.response_format });
+            const userMessage = body.messages?.find(message => message.role === 'user');
+            const decisionRequest = JSON.parse(String(userMessage?.content || '{}'));
+            const candidate = decisionRequest.candidates?.find(item => item.deployment.modelId === 'primary');
+            if (!candidate) return new Response(JSON.stringify({ error: { message: 'No primary candidate in recovery fixture' } }), {
+              status: 422, headers: { 'Content-Type': 'application/json' },
+            });
+            const content = JSON.stringify({
+              primary: { ...candidate.deployment, logicalModelGroupId: candidate.deployment.logicalModelGroupId ?? '' },
+              alternates: [], reasonCodes: ['fixture_current_model_recovery'], confidence: null,
+              modelVersion: CURRENT_MODEL_JEV_VERSION,
+            });
+            return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content }, finish_reason: 'stop' }] }), {
+              status: 200, headers: { 'Content-Type': 'application/json' },
+            });
+          };
+        }
+        try { output = (await agent.process('Complete this isolated recovery test.')).map(token => token.text || '').join(''); }
+        catch (error) { failure = { name: error.name, message: error.message }; }
+      } finally {
+        globalThis.fetch = nativeFetch;
+      }
+      report.cases.push({ name: spec.name, requests: requests.map(({ messages, ...rest }) => rest), waits, actualWaits, toolEvents, failure, output, watchdog,
+        autoModel: spec.auto ? agent.model : undefined, autoRouteDecision: spec.auto ? copy(agent.lastRouteDecision) : undefined,
+        totals: copy(agent.providerUsageTotals) });
       check(spec.name + ': bounded outcome', () => { assert.equal(watchdog, false); assert.equal(requests.length, spec.calls); if (spec.failure) { assert.equal(failure?.name, 'ProviderRunError'); assert.equal(agent.status, 'error'); assert.ok(!output.includes('RECOVERY_VISIBLE_DONE')); } else { assert.equal(failure, undefined); assert.ok(output.includes('RECOVERY_VISIBLE_DONE')); assert.equal(agent.status, 'idle'); } });
       check(spec.name + ': real usage is retained without retries for zero cache', () => { assert.deepEqual(agent.providerUsageTotals, { input: requests.length * 100, output: requests.length * 10, cacheRead: 0, cacheWrite: 0 }); assert.ok(!JSON.stringify(agent.history).includes('PRIVATE_RECOVERY_REASONING')); });
       if (spec.waits) check(spec.name + ': planned waits and budgets', () => assert.deepEqual(waits, spec.waits));
+      if (spec.auto) check(spec.name + ': current model uses one strict typed-JSON JEV request', () => {
+        assert.equal(jevRequests.length, 1);
+        assert.equal(jevRequests[0].responseFormat?.type, 'json_schema');
+        assert.equal(jevRequests[0].responseFormat?.json_schema?.strict, true);
+        assert.equal(jevRequests[0].responseFormat?.json_schema?.name, 'newmark_jev_route_decision');
+      });
       if (spec.actualWaits) check(spec.name + ': server wait survives the Auto planner', () => assert.deepEqual(actualWaits, spec.actualWaits));
       if (spec.models) check(spec.name + ': actual route followed by same-deployment recovery', () => assert.deepEqual(requests.map(request => request.model), spec.models));
       if (spec.tools !== undefined) check(spec.name + ': tools are executed once, never replayed', () => { assert.equal(toolEvents.filter(event => event.type === 'tool_call').length, spec.tools); assert.equal(toolEvents.filter(event => event.type === 'tool_result').length, spec.tools); });

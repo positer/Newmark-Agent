@@ -1,5 +1,485 @@
 # Newmark Agent Overview
 
+## 2026-09-28 Auto 决策倾向与反馈历史退役
+
+- `DESKTOP/src/ui/index.html`、`DESKTOP/src/core/config.ts`、`DESKTOP/src/core/autoRouter.ts`：Auto 设置统一为保守/均衡/激进定性倾向；旧值读取时归一为均衡。
+- `DESKTOP/src/core/jevDecision.ts`：把倾向作为 `objective.tendency` 交给当前对话模型，明确由模型综合任务适配、健康、验证、费用、延迟和上下文事实决策；倾向不变成固定排序或数值阈值。
+- `DESKTOP/src/core/agent.ts`、`DESKTOP/src/core/conversationKernel.ts`、preload/main/server 与 utility/WSL transport：移除 Auto 路由评分、`ratings.jsonl` 写入、清理历史入口及对应专用 IPC/RPC；遗留用户数据不会被新代码读取、覆写或删除。其他聊天/provider通信接口未改。
+- `npm run build`、5 组针对性验证、UI 一致性与六张打包版截图通过。MSI `release/Newmark-Agent-0.6.7-x64.msi` 已安装；Program Files 中 `0.6.7.0` EXE/ASAR 哈希、HKLM ProductCode/PackageCode、CLI `0.6.7` 和 292 个 payload 文件全部与包相符，安装前后的 `.Newmark` 清单无差异。本次安装未启动 GUI（`GuiRuntimeVerified=false`）。
+- 版本身份、安装核验、哈希、截图与归档事故恢复记录见 [本轮报告](archive/20260928-auto-tendency-cleanup/REPORT.md)。
+
+## 2026-09-28 PC GUI 视觉、动效与全场景验收
+
+- `DESKTOP/src/ui/index.html`：桌面 GUI 单文件外壳；本轮候选只修改 CSS。样式交接快照与当前文件在归一化换行后，`style` 区域以外的全文完全相同，功能逻辑与通信接口未动。
+- `archive/20260927-gui-shell-motion-pass/REPORT.md`：本轮范围、Claude Code 自行退出错误、样式边界、性能结果和验收限制。
+- `archive/20260927-gui-shell-motion-pass/scenes-accepted2-20260928/index.html`：48 个 GUI 场景截图总览；同目录 PNG 为各场景原图。
+- `archive/20260927-gui-shell-motion-pass/scenario-audit-accepted2-20260928.json`：133 项交互、91 段动效采样、64 项检查的原始记录，所有失败与运行时错误计数均为 0。
+- `archive/20260927-gui-shell-motion-pass/build-final-20260928.log`：当前源码构建日志，所有阶段成功。
+- 交错四轮 CSS A/B 的 RAF callback 均值为候选 60.08、基线 60.47 次/秒。侧栏开合和历史分页 p95 小幅改善，但输入绘制与整段 RAF 间隔 p95 回退；不能宣称整体帧率提升或达到 165 Hz。测试使用隔离 Electron 与 loopback fixture，不是已安装版本或真实 provider 验证。
+
+## 2026-09-27 用户级 PC GUI 性能压力测试
+
+- `DESKTOP/scripts/test-user-soak-gui.cjs`：以真实 Electron GUI、preload 和 Agent/IPC 对本机 loopback provider 做隔离压力，不替换生产 handler；运行时绑定 exe 与 `app.asar` SHA-256。
+- `archive/20260927-user-level-debugger-performance/REPORT.md`：对照 Program Files 安装版和最新 unpack 候选；涵盖 1200 条历史、连续 5 分钟交互、history paging 锚点、消息输入、侧栏/弹层、Build/队列、GPU/Long Task/RAM 采样和冷重启。
+- 安装版在短测内未通过历史分页原节点保留检查；新 unpack 完成 336/336 检查和 310.6 秒活动，但 RAF callback p95 46.3 ms、最高间隔 1089.1 ms、Long Task p95 168 ms，不能称为 165 Hz 流畅达标。两个包虽同为 0.6.6.0，ASAR 哈希不同；本轮没有安装新候选。
+- 对测试报告和原始采样的解释遵循：RAF 是 renderer callback，不是 compositor present；稀疏 GPU 样本不能单独证明渲染瓶颈或排除瞬时合成器工作。
+
+## 2026-09-26 CU 端侧模型接口退役
+
+桌面生产 Computer Use 现采用稀疏灰度摘要变化唤醒，再执行新鲜全尺寸截图/UIA，并把图像交给当前对话视觉 Provider。App 源码、依赖和打包产物不再包含 CULab/NES-T/NMEP/ONNX loader、工件发现或 schema emitter。`newmark-cu-lab/` 保留为隔离的历史研究项目，使用自身冻结 schema，不读取桌面源码；其 `.nmep` 输出不属于可部署产物。真实 Provider 和 unpack 证据见 [CU 迁移归档](archive/20260926-cu-local-model-retirement/REPORT.md)。
+
+## 2026-09-26 JEV 只用当前模型关闭思考后的严格 JSON
+
+Auto 路由只使用当前符合资格的对话模型完成 JEV 判断，不配置第二个 JEV 模型或额外 JEV 服务。候选先经过 `RouteEligibilityGuard`；模型返回严格类型化 JSON 后再经本地字段/边界检查与 `RouteDecisionValidator`。Provider 不支持原生关闭思考或严格 JSON Schema、输出无效、当前模型不可调用或请求超时，都使本次 Auto 路由失败关闭，不会使用本地选择器或备用模型。
+
+| 路径 | 当前作用 |
+| --- | --- |
+| `DESKTOP/src/core/jevDecision.ts` | 定义 `JEV_ROUTE_DECISION_SCHEMA`、`CurrentModelJevDecisionEngine`、严格 JSON 解析、候选范围验证和超时/失败策略；生产模块不含本地模型排序器，默认失败时 fail closed。仅测试使用的确定性决策夹具位于 `DESKTOP/src/tests/fixtures/localJevDecisionEngine.ts`，应用打包规则排除整个测试目录。 |
+| `DESKTOP/src/core/agent.ts` | 在已有对话模型仍合格时用它发起 JEV；首次 Auto 决策使用符合资格的默认/候选部署发起当前模型 JSON 请求，避免独立 JEV 模型槽位。 |
+| `DESKTOP/src/llm/provider.ts` | 同一 Provider 的 `chatStrictJson` 发送协议原生 JSON Schema；OpenAI-compatible 模型在原生支持时设置思考 `none`，Anthropic 使用 disabled thinking 请求。拒绝/不兼容作为 JEV 失败处理。 |
+| `DESKTOP/src/core/config.ts`、`DESKTOP/config.example.json` | 默认决策超时为 3000 ms；升级时移除旧 JEV runtime/model/path 和回退选路字段。 |
+| `DESKTOP/src/main.ts`、`DESKTOP/src/ui/index.html`、`DESKTOP/src/cli-commands.ts`、`TUI/src/` | 只暴露当前模型策略的启用状态和超时；没有外接 JEV 模型、运行时或备用选路接口。 |
+| `DESKTOP/src/tests/jevDecisionVerify.ts`、`DESKTOP/src/tests/jevRoutingInvarianceVerify.ts`、`DESKTOP/src/tests/jevModelEditorVerify.ts` | 覆盖当前模型严格 JSON、原生关闭思考、守卫复验和失败关闭；测试执行结果见 JEV 归档。 |
+| `archive/20260926-current-model-jev/REPORT.md` | 当前决策边界、旧配置迁移和实际验证记录。 |
+
+首次 Auto 路由从符合资格的当前/默认部署发起 JSON 决策。Schema 对所有字段使用 required 与封闭对象约束；Newmark 再逐项执行类型和边界校验。平台不接受原生关闭思考或严格输出时，不降低为提示词约束，也不回退到另一个模型。默认硬超时 3 秒。
+
+## 2026-09-26 Android 模拟器高压、互联与本地对话复测
+
+本轮使用 Android 15 / API 35、x86_64、1080×2400、60 Hz 的隔离 AVD；功能和持久化门禁通过，Compose UI 在压力下出现高 jank。测试基于本地 mock 和 `adb reverse`，不代表物理手机、真实网络或生产 provider。
+
+| 路径 | 作用 |
+| --- | --- |
+| `android/scripts/mobile-agent-stress.ps1` | 120 条远端流事件、60 轮 UI 压力、目标状态可见性、队列写入、旧事件拒绝与 gfxinfo 采样；报告包含完整采样窗时长和窗口帧吞吐。 |
+| `android/scripts/mobile-queue-animation-benchmark.ps1` | 事件流结束后以固定坐标驱动 60 轮队列展开/收起，隔离截图和 UI 树观察，记录 jank 与帧时延。 |
+| `android/scripts/mobile-remote-target-switch-stress.ps1` | 在两个唯一工作区/对话间切换，核验 SSE 生命周期、目标读取与状态隔离。 |
+| `archive/20260926-mobile-stress-interconnect-local-chat/mobile-local-runtime-stability.ps1` | 选择 Local fixture，验证流式输出、FIFO 队列、取消、持久化、强制停止和重启恢复。 |
+| `archive/20260926-mobile-stress-interconnect-local-chat/local-provider-fixture.cjs` | 为本地运行时稳定性测试提供 loopback SSE / completion mock。 |
+| `archive/20260926-mobile-stress-interconnect-local-chat/local-runtime.json`、`evidence/` | 本地运行时门禁结果与逐阶段模拟器截图。 |
+| `archive/20260926-mobile-stress-interconnect-local-chat/REPORT.md` | 汇总 AVD、build/test、四类运行证据、Astra 复核与生产边界。 |
+| `archive/mobile-stress-20260926-144304.json`、`archive/mobile-queue-animation-benchmark-20260926-144025.json`、`archive/mobile-remote-target-switch-20260926-141513.json` | 三类自动化运行的原始门禁与设备测量数据。 |
+| `archive/mobile-stress-20260926-144304/` | 高压 UI 检查的关键截图。 |
+
+关键结果：混合压力 79.25% jank / p90 150 ms，单项队列动画 52.94% / p90 48 ms；两者功能门禁通过、流畅度有明显缺口。完整采样窗的 `deliveredFramesPerSecond` 包含驱动脚本输入间隔，不等于动画活动时的实际显示 FPS。具体门槛和建议见[复测报告](archive/20260926-mobile-stress-interconnect-local-chat/REPORT.md)。
+
+## 2026-09-26 CU 稀疏观察接入
+
+生产 `computer_use observe` 新增可选 `sparse_wait_ms`（0 默认、最大 5000 ms）。它通过独立的 PowerShell lane 以最多 5 Hz 对 32×18 灰度摘要做变化唤醒，无端侧神经网络；触发、超时、失败或桌面几何变化后都重新执行正常全尺寸截图 + UIA。原生产 observe 未调用 NES-T，因此这是可无模型执行等待的新路径，不是删除已有生产推理。该测量只用于唤醒，不把超时解释成无变化；native 桌面采集成本仍在，性能改善未测量。
+
+| 路径 | 作用与状态 |
+| --- | --- |
+| `DESKTOP/src/tools/index.ts` | 为 `computer_use` 暴露有界 `sparse_wait_ms` 参数并传递取消信号。 |
+| `DESKTOP/src/tools/computerUse.ts` | 运行可取消的 32×18 灰度变化等待；将 helper 初始化计入等待预算，分别记录完整等待墙钟与采样耗时，随后取得新鲜的完整截图与 UIA。 |
+| `DESKTOP/src/tools/computerUsePowerShellHost.ts` | 提供独立 `sparse` PowerShell lane；host 初始化后发 ready 握手，启动阶段超时保留 lane，避免重复冷启动。 |
+| `DESKTOP/src/core/agent.ts` | 引导 CU 对被动等待使用一次有界 sparse observe，而不是反复立即全帧观察。 |
+| `DESKTOP/src/core/agentKernelRunner.ts` | 仍把完整观察图像交给当前视觉模型；本轮未改模型路由，不能保证是远端快速模型。 |
+| `DESKTOP/src/tests/computerUsePerformanceVerify.ts` | 覆盖 Windows 冷启动与暖调用的稀疏采样、等待预算和 UI event-loop 性能。 |
+| `DESKTOP/scripts/test-user-soak-gui.cjs` | 对精确 unpack 包运行隔离 loopback GUI：稀疏采样、队列、并发对话切换、冷重启与 UI 指标。 |
+| `DESKTOP/src/tests/runtimeIsolationVerify.ts`、`DESKTOP/scripts/test-cross-process-workrun-persistence.cjs` | 保护跨 shard / 进程 WorkRun 完成状态，防止旧 `running` 快照覆盖终态。 |
+| `archive/20260926-003001-cu-sparse-observation/` | 实现取舍、Astra 审阅、风险和未验证事项的操作记录。 |
+| `archive/20260926-cu-sparse-production-validation/` | 候选包哈希、CU canary、真实 provider 长上下文/队列/多对话测试、GUI soak 与安装门禁记录。 |
+| `archive/20260926-unpack-complete-v6/` | 最新精确 unpack v6 的包身份、源码回归、隔离 GUI 压力结果及 MSI 未生成/未安装边界。 |
+
+此实现采用固定低分辨率变化测量，不是严格压缩感知重构。它允许等待阶段不依赖本地神经网络，但不能消除原生桌面采集，也未建立专属远端快速视觉模型路由。研究基线见[压缩感知应用边界](archive/20260926-000508-tao-cs-cu/REPORT.md)。
+
+**候选包实测（不是已安装验收）**：精确 unpack v6 通过 CU sparse GUI 12/12、双流 A/B 目标绑定 29/29、120 秒长历史 GUI soak 130/130。冷/热 sparse 为 4.082 秒/12 个样本与 486 毫秒/3 个样本；两个并发 run 经 10 次切换和冷启动后均保持正确目标。长对话 1200 条历史连续活动 122.439 秒，provider、renderer、runtime 错误为 0；输入绘制 p95 34.5 ms，切换/分页 p95 1.095/1.663 s。所有 GUI provider 均为隔离 loopback fixture。包内 `verifyUnpackedOutput()` 与随包 SSH/TUI restart 压力通过；WiX MSI 阶段在生成文件前停止，所以无 MSI/安装验收，后续 CLI/ZIP 阶段未运行。完整证据见 [v6 unpack 验收归档](archive/20260926-unpack-complete-v6/REPORT.md)。
+
+## 2026-09-26 CU 压缩感知应用边界（研究阶段）
+
+理论、当前链路证据、Astra 专家建议和最小远端视觉原型边界见 [archive/20260926-000508-tao-cs-cu/REPORT.md](archive/20260926-000508-tao-cs-cu/REPORT.md)。当时为文档/架构可行性工作，没有生产代码变更；接入后的工具状态见上节。
+
+| 路径 | 作用与本轮发现 |
+| --- | --- |
+| `DESKTOP/src/tools/computerUse.ts` | 生产 `observe` 并行捕获按需截图与 UIA；临时图像随工具结果供当前视觉模型读取。 |
+| `DESKTOP/src/core/agentKernelRunner.ts` | 把工具截图加入当前模型输入，并在物化本轮输入后消费临时图像；当前路径不保证指定远端快速部署。 |
+| `DESKTOP/src/core/computerUse/perceptionRouter.ts`、`frameStore.ts` | 描述本地 cadence、云端升级与稀疏关键帧的独立 CU 组件；尚未接入生产 `computer_use`。 |
+| `archive/20260926-000508-tao-cs-cu/` | CRT 压缩感知原理、CU 适配评估、Astra 方向审阅和后续原型门槛。 |
+
+推荐先验证“事件触发观察 + 明确绑定的远端快速视觉模型”；严格 CS 需要服务端重构，并先证明真实 UI 帧差分可压缩且重建后保住微小控件/文字。详情与性能归因边界见报告。
+
+## 2026-09-24 CU 权重稳定性与 UI 性能复测
+
+完整复测、逐次日志和可重复 soak 脚本位于 archive/20260924-160722-cu-stability-ui-performance/。默认无权重发现结果为 UIA-only，原门禁 18/18 通过。复测后已修复模型装载筛选：发现阶段标出 App ABI 不兼容项，App loader 强制 16D，并拒绝检测/追踪门禁失败的晋级模型。详情见 archive/20260924-170617-cu-weight-load-and-scroll-guards/。
+
+代码结构与本轮判断：
+
+| 文件/目录 | 作用与当前状态 |
+| --- | --- |
+| DESKTOP/src/tools/computerUse.ts | 当前 computer_use 生产工具入口；没有调用下方独立 CU 模型 provider |
+| DESKTOP/src/core/computerUse/model/ | App 自有 artifact discovery、16D ABI 与 producer gate 校验、CPU ONNX session、provider；目前通过独立模块门禁和评测运行 |
+| DESKTOP/src/ui/index.html | 对话工作状态增量渲染；更新路径改用滚动监听缓存的贴底状态，原性能门槛仍需同口径复测 |
+| newmark-cu-lab/var/candidates/ | 本机候选权重；是否被 discovery 看见取决于显式根目录和 artifact stage |
+| archive/20260924-160722-cu-stability-ui-performance/、archive/20260924-170617-cu-weight-load-and-scroll-guards/ | 原复测报告/CPU 图延迟/provider 80 帧 soak/GUI 压测日志；本轮装载修复报告与 MANIFEST |
+
+基线无权重 GUI 两轮输入 tick 峰值为 122.4/223.9 ms；A2 CPU 推理并行一轮为 128.7 ms。三轮都超过 100 ms 压测门槛；滚动布局读取已作低风险优化，尚未复跑同一探针。A2 provider 原 80 帧无推理错误，但阶段仍为 CANDIDATE、描述子为 32D，且 detectorPass/trackingPass 为 false；现有 App loader 会拒绝它。CU-Lab RyzenAI NPU 稳定性数据不代表 Newmark 当前 CPU provider 或完整 GUI 端到端延迟。
+
+## 2026-09-23 外部复核落地：撤回过强结论 + 采集语义门禁 + 隔离入库
+
+用户交来外部复核包（`newmark-cu-lab/archive/20260923-culab-repair-pack/`，CULab_Repair_20260923）。
+该复核对本项目上一轮结论的批评**全部成立**，本轮逐条接受并落地第一轮修复。
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `newmark-cu-lab/nculab/scenarios/windows_ui.py` | `globalShift` 从"按命令参数推算"改为**实测**（归一化 / 输入空间 / 逐帧增量 + `basis` / `cumulative` / `windowShiftDesktopPx`）；新增 `_verify_episode()` 场景语义门禁与每 episode 的 `verification` 块（`verified` / `failed` / `static-by-design` + 原因） |
+| `newmark-cu-lab/nculab/dataset/builder.py` | `verification.status=failed` 的 episode **不入库**，写入 `manifest.quarantine`（原因 + 路径）；合成 suite 无 verification 段时不受影响 |
+| `newmark-cu-lab/scripts/audit_episode_motion.py` | 升级为四级审计：文件哈希 → RGB 哈希 → 实体框 → **控件 ROI**；新增 `--quick` / `--limit-clips` |
+| `newmark-cu-lab/archive/20260923-cu-workflow-recognition-eval/REPORT.md` | 顶部新增**修正块**：撤回"30.4% 是定位上限"、更正 INT8 parity 口径（0.327 属 interactability）、更正 fp32 体积方向（25.179 MiB，超出首选门禁 183 KiB）、共享身份率改报 N/A、F6 数字按目标级审计更正 |
+| `newmark-cu-lab/archive/20260923-cu-external-handoff/CU-Lab-handoff-20260923-v2.zip` | 交接包 v2（0.82 MiB / 70 文件，SHA-256 全通过）：新增 `reviews/`（复核原文 + 审计脚本 + `WHAT-CHANGED-IN-V2.md`）、ROI 级审计、非有限梯度证据、采集门禁摘要；fp32 profile 证据已重跑修正 |
+
+**被推翻的三条自家结论**：① "91.9% 找到目标 / 30.4% 是回归上限"——GT 框内 argmax 等于用真值找信号，
+且 recall@0.2=0.3369、@0.1=0.528 都高于 0.304，从来不是上界（改为"中心选择/编码/筛选链有缺陷、贡献不可分离"）；
+② 用 parity 0.327 解释 INT8 objectness 漂移——0.327 属 interactability，objectness 是 0.103410；
+③ "0 次 CONTINUATION 证明身份层失效"——实测 INT8 12 次、fp32 23 次，真正为 0 的是**稳定身份率**，
+共享身份率应为 **N/A**（比较样本为 0）。
+
+**本轮新增的硬事实**：训练语料 `real-ui-v2` 按目标级审计 **432/700 clip（61.7%）无目标级证据**、
+全局唯一帧 **3,160/8,400（重复 62.4%）**；留出集 38/60；`training/telemetry.jsonl` 中 backbone 梯度
+step 1/3/5/9/17 = NaN、step 4462 = +Inf。**实跑验证**：12 episode 真实采集中 **8 个被判 failed**
+（`moveControl_no_effect` 3、`window_move_only_no_content_motion` 2、`hover_no_pixel_change` 2、
+`hide_not_observed` 1），入库只有 4 clip / 48 帧，比例门禁如实报 false。
+
+**根因已定位到代码行**：`_motion_script()` 的 `move` 移动的是桌面上的窗口而采集裁剪客户区；
+`normal_translation` 固定移动 `btn-save`、`disappear_reappear` 固定 `ico-filter`（多数模板无此控件）；
+`stable_jitter` 依赖不产生重绘的 `hover`。
+
+边界：**采集能力本身未修**（只修了诚实性），未重采、未重训；外部清单的任务 1/3/4/5/6 未执行。
+
+
+## 2026-09-23 App 与 CU-Lab 权重解离 + 外部交接包 + 真实 UI 语料缺陷
+
+对应请求「解离 Newmark 的 App 与 culab 权重，在没有权重的情况下也能正常使用原本 CU 通道，
+然后整理训练结果的数据表现为 zip 包，寻求外部帮助」。
+
+### 一、App ⟂ 权重（已实现并门禁化）
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `DESKTOP/src/core/computerUse/model/artifactDiscovery.ts` | **新增**：App 自有权重点发现。显式 artifact → 用户级安装 → 仓库模型目录 →（仅设置 `NEWMARK_CU_LAB_ROOT` 时）CU-Lab 候选；对元数据进行 16D ABI 与晋级门禁预筛，兼容候选按来源优先，其次按晋级阶段与新旧排序。`selectCuModelArtifact()` 没有兼容候选时返回 `null`；最终文件完整性仍由 loader 校验。 |
+| `DESKTOP/src/core/computerUse/model/artifactEligibility.ts` | **新增**：共享 App 侧快速兼容性判定；允许 App ABI 下的评估候选，晋级/发布阶段必须声明 detector 与 tracking 均通过。 |
+| `DESKTOP/src/tests/computerUseEdgeModelInferenceVerify.ts` | 删除硬编码的 `../newmark-cu-lab/var/candidates`，改走 `artifactDiscovery`；无权重时打印被搜索过的路径并 SKIP（退出码 0）。 |
+| `DESKTOP/src/tests/computerUseWeightlessVerify.ts` | **新增门禁（18 项）**：无权重时的发现语义（不抛异常、默认搜索表不含 lab、优先级、promoted 优先、缺失时 `CuArtifactLoadError(validate)`）；**无权重下的原始 CU 通道**（`uia-only` 不升级、禁止盲坐标、UIA 观测进契约、注册表仅凭几何跨帧续用身份、disabled provider 不伪造检测）；以及**源码级反耦合断言**：`src/`（除 `tests/`）不得出现 `newmark-cu-lab`。 |
+| `DESKTOP/package.json` | `test:computer-use-runtime` 链加入 `computerUseWeightlessVerify`（现为 10 项）。 |
+
+**实测**：无任何权重时整条 CU 运行时门禁链 **91 项全过 + 1 项显式 SKIP**；`node dist/tests/verify.js`
+**1719/1719** 全过；权重在场时 `computerUseWeightlessVerify` 18/18、真实推理 11/11 仍全过。
+
+### 二、外部交接包
+
+`newmark-cu-lab/archive/20260923-cu-external-handoff/CU-Lab-handoff-20260923.zip`（0.77 MiB / 59 文件，
+manifest 逐文件 SHA-256 校验通过）：README（双语，含要外部专家回答的 4 个问题）、HOW-TO-REPRODUCE
+（每个数字的确切命令）、两份报告 + STATUS、训练记录（`run.json`/`stages.jsonl`/`telemetry.jsonl` 等）、
+Lab 与 App 两侧全部评测 JSON、发货 artifact 的元数据（不含权重）、数据集 manifest、
+一个**非退化** `scroll_global` 样本 clip（12 帧 + 精确框）与三套数据集一致性审计。
+
+### 三、真实 UI 语料缺陷（本轮新发现，严重）
+
+新工具 `newmark-cu-lab/scripts/audit_episode_motion.py` 逐 clip 对帧做 SHA-256，把**唯一帧数**与
+`clips.jsonl` 声明的运动/事件对照：
+
+| 数据集 | clips | frames | uniqueFrames | 重复帧率 | 静态 clip | 静态**且声明有运动** |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `dataset-v0.1-real-ui-holdout` | 60 | 720 | 275 | 61.8% | 29 | **24** |
+| `dataset-v0.1-real-ui-v2`（训练） | 700 | 8,400 | 3,353 | 60.1% | 329 | **273** |
+| `dataset-v0.1-tracking-v2`（合成） | 1,700 | 20,400 | 15,160 | 25.7% | 136 | **0** |
+
+命中集中在事件类场景（`normal_translation` 76%、`stable_jitter` 96%、`disappear_reappear` 61%），
+布局类（`resize_layout`/`scroll_global`/`short_occlusion`）0/280，**合成渲染器 0 命中** ⇒ 缺陷限于真实
+WinForms 采集路径。后果：训练语料有效唯一帧只有 3,353/8,400；§9.2 的 `movingTargetContinuation`
+"PASS"建立在 12/15 平移 episode 从未平移之上，`disappearanceDetection` 同批样本亦不可信；
+而 App 侧身份层在**逐字节相同**的相邻帧之间仍产出 0 次 `CONTINUATION`，该结论因此更硬。
+详见 `newmark-cu-lab/STATUS.md` §5bis-13 与 `archive/20260923-cu-workflow-recognition-eval/REPORT.md` F6。
+
+边界：本轮**未**改动采集管线、未重采数据、未改动导出器与 App 校验器（上轮报告中的 INT8/门禁接线
+三项修复仍待裁决）。
+
+
+## 2026-09-23 CU 模型模块端到端识别评估：识别与运行双双未达标
+
+对应请求「评估 culab 训练结果，接入 NewmarkCU 工作流评估是否达成预期识别效果」。首次把 CU-Lab 的产物装入
+App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发货 `.nmep` INT8 → `onnxruntime-node` → `decodeNesTOutputs()`
+→ `CuTemporalEntityRegistry`），用带精确真值的 CU-Lab 帧驱动。更正（2026-09-24）：此模块链没有接入当前 computer_use 生产工具，因此不是整机生产路径 A/B。评测结论：**没有达成预期识别效果**。
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `DESKTOP/scripts/verify-cu-workflow-recognition.cjs` | **新增**：App 工作流端到端识别评测。加载真实 `.nmep`、逐帧驱动生产 provider 与身份注册表，对真值框做 IoU 0.3 一对一贪心匹配，输出 recall/precision/meanIoU、尺寸分桶、稳定身份率/共享身份率、延迟 p50/p95 与 §9.1 门禁判决；`--profile` 拆分预处理/ORT/解码耗时；`--graph-override` 用于同帧 fp32↔INT8 单变量对照（只换图，manifest 与校验不动）。JSON 证据落 `var/probes/`。 |
+| `DESKTOP/scripts/probe-cu-graph-latency.cjs` | **新增**：纯图延迟探针，使用与 App `inferenceSession.ts` 完全相同的 ONNX Runtime 选项，回答"慢的是图还是 App 代码"。 |
+| `newmark-cu-lab/archive/20260923-cu-workflow-recognition-eval/` | **新增**：完整报告 `REPORT.md` + `MANIFEST.json` + `evidence/`（App 路径 INT8/fp32 评测 JSON、Lab 检测/追踪日志、纯图延迟、两端门禁输出）。 |
+| `newmark-cu-lab/STATUS.md` | 新增 §5bis-12（五条结论与待裁决动作）；§0 结论改为"识别与运行双双未达标"；D5/D7 按新事实更正（撤回"延迟已满足调度"的旧结论）。 |
+
+**量出来的数字（全部可复现）**
+
+| 路径 | recall(IoU 0.3) | precision | p50 延迟 |
+| --- | ---: | ---: | ---: |
+| Lab / PyTorch / GPU @0.2（复现既有） | 0.3369 | 0.2427 | 16.34 ms（GPU，batch1） |
+| **App / 发货 INT8 / CPU（120 帧）** | **0.2359** | 0.1564 | **3,022 ms（0.33 fps）** |
+| App / 同图 **fp32** 对照（同 120 帧） | **0.4157** | 0.2799 | **186 ms（5.4 fps）** |
+
+**四条关键判读**
+
+1. **动态 INT8 量化是纯亏**：同权重同帧同解码器，只换图 → 召回 −43% 相对、延迟 16.2×。
+   体积收益真实（6.67 vs 26.4 MiB），但 25/100 MiB 两个体积门禁都不需要拿精度去换。
+2. **没有门禁测过发货图的延迟**：Group D 报的 16.34 ms 是 PyTorch/GPU 的数字，与发货图在 App 侧的
+   3,022 ms 相差约 185×；"5–20 Hz 调度"此前从未在发货产物上验证。
+3. **身份层是安全失败但不可用**：1,503 个观测中 `CONTINUATION` 仅 12、`AMBIGUOUS_BLOCKED` 1,367，
+   被检出≥2 次的真值控件**稳定身份率 0.0000**、共享身份率 0.0000（没有张冠李戴，但也没有身份连续性）。
+4. **`INTEGRATION_CANDIDATE` 拒绝路径会留下产物，而且 App 会接受它**：导出器先写完整个 `.nmep`
+   （manifest 已是 `INTEGRATION_CANDIDATE`）再抛错拒绝；App 的 `validateCuArtifact()` 不校验
+   `manifest.benchmark.detectorPass|trackingPass`，于是这件被拒产物在 `13/13` ABI 校验与
+   `11/11` 真实推理门禁上**全绿**。附带发现：`detector-eval.json` 是 last-writer-wins，
+   导出候选的标定里 `threshold=0.2` 与 `measured.detectorRecall=0.0935` 来自**不同数据集**。
+
+边界：App 侧 120 帧是**按 clip 顺序取自 `dataset-v0.1-real-ui-holdout` 的前 10 个 clip（未分层，
+只含 5 类，缺 `stable_jitter` / `short_occlusion` / `scene_cut_false_association`）**，
+因此纵向不可与 Lab 分层 120 帧直接互比；
+本轮**未**修改导出器、App 校验器或任何训练代码——上述三条修复（停发动态 INT8、门禁接线、评测按数据集分文件）
+均为待用户裁决项。
+
+
+## 2026-09-22 dev-0.6.6 真实 UI 采集管线 + 高帧率/低存储 CU 运行时纪律
+
+对应请求「优化训练集、以真实 UI 控制训练、按路线推进、确保高帧率与低存储下的正确 CU 指导」。仍是 Stage A（v0.1），未触碰 v0.2+。
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `newmark-cu-lab/nculab/capture/uia_playground.py` | **新增**：真实 WinForms 控件采集器。安全边界=只驱动自己创建的窗口、不发合成输入、结束即关进程。DPI 感知（`SetProcessDPIAware`）+ 窗口自报客户端矩形；每帧的 dumps 走**进程内** `RectangleToScreen`（0.36 s/帧），`capture_via_uia()` 是慢速 UIA 树审计路径（1.0 s/帧，实测 worst 归一化差 0.0093）；进程间 JSON 交接改为原子写（`.tmp` + `Move-Item -Force` 重试）。命令面：`move`/`moveControl`/`resize`/`scroll`/`hover`/`hide`/`show`/`page`/`overlay`/`dump`。 |
+| `newmark-cu-lab/nculab/scenarios/windows_ui.py` | **新增**：真实 UI 时序 suite 生成器。4 套窗口模板（设置 / 列表工具栏 / 确认对话框 / 媒体控制，含 8–40 控件、含 22–26px 小控件与中文文案），§6.4 八类时序场景（含 overlay 遮挡、控件隐藏/重现、页面切换的 scene cut、三连相同按钮硬负样本），每 episode 随机布局抖动与配色；输出与合成生成器同 schema，`build_dataset` 原样可用。 |
+| `newmark-cu-lab/nculab/cli/main.py` | `generate --suite windows-uia` 分派到真实采集（默认 synthetic 不变）。 |
+| `DESKTOP/src/core/computerUse/frameStore.ts` | **新增**：有界帧存储——只保留最新帧 + 每 N 帧一个关键帧，按字节/帧数强制上限，中间帧立即丢弃；提供 `stats()`（保留字节、丢弃比例、关键帧数、最新帧延迟）。 |
+| `DESKTOP/src/core/computerUse/perceptionRouter.ts` | 新增 `CuCadenceGate`：整帧推理的显式节流闸门（目标 Hz → 最小间隔），配合既有路由决策，保证 60 Hz 采集不会变成 60 Hz 推理。 |
+| `DESKTOP/src/tests/computerUseHighMotionVerify.ts` | **新增门禁（5 项）**：60 Hz×10 s → 约 10 Hz 模型调用（601 帧→94 次）；32 MiB 预算内只留 32 帧/11 关键帧且丢弃 94.7%；全局平移判为 CONTINUATION 不铸新身份。已接入 `test:computer-use-runtime` 与 `test:desktop:built`。 |
+
+
+## 2026-09-22 dev-0.6.6 CU-Lab 模型演进路线落地：NES-T v0.1 按代冻结 + GPU 训练
+
+依据 `Newmark_CU_Lab_Frozen_Model_Roadmap_v1.0_20260921.md`（§12/§26/§28 严格按代推进）。本轮**只做 Stage A（NES-T v0.1）**，把 §29 要求的 "先让 v0.1 真正训练出来、tracking baseline 成立" 落到可执行状态；未实现 v0.2+ 的任何 head。
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `newmark-cu-lab/configs/nes-t-v0.1.yaml` | **新增**：v0.1 冻结配置（§5）。模型目标 8–10M/hard 15M、16D 描述子、768×432、pair/triplet + frame deltas [1,2,4,8]、§5 损失权重、AdamW 1e-4/3e-4、INT8 与 25/100 MiB 预算；`architecture` 段描述共享金字塔骨干。 |
+| `newmark-cu-lab/nculab/cli/main.py` | **新增**：`GENERATION_CONFIGS` 与 `--generation`（`train --generation nes-t-v0.1`）；未实现代直接报错拒绝（"the roadmap forbids building a later generation before the previous exit gate passes"）；新增 `evaluate-detection`、`evaluate-system`、`size-check` 子命令（§23/§26/§21）。 |
+| `newmark-cu-lab/nculab/models/edge_sensor/model.py` | **新增**：共享金字塔骨干（stem /4 → stages /8 /16 /32 /64 + 1×1 lateral + nearest 上采样融合 → 128 通道 /8 neck），heads 仍读 96×54 网格；`backbone_modules()/backbone_parameters()` 让优化器参数组与参数统计覆盖整条主干；`legacy_backbone` 保留旧 3-conv stem 以便历史 run 快照可复现。 |
+| `newmark-cu-lab/nculab/models/edge_sensor/config.py` | **新增**：`stage_widths/stage_blocks/neck_channels/legacy_backbone` 与 `visibility_class_weights` 解析（`loss.visibility_class_weights`）。 |
+| `newmark-cu-lab/nculab/training/runner.py` | 参数组按 `backbone_parameters()` 划分（主干 lr 1e-4 / 其余 3e-4）；可见性 CE 支持类别权重；修复 InfoNCE 目标张量固定在 CPU 导致 CUDA device mismatch 的缺陷。 |
+| `newmark-cu-lab/nculab/evaluation/system.py` | **新增**：Group D system benchmark（§22/§23）——冷启动、batch 1/8 的每帧延迟 p50/p95、最大调用频率、cadence headroom、RSS、checkpoint 与 INT8 权重字节、artifact 上限，并显式标注 v0.1 尚无 ROI/cloud 调用。 |
+| `newmark-cu-lab/nculab/export/size_check.py` | **新增**：`ncu-lab size-check`（§21）——按目录实测安装体积、逐条 entry 分解（最大几项）、manifest 声明值对比、hard/preferred 双门禁。 |
+| `newmark-cu-lab/scripts/snapshot_dataset.py` | **新增**：数据集快照版本化（§14）——复制已有数据集到 `dataset-v0.1-tracking` 这类名字，写入 `snapshot{role,sourceDatasetId,generator,truthSource,labelSchema,splitHash}` 并注册到 SQLite；同名直接报错拒绝覆盖。 |
+| `newmark-cu-lab/scripts/install-torch-cuda.cmd` | **新增**：安装 cu126 版 PyTorch 到实验室 venv（Stage A 的算力前提）。 |
+| `README.md` / `taste.md` / `archive/20260921-dev066-cu-nest/REPORT.md` | 同步记录路线对齐结论：按代冻结、参数带核对、GPU 前提、稀有类加权、每代必留 system benchmark 与 ablation。 |
+
+### 2026-09-22 实测：三次训练迭代各自修掉的缺陷
+
+| 迭代 | 结果 | 缺陷 |
+| --- | --- | --- |
+| 6k 步 / batch 8 / 顺序取样 | 验证 3.198，检测 recall≈0 | BatchNorm running stats 漂移（eval 峰值 0.396 vs batch-stat 0.560）；InfoNCE 目标张量固定在 CPU（CUDA device mismatch） |
+| 4k 步 / batch 16 / 确定性 shuffle + 内置 BN 重标定 | 验证 **0.807**，BN before/after 一致 | 数据集是 episode 主序，连续样本近乎重复 → 批次内相关性强，模型"背批次" |
+| 12k 步 / 60k 样本 / **多样化训练集**（进行中） | 静态阶段：独立留出集 recall 0.209@0.2（固定布局训练仅 0.0335） | 生成器布局不随 seed 变化 → 此前"留出集"不独立，指标被系统性高估 |
+
+结论：当前 v0.1 泛化瓶颈在**数据多样性**（§9.3 第一优先），不是步数或容量；离 §5.1 的
+0.95 召回门禁仍有很大差距，v0.2 未开始且被 CLI 拒绝。
+
+
+## 2026-09-21 dev-0.6.6 Computer Use 主线：CU-Lab 数据/训练/量化导出 + App CU 运行时
+
+指导文件为 `Newmark_CU_Master_Sequential_Execution_Guide_v1.0_20260921.md`（Phase 0–17）。本轮完成 Phase 2–8 的实质执行与 Phase 9–11 的 App 侧落地，执行记录见 [archive/20260921-dev066-cu-nest/REPORT.md](archive/20260921-dev066-cu-nest/REPORT.md)。
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `newmark-cu-lab/nculab/scenarios/browser_synthetic.py` | 新增模块级 `render_episode(payload)` 与 `generate_suite(..., workers=N)`：用 `ProcessPoolExecutor` 并行渲染，内容与串行路径逐一致（每 episode 种子仍为 `seed + index*13`）；20,400 帧从约 27 分钟降到约 2 分钟。 |
+| `newmark-cu-lab/nculab/dataset/builder.py` | 负样本选择改为「同帧相似 → 同 clip → 有界全局池（`GLOBAL_POOL_LIMIT=20000`）」三级优先 + 按 `(frameId,entityId)` 去重，把原先随数据集增长的二次扫描降为线性；**修复**：被遮挡/消失的正样本不再被丢弃（新增 `targets.associationUsable`），visibility 头因此首次拿到遮挡/消失标签，§9.2 的 occlusion/disappearance 门禁也有了评测覆盖。 |
+| `newmark-cu-lab/nculab/models/edge_sensor/config.py` | 解析并暴露执行预算与设备键：`precision`、`device`、`train_steps`、`train_samples`、`validation_every`（与 §8.1 冻结项分离）。 |
+| `newmark-cu-lab/nculab/training/runner.py` | 设备解析（CUDA 可用即用，`NCU_DEVICE` 可覆盖）、AMP `GradScaler`、显式步数预算、每 `validation_every` 步的留出验证与平台早停、逐步 stdout 日志（loss/backbone grad/temporal grad/elapsed）；objectness 目标改为 CenterNet 式高斯热图，损失改为 penalty-reduced focal loss（§8.6 权重不变），`TargetBatch` 增加 `association_usable` 以跳过遮挡样本的关联监督。 |
+| `newmark-cu-lab/nculab/evaluation/tracking.py` | 关联类门禁只统计 `associationUsable` 样本；遮挡/消失样本只进 visibility 门禁，避免「穿过遮挡物匹配」被当成正例。 |
+| `newmark-cu-lab/nculab/export/nmep.py` | Phase 7 落地：模型先导出 fp32 ONNX（`run_dir/edge_sensor.fp32.onnx`），再用 `onnxruntime.quantization.quantize_dynamic` 量化成 `models/edge_sensor.onnx`，并做 fp32↔int8 parity（逐输出 max/mean abs diff、association cosine）；manifest 写 `quantization.mode = ptq-int8`（与 App 契约词表 `none|ptq-int8|qat-int8` 对齐），`artifact.budget` 用真实字节数而非参数量估算。 |
+| `newmark-cu-lab/nculab/cli/main.py` | `generate --workers`、`train --steps`、`export --no-quantize`；训练日志行与 `db.log_event` 记录设备与步数。 |
+| `newmark-cu-lab/configs/edge-sensor-nes-t-v0.1.yaml` | 新增执行预算段（`train_steps: 4000`、`train_samples: 6000`、`validation_every: 400`、`device: auto`），§8.1 的模型/损失/优化器/调度保持不变。 |
+| `newmark-cu-lab/scripts/diagnose_objectness.py` | **新增诊断**：打印 objectness 分布、真值格得分与 train-mode 最大值，用于定位「检测头塌缩」。 |
+| `DESKTOP/src/core/computerUse/sceneState.ts` | **新增**：SceneVersion 唯一推进点（`beginFrame`/`markDirty`）、`commit/current/entity` 全部返回深拷贝、`isStale()`、`targetableEntities()`（LOST 保留窗口）。 |
+| `DESKTOP/src/core/computerUse/temporalEntityRegistry.ts` | **新增**：身份唯一真源。`S = w_d·S_desc + w_m·S_motion + w_g·S_geom + w_u·S_UIA + w_c·S_ctx` 融合评分、接受/不确定/拒绝三档阈值（§14 默认值）、贪心 1:1 分配、歧义 `AMBIGUOUS_BLOCKED` + 新身份、遮挡保留身份（`OCCLUDED`）、消失立即 `LOST`、超时老化 `LOST`，并输出 §25 遥测计数。 |
+| `DESKTOP/src/core/computerUse/actionTransaction.ts` | **新增**：§19 状态机 + 确定性前置条件（sceneVersion、目标存活、CU 租约、权限、可交互度、工作区绑定、副作用未决）；`EFFECT_UNCERTAIN` 禁止自动重试，只有「执行前失败」可重试。 |
+| `DESKTOP/src/core/computerUse/visionCapability.ts` | **新增**：四种能力态（uia-only / vision-assisted / vision-required / vision-unavailable）、结构化优先阶梯、`allowBlindCoordinateGuess: false` 与 `decideCuBlindCoordinateAction()`。 |
+| `DESKTOP/src/core/computerUse/perceptionRouter.ts` | **新增**：逐帧感知路由；稳定结构化帧不调用模型、移动帧用本地模型、语义需求单飞升级云端并按冷却限速、`vision-unavailable` 一律 `cannot-act`。 |
+| `DESKTOP/src/core/computerUse/grounder.ts`、`verifier.ts` | **新增**：陈旧场景拒绝对地、歧义返回 `ambiguous` 而不是挑最像的；验证区分 `SUCCEEDED / NO_CHANGE / EFFECT_UNCERTAIN`（只有后者要求重新观测）。 |
+| `DESKTOP/src/core/computerUse/legacySenseProvider.ts` | **新增**：UIA-only 回退通路（UIA → `EdgeObservation`，无描述子），模型不可用时仍可运行链路。 |
+| `DESKTOP/src/core/computerUse/model/artifactValidator.ts` | **新增**：App 侧自证 `.nmep`——自测安装体积、重算 `checksums.json`、校验 manifest（ABI/schema/阶段/16D 输出/晋级检测和追踪门禁/预算）、本体子集一致性，并报告每个拒绝原因。 |
+| `DESKTOP/src/core/computerUse/model/modelArtifactLoader.ts` | **新增**：`validate → session` 两段式加载；验证失败或会话创建失败都抛 `CuArtifactLoadError`（带 stage 与 issues），绝不静默降级。 |
+| `DESKTOP/src/core/computerUse/model/inferenceSession.ts` | **新增**：`onnxruntime-node` 会话封装（输入 `frame`，输出 7 个张量），并给出可用性探测 `cuInferenceAvailability()`。 |
+| `DESKTOP/src/core/computerUse/model/edgeModelProvider.ts` | **新增**：provider 契约、RGB→NCHW 768×432 双线性预处理、NES-T 输出解码（sigmoid 物体度 + top-k、box 反 log、coarse type softmax、motion、visibility softmax、16D 归一化描述子），并派生 `matchConfidence`（帧内描述子可分性 × 物体度，明确标注为派生证据）。 |
+| `DESKTOP/src/core/computerUse/model/stableEdgeModelProvider.ts`、`disabledEdgeModelProvider.ts` | **新增**：生产主路径与诊断路径；`health()` 报告 ABI/阶段/量化/后端/体积/阈值与推理计数。 |
+| `DESKTOP/package.json` | 新增 `test:computer-use-runtime` 门禁链，把 CU 运行时门禁接入 `test:desktop:built`；`onnxruntime-node` 作为 optionalDependency（推理运行时，非训练依赖）。 |
+| `DESKTOP/src/tests/computerUse*.ts` | **新增 7 个门禁**：`computerUseSceneVersionVerify`(8)、`computerUseTemporalIdentityVerify`(7)、`computerUseStaleActionVerify`(8)、`computerUseVisionCapabilityVerify`(7)、`computerUsePerceptionFallbackVerify`(13)、`computerUseEdgeModelArtifactVerify`(9)、`computerUseEdgeModelInferenceVerify`（真实 `.nmep` 推理 + hints 进 Registry）。 |
+
+
+## 2026-09-21 dev-0.6.6 Auto 决策模型（JEV）三端编辑入口 + Auto 关闭冻结
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `DESKTOP/src/core/jevDecision.ts` | 新增运行时槽位契约：`JevRuntimeKind`（`local`/`onnx`/`native`）、`JevRuntimeDescriptor{runtime,modelId,modelPath}`、`normalizeJevRuntime/normalizeJevModelId/normalizeJevModelPath`、`createJevDecisionEngine()`（非 `local` 槽位返回 `null`，绝不静默替换）。`LocalJevDecisionEngine` 接受 `modelVersion`，把配置的决策模型标识写进每次路由审计。 |
+| `DESKTOP/src/core/agent.ts` | 新增公开编辑器 API：`autoDecisionEnabled()`、`jevDecisionModelState()`（含 `autoEnabled/locked/lockReason/runtimeAvailable`）、`updateJevDecisionModel(patch)`（Auto 关闭时整笔拒绝 `auto_disabled`，非法值拒绝 `invalid_value` 且不落盘）+ 私有 `resolveJevDecisionRuntime()`。冻结语义：`evaluateAndSwitch()` 在 Auto 关闭或决策模型不可用时产出 `no_candidate` 且**保留**原 `resolvedDeployment`，不再清空后静默改用默认模型。 |
+| `DESKTOP/src/core/routeDecisionValidator.ts` | 决策管线新增 `unavailablePolicy: 'fail' | 'configured_fallback'` 与 `unavailableReason`：用户关掉决策模型 / 槽位无适配器 ⇒ `fail`（不选、不改）；已部署但运行时故障 ⇒ `configured_fallback`（指南允许的确定性降级）。 |
+| `DESKTOP/src/core/config.ts`、`DESKTOP/config.example.json` | 新增 `jev_runtime`、`jev_model_id`、`jev_model_path` 三个键（连同既有 `jev_enabled`/`jev_timeout_ms`/`jev_fallback_*`），构成 Auto 决策模型槽位的完整可编辑面。 |
+| `DESKTOP/src/ui/index.html` | 新增 `#jev-decision-model-card`：标题/说明/锁定提示 + 8 个带 `data-jev-field` 的控件（enabled、runtime、model-id、model-path、timeout-ms、fallback-strategy、fallback-provider、fallback-model）、运行时状态行；新增 `window.setJevDecisionModel/applyJevDecisionModelState/refreshJevDecisionModel`；Auto 开关切换后自动刷新锁定态；中英双语 17 条文案。 |
+| `DESKTOP/src/main.ts`、`DESKTOP/src/preload.ts`、`DESKTOP/src/server.ts` | 新增 IPC `agent:setJevDecisionModel`（返回 `{ok, reason, state}`，成功后把整槽 8 个键广播到 Electron Utility 与 WSL 运行时）；`getState` 与 `/api/state` 新增 `jevDecisionModel`。 |
+| `TUI/src/settings-schema.js`、`TUI/src/state.js`、`TUI/src/render.js`、`TUI/src/i18n.js` | 新增设置分区 `[J] JEV decision model`（`settingsRows('jev')`：启用/运行时/超时预设/回退策略可循环，模型标识与产物路径为只读提示）；Auto 关闭时行值显示 `Locked (Auto off)` 并带 `LOCKED` 标记，Enter 只提示不改写；`state.settings.jev` 随权威快照刷新；中文标签补齐。 |
+| `TUI/src/adapters/core-runtime-adapter.js` | `stateFields()` 暴露 `autoSwitchEnabled/autoSwitchScope/jevDecisionModel`；`applyConfig` 新增 `jevDecisionModel` 分支，直接走 `agent.updateJevDecisionModel()` 并在拒绝时返回 `{ok:false, reason}`。 |
+| `DESKTOP/src/cli-commands.ts`、`DESKTOP/src/cli-discovery.ts` | 新增 `Newmark.exe jev` 命令（查看 + 编辑 + `--json`），帮助文本、值参数表与布尔参数表同步登记；Auto 关闭时编辑返回退出码 2 且不改配置。 |
+| `DESKTOP/src/tests/jevModelEditorVerify.ts` | **新增门禁（24 项）**：槽位默认值、非法值不落盘、合法补丁落库、Auto 关闭时锁定与拒绝、Auto 关闭/决策模型关闭/槽位无适配器三种情况下不调用引擎且不改变已选模型；GUI/TUI 源码入口断言；真实 CLI 进程的查看/编辑/拒绝。 |
+| `DESKTOP/scripts/dev-0.6.6-jev-settings-ui-monitor.cjs` | **新增视觉监控**：真实 Electron 渲染器 → Settings → Models & Providers，断言卡片与 8 个编辑位置的几何可见性、真实 DOM 编辑落库、Auto 关闭后整卡禁用 + 写入被拒、重新开启后解锁，输出 4 张截图与 `REPORT.json` 到 `archive/20260921-dev066-jev-settings-ui/`。 |
+| `DESKTOP/scripts/dev-0.6.6-jev-tui-cli-evidence.cjs` | **新增终端证据**：用生产适配器渲染 TUI 的 JEV 分区（Auto 开/关两份画面，含 `LOCKED` 状态）并抓取 CLI 的查看/编辑/拒绝输出，落盘为归档文本；已接入 `test:desktop:built`。 |
+
+验收：`npm run dev:jev-settings-ui` 7/7 通过（截图见归档）；`npm run dev:jev-tui-cli-evidence` 7/7 通过；`node dist/tests/jevModelEditorVerify.js` 24/24 通过；`npm run test:auto-router` 与 `npm run test:desktop:built` 全绿（verify.js 1721/1721）。
+
+
+## 2026-09-21 dev-0.6.6 Auto 路由重构：从自学习 AutoRouter 迁移到 JEV 确定性决策
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `DESKTOP/src/core/routeEligibility.ts` | **新增**：RouteEligibilityGuard，唯一权威的硬过滤实现（enabled / `unavailableReason` / provider scope / explicit subset / fallbackOnly / preview / context size / privacy / data region / required protocol parameters / hard cost ceiling）。只回答「谁能进入决策引擎」，不做任何打分，不读历史。导出 `deploymentKey`、`sameDeploymentRef`、`inAutoScope`、`inAutoSubset`、`expectedRequestCost`、`excludedOnlyForFallbackPool` 等共享原语。 |
+| `DESKTOP/src/core/jevDecision.ts` | **新增**：JEV 决策契约与本地适配器。定义 `JevDecisionEngine` / `JevRouteRequest` / `JevCandidate` / `JevRouteDecision`（primary + ordered alternates + reasonCodes + modelVersion），`buildJevRouteRequest()` 把候选目录投影成「请求事实 + 显式用户配置 + 实时健康」，`LocalJevDecisionEngine` 用字典序（熔断降级 → 用户 `route_preference` → 模式目标 → 事务内上一部署平局续用 → 目录顺序）做确定性决策，`decideWithinBudget()` 提供硬超时，`resolveDeterministicFallback()` 提供 `configured_model` / `first_eligible` / `disabled` 三种确定性降级。**故意不含**：feedback、EWMA、quality_by_task、评分历史、工具结果学习。 |
+| `DESKTOP/src/core/routeDecisionValidator.ts` | **新增**：`validateJevDecision()`（primary 必须在守卫集合内、alternates 去重/剔除越界、数量有界、部署身份完整）与 `buildRouteDecision()`，以及 Agent 与测试共用的唯一决策管线 `resolveAutoRouteDecision()`（guard → engine → validator → 可选事务 pin）。越界 primary 抛 `JevDecisionValidationError`，由管线转成确定性 fallback，而不是旧排序。 |
+| `DESKTOP/src/core/autoRouter.ts` | **重写收缩**：只保留共享路由类型、`classifyRouteFailure()`、`classifyTaskClasses()`、`RouteExecutionController`（端点健康 + 熔断 + 事务 pin + provider-local 恢复阶梯）与审计哈希。**删除**：feedback Map、`recordFeedback()`、`clearLearnedPreferences()`、`learnedPreference()`、`qualityScore()`、`rankEligible()`、`rankCandidate()`、成本/速度/可靠性加权效用、cache affinity、switchThreshold。`RouteDecision` 升级为 `decisionSource` + `alternatives` + `jev{modelVersion,confidence?,reasonCodes,latencyMs}` + `fallbackReason` + `pinReason:'transaction'`。 |
+| `DESKTOP/src/core/agent.ts` | `evaluateAndSwitch()` 改为调用 `resolveAutoRouteDecision()`；新增构造注入 `jevDecisionEngine`（默认 `LocalJevDecisionEngine`）；删除 `loadLearnedRouteFeedback()`、`recordRouteFeedbackFor()`、`recordObjectiveRouteResult()`、`recordRouteQualityObservation()` 与手动切模反馈；`rateActiveAutoRoute()` 只写 `routing/ratings.jsonl` 遥测（保留 stale/重复点击校验）；`clearLearnedModelPreferences()` 退化为删除旧 `feedback.jsonl` 与遥测；`autoRouteCandidates()` 不再填 `qualityByTask`，改为携带实时 `circuit` 与显式 `unavailableReason`（余额阻断）。 |
+| `DESKTOP/src/core/agentKernelRunner.ts` | 工具客观后置条件不再进入模型偏好：`recordObjectiveRouteResult()` 调用删除，改为 `agent.recordRouteToolOutcome(objectiveResult)`（仅运行健康）。`toolResultObjectiveOutcome()` 保留为分类函数。 |
+| `DESKTOP/src/core/config.ts` | 新增 `jev_enabled`（默认 true）、`jev_timeout_ms`（默认 100）、`jev_fallback_strategy`（默认 `configured_model`）、`jev_fallback_provider_id`、`jev_fallback_model_id`。`quality_by_task` schema 保留以兼容旧配置与降级回滚，运行时不再读写。 |
+| `DESKTOP/src/core/performanceDiagnostics.ts` | 新增性能阶段 `jev_route_decision`，供 Auto 决策耗时观测。 |
+| `DESKTOP/src/tests/jevDecisionVerify.ts` | **新增**：21 项契约门禁（primary/alternates、重复与越界剔除、空/无效 schema、跨 provider 越界、崩溃、超时、三种 fallback、输入不含历史字段）。 |
+| `DESKTOP/src/tests/jevRoutingInvarianceVerify.ts` | **新增**：21 项不变量门禁（Test A–J：历史 feedback / quality_by_task / 点赞 / 手动切模 / 工具结果都不能改变 resolvedDeployment；守卫越界拒绝；超时 fallback；恢复不跨 provider；事务 pin；重复请求确定性）。 |
+| `DESKTOP/src/tests/autoRouterVerify.ts` | **重写**：42 项守卫 / JEV 排序 / 健康与熔断 / 恢复阶梯 / 审计 / 「旧学习 API 已消失且源码中不存在」门禁。 |
+| `DESKTOP/src/tests/autoRouteRatingVerify.ts` | **重写**：评分=遥测（不写 `quality_by_task`、不写 `feedback.jsonl`、不保存配置），并断言「踩过之后同请求重新路由结果完全相同」。 |
+| `DESKTOP/src/tests/autoAgentIntegrationVerify.ts` | 增加构造注入 `FakeJevDecisionEngine` 的集成用例与「客观工具结果只进健康」断言。 |
+| `DESKTOP/src/tests/modelRecoveryStressVerify.ts`、`DESKTOP/src/tests/providerIdentityVerify.ts` | 迁移到新管线（guard + JEV + validator）后继续保持 2000 轮配额路由、250 轮配置编辑、30 轮真实进程级 quota failover 与同名模型跨账号隔离全绿。 |
+| `DESKTOP/src/tests/verify.ts` | Auto 用例改为断言 v2 语义（速度=最低延迟的合格部署、balanced/quality 不再有历史质量带、provider scope 仍锚定同一 provider）。 |
+| `DESKTOP/scripts/release-dev010-features-smoke.cjs` | 打包态断言改查 v2 审计字段与三个新模块（`jevDecision.js` / `routeEligibility.js` / `routeDecisionValidator.js`）。 |
+| `DESKTOP/src/ui/index.html` | 设置项文案由「自适应偏好 / 清空学习偏好」改为「Auto 反馈历史 / 清空 Auto 反馈历史」；👍/👎 语义改为反馈遥测，IPC 契约保持不变。 |
+| `DESKTOP/config.example.json`、`DESKTOP/package.json` | 示例配置新增五个 `jev_*` 键；版本提升为 `0.6.6`；`test:auto-router`、`test:desktop:built`、(进而) `test:full-release` 纳入两个新门禁。 |
+
+验证：`npm run test:auto-router` 全绿（autoRouterVerify 42/42、jevDecisionVerify 21/21、jevRoutingInvarianceVerify 21/21、autoAgentIntegrationVerify 33、autoRouteRatingVerify 18、providerIdentityVerify 10/10）；`npm run test:model-recovery-stress` 通过（edits=250 quotaRoutes=2000 nonQuotaGuards=500 chainedProcessFailovers=30）；`node dist/tests/verify.js` 1722/1722 通过；`npm run test:desktop:built` 全绿。
+
+边界与保留项：`quality_by_task` 字段、旧 `feedback.jsonl` 文件与「清空反馈历史」入口都保留（不读、不写、不自动删除），以便降级回 0.6.5；本次不涉及固定模型路径、provider identity 保护、stream/副作用恢复边界、ComputerUse/会话分支逻辑。Auto 选择结果与 0.6.5 不同是设计结果：旧「质量带」本身就建立在被移除的历史质量之上。
+
+`npm run test:full-release` 边界：desktop / intelligence-tier / TUI / mode-conversation-stress / cross-platform-env / SSH TUI stress / WSL TUI stress / CLI 全绿，**最后一段 `test:gui-tui-cli-stress` 仍失败**（`stress-cli-0 lost its provider reply`）。该夹具 `auto_switch: false`，JEV/Auto 路径不被调用；独立复现显示 CLI 子进程 stdout 正确返回 `REPLY_SURFACE_CLI_0` 且 exit=0，但工作区分片里该对话只有 user 消息、workRun 仍为 `running` —— 即终态没落盘。归因于工作区已有的未提交会话持久化改造（`agent.ts` 中 `done`/`error` 的 `saveWorkspaceConversationState(true)` 已改为 `(false)`，延迟写在短命 CLI 进程里没有机会落盘），属于并行进行中的 dev-0.6.6 存储工作，本轮未改动。
+
+
+## 2026-09-17 dev-0.6.6 移动端**本地**对话归档卡顿（取证 → 修复 → 真机复测）
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `android/.../data/ConversationStore.kt` | `saveArchived()` 由 `archivedFile.writeText(gson.toJson(list))`（在主线程上调用的整文件同步重写）改为**流式序列化 + 暂存文件 + `fd.sync` + rename 原子替换**，并返回 `Result<Unit>`；顺带修掉「写一半被杀会把整份归档截断」「失败被静默吞掉」两个隐患。新增 `CONVERSATION_ARCHIVE_FAILURE_MESSAGE`。 |
+| `android/.../vm/ChatViewModel.kt` | `archiveConversation()` 不再同步写盘；新增 `persistArchived()`：在 `LocalAgentForegroundService.launchRuntime { withContext(Dispatchers.IO) { … } }` 内写归档，并用 `archivedRevision` 做「最新状态优先」的合并（连续归档只写一次，旧快照绝不覆盖新快照），失败置 `error`。 |
+| `android/.../vm/ChatViewModel.kt`（本轮追加） | ① `interruptLocalConversation(conversationId)`：把 `stop()` 的收尾抽成共用函数（取消 job、关闭 Guide 通道、移除 runtime、写入 `interrupted` 记录、排水）。② `archiveConversation()` **先立即打断**该对话正在跑的本地运行，再取最新快照归档 —— 不再把一条仍在写的工作留在列表之外。③ `persistArchived()` 由「失败即退出」改为**退避重试到成功**（500ms→1s→…上限 30s），成功清除错误位。 |
+| `DESKTOP/scripts/dev-0.6.6-mobile-local-archive-soak.cjs` | 新增设备级监督门禁：`adb root` 播种 6 条活跃 + 120 条已归档（×300 条消息，含图片附件，55.4 MiB）本地对话 → 真实 UI 点「⋯ → 归档」→ 用 `dumpsys gfxinfo framestats` 的单帧耗时 + Choreographer 丢帧 + 归档文件落盘时刻判定。断言「行离开列表 / 有帧数据 / 单帧 < 250 ms / 无丢帧爆发」。 |
+| `DESKTOP/scripts/dev-0.6.6-mobile-local-archive-surfaces.cjs` | 新增影响面监控：S1 启动期旧 `archived=true` 迁移、S2 连续快速归档（合并不丢写）、S3 归档"正在看"的对话、S4 冷启动持久性、S5 写入失败时旧归档字节不变、S6 **归档立即打断正在运行的本地轮次**（mock provider 流在点击后 1118 ms 被关闭、归档快照含 interrupted 记录）、S7 **写入失败自动重试到成功**（只读期间不落盘，恢复可写后自动落盘）。7 个场景 **29/29 PASS**（证据 `archive/20260917-160509-mobile-local-archive-surfaces/`）。 |
+| `archive/20260917-mobile-local-archive-soak/` | `REPORT.md` + 逐次运行证据（截图、UI dump、JSON 报告）。 |
+
+实测（55.4 MiB 归档，同一台模拟器）：修复前**单帧阻塞 1386 ms**（>250 ms 帧 1 个），修复后 **171 / 178 ms**（两次复跑，>250 ms 帧 0 个），12.5 MiB 配置 185 ms；落盘时刻基本不变（说明写入只是搬到了 IO 线程）。归档文件内容核对：`archived.json` 121 条 `"archived":true`、活跃文件剩 5 条、被归档对话不再出现在活跃列表。
+产物：`android/app/build/outputs/apk/release/app-release.apk`（76,134,350 bytes，SHA-256 `9FBA5145…BF2F`，已安装到模拟器）；`APK/Newmark-Agent-0.6.5-release.apk` 仍是修复前分发包，未替换。
+回归：`gradlew :app:testDebugUnitTest` BUILD SUCCESSFUL；设备门禁（响应性 3 次 + 影响面 29/29）全 PASS；远端监督实测用新 APK 复跑 21/21。桌面端未改动。最新产物 SHA-256 `802AE95E…A520`（含打断+重试），`APK/Newmark-Agent-0.6.5-release.apk` 仍是旧分发包，未替换。
+
+## 2026-09-17 dev-0.6.6 模拟器真实安装 + 监督实测（移动端归档）与后台侧修复
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `DESKTOP/src/core/electronUtilityRuntimePool.ts` | `snapshot()` 新增「拆解期只读」契约：目标处于 `disposing`/`restarting` 且调用方要的是默认窗口时，直接返回 `supervisorSnapshot(entry)`（缓存转录 + `runtime.running/stopRequested`），不再让 `acquire()` 抛 `... is stopping` 变成 HTTP 500；`supervisorSnapshot` 允许没有 `stopIntent`（归档强停只经过 disposing/restarting），`runId/generation` 回退到 entry 记录。请求更早历史页（`before`/非 200 窗口）仍照旧报错。 |
+| `DESKTOP/src/core/wslAgentRuntimePool.ts` | 同一契约在两个后端池上对齐实现（WSL 池的 `acquire()` 有同样的 `is stopping` 抛错路径）。 |
+| `DESKTOP/src/core/mobilePairing.ts`、`DESKTOP/src/server.ts` | 新增 `NEWMARK_MOBILE_PORT` 端口覆盖（默认仍是 47890）：`MOBILE_PORT` 与 server 的 `HOSTED_PORT` 共用同一来源，使第二个隔离实例可以在不占用生产端口、不打扰用户正在运行的实例的前提下托管已配对客户端。`const PORT = 47890;` 仍原样保留，既有隔离端口门禁的替换缝不变。 |
+| `DESKTOP/scripts/dev-0.6.6-mobile-emulator-supervised.cjs` | 新增设备级监督脚本：临时 root 播种唯一标题的桌面对话 → 隔离端口起真实 Electron 主机（`NEWMARK_MOBILE_PORT`）→ 端口代理记录客户端全部请求 → `adb install -r` 安装 release APK → 深链配对 → 真实 UI 导航（侧栏→设备→工作区→对话）→ 发送永不结束的轮次 → 菜单点「归档」→ 逐步截图与计时 → 校验桌面归档载荷/索引/分片/无复活。 |
+| `DESKTOP/scripts/dev-0.6.6-mobile-apk-string-probe.cjs` | 新增 APK 内容探针（解包后按字符串查证产物是否真的包含某段代码），用于回答「磁盘上的 APK 是否落后于源码」。 |
+| `archive/20260917-mobile-emulator-supervised/` | `REPORT.md` + 逐次运行的证据目录（截图、UI dump、客户端 HTTP 轨迹、桌面 stdout/stderr、JSON 报告）。 |
+
+边界：未改移动端网络层（`MobileApiClient` 的 `readTimeout(0)` 是合约，不加上限）；未改版本号、未重新打包 MSI/APK 产物清单；设备实测在模拟器 `emulator-5554`（Android 15、`com.newmark.mobile` 0.6.5/605）上进行，用户正在运行的桌面实例（47890）全程未被触碰。实测结果：深链配对成功、永不结束的轮次由手机发出、电话端菜单点「归档」后 **5895 ms** 自行完成、载荷含该轮输入、索引与分片清干净、无复活；归档窗口内客户端每秒轮询全部 200（修复前全是 500）。回归：`verify.js` 1721/1721、`runtimePoolCapacityVerify` 27、`runtimeIsolationVerify`、`remoteTouchServerStatusVerify`、`test-hosted-command-transport` 37、`mobileWorkspaceApiVerify` 55、`test:archive-while-running` 13/13、`npm run test:desktop:built` **EXIT=0**。
+
+## 2026-09-17 dev-0.6.6 归档契约：不加上限，改为「解放占用 + 并行归档」
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `DESKTOP/src/core/conversationKernel.ts` | `prepareForArchive(target, { releaseOccupancy })`：删除了上一轮加入的 `ARCHIVE_RUN_SETTLE_MS = 5000` 上限。现在先置 `preparingArchive`/`queuePaused`、取消 goal 续跑定时器、`abortActiveKernelRun('user_stop')`，随后**并行**启动调用方给的 `releaseOccupancy()`（常驻运行时强停）并 `await Promise.all([运行自身 settle, occupancyRelease])`；释放失败只记日志，不单独让归档失败。等待由**真实工作结束**终止，没有任何定时器预算。 |
+| `DESKTOP/src/main.ts` | `archiveConversationForTarget`：常驻运行时强停**提前启动**（`occupancyRelease`），按持有者分流 —— 内核持有（Flow）走 `releaseOccupancy: () => occupancyRelease`；常驻运行时正在跑/正在停（`peekTargetRuntime`）时必须等这次强停完成再取快照；空闲则留在关键路径之外。内核 settle、占用释放、Flow `settlement` 三处等待合并为一次 `Promise.all`。 |
+| `DESKTOP/src/core/agent.ts` | `archiveConversationAsyncUnlocked` 在克隆存储状态后，按 `Agent.CONVERSATION_SHARD_FIELDS` 从活条目读回被不可枚举访问器隐藏的载荷（分片布局下克隆会丢 `chatMessages`/`history`/`workRuns`/`tree`，导致「归档内存里没有的对话」写出空归档并删掉真转录）；`finalizeAsyncConversationArchive` 显式回收该对话的转录分片。 |
+| `DESKTOP/src/tests/verify.ts` | 源码字符串门禁改为断言新契约（`occupancyRelease`、`occupancyMustSettle`、`const [mainArchiveOwner] = await Promise.all([`、`!ARCHIVE_RUN_SETTLE_MS`），并新增「内核绝不使用定时器预算」与「跨进程归档保留转录并回收分片」两条。`verify.js` 由 1718 → **1721** 条。 |
+| `DESKTOP/src/tests/conversationArchiveRuntimeVerify.ts` | 「永不结束的运行不得扣住归档」改为三条更严格的断言：(a) 真实结束的运行**真的被 await**（1200 ms 的运行实测 await 1200+ ms）；(b) 只有释放占用才会结束的等待**由释放结束**（实测 0–1 ms）；(c) 不释放时归档**一直等**（2500 ms 仍在等）。另加跨进程归档用例（第二实例归档分片条目 → 载荷完整、manifest 2 条消息、分片回收）。 |
+| `DESKTOP/scripts/dev-0.6.6-mobile-archive-affected-surfaces.cjs` | 新增影响面监控脚本：复用延迟取证夹具，在隔离端口起真实 `dist/server.js` 打真实 HTTP（暂停 goal / 暂停 Flow 归档、分支创建与激活、以及「真正在跑」对照组），再在进程内驱动内核归档等待。600 轮与 1500 轮两次运行均 **15/15**。 |
+| `DESKTOP/scripts/verify-archive-while-running.cjs` | 新增真实 Electron + CDP 用户级门禁（npm `test:archive-while-running`）：mock provider 的 SSE 永不结束 → 轮次运行中点归档。断言行离开列表、provider 流被真正取消、载荷含该轮输入、索引无该对话、分片已回收、4 秒内无复活；再加「空闲归档仍是快路径且载荷完整」对照。**13/13 PASS**（运行中 5600 ms、空闲 262 ms）。 |
+| `archive/20260917-archive-occupancy-release/`、`archive/20260917-102951-archive-while-running/` | `REPORT.md` + `evidence/`（影响面日志、`verify.js`、完整 `test:desktop:built` 日志、用户级门禁 JSON）。同日修订了 `archive/20260917-mobile-archive-latency/REPORT.md` 中被取代的上限说明。 |
+
+边界：未改 `claimBuild` 准入语义、未改移动端网络层（`readTimeout(0)` 仍是独立 UX 议题）、未重新打包/安装；版本仍 `0.6.5`。回归：`verify.js` 1721/1721、`conversationArchiveRuntimeVerify`（48 并发归档 + 跨进程归档 + 三条等待断言）、`conversationArchiveConcurrencyVerify` 19、`mobileWorkspaceApiVerify` 55、`test-hosted-command-transport` 37、`test-shared-conversation-commands` 51、`test:archive-while-running` 13/13、`npm run test:desktop:built` **EXIT=0**。
+
+## 2026-09-16 dev-0.6.6 诊断与探针：保留在源码、绝不进包体
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `DESKTOP/src/core/memoryProbe.ts` | 运行期内存探针本体（env 门控 `NEWMARK_MEMORY_PROBE=1` + `NEWMARK_MEMORY_PROBE_FILE`）：每 2s 记 RSS/heapUsed/external/arrayBuffers 与宿主投递事件数/字节，RSS 超阈值自动 `writeHeapSnapshot`。**仅存在于源码**。 |
+| `DESKTOP/src/core/hostRuntimeHooks.ts` | 打包用的**中性空实现**（同 `installHostRuntimeHooks()` 签名，全部 no-op）。文件名与导出名都不含探针字样，因此成品 bundle 内既无探针能力也无探针命名。 |
+| `DESKTOP/src/conversation-utility-host.ts` | 改为 `installHostRuntimeHooks({ root })` 并只在 `post()` 里调用 `hostHooks.countPosted(value)`；具体实现由构建期决定。 |
+| `DESKTOP/scripts/build-conversation-utility-host.cjs` | 新增 `--strip-diagnostics`（或 `NEWMARK_STRIP_DIAGNOSTICS=1`）：esbuild 插件把探针模块解析为空实现；另支持 `NEWMARK_UTILITY_HOST_OUTFILE` 供门禁构建到临时文件（不污染 `dist/`）。改用异步 `build()`（`buildSync` 不支持插件）。 |
+| `DESKTOP/scripts/dist-portable.cjs` | 打包前**强制**以剥离模式重建 utility host bundle；打包后调用 `assertNoDiagnosticsInPackage()`：`app.asar` 不得含 `dist/tests` 条目、不得含探针模块，host bundle 不得含 `NEWMARK_MEMORY_PROBE`/`writeHeapSnapshot`/`host-memory.jsonl`/`installHostRuntimeHooks` 等标记。 |
+| `DESKTOP/scripts/verify-package-no-diagnostics.cjs` | 独立门禁（npm `test:package-no-diagnostics`）：静态校验 `build.files` 排除项、以临时输出跑一次剥离构建并断言零标记、校验 `src/core/memoryProbe.ts` 仍在源码、若存在 `app.asar` 则校验其中无 `dist/tests` 与探针。 |
+| `DESKTOP/package.json` | `build.files` 增加 `!dist/tests/**/*`（0.6.5 包体里实际含 342 个编译测试条目）与 `!dist/core/memoryProbe.*`、`!dist/core/hostRuntimeHooks.*`；新增脚本 `build:strip-diagnostics`、`test:package-no-diagnostics`。 |
+| `DESKTOP/scripts/dev-0.6.6-host-memory-probe.cjs`、`dev-0.6.6-heapsnapshot-top.cjs`、`dev-0.6.6-memory-soak.cjs`、`dev-0.6.6-visual-materialization-measure.cjs`、`dev-0.6.6-live-conversation-forensics.cjs`、`dev-0.6.6-replay-live-ledger-recovery.cjs` | 诊断脚本集合，全部位于 `scripts/`（electron-builder 不收集该目录，仅 `extraResources` 收集安装脚本），因此天然不进包体。 |
+
+验证：剥离构建后 host bundle 的 `NEWMARK_MEMORY_PROBE`/`writeHeapSnapshot`/`host-memory.jsonl`/`memoryProbe`/`heapsnapshot` 标记计数全为 0，而 dev 构建仍为 3/1/1/1（源码保留）；用**剥离版 bundle** 跑真实 Electron 门禁 `verify-background-question-hold` 通过（`passed: true`），证明剥离不改变运行行为。`test:package-no-diagnostics` 当前唯一 FAIL 是历史 0.6.5 成品 `app.asar` 里仍带 342 个 `dist/tests` 条目——该产物早于本策略，重新打包即被排除。
+
+## 2026-09-16 dev-0.6.6 ComputerUse/BrowserControl 视觉内存阈值（按可用内存自适应）
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `DESKTOP/src/core/conversationVisualBudget.ts` | 新增视觉内存预算策略：按**可用内存**（`os.freemem()`）分 roomy/tight/critical/severe 四档（单图上限 2 MiB→160 KiB、单请求可视上限 48 MiB→2 MiB、上下文保留截图 ≤12→≤1 张、会话可视总量 192 MiB→8 MiB、空闲宿主 RSS 回收线 1536→384 MiB），并被**总内存**夹紧（4 GiB 机器拿不到 roomy）；宿主自身 RSS 达本档回收线 60% 时**再升一档**（V8 是在自己的堆上 abort）；最新一张截图只要不超单图上限就始终保留。附 `planVisualRetention()` / `visualDataUrlBytes()` / `shouldRecycleIdleHost()` / `describeVisualBudget()`。 |
+| `DESKTOP/src/core/visualDownscale.ts` | 新增截图降采样：PNG 优先，仍超限则转 JPEG，最多 4 轮；遇到不可解码负载返回 null 由调用方走原路径。用于在内存紧张时**保住视觉能力**而不是丢弃截图。 |
+| `DESKTOP/src/core/agentKernelRunner.ts` | ① `visualFallbackImageInput` 的固定 2 MiB 单图上限改为当前预算并配合降采样；② 新增 `materializeVisualImagePart()`（路径/内联统一按单图上限降采样）；③ `fromKernelMessages(messages, includeEphemeralImages, visualBudget, onVisualRelease)` 每请求按「最新优先」规划保留截图，预算外的历史截图不再物化 base64，并以 `[visual_memory_budget]` 说明告知模型可重新观察；释放量经节流工作状态行上报。 |
+| `DESKTOP/src/core/electronUtilityRuntimePool.ts` | 新增 `sampleProcessMemoryBytes` / `visualBudget` 选项、`hostOverMemoryBudget()` 与 `reclaimIdleHostsOverMemory()`：空闲宿主 RSS 超过机器档位回收线时被回收（而非复用），下次从干净进程开始。 |
+| `DESKTOP/src/main.ts` | 以 `app.getAppMetrics()` 的 `workingSetSize`（KB→bytes）为运行时池提供宿主 RSS 采样。 |
+| `DESKTOP/src/tests/conversationVisualBudgetVerify.ts` | 新增 33 项断言（npm `test:visual-budget`，已接入 `test:desktop:built`）：档位与总内存夹紧、RSS 升级、保留计划（字节+张数、释放统计）、回收线、真实大图降采样到 96 KiB/32 KiB、不可解码拒绝、12 张历史截图只物化最新 2 张并补释放说明、零预算退化为纯文本、真实 `visualFallbackImageInput` 不超当前单图上限。 |
+| `archive/20260916-visual-memory-budget/` | `REPORT.md`：阈值表、执行点、证据（现场 OOM 3017 MB / 本机 31.12 GiB 总 13.38 GiB 可用 / 实测单张观察图 65,665 字节）与未决说明。 |
+
+边界：只回收**可视材料**与**空闲宿主**；不改文本、工具结果、计划、转录与模型上下文预算；被释放的只是“更早请求里已经发过”的历史截图，最新一张始终保留（必要时降采样）。回归：`verify.js` 1717/1717、`conversationVisualBudgetVerify` 33、`computerUsePerformanceVerify`、`screenCaptureIndependentVerify`、`browserUseVerify` 93、`runtimePoolCapacityVerify` 27、`runtimeIsolationVerify`、`runtimeMemoryBudgetVerify`、真实 Electron 门禁 `verify-queue-sequencing-and-drag-landing` 23/23。
+
+## 2026-09-16 dev-0.6.6 真实对话取证与「崩溃不再卡死」的持久性加固
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `DESKTOP/scripts/dev-0.6.6-live-conversation-forensics.cjs` | 新增只读取证工具（npm `forensics:live-conversation`）：解析真实 `conversations/state.json` 与 `continuation-ledger.json`，输出对话/队列/work run/guard/attempt/事件与异常清单。真实对话 `conv-1789533845556-2`（history=483、finals=0）实测出「RUNNING build + guard 指向已死 PID + 租约过期 + 残留 DEPENDENCY_FAILED」。 |
+| `DESKTOP/scripts/dev-0.6.6-replay-live-ledger-recovery.cjs` | 新增回放/修复工具（npm `repair:ledger-orphan`）：默认把真实账本复制到临时工作区回放孤儿回收（7/7 通过）；`--apply` 在**确认没有 Newmark Agent 进程**后，先写 `<ledger>.repair-<时间戳>.bak` 再回收孤儿 attempt（进程在跑时拒绝执行，避免被老逻辑重写覆盖）。 |
+| `DESKTOP/src/core/continuation/store.ts` | ① 终态写入的归属判定改为**按 attempt 身份 + fence**，不再因租约过期拒绝活着的所有者（真实现场：34 分钟回合的 `commitFinal` 被判 `Attempt … no longer owns branch`，导致 `finals=0`）；② 新增 `recoverOrphanedAttempt()`（死所有者/长期过期/悬空 guard → attempt=EXPIRED、RUNNING build→QUEUED、释放 guard、写 `AttemptOrphanRecovered`）；③ `reanchorQueuedChainUnlocked()` 由显式修复与孤儿回收共用，并清除不再成立的 `DEPENDENCY_FAILED` 残留；④ 每次成功写入后保留 `.bak`，主账本截断/损坏时自动恢复并留 `.corrupt`。 |
+| `DESKTOP/src/core/conversationKernel.ts` | ⑤ 排队回合执行期间按 `leaseRenewalMs`（20s）续租心跳；⑥ `settleLedgerScope()` 幂等结算 + `.finally` 兜底，任何退出路径都不再把 scope 留在 RUNNING；⑦ `maybeRecoverOrphanedAttempt()`（`kernel:<pid>` 判活 + 120s 宽限 + 5s 节流）在运行时创建、每次状态投影、每次入队时回收，并在队列未暂停时重新触发排水。 |
+| `DESKTOP/src/ui/index.html` | ⑧ `reconcileLocalRuntimeFromSnapshot()` + 15s 看门狗：权威快照说 idle/completed/interrupted 而本地仍认为在跑时清掉幻影运行态（修复「时间戳一直在走但没有工作、输入被当 Next 排队」）；⑨ 持久化遗留的 `running` work run 只有在后端确实报告在跑时才恢复运行态，否则本地按 `interrupted` 关闭。 |
+| `DESKTOP/src/tests/queueOrphanRecoveryVerify.ts` | 新增 21 项断言并接入 `test:desktop:built`：长回合跨过原租约仍能提交终态；死所有者被回收后队列继续按序执行；活着的所有者不被抢占；悬空 guard 可释放；截断账本从 `.bak` 恢复；回收写审计事件。 |
+| `archive/20260916-live-forensics/` | `REPORT.md` + `ledger-report.json`（真实账本取证）+ `live-ledger-recovery-replay.json`（真实账本回放 7/7）。核心事实链：60s 租约无心跳 → 长回合终态被拒 → `finals=0`；utility host V8 OOM（exit 4294930435，3017MB）崩溃 → attempt 永远 RUNNING → 排队进入但永不执行。 |
+
+边界：未改 `claimBuild` 准入语义与失败前置阻断契约；未删除账本历史；未修 3GB V8 OOM 本身（内存问题另案）；版本仍 `0.6.5`，未打包、未安装。回归：`verify.js` 1717/1717、`queueOrphanRecoveryVerify` 21、`continuationStoreVerify`、`queueBlockedRepairVerify`、`queueUnifyStressVerify`、`queueDrainUserMessageVerify`、`branchPageQueueIdentityVerify`、`runtimePoolCapacityVerify`、`runtimeIsolationVerify`、`conversationArchiveRuntimeVerify`、`test-long-conversation-ui-ordering` 18/18、`test-ui-consistency`、`mode-conversation-state-stress`、`pcGlassMigrationVerify`，以及真实 Electron 门禁 `verify-queue-sequencing-and-drag-landing` 23/23、`verify-background-question-hold`、`verify-fixed-control-centering`。
+
+## 2026-09-16 dev-0.6.6 正常排队误标“前置阻断”、对话拖动落点与轮次增长卡顿
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `DESKTOP/src/core/continuation/store.ts` | ① `blockedQueuedBuildIds()` 把 **RUNNING** 行纳入链行走：正在执行的那一轮状态是 RUNNING 而非 QUEUED，旧实现漏掉它，导致「父正好是这一轮」的正常排队行被推导为 `DEPENDENCY_FAILED`，且其后每一行跟着受累；现在只有父不是链上前驱、或父已 FAILED/CANCELLED 的 QUEUED 行才判受阻。② `ensureRoot()`/`ensureBranch()` 在 root/branch 已存在时直接返回，不再写整份账本。③ 新增只读投影 `queuedBlockedReasons()`（只遍历排队行，不物化 snapshot、不深拷贝 build input）。 |
+| `DESKTOP/src/core/conversationKernel.ts` | ① 按 `workspace::rootId::branchId` 缓存 `GuardedContinuationStore`（读路径仍按文件指纹校验缓存，跨进程写入依然可见），队列投影不再每次重新构造并解析账本；② `queueItems()` 改用 `queuedBlockedReasons()`。 |
+| `DESKTOP/src/ui/index.html` | ① 新增 `conversationRowOrderDuringDrag()`：拖动持有期间以 DOM 现序为准，只把新出现的会话行按 state 位置补进去；`renderConversations()` 用它落位，权威列表推送不再抹掉用户让出的落点。② `commitConversationDomOrder()` 在 DOM 与 state 成员不一致时以 DOM 顺序为准、缺失会话补末尾后提交，不再整表重渲染放弃拖动。③ 转录渲染的「消息是否属于已持久化 work run」判定改用 `persistedRunIdSet` 查表，去掉每消息一次 `persistedRuns.some()` 的 O(轮次²) 扫描。 |
+| `DESKTOP/src/tests/continuationStoreVerify.ts` | 新增 8 条断言：正在执行的回合之后两行排队都不得带 `DEPENDENCY_FAILED` 且仍不可 claim；真实失败仍阻断整条后继链；显式修复后整条链清空且首行可 claim；既有 root/branch 的 `ensureRoot()` 零写入、新 root/branch 仍落盘。 |
+| `DESKTOP/scripts/verify-queue-sequencing-and-drag-landing.cjs` | 新增真实 Electron 门禁（mock provider + CDP，npm `test:queue-sequencing-and-drag-landing`）：长回合运行中经 `queue_enqueue` 排三行 → 面板三行可见、无 `data-queue-blocked`、后端投影无 `waitingReason`；三行按提交顺序依次执行且都在长回合结束后开始；拖动越位后注入权威列表推送 → 落点保持、松手落在让位处并持久化；反证控制组还原旧行为证明推送确实会抹掉落点；640 条消息转录渲染耗时、12 个连续回合每轮耗时（356 ms → 362 ms，无轮次劣化）与零渲染器错误。24/24 PASS，evidence=`archive/20260916-153102-queue-sequencing-and-drag-landing/`。 |
+| `DESKTOP/scripts/dev-0.6.6-ledger-growth-measure.cjs` | 账本增长与投影成本诊断（npm `dev:ledger-growth`）：每轮 final ≈1.4KB 时，400 轮账本 2514 KiB，一次投影 35.1 ms（修复前，整文件写）→ 12.4 ms（首次读）/ 0.44 ms（稳态读）。 |
+| `archive/20260916-151057-queue-sequencing-and-drag-landing/` | `REPORT.md` + `evidence/`（门禁 JSON、运行中队列截图、拖动落点截图）。 |
+
+边界：不改 `claimBuild` 准入语义（仍只认「父 = 已提交 frontier」），失败前置继续阻断后继、必须显式修复；不删除账本历史 build/attempt/final；版本仍 `0.6.5`，未打包、未安装、未发布。回归：`verify.js` 1717/1717、`continuationStoreVerify`、`queueBlockedRepairVerify`、`queueUnifyStressVerify`、`queueDrainUserMessageVerify`、`queueAttachmentIsolationVerify` 57/57、`branchPageQueueIdentityVerify`、`test-queue-continuation-identity` 61/61、`test-queue-acceptance-boundary` 109/109、`test-queue-start-failure` 40/40、`test-shared-conversation-commands` 51/51、`test-long-conversation-ui-ordering` 18/18、`pcGlassMigrationVerify`、`conversationBranchStressVerify`、`mode-conversation-state-stress`。
+
+## 2026-09-16 dev-0.6.6 后台对话 question 的 hold 与回显修复
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `DESKTOP/src/ui/index.html` | `renderChatMessagesUnsafe()` 新增 `state.renderedChatTargetKey`（记录当前占据 `#chat-area` 的对话）；`applyConversationSnapshot()` 在 `syncQueueItemsFromSnapshot()` 写完 per-target 投影之后，若该目标是当前关注对话且仍占据屏幕转录，则用同一投影源 `state.pendingOptions` 重绘一次选项块。修复「Build 以 question 结束时用户正关注其他对话，返回后问题既不 hold 也不展示」；owner 契约与作答后的乐观清空不变。 |
+| `DESKTOP/scripts/verify-background-question-hold.cjs` | 新增真实 Electron 门禁（npm `test:background-question-hold`）：mock provider 按真实 runtime 顺序 `tool_provision → question`，在问题落地前切到新对话，断言「不泄漏进当前对话」「返回后恰好一个被 hold 的问题块、owner 正确」「仍可作答并继续 Build」「单份携带问题的快照必须画出选项块（确定性复现顺序缺陷）」「已作答问题不会因离开再返回而复活」。18/18 PASS。 |
+| `archive/20260916-133413-background-question-hold/` | `REPORT.md` + `evidence/`（门禁 JSON、B 中无泄漏截图、返回 A 后被 hold 的问题截图、CDP 时序轨迹） |
+| `archive/20260916-131906-background-question-hold/` | A/B 反证：临时移除重绘块后同一门禁的「单份快照」断言失败（`blocks=0`），证明门禁有判别力。 |
+
+边界：只调整渲染器排布顺序与屏幕转录归属标记；不改后端 pendingOptions 生命周期、owner 校验与作答路径；不涉及版本号提升（仍 0.6.5），不打包、不安装、不停止进程。回归：`dev-0.6.4-option-owner-check`、`pcGlassMigrationVerify` 57 项、`test-renderer-conversation-commands` 57/57、`test-conversation-history-window` 39/39、`test-long-conversation-ui-ordering` 18/18、`test-ui-consistency`、`verify-fixed-control-centering` 24/24 全部通过。
+
+## 2026-09-16 dev-0.6.6 左栏固定玻璃控件内容居中修复
+
+| 文件/目录 | 变更与职责 |
+| --- | --- |
+| `DESKTOP/src/ui/index.html` | 在通用堆叠兜底规则 `.liquid-selection-float > :not(.liquid-selection-canvas)` 之后新增同特异度、更后来源顺序的 `.liquid-selection-float > .liquid-fixed-control-content, .liquid-selection-float > .conversation-drag-content { position: absolute; }`。修复 PC 左侧栏底部固定控件（`#left-ws-add`「+ 新建」、`.left-collapse-btn`，连同同一桥接器覆盖的 `.sec-btn`/`.right-open-btn`/`.shell-btn`/`.option-btn`/`.stack-icon-btn`/`#submit-btn`）按下时被玻璃浮块接管后内容左顶格的问题，并同时修复对话拖动浮块 `inset:9px` 丢失。仅覆盖 `position`，不动浮块几何/动画/材质与命令派发。 |
+| `DESKTOP/scripts/verify-fixed-control-centering.cjs` | 新增真实 Electron 渲染器门禁（npm `test:fixed-control-centering`）：同一构建内先注入等价旧声明复现缺陷帧、再移除取修复帧，按住控件比较承载内容盒与浮块盒中心偏移；同时断言按下期间玻璃浮块可见且源按钮保持 `liquid-fixed-source-covered`、松手无残留浮块、每次按压只派发一次点击、真实折叠提交后左栏宽度 48px、渲染器零错误。 |
+| `archive/20260916-132405-pc-left-rail-fixed-control-centering/` | `REPORT.md` + `evidence/`（before/after 截图、左右对照图、门禁 JSON）。实测中心偏移：`#left-ws-add` −62.98px → 0，`.left-collapse-btn` −88.50px → 0。 |
+
+边界：不涉及版本号提升（`VERSION`/`DESKTOP/package.json` 仍为 0.6.5），不打包、不安装、不停止进程；`DESKTOP/dist/ui/index.html` 由 `node scripts/build-ui-icons.cjs` 重生成且 style 块与 src 逐字节一致。既有失败 `scripts/dev-popup-direction-regression.cjs`（弹窗外部材质条纹背景模糊判定）已用 A/B 还原验证为与本次修复无关。
+
 ## 2026-09-15 弹窗及模型配置增量
 
 `android/ui/ChatScreen.kt`（完整路径见报告）管理返回项和选中滚动；`RightSidebar.kt` 使用外扩按钮画布；`SettingsScreen.kt` 增加供应商模型编辑导航；`vm/ChatViewModel.kt` 按供应商身份重命名。`Dev065PopupModelsTest.kt` 提供触控/视觉门禁，PC `src/ui/index.html` 分离模型字段及稳定身份，`scripts/dev065-model-settings-visual.cjs` 验证实际配置路径。`archive/20260915-dev065-popup-models/` 存放截图、报告与日志。目标是交互稳定且配置不跨供应商。
@@ -4259,4 +4739,50 @@ Release APK/MSI hashes, install preparation, emulator screenshot, and the cancel
 
 ## archive/20260916-dev065-release-packaging
 Cross-platform release manifest with artifact sizes and SHA-256 hashes for MSI, portable ZIP, and Android APK.
+
+## archive/20260916-compression-stress
+Single-conversation long-run gate: 30/120/300 turns through the real kernel compaction path. Bounded context (`history` 7-8 entries, provider request 66-83 KiB) with intact visible transcript at 300 turns, 199 automatic compressions, cold-archive rollover, restore, and disk reload all passing. Also measured an unfixed quadratic cost: the workspace `conversations/state.json` document is rewritten in full ~5.33 times per turn (9.07 GB written over 300 turns) because the document grows with the conversation. New: `DESKTOP/src/tests/singleConversationCompressionStressVerify.ts`, `DESKTOP/scripts/dev-0.6.6-conversation-state-write-audit.cjs`, npm scripts `test:conversation-compression-stress[:built]` and `dev:conversation-state-write-audit` (wired into `test:full-release`).
+
+## archive/20260917-storage-policies-SMplusL
+Executed all four storage policies in order with monitoring, targeting run-time memory and I/O frequency rather than cumulative bytes. **S** coalesces mid-turn saves (terminal flush stays synchronous) and folds a cancelled snapshot's other-conversation changes into the synchronous write; **M** short-circuits byte-identical index/shard writes; **M+** bounds the live Build ledger to the persisted 120-run window; **L** splits `conversations/state.json` into a small index plus per-conversation shard files that hydrate lazily, keeps `providerUsage` in the index, and guards the durable queue with a queue revision so stale snapshots can neither drop nor resurrect queued work. Measured on the 300-turn single-conversation gate: index writes 1600 -> 701, index bytes 9 073 MiB -> 1.83 MiB, total bytes per turn 30.24 -> ~5.5 MiB, index file 10.0 MiB -> 2.7 KiB, in-memory Build records 307 -> 121, mean turn 766 -> 429 ms, peak heap 141.9 -> 136.7 MiB. Same cycle fixed three real defects surfaced by monitoring: archive JSON round-trip losing transcript/branch tree, stale conversation-state lock blocking saves after a killed runtime, and an unbounded busy loop in the kernel run loop (reproduced with HEAD sources, i.e. pre-existing; now bounded). `npm run test:desktop:built` is green (verify.js 1717/1717). New source-only tools: `core/conversationStateDocument.ts`, `scripts/dev-0.6.6-sharded-state-repro.cjs`. Layout note: conversations last written by 0.6.6 are index+shard; an older (<=0.6.5) build opening the same workspace will not see those transcripts until the shard is re-read by 0.6.6.
+
+## archive/20260917-long-run-ui-monitor
+User-level UI monitoring with real screenshots for the storage/runtime policies. `scripts/dev-0.6.6-long-run-ui-monitor.cjs` seeds real storage through the production Agent (800- and 1600-message conversations, queued items, a goal, a paused Flow with its workflow file, branch pages, an archived conversation), boots the source-mode Electron renderer, drives real DOM interactions and captures a screenshot per step. 13/13 checks pass at both scales: conversation list renders the long conversation from the index (`ui-longrun (1600)`), the transcript opens in a bounded newest window with exact paging (`Load 1400 earlier messages`), the queue panel lists every queued row in order with its pause state, the goal bar shows the persisted objective, the Flow takeover shows the paused Flow, branch pages stay selectable with a stable runtime leaf, the archive list still resolves, the queue pause toggle round-trips, and a live send on the 800-message history runs and renders a turn (with a fresh-conversation control). Screenshots in `archive/20260917-long-run-ui-monitor/`. Monitoring also documented two boundaries: a send issued immediately after the pause toggle is interpreted as resuming the queue (the monitor now waits for the backend to settle), and a suspended Flow whose workflow file is missing is cleared by design.
+
+## archive/20260917-unpack-ui-comparison
+Regenerated the unpacked Windows build (`npm run dist:win`: MSI `FAB1D24A…`, ZIP `3596EF88…`, `win-unpacked/resources/app.asar` `43015C16…`, all packaged-state gates green including the real SSH/TUI restart stress) and ran the user-level UI monitor against four combinations: new unpack + new store, installed 0.6.5 + legacy store, new unpack + legacy store (upgrade path), installed 0.6.5 + new store (downgrade path). The first three pass 13/13, so the storage/runtime changes did not alter the queue/goal/flow/long-history surfaces and the upgrade path migrates on write. The downgrade combination shows the conversation in the list but renders an empty transcript (screenshot `old-installed-newstore-02-...png`) while the index-resident goal and Flow banner still show; a store inspection afterwards proves it is display-only — shard pointers, `messageCount` (800/240/10) and all four shard files (465,802 bytes) survived the old build's session, so re-upgrading restores everything. Recommendation stands: do not run both versions against one workspace at the same time.
+
+## archive/20260917-unpack-ui-monitor-longrun
+Extended the user-level UI monitor to sixteen checks (adding Build/Work-block rendering from the shard, the context/token inspector, and a stability sweep that proves paging through an extremely long history leaves queue, goal and Flow surfaces byte-identical) and ran it against the packaged `release/win-unpacked` executable at two extreme scales: 800 turns (1600 messages) and 1500 turns (3000 messages plus 24 Build records). Both runs pass 16/16 with real screenshots per step (`unpack-1600msg-*`, `unpack-3000msg-*` in `archive/20260917-long-run-ui-monitor/`): the list shows `ui-longrun (3024)` from the index alone, the transcript still opens in a bounded newest window, paging returns exact ordered pages, the queue shows `Queue 3` with the three seeded ids and correct pause state, the goal bar and paused Flow banner render, branch pages stay selectable, the archive list resolves, the pause toggle round-trips, and a live send on the 3000-message history runs and renders a turn (fresh-conversation control passes too).
+
+## archive/20260917-mobile-archive-latency
+Mobile "archive stays in standby too long" investigation with a measuring harness (`scripts/dev-0.6.6-mobile-archive-latency.cjs`: long fixture, standalone mobile server on a spare port, per-step timings, plus in-process archive and kernel settle timings). Two root causes were measured, not guessed: (1) `server.ts` `mobileConversationRuntimeBusy()` treated *any* non-idle agent status as running, so archiving/分支 the conversation the user is actually looking at was refused with 423 whenever its goal was paused (`goal_paused`) or an `error` state lingered — with a paused goal the same fixture archived in 124 ms when no goal existed; (2) `conversationKernel.prepareForArchive()` awaited the in-flight run with no bound, so a run that never settles held the archive click for at least the whole observation window, contradicting the archive command's own background force-stop design. Fixes: only `status === 'working'` counts as busy, and the archive settle wait is bounded by `ARCHIVE_RUN_SETTLE_MS = 5000`. After the fix, a 3024-message conversation archives in ~0.6 s in all three states (paused goal / no goal / suspended Flow) and `prepareForArchive` returns after 5014 ms even against a never-settling run. Regressions: `mobileWorkspaceApiVerify` now covers an active conversation with a paused goal (55 assertions) and `conversationArchiveRuntimeVerify` asserts the bounded settle; `npm run test:desktop:built` stays green. Not changed: the mobile client's infinite read timeout (proposed as a separate UX decision), and no APK rebuild/device run this round.
+
+
+## 2026-09-26 PC GUI 高压帧间隔与长历史 Soak
+
+- DESKTOP/scripts/test-user-soak-gui.cjs 增加可选 --frame-monitor：用 owned Electron 的原生 HWND 最大化窗口；按 165 Hz 基准记录 renderer RAF callback 间隔；为滚动、弹层和侧栏动画单独统计；采集 PerformanceObserver Long Task、GPU Engine 子进程计数器与进程树内存/响应状态。窗口/API、RAF 与 GPU 调用都限定在本次临时 root 启动的应用进程。
+- archive/20260926-pc-gui-frame-pressure/REPORT.md 汇总正式安装包 0.6.6.0 与 v6 unpack 候选的完整测试。两边分别使用 3000/240/80 条会话历史与 loopback provider，180 秒活动目标；119/119、130/130 功能和冷启动检查通过。
+- PC 主屏 2560×1600/165 Hz，Windows DPR 2；Electron 最大化工作区 1280×752 CSS 像素。正式包 renderer RAF callback cadence 56.00/s、p95 40.5 ms；v6 unpack 60.57/s、p95 40.4 ms。RAF 间隔 >9.091 ms 分别占 43.39% 与 31.23%，不是实际屏幕漏呈现帧率；两边仍出现数百次 ≥50 ms Long Task 与秒级最大 RAF 间隔，不能称为流畅达标。
+- GPU Engine 3D 样本均值约 12%，最高单实例约 26–28%；配合 Long Task 数据，倾向 renderer 任务或调度阻塞，但稀疏 GPU 采样不能排除瞬时合成/驱动问题，且未采集主线程 profile。Astra 建议用短 Chromium/Perfetto trace 标记历史分页、侧栏/滚动卡顿，检查 JS、style/layout、paint/raster、GC、IPC、compositor 与调度，并另测实际 present 时间线。要归因稀疏 CU，需在同一候选构建内实际触发 CU 并进行功能开/关交错多轮对照。
+- v6 候选仅从 win-unpacked 运行，未安装到 Program Files；不将其表现记作安装版结果，也不把单次候选差值归因于稀疏 CU。旧版 Electron page-CDP 不支持 Browser.getWindowForTarget，前两次校准在测量前安全退出；改用匹配 owned process tree 的 native HWND 后，30 秒 smoke 和两轮长测完成。
+- 帧值是 renderer RAF callback intervals，不是 compositor presents；各轮只跑一次且串行，适合确认 PC GUI 卡顿与找下一步 profile 方向，不能替代多轮受控性能实验。
+- 从 v6 unpack 生成 MSI 后，330 个提取文件的清单通过预检，主程序和 `app.asar` 与测试候选哈希一致。安装请求的 UAC 提权被 Windows 取消，worker 未启动；Program Files 两个哈希复核仍与正式包长测相同。MSI 和准备证据留在本归档，未将候选 MSI 称为生产安装版本。
+
+## 2026-09-27 构建强制停止、稀疏 CU 与 PC GUI 回归
+
+- `DESKTOP/scripts/build-driver.cjs`：按阶段运行 TypeScript、进程树 helper、TypeBox、图标、WSL/utility host 与 TUI 构建；阶段默认 180 秒超时，Ctrl+C/超时会终止整个子进程树。`--clean` 和 `--clean-only` 复用该监督器；`--package-only` 以独立 1200 秒默认上限监督 Windows 打包（本轮实测约 642 秒）。
+- `DESKTOP/scripts/test-build-driver-cancellation.cjs`：1 秒超时回归生成子进程及孙进程，并确认都已退出。`DESKTOP/package.json` 将 build/clean/build:clean 和 Windows release 打包接入驱动，也把取消回归放入 `test:full-release`。
+- `DESKTOP/src/ui/index.html`：长历史渲染期间跳过每条消息的自动滚动并缓存编辑按钮；`DESKTOP/src/tests/verify.ts` 更新对应 UI 与 Strict JSON 自动路由契约。
+- `archive/20260927-user-level-debugger-stress/REPORT.md`：存放构建 Ctrl+C、超时回归、完整主验证、unpack smoke、长对话压缩、PC 165Hz GUI A/B 和 DeepSeek/APInebula 实测记录。
+- 主 `verify.js` 1719/1719；Auto Strict JSON 32/32；JEV 路由不变性 20/20；稀疏 CU 8/8；CU-Lab 数据来源门 10/10；单对话 30 轮压缩、reload 检查通过。Windows unpack/MSI/ZIP 打包 smoke 完成，但未安装；真实 Provider 有 sparse/image transport 证据，没有语义闭环通过证据。
+- GUI A/B 在同一 2560×1600、165Hz、DPR 2 环境下改善 RAF callback cadence 和文本/滚动响应；历史分页 p95 从 776.7ms 退化到 842.9ms，最长 RAF 间隔从 946.8ms 退化到 1067.1ms。RAF 是回调间隔而非真实 present FPS，不能据此声称达到刷新率目标。
+
+## 2026-09-27 PC GUI 历史消息绘制优化、unpack Soak 与本机安装
+
+- `DESKTOP/src/ui/index.html`：恢复/分页出的历史消息标为 `history-static`，禁用逐消息入场动画与 transform；`.chat-msg` 不再强制 `translateZ(0)` 持久合成层。新消息仍使用原有 250 ms 二维 `translateY` 动画。
+- `archive/20260927-pc-gui-fps-optimization/unpack-gui-soak-300s/` 保存 0.6.7.0 unpack 的 1200 条长历史、165 Hz 桌面、约 301.4 秒 GUI Soak、375 项断言、运行采样、动作日志及三张复核截图。结果 `passed=true`，renderer/provider/runtime 错误均为 0；长历史、活动完成与冷启动画面未见明显布局/裁切异常。
+- 对比同负载 0.6.6.0 unpack 一次基线：renderer RAF callback cadence 65.31→75.58 次/秒，RAF p95 间隔 46.3→42.4 ms；Long Task p95 168→150 ms；历史分页 p50/p95 580.1/791.9→406.6/663.4 ms；可信输入至绘制 p50/p95 20.5/151.8→9.9/51.8 ms。单次跨版本对照未隔离本次 CSS 的因果贡献。
+- unpack 测试版、安装版 EXE SHA-256 均为 `18B375DB2FD0071147D3E4010BC06914CA8ABF7908BC621FBE80E713DD91955E`，`resources/app.asar` 均为 `2EBB3B34D4C064847B202AB7E55DF1CEA1E94C532EB751E85F72712B8021E727`。0.6.7.0 已写入 Program Files；安装版正常用户启动后主窗口可响应。
+- 报告：[GUI 优化、unpack 证据、MSI/ZIP、安装结果与测试边界](archive/20260927-pc-gui-fps-optimization/REPORT.md)。RAF callback cadence 不是 compositor present；平均 75.58 次/秒仍低于 165 Hz，76.73% 间隔高于 6.061 ms 帧预算，仍有明显长任务。`npm run test:tui:built` 的最终旧式源码结构断言未通过（期待普通 build 脚本直接复制 TUI，而当前流程经 `build-driver.cjs`）；不能据此声称聚合 release 测试全绿。
 

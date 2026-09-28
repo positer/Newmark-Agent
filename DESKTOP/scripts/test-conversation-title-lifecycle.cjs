@@ -96,8 +96,7 @@ async function verifyConversationTitleLifecycle(options = {}) {
         agent.engineModel = () => ({ intelligenceConfig: () => ({ temperature: 0, maxTokens: 100 }), chat: async () => { titleCalls++; return ''; }, chatStreamWithTools: async function* () { formalCalls++; yield { type: 'text', text: 'must not start' }; } });
         const started = Date.now(); let error = '';
         try { await agent.process('Persist this first user message'); } catch (e) { error = e.message; }
-        const stored = JSON.parse(fs.readFileSync(path.join(workspace.path, 'conversations/state.json'), 'utf8'));
-        const entry = Object.values(stored.conversations).find(item => item.chatMessages?.some(message => message.content === 'Persist this first user message'));
+        const entry = readPersistedConversations(workspace.path).find(item => item.chatMessages?.some(message => message.content === 'Persist this first user message'));
         result.cases.emptyTitles = { elapsedMs: Date.now() - started, error, titleCalls, formalCalls, status: agent.status, processDepth: agent.processDepth, processingConversationId: agent.processingConversationId,
           firstUserPersisted: !!entry, persistedUserCount: entry?.chatMessages?.filter(message => message.role === 'user').length, firstAgentResponseStarted: entry?.firstAgentResponseStarted };
       })(),
@@ -149,8 +148,7 @@ async function verifyConversationTitleLifecycle(options = {}) {
         agent.engineModel = () => real;
         let error = '';
         try { await agent.process('Persist the provider failure fixture'); } catch (e) { error = e.message; }
-        const stored = JSON.parse(fs.readFileSync(path.join(workspace.path, 'conversations/state.json'), 'utf8'));
-        const entry = Object.values(stored.conversations).find(item => item.chatMessages?.some(message => message.content === 'Persist the provider failure fixture'));
+        const entry = readPersistedConversations(workspace.path).find(item => item.chatMessages?.some(message => message.content === 'Persist the provider failure fixture'));
         const calls = requests.filter(item => item.route.startsWith('/' + scenario + '/'));
         result.cases[scenario] = { error, formalCalls, attempts: calls.length, outbound: calls.map(call => call.request),
           status: agent.status, processDepth: agent.processDepth, processingConversationId: agent.processingConversationId,
@@ -201,4 +199,23 @@ module.exports = { verifyConversationTitleLifecycle };
 if (require.main === module) {
   const args = process.argv.slice(2), option = name => args.includes(name) ? path.resolve(args[args.indexOf(name) + 1]) : undefined;
   verifyConversationTitleLifecycle({ source: option('--agent-source'), evidence: option('--evidence'), baseline: args.includes('--baseline') }).catch(error => { console.error(error.stack || error); process.exitCode = 1; });
+}
+/**
+ * Conversation state is indexed per workspace with the transcript stored in a
+ * per-conversation shard file (`conversations/shards/<key>.<hash>.json`).
+ * Reading only the index would make every conversation look empty, so this
+ * helper merges the index entry with its shard payload.
+ */
+function readPersistedConversations(workspacePath) {
+  const store = JSON.parse(fs.readFileSync(path.join(workspacePath, 'conversations', 'state.json'), 'utf8'));
+  const shardDir = path.join(workspacePath, 'conversations', 'shards');
+  return Object.values(store.conversations || {}).map(entry => {
+    if (!entry || !entry.shard) return entry;
+    try {
+      const payload = JSON.parse(fs.readFileSync(path.join(shardDir, String(entry.shard)), 'utf8'));
+      return { ...entry, ...payload };
+    } catch {
+      return entry;
+    }
+  });
 }

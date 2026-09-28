@@ -1,5 +1,202 @@
 # Newmark Agent
 
+## 2026-09-28 Auto 决策倾向与反馈历史退役
+
+Auto 模型切换倾向现为“保守 / 均衡 / 激进”三档定性引导；每次切换仍由当前符合条件的对话模型根据任务与候选事实作出判断。资格过滤、用户明确的部署选择与硬成本约束继续生效。旧 Auto 点赞/点踩、评分持久化与历史清理入口已移除；过去遗留的本地文件不再读写或自动删除。0.6.7.0 MSI 已安装并核对：292 个文件、Program Files EXE/ASAR 哈希、注册信息和 CLI 版本均匹配，既有 `.Newmark` 文件清单无变化。本次安装后未启动 GUI；构建、针对性验证、截图与安装边界见[本轮归档](archive/20260928-auto-tendency-cleanup/REPORT.md)。
+
+## 2026-09-28 PC GUI 视觉、动效与全场景验收
+
+本轮将桌面 GUI 外壳交由 Claude Code 使用 claude-opus-5-5 自主打磨，重点是视觉协调、键盘焦点、减少动态效果偏好及渲染质感。两个 Claude 会话均自行因网关/API 错误退出（先 503 并发错误，后 403 预扣额度不足）；没有中断 Claude。保留的候选更改只在 `DESKTOP/src/ui/index.html` 的 `<style>` 区域。与本轮交接快照比较，换行符归一化后 `style` 外全文相同；renderer/preload API、IPC、HTTP/provider 协议、持久化和功能逻辑未改。
+
+最终源码构建成功。隔离 Electron + loopback fixture 的全场景验收记录 48 个状态截图、133 项交互、91 段动效采样和 64 项检查；失败、软失败、renderer error、console error 均为 0。交错四轮 CSS A/B 的 RAF callback 均值是候选 60.08、基线 60.47 次/秒，证明不了整体帧率提升；输入绘制 p95 与 RAF 间隔 p95 有回退，侧栏开合和历史分页 p95 小幅改善。RAF callback 不是屏幕实际呈现帧率，结果不代表达到 165 Hz。完整数据、所有截图、Claude 错误、构建和性能限制见[本轮验收报告](archive/20260927-gui-shell-motion-pass/REPORT.md)。
+
+## 2026-09-27 PC GUI 帧性能优化与本机安装
+
+长历史恢复与分页显示不再给每条历史消息分配入场动画或持久合成层；新到消息仍保留轻量二维位移动画。0.6.7.0 unpack 在 1200 条历史、165 Hz PC 桌面下连续运行约 5 分钟，375 项检查通过、renderer/provider/runtime 错误为 0，长历史、活动完成和冷启动截图均无明显显示异常。与同负载 0.6.6.0 unpack 基线相比，renderer RAF callback cadence 从 65.31 提升到 75.58 次/秒；历史分页 p95 从 791.9 降到 663.4 ms，可信输入至绘制 p95 从 151.8 降到 51.8 ms。RAF callback 不是屏幕实际呈现帧率；本次仍未达到 165 Hz 流畅目标，也不是隔离单条 CSS 修改的多轮因果实验。该报告记录的旧 0.6.7.0 构建当时安装在 Program Files 并完成 GUI 启动验收；它已于 2026-09-28 被 Auto 倾向更新 MSI 替换。当前安装版字节见本节上方归档；本次新安装未重复启动 GUI。[完整测试、安装与限制记录](archive/20260927-pc-gui-fps-optimization/REPORT.md)。
+
+## 2026-09-27 用户级 PC GUI 性能压力测试
+
+在当前 Program Files 安装版与最新 0.6.6.0 unpack 候选上，以同一 1200 条长历史、loopback provider 和 165 Hz PC GUI 流程实测。安装版在 6 个循环后未通过历史分页节点保留检查；最新 unpack 版完成 310 秒、336/336 检查及冷重启恢复，但 RAF callback p95 为 46.3 ms、长任务 p95 为 168 ms，仍未达到流畅目标。两个 0.6.6.0 包的 `app.asar` 哈希不同；unpack 结果不代表已安装版。帧回调不等同屏幕实际呈现率。[完整报告与原始证据](archive/20260927-user-level-debugger-performance/REPORT.md)。
+
+## 2026-09-26 JEV 仅由当前对话模型的严格 JSON 决策
+
+Auto 路由的 JEV 判断直接调用当前符合条件的对话模型及其 Provider。首次 Auto 路由优先使用符合资格的默认模型；已有有效部署时沿用该部署，否则从符合资格的候选中选取。JEV 只能在已通过路由守卫的候选中返回主部署与最多两个备选。
+
+请求使用 Provider 原生的严格 JSON Schema，固定返回部署标识、理由码、置信度和 schema 版本；本地还会复核字段、类型、数量和边界，随后继续经过 `RouteDecisionValidator`。Provider 必须原生关闭思考。若 Provider/模型不支持关闭思考或严格 schema、输出不合约或请求超时，本次 Auto 路由失败关闭，不选择备用模型。JEV 默认硬超时为 3 秒。
+
+GUI、TUI、CLI 只编辑启用状态和超时，不再配置独立 JEV runtime、模型标识、模型产物路径或回退选路。升级时会清除旧槽位和回退字段。当前行为、协议边界与验证记录见 [JEV 操作归档](archive/20260926-current-model-jev/REPORT.md)。
+
+## 2026-09-26 CU 迁移为稀疏唤醒 + 远端视觉
+
+桌面端已彻底停用 CULab/NES-T/NMEP/ONNX 端侧推理接口与依赖。`computer_use observe` 先用最多 5 Hz 的 32×18 灰度摘要等待变化或有界超时，再采集新鲜的完整截图和 UIA；截图交给当前对话配置的视觉 Provider。稀疏摘要只负责唤醒，不重构图像，也不等于严格压缩感知。完整截图仍会产生采集、传输和远端推理成本。
+
+本轮代码、隔离 unpack 包、真实 DeepSeek 与 APInebula CU 闭环结果和限制见 [CU 稀疏迁移归档](archive/20260926-cu-local-model-retirement/REPORT.md)。`newmark-cu-lab/` 作为独立历史训练研究目录保留，不再与桌面 App 共用 schema、模型 loader 或运行时接口。
+
+## 2026-09-26 Android 模拟器高压、互联与本地对话复测
+
+Android 15 x86_64 模拟器上的流式、队列、取消、重启恢复、远端目标绑定和 UI 压力功能门禁通过，未见崩溃或 ANR。UI 流畅度未通过：60 轮队列动画 jank 52.94% / p90 48 ms；混合高压 jank 79.25% / p90 150 ms。测试用隔离 stress/benchmark 包及 loopback fixtures，未覆盖物理手机、生产网络或真实 provider。完整环境、帧率口径、Astra 建议和限制见[模拟器复测报告](archive/20260926-mobile-stress-interconnect-local-chat/REPORT.md)。
+
+## 2026-09-26 CU 稀疏变化唤醒接入
+
+`computer_use observe` 可选使用 `sparse_wait_ms`（默认 0、最大 5000 ms）：独立 PowerShell lane 每 200 ms 至多采样一次 32×18 灰度摘要，不需要端侧视觉模型。每次等待之后都会重新获取完整截图和 UIA 树。它是低分辨率变化唤醒，不是严格压缩感知；超时不代表屏幕无变化，微小/短暂/色相变化仍可能漏过，完整桌面读取成本仍在。
+
+0.6.6 v6 精确 unpack 候选包通过包内校验、CU 稀疏 GUI、双运行对话目标绑定，以及 120 秒 / 130 项 GUI soak。冷/热 sparse 实测分别为 4.082 秒 / 12 个样本和 486 毫秒 / 3 个样本；双流并发切换 10 次后，两条 completed run 均在关闭前落盘并通过冷启动恢复。1200 条长历史下，可信输入事件到绘制 p95 为 34.5 ms，对话切换 p95 为 1.095 s、历史分页 p95 为 1.663 s；长对话导航仍有明显等待。完整哈希、测试报告与 MSI/安装边界见 [v6 unpack 完整验收记录](archive/20260926-unpack-complete-v6/REPORT.md)。
+
+截图语义仍由当前对话配置的视觉模型处理。本轮用隔离 loopback provider 验证真实 Electron GUI 与图像输入，没有验证外部 provider，也未接入专用远端快速模型路由；这些测试不能证明减少了端侧整帧采集或整机负载。候选 unpack 不是已安装的生产版本，MSI 没有生成或安装。
+
+## 2026-09-26 CU 压缩感知与远端视觉可行性
+
+理论与代码路径核查见[陶哲轩参与的压缩感知与 CU 远端视觉可行性报告](archive/20260926-000508-tao-cs-cu/REPORT.md)。结论：严格压缩感知要有稀疏表示、合格测量算子和接收端重构器；当前多模态模型通道只接收普通图像，本项目没有配套的远端 CS 重构服务。生产 `computer_use` 已接入可选稀疏变化唤醒；完整截图仍交给当前对话的视觉模型，未绑定专用远端快速模型。候选包和生产路径验证见上节及[生产验证报告](archive/20260926-cu-sparse-production-validation/REPORT.md)。
+
+## 2026-09-24 CU 权重与桌面 UI 稳定性复测
+
+复测记录与原始证据见 [CU 权重与 UI 性能诊断](archive/20260924-160722-cu-stability-ui-performance/REPORT.md)。复测暴露出发现层会优先选中检测/追踪门禁失败的旧 `INTEGRATION_CANDIDATE`；A2 QDQ 是 32 维描述子，而 App 当前使用 16 维 ABI。修复记录见 [权重加载与滚动门禁修复](archive/20260924-170617-cu-weight-load-and-scroll-guards/REPORT.md)。
+
+加载器现要求模型声明 16 维输入/输出描述子；`INTEGRATION_CANDIDATE` 和 `ACCEPTED_FOR_RELEASE` 必须同时带 `detectorPass=true`、`trackingPass=true`。发现排序会跳过 App ABI 不兼容或晋级门禁失败的模型，并保留来源优先级。工作状态增量更新改用被动滚动监听维护的贴底标记，避免 DOM 修改前同步读取 `scrollHeight`。原 GUI 压测峰值仍为 122/224/129 ms；修改后的同口径复测尚未运行，所以不据此宣称 100 ms 门禁已通过。
+
+Newmark 当前模型 session 固定使用 ONNX Runtime CPU：旧模型本机 p50/p95 3,218/3,304 ms，最新 A2 383/388 ms。CU-Lab RyzenAI NPU 的 32 ms p95 是另一执行 provider 的结果。当前 `computer_use` 生产工具仍未调用该模型模块，这些数字不是整机有/无权重 A/B。
+
+**评测口径更正**：下方 2026-09-23 的识别报告调用了 App 自有 loader/provider/decoder/registry 模块，但当前 computer_use 生产工具尚未调用该模型模块。因此那组数字不是有权重与无权重的整机生产路径 A/B。
+
+## 2026-09-23 外部复核落地：撤回三条自家结论 + 采集语义门禁
+
+外部复核包（[archive/20260923-culab-repair-pack](newmark-cu-lab/archive/20260923-culab-repair-pack)）
+对本项目上一轮的批评全部成立，本轮逐条更正并落地第一轮修复。
+
+**被推翻/更正**：① "91.9% 找到目标、30.4% 是定位上限"**撤回**——在 GT 框内取 argmax 等于用真值找信号，
+而 recall@0.2=0.3369、@0.1=0.528 都高于 0.304，它从来不是上界；② parity 的 0.327 属 **interactability**，
+不是 objectness（后者 0.103410）；③ 真正为 0 的是**稳定身份率**（INT8 12 / fp32 23 次 continuation），
+共享身份率应为 **N/A**；④ fp32 图 25.179 MiB 是**超出** 25 MiB 首选门禁约 183 KiB。
+
+**本轮修复（代码）**：`windows_ui.py` 的 `globalShift` 改为**实测**（并标注空间与基准），新增
+`_verify_episode()` 场景语义门禁——`moveControl` 要求框真的动、`hide/show` 要求 id 真的离开/回到可见集合、
+`hover` 要求 ROI 像素变化、`resize`/`page`/`overlay` 同理，否则 episode 记 `failed` 并给出原因；
+`builder.py` 把 failed episode **隔离**出库并写入 `manifest.quarantine`；审计器升级为文件哈希 → RGB 哈希 →
+实体框 → **控件 ROI** 四级。
+
+**实跑结果**：12 episode 真实采集 **8 个 failed**（`moveControl_no_effect` 3、`window_move_only_no_content_motion` 2、
+`hover_no_pixel_change` 2、`hide_not_observed` 1），入库只剩 4 clip / 48 帧，比例门禁如实报 false。
+训练语料按目标级审计为 **432/700 clip 无目标级证据**、全局唯一帧 **3,160/8,400**；遥测里 backbone 梯度
+step 1/3/5/9/17 = NaN、step 4462 = +Inf。
+
+**交接包 v2**：[CU-Lab-handoff-20260923-v2.zip](newmark-cu-lab/archive/20260923-cu-external-handoff/CU-Lab-handoff-20260923-v2.zip)
+（0.82 MiB / 70 文件，SHA-256 全通过），含外部复核原文、`WHAT-CHANGED-IN-V2.md` 逐条更正说明与全部新证据。
+边界：采集**能力**本身未修、未重采、未重训；外部清单的任务 1/3/4/5/6 未执行。
+
+
+## 2026-09-23 App 与 CU-Lab 权重解离：没有权重也能跑原本的 CU 通道
+
+Computer Use 通道不再依赖 CU-Lab 权重，也不依赖 CU-Lab 目录存在：
+
+- **App 自有权重点发现**（`DESKTOP/src/core/computerUse/model/artifactDiscovery.ts`）：
+  `NEWMARK_CU_NMEP` → `~/.Newmark/models/cu`（用户级安装位）→ `<project>/models/cu` →
+  **仅当显式设置 `NEWMARK_CU_LAB_ROOT` 时**才读 lab 的 `var/candidates`。找不到就是"没有权重"这一
+  正常状态，不是异常；promoted 阶段优先于更新的未晋级候选。
+- **无权重时的行为**：仍走原本的结构化（UIA）通道——UIA 观测进冻结契约、注册表仅凭几何跨帧续用身份、
+  `resolveCuVisionCapability` 返回 `uia-only` 而不升级、盲坐标猜测始终禁止、disabled provider 不伪造检测。
+- **门禁**：新增 `computerUseWeightlessVerify`（18 项，含"源码中不得出现 `newmark-cu-lab`"的反耦合断言），
+  并入 `test:computer-use-runtime`。实测**无权重**时整链 91 项全过 + 1 项显式 SKIP；
+  `node dist/tests/verify.js` 1719/1719 全过。
+
+## 2026-09-23 真实 UI 语料缺陷：47% 的训练 episode 场景从未渲染 + 外部交接包
+
+- **缺陷**（新工具 `newmark-cu-lab/scripts/audit_episode_motion.py`）：真实 WinForms 采集的
+  `dataset-v0.1-real-ui-v2` 中 **273/700** 个 clip 的 12 帧**逐字节相同**却仍带运动/消失标签
+  （`normal_translation` 76%、`stable_jitter` 96%、`disappear_reappear` 61% 命中）；留出集 24/60。
+  布局类场景与合成渲染器 **0 命中** ⇒ 缺陷只在真实采集的事件类场景上。训练语料的有效唯一帧因此只有
+  **3,353/8,400**；§9.2 的 `movingTargetContinuation` PASS 建立在"15 个平移 episode 里 12 个没平移"之上。
+- **外部交接包**：[CU-Lab-handoff-20260923.zip](newmark-cu-lab/archive/20260923-cu-external-handoff/CU-Lab-handoff-20260923.zip)
+  （0.77 MiB / 59 文件，逐文件 SHA-256 已校验通过）：双语 README（列出要外部专家回答的 4 个问题）、
+  每个数字的确切复现命令、两份评测报告、训练记录含逐步 `telemetry.jsonl`、Lab+App 两侧全部评测 JSON、
+  发货 artifact 元数据、数据集 manifest、一个非退化 `scroll_global` 样本 clip 与三套数据一致性审计。
+
+
+## 2026-09-23 CU 模型模块识别评估：NES-T v0.1 未达成预期识别效果
+
+把 CU-Lab 的产物装入 App 自有 loader/provider/decoder/registry 模块进行隔离评测（发货 `.nmep` INT8 → App 自己的 ONNX Runtime 会话 →
+App 自己的 NES-T 解码 → App 自己的身份注册表），用带精确真值的真实 UI 帧驱动。该模块链当时没有接入当前 computer_use 生产工具。
+
+- **识别**：PyTorch/GPU 上 recall 0.3369 @0.2；**发货 INT8 在 App 侧只有 0.2359**，而同图 fp32 是
+  **0.4157**（同权重、同帧、同解码器，只换图 ⇒ 动态 INT8 让召回掉 43% 相对）。§9.1 门禁 0.95 两档都远未达到。
+- **运行**：发货图在本机 ONNX Runtime CPU 上 **3,022 ms/帧（0.33 fps）**，同 run 的 fp32 图 186 ms
+  （16.2× 快）。此前 Lab 的"16.34 ms/帧、满足 5–20 Hz 调度"是 PyTorch/GPU 的数字，**从未代表过发货产物**。
+- **身份**：1,503 个观测里只有 12 次 `CONTINUATION`、1,367 次歧义拒绝，被检出≥2 次的真值控件
+  **稳定身份率 0.0000**（也没有共享身份）——注册表在正确地"宁可 LOST 不要 WRONG-ID"，但身份连续性尚不存在。
+
+另发现一处完整性缺口：`export --stage INTEGRATION_CANDIDATE` 会**先写完整产物、再抛错拒绝**，
+而 App 的 `validateCuArtifact()` 不核对 `manifest.benchmark.detectorPass|trackingPass`，
+于是被路线判定不该晋级的产物在 `13/13` ABI 校验与 `11/11` 真实推理门禁上全绿。
+完整报告与全部证据见 [newmark-cu-lab/archive/20260923-cu-workflow-recognition-eval/REPORT.md](newmark-cu-lab/archive/20260923-cu-workflow-recognition-eval/REPORT.md)；
+复现命令：`DESKTOP\scripts\verify-cu-workflow-recognition.cjs`（`--graph-override` 做 fp32 对照）与
+`DESKTOP\scripts\probe-cu-graph-latency.cjs`。本轮未改动导出器、App 校验器或训练代码。
+
+
+## dev-0.6.6 Computer Use 主线：CU-Lab 产出 NES-T 候选，App 侧用真实 INT8 模型跑通推理与身份追踪
+
+### 2026-09-22 更新：真实 UI 训练集 + 高帧率/低存储纪律
+
+按《CU-Lab 后续模型训练路线冻结指导》执行 Stage A，并按请求引入**真实 UI 控件**数据：
+
+- **真实 UI 采集管线**（`nculab/capture/uia_playground.py` + `scenarios/windows_ui.py`）：真实 WinForms 控件窗口 + UIA 精确框真值；DPI 感知、原子文件交接、进程内快速真值与真实 UIA 树互校（worst 归一化差 0.0093）。4 套模板 / 8 类时序场景 / 每 episode 随机布局与配色。安全边界：只驱动自建窗口、不发合成输入、结束即关进程。
+- **数据集**：真实 UI `dataset-v0.1-real-ui`（200 clips / 2,400 帧 / 69,366 对）与其独立留出集（60 clips / 720 帧 / 20,889 对），§6.4 八类比例全部达标；合成侧用布局抖动修复"留出集不独立"（`LAYOUT_JITTER`）。混合语料训练：`ncu-lab train --dataset a,b`。
+- **高帧率 + 低存储 CU 纪律**（App）：`CuCadenceGate` 让 60 Hz 采集只产生 ~10 Hz 整帧推理（实测 601 帧→94 次调用）；`CuFrameStore` 只留最新帧 + 稀疏关键帧并强制字节上限（实测 32 MiB 内保留 32 帧、丢弃 94.7%）；全局平移判为 CONTINUATION 而不铸新身份。门禁 `computerUseHighMotionVerify` 已并入 `test:computer-use-runtime`（现有 **82/82** 通过）。
+- **当前数值**：混合语料训练的静态阶段 checkpoint 在**真实 UI 留出集**上 recall **0.298 @0.2**、precision 0.320（合成抖动留出集 0.151）——真实控件域反而学得更好，但仍未达 §5.1 的 0.95 召回门禁；完整 12k 步训练仍在跑。
+
+
+按《Newmark Computer Use 主线实施总指导》执行 Phase 2–11：CU-Lab 从合成精确真值出发做数据工厂 → 时序数据集 → NES-T 真实训练 → 检测/追踪评测 → INT8 量化 → `.nmep` 导出；App 侧落地 SceneVersion、TemporalEntityRegistry、ActionTransaction、视觉能力/感知路由，并用 **ONNX Runtime 真实加载该 `.nmep`**、把 `trackingHints` 送进身份注册表。
+
+**数据（真实跑出来的规模）**：训练 suite 1,700 episodes / 20,400 帧，留出 suite 300 episodes / 3,600 帧，两者独立 seed。时序数据集 `ds-cu-train-20k-v2` = 20,400 帧 / 1,700 clips / 1,018,776 pair / 6,112,656 负样本；§6.4 的八类比例全部落在容差内（0 项越界），含 544 个硬负样本 episode（同窗口多个 Save、同图标、同列表行、scene cut、global motion）。生成从串行 ~27 分钟降到 12 进程并行 ~2 分钟。
+
+**训练（Phase 5）**：NesT v0.1 冻结配置（768×432 输入、16D 描述子、§8.6 损失权重、AdamW 1e-4/3e-4）在 CPU 上真实训练，逐步记录 raw/weighted loss 与 backbone/temporal 梯度范数，按验证平台早停，并把执行预算（步数、分层样本数、验证间隔、设备）与冻结项分开写进 `run.json`。参数 0.99M（容量放在 stride-8 之后：stem 32/64/128 + 3 残差块）。
+
+**本轮修掉的两个真缺陷**（都不是"调参"）：
+
+1. **检测头塌缩**：96×54 网格上每图 1 个正例 + `pos_weight=20` 的 BCE，其最优解就是"处处 ≈0.0077"（实测真值格 0.006、全局 max 0.119），且 focal 在网格上求和后量级 ~450，被 `clip_grad_norm(5.0)` 归一化，等于把 box/type/motion 的学习率压到 1e-6。改为 CenterNet 式高斯热图 + penalty-reduced focal loss，并把 objectness 头 bias 初始化到 −4.0 之后，总损失回到 ~6.6、梯度 ~100。仅 200 步，真值格/背景对比就达到 0.157 / 0.017。
+2. **数据工厂静默丢样本**：构建 pair 时"正样本不可见就跳过"实际删掉了 occlusion/disappearance 门禁的全部评测覆盖，也让 visibility 头永远没有标签。现在遮挡/消失样本保留，并用 `associationUsable=false` 明确告诉关联头"这一帧不能当匹配证据"。
+
+**量化与产物（Phase 7/8）**：模型先导出 fp32 ONNX，再做 `onnxruntime.quantization.quantize_dynamic` INT8，并做 fp32↔int8 parity（逐输出 max/mean abs diff、association cosine），manifest 的 `quantization.mode` 使用 App 契约词表 `ptq-int8`；`artifact.budget` 用真实字节数而不是参数量估算。
+
+**App 侧（Phase 9–11）**：`sceneState`（SceneVersion + 深拷贝读取）、`temporalEntityRegistry`（`S = w_d·S_desc + w_m·S_motion + w_g·S_geom + w_u·S_UIA + w_c·S_ctx`，歧义一律 `AMBIGUOUS_BLOCKED` + 新身份，遮挡保留、消失即 LOST）、`actionTransaction`（§19 状态机 + `EFFECT_UNCERTAIN` 禁止自动重试）、`visionCapability`/`perceptionRouter`（稳定帧 0 次模型调用、云端单飞限速、`vision-unavailable` 明确 `cannot-act`）、`grounder`/`verifier`（陈旧场景拒绝对地、歧义不猜、`NO_CHANGE` 与 `EFFECT_UNCERTAIN` 分离）、`model/*`（`.nmep` 自证 → 会话 → 解码 candidates/observations/trackHints；`onnxruntime-node` 为 optionalDependency，App 不引入任何训练依赖）。
+
+**实测结果（留出集 `ds-cu-holdout-3k-v2`，模型 `train-20260921-230855-442cde`）**：
+
+- 产物：`var/candidates/nes-t-v0.1-20260922-first.nmep`，安装体积 **0.99 MiB**（preferred 25 MiB / hard 100 MiB 双达标），INT8 动态量化后 fp32↔int8 的 **association 描述子余弦 0.99983**（objectness logits 最大绝对差 0.228）。
+- 检测：工作点阈值 0.12 时 recall **0.1694** / precision 0.1839 / meanIoU 0.4976（真值格 0.212 vs 背景 0.0116，≈18× 对比）——**未达 §9.1 的 0.95 召回门禁**。
+- 追踪：`movingTargetContinuation` 0.9503(≥0.95 PASS)、`sameSceneRepeatedControlFalseReassociation` 0.0000(<0.02 PASS)、`shortOcclusionRecovery` 1.0000(≥0.90 PASS)、`smallControlContinuation` 0.9623(≥0.85 PASS)；`sameEntityAssociation` 0.9503(<0.97)、`falseReassociation` 0.0497(≥0.01)、`scrollContinuation` 0.9231(<0.95)、`disappearanceDetection` 0.0000(<0.95) 未过。
+- **因此导出器正确拒绝了 `INTEGRATION_CANDIDATE`**（`unmetForIntegrationCandidate = [detector recall gate, tracking gates]`），本轮交付的是 `CANDIDATE` 阶段产物——没有靠改门槛把候选升格。
+
+App 门禁：`npm run test:computer-use-runtime` **77/77 全绿**（契约 16、SceneVersion 8、身份 7、动作事务 8、视觉能力 7、感知回退 13、产物校验 9、真实推理 9），其中真实推理门禁用 CU-Lab 真实渲染帧驱动 App 的 ONNX Runtime：14 个候选、全部通过冻结契约、16D 描述子范数 1.0000、hints 全部进入 Registry 且每个观测恰有一个身份归属（续用 0、歧义拒绝 14 —— 即"宁可 LOST 不要 WRONG-ID"在弱模型下的正确表现）。`node scripts/verify-cu-nmep-candidate.cjs <candidate.nmep>` 13/13 通过（App 自己重算哈希与体积，ABI PASS）。
+
+已知边界与下一步：训练数据仍是合成精确真值（未验证真实泛化）；0.99M 参数 / 1500 CPU 步处于**欠训练**状态，§8.1 目标是 8–10M 参数 + 35/5/30 epoch，需要 CUDA fp16 才算真正跑到预算；disappearance 正样本只有 0.16%，visibility 头需要类别加权或过采样；关联头 InfoNCE 仍在 1.7 附近。Phase 12–17 未开始。完整数字与诊断过程见 [archive/20260921-dev066-cu-nest/REPORT.md](archive/20260921-dev066-cu-nest/REPORT.md)。
+
+
+## 历史记录：dev-0.6.6 Auto 路由重构
+
+本节保留当时的实施记录；回退模型接口、第一合格模型回退和独立决策模型编辑器已于 2026-09-26 移除。当前行为以本文顶部 JEV 说明为准。
+
+Auto 模式不再使用「质量历史 + EWMA 偏好 + 用户评分 + 手动切模 + 工具结果 + 成本/速度/可靠性权重 + 缓存黏性」的旧打分器。模型选择使用一条决策链路：**RouteEligibilityGuard（只做硬过滤）→ 当前对话模型的 JEV 严格 JSON 决策 → RouteDecisionValidator（只接受守卫允许的部署）→ Build 内事务绑定 → Provider 调用**。
+
+历史数据被明确切断：`~/.Newmark/routing/feedback.jsonl` 不再被加载；👍/👎 只写 `routing/ratings.jsonl` 遥测（stale/重复点击保护不变）；手动切换模型不再产生任何反馈；工具执行成功/失败只进入端点运行健康；`quality_by_task` 字段保留以兼容旧配置与降级回滚，但 Auto 既不读取也不再自动写入。端点健康、熔断与失败恢复继续保留，但它们只决定「此刻能不能用」，不再形成第二套模型选择器。
+
+Auto 只接受当前对话模型在关闭思考模式下返回的严格 JSON，再由本地 schema、资格守卫和候选范围校验器复验。模型调用超时、失败或输出不合法时，本次路由失败关闭；不存在确定性回退模型。生产 `core/jevDecision.ts` 不含本地排序决策器，测试夹具排除于应用包。决策硬超时默认 3000 ms；路由审计记录 `decisionSource`、JEV `modelVersion`、`reasonCodes`、`latencyMs` 和模型返回的 `alternatives`，不记录 prompt 与密钥。
+
+新增门禁：`jevDecisionVerify`（当前模型严格 JSON、校验器、关闭思考和失败关闭契约）与 `jevRoutingInvarianceVerify`（同一 JEV 输出、候选目录、用户策略与实时健康状态下，反馈文件、历史评分、手动切模、工具结果与旧 `quality_by_task` 不得改变部署）。
+
+行为说明（有意的变化）：旧 Auto 的「质量带」来自历史质量，本身就在被移除之列，因此 Auto 的实际选择会与 0.6.5 不同（例如 speed 模式现在直接取延迟最低的合格部署，balanced/quality 按验证证据、实时可靠性与声明价格排序）；用户显式固定模型的行为完全不变，JEV 不接管固定模型路径。
+
+### Auto 当前模型决策策略入口：GUI / TUI / CLI
+
+Auto 的「生态位」现在有了显式的决策模型槽位，三端都能就地编辑，并且都以 Agent 为唯一权威：
+
+- **GUI（Models & Providers 设置页）**：JEV 卡片只提供启用与超时控制，并固定展示当前合格对话模型、原生关闭思考和严格 JSON Schema。没有 runtime、JEV 模型标识、产物路径或备用模型控件。
+- **TUI（Settings → [J] Auto decision policy）**：提供启用和超时控制；输出模式只读展示。决策失败时 Auto 停止，不会挑选替代模型。
+- **CLI**：`Newmark.exe jev` 只读查看或编辑启用状态、超时；旧 `--runtime`、`--model-id`、`--model-path` 和 `--fallback*` 参数已移除。
+
+**Auto 关闭即冻结**：`auto_switch` 关闭时，Agent 不调用 JEV，也不改动当前部署；GUI/TUI 锁定策略控件，CLI 写入返回退出码 2。`jev_enabled` 关闭、当前 Provider 不可调用或严格 JSON 请求失败时，路由均失败关闭。
+
+历史界面证据仍在 `archive/20260921-dev066-jev-settings-ui/`。当前源码门禁 `jevModelEditorVerify` 检查已移除的 runtime/model/fallback 字段与 GUI、TUI、CLI 的当前策略入口。
+
+
 ## dev-0.6.5 弹窗与模型配置
 
 移动端返回项不再参与色块移动，模型菜单打开时定位当前选项，浏览器按钮采用外扩玻璃画布；供应商模型行落地后进入配置页。双端分别设置调用模型标识与显示名，并加强同名模型的供应商隔离。PC 实际窗口与 Android 模拟器触控/截图验证已执行，实体手机尚未连接。见 [本轮报告](archive/20260915-dev065-popup-models/REPORT.md)。
@@ -993,4 +1190,14 @@ Release APK installed on emulator and MSI built. MSI elevation was canceled, so 
 
 ## dev-0.6.5 cross-platform release artifacts
 Windows MSI, Windows portable ZIP, Linux AppImage/deb/portable ZIP, and Android release APK were rebuilt and hash-verified. See [release artifact manifest](archive/20260916-dev065-release-packaging/REPORT.md).
+
+## 2026-09-26 PC GUI frame-pressure validation
+
+At the active 2560×1600, 165 Hz PC display, the installed 0.6.6.0 GUI and the packaged v6 unpack candidate both passed their long-history functional and cold-restart checks, but both showed renderer stalls under a 3000-message interactive soak. Renderer RAF p95 intervals were 40.5 ms and 40.4 ms. RAF intervals longer than 9.091 ms accounted for 43.39% and 31.23%; these callback intervals are not actual dropped-present counts. The v6 result is from the unpacked app, not an installed build. Its MSI payload was hash-matched to the unpacked candidate, but Windows canceled elevation; the installed 0.6.6.0 hashes were confirmed unchanged. [Full PC GUI report](archive/20260926-pc-gui-frame-pressure/REPORT.md).
+
+## 2026-09-27 Build cancellation and sparse Computer Use verification
+
+The desktop build now runs through a phase-logged supervisor with bounded step timeouts and process-tree termination. A live Ctrl+C during `npm run build` stopped the active TypeScript process tree, left no `build-driver` or `tsc` descendants, and a follow-up build succeeded. The packaged Windows x64 0.6.6.0 candidate passed its unpacked CLI, SSH/TUI, context-compression, MSI, and ZIP smoke checks; it was not installed.
+
+The 165 Hz unpacked GUI A/B improved renderer RAF callback cadence from 66.02/s to 76.98/s, while history-page p95 and the longest callback interval regressed. These callback measurements are not compositor presentation FPS, and the GUI remains visibly short of a smooth 165 Hz target. DeepSeek reached sparse-change wakeup and full-image upload, but neither real-provider run completed the semantic task; Windows Firewall prompts obscured the synthetic target. [Build, package, GUI, and real-provider evidence](archive/20260927-user-level-debugger-stress/REPORT.md).
 

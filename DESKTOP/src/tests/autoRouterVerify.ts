@@ -1,16 +1,22 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
-  AutoRouter,
   AutoRouteCandidate,
+  ModelSelection,
+  RouteDecision,
+  RouteExecutionController,
   RoutePolicy,
-  classifyTaskClasses,
+  RouteRequest,
   classifyRouteFailure,
+  classifyTaskClasses,
   defaultRoutePolicy,
   normalizeAutoPreference,
 } from '../core/autoRouter';
 import { ConfigManager, stableProviderId } from '../core/config';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { LocalJevDecisionEngine } from './fixtures/localJevDecisionEngine';
+import { evaluateRouteEligibility } from '../core/routeEligibility';
+import { resolveAutoRouteDecision, type AutoRoutePipelineInput } from '../core/routeDecisionValidator';
 
 type Check = { ok: boolean; label: string };
 
@@ -37,15 +43,13 @@ function candidate(
     latencyMs: 1_000,
     reliability: 0.95,
     throughput: 40,
-    qualityByTask: { chat: { successes: 8, attempts: 10 } },
     ...options,
   };
 }
 
-function request(overrides: Record<string, unknown> = {}) {
+function request(overrides: Partial<RouteRequest> = {}): RouteRequest {
   return {
     transactionId: 'turn-1',
-    affinityKey: 'conversation-1',
     taskText: 'Explain this result',
     estimatedInputTokens: 1_000,
     expectedOutputTokens: 1_000,
@@ -54,16 +58,41 @@ function request(overrides: Record<string, unknown> = {}) {
   };
 }
 
-export function verifyAutoRouter(): Check[] {
+function autoSelection(policyId = 'balanced'): ModelSelection {
+  return { kind: 'auto', scope: { kind: 'global' }, policyId };
+}
+
+async function decide(
+  selection: ModelSelection,
+  policy: RoutePolicy,
+  candidates: AutoRouteCandidate[],
+  routeRequest: RouteRequest,
+  extra: Partial<AutoRoutePipelineInput> = {},
+): Promise<RouteDecision> {
+  return resolveAutoRouteDecision({
+    selection,
+    policy,
+    taskText: routeRequest.taskText,
+    request: routeRequest,
+    candidates,
+    taskClasses: classifyTaskClasses(routeRequest.taskText, routeRequest.requiredCapabilities, routeRequest.estimatedInputTokens),
+    engine: new LocalJevDecisionEngine(),
+    ...extra,
+  });
+}
+
+export async function verifyAutoRouter(): Promise<Check[]> {
   const checks: Check[] = [];
   let now = Date.parse('2026-07-15T00:00:00.000Z');
-  const router = new AutoRouter({ now: () => now });
+  const controller = new RouteExecutionController({ now: () => now });
 
   assert(normalizeAutoPreference('default') === 'balanced'
-    && normalizeAutoPreference('performance') === 'quality'
-    && normalizeAutoPreference('cheap_save') === 'cost'
-    && normalizeAutoPreference('speed') === 'speed',
-  'auto migration: legacy preferences map to the four policies', checks);
+    && normalizeAutoPreference('conservative') === 'conservative'
+    && normalizeAutoPreference('aggressive') === 'aggressive'
+    && normalizeAutoPreference('quality') === 'balanced'
+    && normalizeAutoPreference('cheap_save') === 'balanced'
+    && normalizeAutoPreference('speed') === 'balanced',
+  'auto tendency: canonical values survive and retired route objectives normalize to balanced', checks);
 
   const chineseTaskClasses = classifyTaskClasses('请调试这段代码并证明算法为什么正确', [], 0);
   assert(chineseTaskClasses.includes('coding') && chineseTaskClasses.includes('reasoning'),
@@ -110,17 +139,22 @@ export function verifyAutoRouter(): Check[] {
     fs.rmSync(configRoot, { recursive: true, force: true });
   }
 
+  // ---- Guard: hard eligibility only -------------------------------------
+
   const sameName = [
-    candidate('provider-a', 'shared-model', { qualityByTask: { chat: { successes: 20, attempts: 20 } } }),
-    candidate('provider-b', 'shared-model', { qualityByTask: { chat: { successes: 1, attempts: 20 } } }),
+    candidate('provider-a', 'shared-model'),
+    candidate('provider-b', 'shared-model'),
   ];
-  const providerDecision = router.route(
-    { kind: 'auto', scope: { kind: 'provider', providerId: 'provider-b' }, policyId: 'balanced' },
-    defaultRoutePolicy('balanced'), sameName, request(),
-  );
-  assert(providerDecision.resolvedDeployment?.providerId === 'provider-b'
-    && providerDecision.resolvedDeployment.modelId === 'shared-model',
-  'auto identity: provider scope never confuses equal model ids', checks);
+  const scopedGuard = evaluateRouteEligibility({
+    selection: { kind: 'auto', scope: { kind: 'provider', providerId: 'provider-b' }, policyId: 'balanced' },
+    policy: defaultRoutePolicy('balanced'),
+    request: request(),
+    candidates: sameName,
+  });
+  assert(scopedGuard.eligible.length === 1
+    && scopedGuard.eligible[0].deployment.providerId === 'provider-b'
+    && scopedGuard.excluded.some(entry => entry.deployment.providerId === 'provider-a' && entry.reasons.includes('outside_scope')),
+  'auto guard: provider scope never confuses equal model ids and never exposes the other account', checks);
 
   const hardFilterCandidates = [
     candidate('p', 'legacy', { validation: { level: 'legacy_basic', status: 'verified', checkedAt: '2026-07-15T00:00:00.000Z' } }),
@@ -129,93 +163,49 @@ export function verifyAutoRouter(): Check[] {
     candidate('p', 'image-output-only', { capabilities: ['text_input', 'text_output', 'image_output'] }),
     candidate('p', 'vision', { capabilities: ['text_input', 'text_output', 'image_input'] }),
   ];
-  const visionDecision = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'balanced' },
-    defaultRoutePolicy('balanced'), hardFilterCandidates,
-    request({ requiredCapabilities: ['text_input', 'text_output', 'image_input'] }),
-  );
-  assert(visionDecision.excludedCandidates.length === 2
-    && visionDecision.excludedCandidates.some(entry => entry.deployment.modelId === 'preview')
-    && visionDecision.excludedCandidates.some(entry => entry.deployment.modelId === 'short'),
-  'auto filters: explicit preview and context limits remain, observational capability flags do not exclude', checks);
-  assert(!visionDecision.excludedCandidates.some(entry => ['legacy', 'image-output-only', 'vision'].includes(entry.deployment.modelId)),
-  'auto capability: untested image input remains eligible for a real response', checks);
+  const visionGuard = evaluateRouteEligibility({
+    selection: autoSelection(),
+    policy: defaultRoutePolicy('balanced'),
+    request: request({ requiredCapabilities: ['text_input', 'text_output', 'image_input'] }),
+    candidates: hardFilterCandidates,
+  });
+  assert(visionGuard.excluded.length === 2
+    && visionGuard.excluded.some(entry => entry.deployment.modelId === 'preview')
+    && visionGuard.excluded.some(entry => entry.deployment.modelId === 'short'),
+  'auto guard: explicit preview and context limits remain, observational capability flags do not exclude', checks);
+  assert(!visionGuard.excluded.some(entry => ['legacy', 'image-output-only', 'vision'].includes(entry.deployment.modelId)),
+  'auto guard: untested image input remains eligible for a real response', checks);
 
   const regionalPolicy: RoutePolicy = {
     ...defaultRoutePolicy('balanced'),
     dataRegion: 'eu-west',
     requiredProtocolParameters: ['strict_json', 'streaming'],
   };
-  const regionalDecision = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'balanced' },
-    regionalPolicy,
-    [
+  const regionalGuard = evaluateRouteEligibility({
+    selection: autoSelection(),
+    policy: regionalPolicy,
+    request: request({ transactionId: 'regional' }),
+    candidates: [
       candidate('p', 'wrong-region', { dataRegions: ['us-east'], supportedProtocolParameters: ['strict_json', 'streaming'] }),
       candidate('p', 'missing-parameter', { dataRegions: ['eu-west'], supportedProtocolParameters: ['streaming'] }),
       candidate('p', 'regional-compatible', { dataRegions: ['EU-WEST'], supportedProtocolParameters: ['STRICT_JSON', 'STREAMING'] }),
     ],
-    request({ transactionId: 'regional', affinityKey: 'regional' }),
-  );
-  assert(regionalDecision.resolvedDeployment?.modelId === 'regional-compatible'
-    && regionalDecision.excludedCandidates.some(entry => entry.deployment.modelId === 'wrong-region'
+  });
+  assert(regionalGuard.eligible.length === 1
+    && regionalGuard.eligible[0].deployment.modelId === 'regional-compatible'
+    && regionalGuard.excluded.some(entry => entry.deployment.modelId === 'wrong-region'
       && entry.reasons.includes('data_region:eu-west'))
-    && regionalDecision.excludedCandidates.some(entry => entry.deployment.modelId === 'missing-parameter'
+    && regionalGuard.excluded.some(entry => entry.deployment.modelId === 'missing-parameter'
       && entry.reasons.includes('protocol_parameter:strict_json')),
-  'auto hard filters: data region and required protocol parameters are case-normalized and enforced', checks);
-
-  const qualityPool = [
-    candidate('p', 'best', {
-      expectedInputCostUsdPerM: 20,
-      expectedOutputCostUsdPerM: 60,
-      qualityByTask: { chat: { successes: 98, attempts: 100 } },
-    }),
-    candidate('p', 'near', {
-      expectedInputCostUsdPerM: 0.1,
-      expectedOutputCostUsdPerM: 0.2,
-      qualityByTask: { chat: { successes: 96, attempts: 100 } },
-    }),
-    candidate('p', 'cheap-low', {
-      expectedInputCostUsdPerM: 0.01,
-      expectedOutputCostUsdPerM: 0.02,
-      qualityByTask: { chat: { successes: 85, attempts: 100 } },
-    }),
-  ];
-  const quality = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'quality' },
-    defaultRoutePolicy('quality'), qualityPool, request({ transactionId: 'quality-turn', affinityKey: 'quality' }),
-  );
-  const balanced = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'balanced' },
-    defaultRoutePolicy('balanced'), qualityPool, request({ transactionId: 'balanced-turn', affinityKey: 'balanced' }),
-  );
-  const cost = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'cost' },
-    defaultRoutePolicy('cost'), qualityPool, request({ transactionId: 'cost-turn', affinityKey: 'cost' }),
-  );
-  assert(quality.resolvedDeployment?.modelId === 'best'
-    && balanced.resolvedDeployment?.modelId === 'near'
-    && cost.resolvedDeployment?.modelId !== 'cheap-low',
-  'auto quality bands: quality is exact, balanced admits 2%, cost cannot cross 6%', checks);
-
-  const speedBand = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'speed' },
-    defaultRoutePolicy('speed'), [
-      candidate('speed-provider', 'quality-anchor', { latencyMs: 1_000, throughput: 20, qualityByTask: { chat: { successes: 98, attempts: 100 } } }),
-      candidate('speed-provider', 'fast-within-band', { latencyMs: 20, throughput: 400, qualityByTask: { chat: { successes: 94, attempts: 100 } } }),
-      candidate('speed-provider', 'fast-outside-band', { latencyMs: 1, throughput: 1_000, qualityByTask: { chat: { successes: 93, attempts: 100 } } }),
-    ], request({ transactionId: 'speed-band', affinityKey: 'speed-band' }),
-  );
-  assert(speedBand.resolvedDeployment?.modelId === 'fast-within-band'
-    && !speedBand.rankedCandidates.some(item => item.deployment.modelId === 'fast-outside-band'),
-  'auto quality bands: speed selects the fastest candidate inside its 4% loss band', checks);
+  'auto guard: data region and required protocol parameters are case-normalized and enforced', checks);
 
   const constrainedPolicy: RoutePolicy = {
-    ...defaultRoutePolicy('cost'),
+    ...defaultRoutePolicy('balanced'),
     privacy: 'zdr',
     maxExpectedCostUsd: 0.003,
   };
-  const constrained = router.route(
-    {
+  const constrainedGuard = evaluateRouteEligibility({
+    selection: {
       kind: 'auto',
       scope: { kind: 'global' },
       policyId: 'cost',
@@ -225,121 +215,124 @@ export function verifyAutoRouter(): Check[] {
         { providerId: 'constraints', modelId: 'eligible' },
       ],
     },
-    constrainedPolicy,
-    [
+    policy: constrainedPolicy,
+    request: request({ transactionId: 'constraints' }),
+    candidates: [
       candidate('constraints', 'outside-subset', { privacy: ['zdr'] }),
       candidate('constraints', 'wrong-privacy', { privacy: ['default'] }),
       candidate('constraints', 'over-budget', { privacy: ['zdr'], expectedInputCostUsdPerM: 10, expectedOutputCostUsdPerM: 10 }),
       candidate('constraints', 'eligible', { privacy: ['default', 'zdr'], expectedInputCostUsdPerM: 1, expectedOutputCostUsdPerM: 1 }),
     ],
-    request({ transactionId: 'constraints', affinityKey: 'constraints' }),
-  );
-  assert(constrained.resolvedDeployment?.modelId === 'eligible'
-    && constrained.excludedCandidates.some(item => item.deployment.modelId === 'outside-subset' && item.reasons.includes('outside_subset'))
-    && constrained.excludedCandidates.some(item => item.deployment.modelId === 'wrong-privacy' && item.reasons.includes('privacy:zdr'))
-    && constrained.excludedCandidates.some(item => item.deployment.modelId === 'over-budget' && item.reasons.includes('budget_exceeded')),
-  'auto hard filters: explicit subset, privacy and expected-cost budget are enforced together', checks);
+  });
+  assert(constrainedGuard.eligible.length === 1
+    && constrainedGuard.eligible[0].deployment.modelId === 'eligible'
+    && constrainedGuard.excluded.some(item => item.deployment.modelId === 'outside-subset' && item.reasons.includes('outside_subset'))
+    && constrainedGuard.excluded.some(item => item.deployment.modelId === 'wrong-privacy' && item.reasons.includes('privacy:zdr'))
+    && constrainedGuard.excluded.some(item => item.deployment.modelId === 'over-budget' && item.reasons.includes('budget_exceeded')),
+  'auto guard: explicit subset, privacy and expected-cost budget are enforced together', checks);
 
-  const unknownCost = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'cost' },
-    defaultRoutePolicy('cost'), [
-      candidate('p', 'known-cost', { expectedInputCostUsdPerM: 5, expectedOutputCostUsdPerM: 5 }),
-      candidate('p', 'unknown-cost', { expectedInputCostUsdPerM: undefined, expectedOutputCostUsdPerM: undefined }),
-    ], request({ transactionId: 'unknown-cost', affinityKey: 'unknown-cost' }),
-  );
-  assert(unknownCost.resolvedDeployment?.modelId === 'known-cost',
-    'auto cost: unknown price is worst-case rather than free', checks);
+  const unavailableGuard = evaluateRouteEligibility({
+    selection: autoSelection(),
+    policy: defaultRoutePolicy('balanced'),
+    request: request({ transactionId: 'unavailable' }),
+    candidates: [candidate('p', 'healthy'), candidate('p', 'balance-blocked', { unavailableReason: 'balance_blocked' })],
+  });
+  assert(unavailableGuard.eligible.length === 1
+    && unavailableGuard.excluded.some(entry => entry.deployment.modelId === 'balance-blocked' && entry.reasons.includes('balance_blocked')),
+  'auto guard: an explicitly unavailable deployment is excluded with its own reason instead of a silent disable', checks);
 
-  const affinityPool = [
-    candidate('p', 'incumbent', { latencyMs: 1_000 }),
-    candidate('p', 'challenger', { latencyMs: 950 }),
+  // ---- JEV decision semantics -------------------------------------------
+
+  const costPool = [
+    candidate('p', 'expensive', { expectedInputCostUsdPerM: 20, expectedOutputCostUsdPerM: 60 }),
+    candidate('p', 'cheap', { expectedInputCostUsdPerM: 0.1, expectedOutputCostUsdPerM: 0.2 }),
+    candidate('p', 'mid', { expectedInputCostUsdPerM: 5, expectedOutputCostUsdPerM: 5 }),
   ];
-  const incumbent = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'speed' },
-    defaultRoutePolicy('speed'), [affinityPool[0]], request({ transactionId: 'affinity-1', affinityKey: 'sticky' }),
-  );
-  const sticky = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'speed' },
-    defaultRoutePolicy('speed'), affinityPool, request({ transactionId: 'affinity-2', affinityKey: 'sticky' }),
-  );
-  assert(incumbent.resolvedDeployment?.modelId === 'incumbent'
-    && sticky.resolvedDeployment?.modelId === 'incumbent'
-    && sticky.pinReason === 'cache_affinity',
-  'auto affinity: a sub-0.15 challenger cannot displace a valid five-minute route', checks);
-  router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'speed' },
-    defaultRoutePolicy('speed'), [candidate('p', 'slow-incumbent', { latencyMs: 1_000, throughput: 20 })],
-    request({ transactionId: 'threshold-1', affinityKey: 'switch-threshold' }),
-  );
-  const thresholdSwitch = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'speed' },
-    defaultRoutePolicy('speed'), [
-      candidate('p', 'slow-incumbent', { latencyMs: 1_000, throughput: 20 }),
-      candidate('p', 'decisive-challenger', { latencyMs: 10, throughput: 400 }),
-    ],
-    request({ transactionId: 'threshold-2', affinityKey: 'switch-threshold' }),
-  );
-  assert(thresholdSwitch.resolvedDeployment?.modelId === 'decisive-challenger' && !thresholdSwitch.pinReason,
-    'auto affinity: a challenger with at least 0.15 utility advantage switches immediately', checks);
-  const stickyIncumbent = sticky.rankedCandidates.find(item => item.deployment.modelId === 'incumbent');
-  const stickyChallenger = sticky.rankedCandidates.find(item => item.deployment.modelId === 'challenger');
-  assert(stickyIncumbent?.components.cache === 1 && stickyChallenger?.components.cache === 0,
-    'auto affinity: the incumbent receives the cache component and challengers do not', checks);
-  now += 5 * 60_000 + 1;
-  const expired = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'speed' },
-    defaultRoutePolicy('speed'), affinityPool, request({ transactionId: 'affinity-3', affinityKey: 'sticky' }),
-  );
-  assert(expired.pinReason !== 'cache_affinity', 'auto affinity: five-minute expiry causes fresh selection', checks);
+  const balancedDecision = await decide(autoSelection('balanced'), defaultRoutePolicy('balanced'), costPool, request({ transactionId: 'balanced-turn' }));
+  assert(balancedDecision.resolvedDeployment?.modelId === 'cheap'
+    && balancedDecision.alternatives.length === 2,
+  'auto JEV: the decision engine weighs cost with other candidate evidence and returns ordered alternates', checks);
+
+  const speedPool = [
+    candidate('p', 'slow', { latencyMs: 1_000, throughput: 20 }),
+    candidate('p', 'fast', { latencyMs: 20, throughput: 400 }),
+  ];
+  const aggressiveDecision = await decide(autoSelection('aggressive'), defaultRoutePolicy('aggressive'), speedPool, request({ transactionId: 'aggressive-turn' }));
+  assert(aggressiveDecision.resolvedDeployment?.modelId === 'fast'
+    && aggressiveDecision.alternatives.some(item => item.modelId === 'slow'),
+  'auto JEV: aggressive tendency still selects only an eligible deployment using live evidence', checks);
+
+  const tiePool = [
+    candidate('p', 'first-in-catalog'),
+    candidate('p', 'second-in-catalog'),
+  ];
+  const tieDecision = await decide(autoSelection('balanced'), defaultRoutePolicy('balanced'), tiePool, request({ transactionId: 'tie-turn' }));
+  assert(tieDecision.resolvedDeployment?.modelId === 'first-in-catalog',
+    'auto JEV: identical candidates resolve by catalog order, never by history', checks);
+
+  const preferencePool = [
+    candidate('p', 'preferred', { preference: 1, expectedInputCostUsdPerM: 50, expectedOutputCostUsdPerM: 50 }),
+    candidate('p', 'cheaper', { expectedInputCostUsdPerM: 0.1, expectedOutputCostUsdPerM: 0.1 }),
+  ];
+  const preferenceDecision = await decide(autoSelection('balanced'), defaultRoutePolicy('balanced'), preferencePool, request({ transactionId: 'preference-turn' }));
+  assert(preferenceDecision.resolvedDeployment?.modelId === 'preferred'
+    && preferenceDecision.jev.reasonCodes.includes('user_preference_applied'),
+  'auto JEV: explicit user route preference is honored and reported in the audit reason codes', checks);
+
+  const openCircuitDecision = await decide(autoSelection('balanced'), defaultRoutePolicy('balanced'), [
+    candidate('p', 'circuit-open', { circuit: 'open', expectedInputCostUsdPerM: 0.01, expectedOutputCostUsdPerM: 0.01 }),
+    candidate('p', 'circuit-closed', { circuit: 'closed', expectedInputCostUsdPerM: 50, expectedOutputCostUsdPerM: 50 }),
+  ], request({ transactionId: 'circuit-turn' }));
+  assert(openCircuitDecision.resolvedDeployment?.modelId === 'circuit-closed',
+    'auto JEV: an open circuit demotes an endpoint without removing it from the catalog', checks);
+
+  const continuationDecision = await decide(autoSelection('conservative'), defaultRoutePolicy('conservative'), tiePool, request({ transactionId: 'continuation-turn' }), {
+    previousDeployment: { providerId: 'p', modelId: 'second-in-catalog' },
+  });
+  assert(continuationDecision.resolvedDeployment?.modelId === 'second-in-catalog'
+    && continuationDecision.jev.reasonCodes.includes('previous_deployment_continuation'),
+  'auto JEV: an exact tie continues the previous deployment for context continuity', checks);
+
+  const transactionPool = [candidate('p', 'a'), candidate('p', 'b')];
+  const transactionRequest = request({ transactionId: 'build-transaction' });
+  const firstTurn = await decide(autoSelection('balanced'), defaultRoutePolicy('balanced'), transactionPool, transactionRequest, {
+    pinnedDeployment: { providerId: 'p', modelId: 'b' },
+  });
+  assert(firstTurn.resolvedDeployment?.modelId === 'b'
+    && firstTurn.pinReason === 'transaction'
+    && firstTurn.alternatives.some(item => item.modelId === 'a'),
+  'auto transaction pin: one Build keeps its first deployment and the JEV primary becomes the first alternate', checks);
+
+  // ---- Operational health (no learning) ---------------------------------
 
   const interruptedStreak = { providerId: 'p', modelId: 'interrupted-streak' };
-  router.recordEndpointFailure(interruptedStreak, 'transport');
-  router.recordEndpointFailure(interruptedStreak, 'transport');
-  router.recordEndpointFailure(interruptedStreak, 'invalid_request');
-  router.recordEndpointFailure(interruptedStreak, 'transport');
-  assert(router.endpointMetrics(interruptedStreak).circuit === 'closed',
+  controller.recordEndpointFailure(interruptedStreak, 'transport');
+  controller.recordEndpointFailure(interruptedStreak, 'transport');
+  controller.recordEndpointFailure(interruptedStreak, 'invalid_request');
+  controller.recordEndpointFailure(interruptedStreak, 'transport');
+  assert(controller.endpointMetrics(interruptedStreak).circuit === 'closed',
     'auto health: a non-transport failure breaks the consecutive transport streak', checks);
 
-  router.recordEndpointFailure({ providerId: 'p', modelId: 'broken' }, 'transport');
-  router.recordEndpointFailure({ providerId: 'p', modelId: 'broken' }, 'transport');
-  router.recordEndpointFailure({ providerId: 'p', modelId: 'broken' }, 'transport');
-  const circuit = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'balanced' },
-    defaultRoutePolicy('balanced'), [candidate('p', 'broken'), candidate('p', 'healthy')],
-    request({ transactionId: 'circuit', affinityKey: 'circuit' }),
-  );
-  assert(router.endpointMetrics({ providerId: 'p', modelId: 'broken' }).circuit === 'open'
-    && !circuit.excludedCandidates.some(entry => entry.deployment.modelId === 'broken'),
-  'auto health: failed endpoint remains eligible while its circuit is only diagnostic', checks);
+  controller.recordEndpointFailure({ providerId: 'p', modelId: 'broken' }, 'transport');
+  controller.recordEndpointFailure({ providerId: 'p', modelId: 'broken' }, 'transport');
+  controller.recordEndpointFailure({ providerId: 'p', modelId: 'broken' }, 'transport');
+  assert(controller.endpointMetrics({ providerId: 'p', modelId: 'broken' }).circuit === 'open',
+    'auto health: three consecutive transport failures open the circuit for diagnostics', checks);
   now += 60_001;
-  const halfOpenMetrics = router.endpointMetrics({ providerId: 'p', modelId: 'broken' });
-  const halfOpen = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'balanced' },
-    defaultRoutePolicy('balanced'), [candidate('p', 'broken')],
-    request({ transactionId: 'half-open-probe', affinityKey: 'half-open-probe' }),
-  );
-  const secondHalfOpen = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'balanced' },
-    defaultRoutePolicy('balanced'), [candidate('p', 'broken')],
-    request({ transactionId: 'half-open-blocked', affinityKey: 'half-open-blocked' }),
-  );
-  assert(halfOpenMetrics.circuit === 'half_open'
-    && halfOpen.resolvedDeployment?.modelId === 'broken'
-    && secondHalfOpen.resolvedDeployment?.modelId === 'broken'
-    && !secondHalfOpen.excludedCandidates.some(entry => entry.reasons.includes('circuit_open')),
-  'auto health: metrics reads are pure and half-open diagnostics never disable a subsequent request', checks);
-  router.recordEndpointSuccess({ providerId: 'p', modelId: 'broken' }, 800);
+  assert(controller.endpointMetrics({ providerId: 'p', modelId: 'broken' }).circuit === 'half_open',
+    'auto health: metrics reads are pure and report the half-open probe window', checks);
+  controller.recordEndpointSuccess({ providerId: 'p', modelId: 'broken' }, 800);
 
-  const metricsRouter = new AutoRouter({ now: () => now });
+  const metricsController = new RouteExecutionController({ now: () => now });
   const measuredDeployment = { providerId: 'metrics-provider', modelId: 'metrics-model' };
-  metricsRouter.recordEndpointSuccess(measuredDeployment, 100, 10);
-  metricsRouter.recordEndpointSuccess(measuredDeployment, 300, 30);
-  metricsRouter.recordEndpointSuccess(measuredDeployment, 200, 20);
-  metricsRouter.recordEndpointFailure(measuredDeployment, 'transport');
-  metricsRouter.recordToolOutcome(measuredDeployment, true);
-  metricsRouter.recordToolOutcome(measuredDeployment, true);
-  metricsRouter.recordToolOutcome(measuredDeployment, false);
-  const measured = metricsRouter.endpointMetrics(measuredDeployment);
+  metricsController.recordEndpointSuccess(measuredDeployment, 100, 10);
+  metricsController.recordEndpointSuccess(measuredDeployment, 300, 30);
+  metricsController.recordEndpointSuccess(measuredDeployment, 200, 20);
+  metricsController.recordEndpointFailure(measuredDeployment, 'transport');
+  metricsController.recordToolOutcome(measuredDeployment, true);
+  metricsController.recordToolOutcome(measuredDeployment, true);
+  metricsController.recordToolOutcome(measuredDeployment, false);
+  const measured = metricsController.endpointMetrics(measuredDeployment);
   assert(measured.attempts === 4
     && Math.abs(measured.reliability - 0.625) < 1e-9
     && measured.p50 === 200
@@ -349,49 +342,26 @@ export function verifyAutoRouter(): Check[] {
     && Math.abs(measured.toolValidity - (4 / 7)) < 1e-9,
   'auto health metrics: latency percentiles, median throughput, Beta reliability and tool validity use observed outcomes', checks);
 
-  metricsRouter.recordEndpointFailure(measuredDeployment, 'auth');
-  const authOpen = metricsRouter.endpointMetrics(measuredDeployment);
-  metricsRouter.resetEndpointAfterConfigChange(measuredDeployment);
-  const authReset = metricsRouter.endpointMetrics(measuredDeployment);
+  metricsController.recordEndpointFailure(measuredDeployment, 'auth');
+  const authOpen = metricsController.endpointMetrics(measuredDeployment);
+  metricsController.resetEndpointAfterConfigChange(measuredDeployment);
+  const authReset = metricsController.endpointMetrics(measuredDeployment);
   assert(authOpen.circuit === 'open' && authReset.circuit === 'closed' && authReset.attempts === 0,
     'auto health: a provider configuration change clears an authentication circuit', checks);
 
-  const feedbackNow = Date.parse('2026-07-30T00:00:00.000Z');
-  const feedbackDeployment = { providerId: 'feedback-provider', modelId: 'feedback-model' };
-  const spacedFeedback = new AutoRouter({ now: () => feedbackNow });
-  const feedbackActivation = [
-    spacedFeedback.recordFeedback({ deployment: feedbackDeployment, taskClass: 'coding', score: 1, source: 'explicit_rating', at: feedbackNow - 29 * 24 * 60 * 60_000 }),
-    spacedFeedback.recordFeedback({ deployment: feedbackDeployment, taskClass: 'coding', score: 1, source: 'explicit_rating', at: feedbackNow - 15 * 24 * 60 * 60_000 }),
-    spacedFeedback.recordFeedback({ deployment: feedbackDeployment, taskClass: 'coding', score: 1, source: 'explicit_rating', at: feedbackNow - 1 * 24 * 60 * 60_000 }),
-  ];
-  const clusteredFeedback = new AutoRouter({ now: () => feedbackNow });
-  for (const offsetMs of [3_000, 2_000, 1_000]) {
-    clusteredFeedback.recordFeedback({ deployment: feedbackDeployment, taskClass: 'coding', score: 1, source: 'explicit_rating', at: feedbackNow - offsetMs });
-  }
-  const spacedPreference = spacedFeedback.learnedPreference(feedbackDeployment, ['coding']);
-  const clusteredPreference = clusteredFeedback.learnedPreference(feedbackDeployment, ['coding']);
-  assert(feedbackActivation[0] === false
-    && feedbackActivation[1] === false
-    && feedbackActivation[2] === true
-    && spacedPreference > 0
-    && spacedPreference < clusteredPreference,
-  'auto preference: learning starts at three domain events and EWMA decays between individually spaced events', checks);
+  // ---- Provider-local recovery ladder -----------------------------------
 
   const fallbackPool = [
-    candidate('p', 'primary', {
-      deployment: { providerId: 'p', modelId: 'primary', logicalModelGroupId: 'logical-primary' },
-      qualityByTask: { chat: { successes: 10, attempts: 10 } },
-    }),
+    candidate('p', 'primary', { deployment: { providerId: 'p', modelId: 'primary', logicalModelGroupId: 'logical-primary' } }),
     candidate('p', 'equivalent', { deployment: { providerId: 'p', modelId: 'equivalent', logicalModelGroupId: 'logical-primary' } }),
     candidate('p', 'fallback', { fallbackOnly: true }),
     candidate('other', 'forbidden', { fallbackOnly: true }),
   ];
-  const fallbackDecision = router.route(
+  const fallbackDecision = await decide(
     { kind: 'auto', scope: { kind: 'provider', providerId: 'p' }, policyId: 'balanced' },
-    defaultRoutePolicy('balanced'), fallbackPool,
-    request({ transactionId: 'fallback', affinityKey: 'fallback' }),
+    defaultRoutePolicy('balanced'), fallbackPool, request({ transactionId: 'fallback' }),
   );
-  const ladder = router.planAttempts(fallbackDecision, fallbackPool, {
+  const ladder = controller.planAttempts(fallbackDecision, fallbackPool, {
     error: classifyRouteFailure('HTTP 503 upstream unavailable'),
     streamCommitted: false,
     sideEffectCommitted: false,
@@ -401,7 +371,7 @@ export function verifyAutoRouter(): Check[] {
     && ladder[1].deployment.modelId === 'equivalent'
     && ladder.every(attempt => attempt.deployment.providerId === 'p'),
   'auto fallback: failed initial call plus retry and explicit equivalent stay within three total attempts', checks);
-  const fallbackDisabledLadder = router.planAttempts(fallbackDecision, fallbackPool, {
+  const fallbackDisabledLadder = controller.planAttempts(fallbackDecision, fallbackPool, {
     error: classifyRouteFailure('HTTP 503 upstream unavailable'),
     streamCommitted: false,
     sideEffectCommitted: false,
@@ -411,7 +381,7 @@ export function verifyAutoRouter(): Check[] {
     && fallbackDisabledLadder[0].kind === 'retry_same_deployment'
     && fallbackDisabledLadder[0].deployment.modelId === fallbackDecision.resolvedDeployment?.modelId,
   'auto fallback off: only a same-deployment retry is planned and no other model identity is eligible', checks);
-  const fallbackDisabledNonRetryable = router.planAttempts(fallbackDecision, fallbackPool, {
+  const fallbackDisabledNonRetryable = controller.planAttempts(fallbackDecision, fallbackPool, {
     error: classifyRouteFailure('HTTP 402 insufficient_quota'),
     streamCommitted: false,
     sideEffectCommitted: false,
@@ -419,24 +389,21 @@ export function verifyAutoRouter(): Check[] {
   });
   assert(fallbackDisabledNonRetryable.length === 0,
     'auto fallback off: a non-retryable failure cannot schedule an equivalent, fallback, or alternate model', checks);
+
   const globalFallbackPool = [
     ...fallbackPool,
     candidate('other', 'same-model-name', { fallbackOnly: true }),
     candidate('other', 'ordinary-backup'),
   ];
-  const globalFallbackDecision = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'balanced' },
-    defaultRoutePolicy('balanced'), globalFallbackPool,
-    request({ transactionId: 'global-provider-boundary', affinityKey: 'global-provider-boundary' }),
-  );
-  const globalFallbackLadder = router.planAttempts(globalFallbackDecision, globalFallbackPool, {
+  const globalFallbackDecision = await decide(autoSelection(), defaultRoutePolicy('balanced'), globalFallbackPool, request({ transactionId: 'global-provider-boundary' }));
+  const globalFallbackLadder = controller.planAttempts(globalFallbackDecision, globalFallbackPool, {
     error: classifyRouteFailure('HTTP 503 upstream unavailable'),
     streamCommitted: false,
     sideEffectCommitted: false,
   });
   assert(globalFallbackLadder.every(attempt => attempt.deployment.providerId === 'p'),
     'auto fallback: global Auto still keeps every retry and fallback on the failed provider', checks);
-  const fallbackOnlyLadder = router.planAttempts(fallbackDecision, fallbackPool.filter(item => item.deployment.modelId !== 'equivalent'), {
+  const fallbackOnlyLadder = controller.planAttempts(fallbackDecision, fallbackPool.filter(item => item.deployment.modelId !== 'equivalent'), {
     error: classifyRouteFailure('HTTP 503 upstream unavailable'),
     streamCommitted: false,
     sideEffectCommitted: false,
@@ -445,21 +412,22 @@ export function verifyAutoRouter(): Check[] {
     && fallbackOnlyLadder[1].deployment.modelId === 'fallback'
     && fallbackOnlyLadder.every(attempt => attempt.deployment.providerId === 'p'),
   'auto fallback: fallback-only models are used only inside the original scope', checks);
+
   const previewFallback = candidate('p', 'unsafe-preview-fallback', { fallbackOnly: true, preview: true });
   const previewFallbackPool = [fallbackPool[0], previewFallback];
-  const previewFallbackDecision = router.route(
+  const previewFallbackDecision = await decide(
     { kind: 'auto', scope: { kind: 'provider', providerId: 'p' }, policyId: 'balanced' },
-    defaultRoutePolicy('balanced'), previewFallbackPool,
-    request({ transactionId: 'unsafe-preview-fallback', affinityKey: 'unsafe-preview-fallback' }),
+    defaultRoutePolicy('balanced'), previewFallbackPool, request({ transactionId: 'unsafe-preview-fallback' }),
   );
-  const previewFallbackLadder = router.planAttempts(previewFallbackDecision, previewFallbackPool, {
+  const previewFallbackLadder = controller.planAttempts(previewFallbackDecision, previewFallbackPool, {
     error: classifyRouteFailure('HTTP 503 upstream unavailable'),
     streamCommitted: false,
     sideEffectCommitted: false,
   });
   assert(previewFallbackLadder.length === 1 && previewFallbackLadder[0].kind === 'retry_same_deployment',
     'auto fallback: fallback-only candidates cannot bypass preview or other initial hard filters', checks);
-  const overBudget429 = router.planAttempts(fallbackDecision, fallbackPool, {
+
+  const overBudget429 = controller.planAttempts(fallbackDecision, fallbackPool, {
     error: classifyRouteFailure('HTTP 429 Retry-After: 10s'),
     streamCommitted: false,
     sideEffectCommitted: false,
@@ -469,17 +437,17 @@ export function verifyAutoRouter(): Check[] {
     && overBudget429[0].kind === 'equivalent_deployment'
     && overBudget429[1].kind === 'fallback_model',
   'auto retry budget: Retry-After is honored and an over-5s interactive wait is not performed', checks);
+
   const ordinaryBackupPool = [
     candidate('p', 'quota-primary', { reliability: 1, throughput: 100, latencyMs: 100 }),
     candidate('p', 'ordinary-backup', { reliability: 0.8, throughput: 10, latencyMs: 2_000 }),
   ];
-  const ordinaryBackupDecision = router.route(
+  const ordinaryBackupDecision = await decide(
     { kind: 'auto', scope: { kind: 'provider', providerId: 'p' }, policyId: 'balanced' },
-    defaultRoutePolicy('balanced'), ordinaryBackupPool,
-    request({ transactionId: 'quota-alternate', affinityKey: 'quota-alternate' }),
+    defaultRoutePolicy('balanced'), ordinaryBackupPool, request({ transactionId: 'quota-alternate' }),
   );
   const quotaFailure = classifyRouteFailure('HTTP 429 insufficient_quota: account credits exhausted');
-  const quotaLadder = router.planAttempts(ordinaryBackupDecision, ordinaryBackupPool, {
+  const quotaLadder = controller.planAttempts(ordinaryBackupDecision, ordinaryBackupPool, {
     error: quotaFailure,
     streamCommitted: false,
     sideEffectCommitted: false,
@@ -490,13 +458,13 @@ export function verifyAutoRouter(): Check[] {
     && quotaLadder.length === 1
     && quotaLadder[0].kind === 'alternate_model'
     && quotaLadder[0].deployment.modelId === 'ordinary-backup',
-  'auto balance recovery: exhausted quota skips same-deployment retry and switches to an ordinary eligible model', checks);
-  const batchDecision = router.route(
+  'auto balance recovery: exhausted quota skips same-deployment retry and switches to a JEV alternate', checks);
+
+  const batchDecision = await decide(
     { kind: 'auto', scope: { kind: 'provider', providerId: 'p' }, policyId: 'balanced' },
-    defaultRoutePolicy('balanced'), fallbackPool,
-    request({ transactionId: 'fallback-batch', affinityKey: 'fallback-batch', batch: true }),
+    defaultRoutePolicy('balanced'), fallbackPool, request({ transactionId: 'fallback-batch', batch: true }),
   );
-  const batch429 = router.planAttempts(batchDecision, fallbackPool, {
+  const batch429 = controller.planAttempts(batchDecision, fallbackPool, {
     error: classifyRouteFailure('HTTP 429 Retry-After: 10s'),
     streamCommitted: false,
     sideEffectCommitted: false,
@@ -507,40 +475,69 @@ export function verifyAutoRouter(): Check[] {
     && batch429[0]?.retryDelayMs === 10_000,
   'auto retry budget: interactive requests cap waits at 5s while batch requests admit Retry-After up to 15s', checks);
   const refused = [
-    router.planAttempts(fallbackDecision, fallbackPool, { error: classifyRouteFailure('content policy refusal'), streamCommitted: false, sideEffectCommitted: false }),
-    router.planAttempts(fallbackDecision, fallbackPool, { error: classifyRouteFailure('HTTP 503'), streamCommitted: true, sideEffectCommitted: false }),
-    router.planAttempts(fallbackDecision, fallbackPool, { error: classifyRouteFailure('HTTP 503'), streamCommitted: false, sideEffectCommitted: true }),
+    controller.planAttempts(fallbackDecision, fallbackPool, { error: classifyRouteFailure('content policy refusal'), streamCommitted: false, sideEffectCommitted: false }),
+    controller.planAttempts(fallbackDecision, fallbackPool, { error: classifyRouteFailure('HTTP 503'), streamCommitted: true, sideEffectCommitted: false }),
+    controller.planAttempts(fallbackDecision, fallbackPool, { error: classifyRouteFailure('HTTP 503'), streamCommitted: false, sideEffectCommitted: true }),
   ];
   assert(refused.every(plan => plan.length === 0),
     'auto fallback: moderation, committed streams and side effects cannot switch or replay', checks);
 
-  const policy: RoutePolicy = defaultRoutePolicy('balanced');
-  const fixed = router.route(
-    { kind: 'fixed', deployment: { providerId: 'p', modelId: 'best' } },
-    policy, qualityPool, request({ transactionId: 'fixed', affinityKey: 'fixed' }),
-  );
-  assert(fixed.resolvedDeployment?.modelId === 'best' && fixed.rankedCandidates.length === 1,
-    'auto contract: fixed selection bypasses model ranking', checks);
-  assert(!JSON.stringify(balanced).includes('Explain this result'),
-    'auto audit: RouteDecision does not retain prompt text', checks);
+  // ---- Audit + determinism ----------------------------------------------
 
-  const changedCatalog = router.route(
-    { kind: 'auto', scope: { kind: 'global' }, policyId: 'balanced' },
-    defaultRoutePolicy('balanced'),
-    qualityPool.map(item => item.deployment.modelId === 'near'
-      ? { ...item, expectedInputCostUsdPerM: Number(item.expectedInputCostUsdPerM) + 1 }
-      : item),
-    request({ transactionId: 'catalog-change', affinityKey: 'catalog-change' }),
-  );
-  assert(changedCatalog.catalogSnapshotHash !== balanced.catalogSnapshotHash,
+  const auditDecision = await decide(autoSelection(), defaultRoutePolicy('balanced'), costPool, request({ transactionId: 'audit-turn' }));
+  const alternateCandidates = costPool.map(item => item.deployment.modelId === 'mid'
+    ? { ...item, expectedInputCostUsdPerM: Number(item.expectedInputCostUsdPerM) + 1 }
+    : item);
+  const changedCatalog = await decide(autoSelection(), defaultRoutePolicy('balanced'), alternateCandidates, request({ transactionId: 'catalog-change' }));
+  assert(changedCatalog.catalogSnapshotHash !== auditDecision.catalogSnapshotHash,
     'auto audit: catalog snapshot hash changes when a routing input changes', checks);
+  assert(!JSON.stringify(auditDecision).includes('Explain this result'),
+    'auto audit: RouteDecision does not retain prompt text', checks);
+  assert(auditDecision.decisionSource === 'jev'
+    && auditDecision.jev.modelVersion.length > 0
+    && auditDecision.jev.reasonCodes.length > 0
+    && typeof auditDecision.jev.latencyMs === 'number'
+    && !('rankedCandidates' in (auditDecision as unknown as Record<string, unknown>)),
+  'auto audit: decision source, JEV model version, reason codes and latency are recorded without legacy ranking', checks);
+
+  // ---- Legacy learning has no API left ----------------------------------
+
+  const controllerSurface = controller as unknown as Record<string, unknown>;
+  assert(typeof controllerSurface.recordFeedback === 'undefined'
+    && typeof controllerSurface.learnedPreference === 'undefined'
+    && typeof controllerSurface.clearLearnedPreferences === 'undefined',
+  'auto router v2: the feedback, EWMA preference and learned-preference APIs are gone', checks);
+  const cwd = process.cwd();
+  const routerSource = fs.readFileSync(path.join(cwd, 'src', 'core', 'autoRouter.ts'), 'utf-8');
+  const agentSource = fs.readFileSync(path.join(cwd, 'src', 'core', 'agent.ts'), 'utf-8');
+  const runnerSource = fs.readFileSync(path.join(cwd, 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
+  const forbidden = [
+    'learnedPreference',
+    'FEEDBACK_WINDOW_MS',
+    'FEEDBACK_HALF_LIFE_MS',
+    'recordFeedback(',
+    'loadLearnedRouteFeedback',
+    'recordRouteQualityObservation',
+    'recordObjectiveRouteResult',
+    'objective_success',
+    'cache_affinity',
+    'switchThreshold',
+  ];
+  assert(forbidden.every(token => !routerSource.includes(token) && !agentSource.includes(token) && !runnerSource.includes(token)),
+    'auto router v2: no online preference learning, quality observation or cache affinity remains on the routing path', checks);
+  assert(!agentSource.includes("updateModelByDeployment(deployment.providerId, deployment.modelId, { quality_by_task"),
+    'auto router v2: quality_by_task is never written by runtime feedback', checks);
 
   return checks;
 }
 
 if (require.main === module) {
-  const checks = verifyAutoRouter();
-  const failed = checks.filter(check => !check.ok);
-  console.log(`\nAuto Router verification: ${checks.length - failed.length}/${checks.length} passed`);
-  if (failed.length) process.exitCode = 1;
+  verifyAutoRouter().then(checks => {
+    const failed = checks.filter(check => !check.ok);
+    console.log(`\nAuto Router verification: ${checks.length - failed.length}/${checks.length} passed`);
+    if (failed.length) process.exitCode = 1;
+  }).catch(error => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

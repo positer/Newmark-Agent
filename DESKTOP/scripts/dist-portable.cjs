@@ -41,6 +41,41 @@ function log(message) {
   console.log(`[dist-windows-release] ${message}`);
 }
 
+/**
+ * dev-0.6.6: diagnostics and probes stay in source but must never ship. The
+ * utility host bundle is rebuilt in stripped mode right before packaging, so
+ * the artifact cannot contain probe sampling, heap-snapshot capability or a
+ * probe file path even if a developer build was run first.
+ */
+function buildPackagedUtilityHost() {
+  const script = path.join(root, 'scripts', 'build-conversation-utility-host.cjs');
+  const result = spawnSync(process.execPath, [script, '--strip-diagnostics'], { cwd: root, stdio: 'inherit' });
+  if (result.status !== 0) throw new Error(`utility host strip build failed with status ${result.status}`);
+}
+
+const packagedDiagnosticsForbidden = [
+  { marker: 'NEWMARK_MEMORY_PROBE', label: 'memory probe env switch' },
+  { marker: 'writeHeapSnapshot', label: 'heap snapshot capability' },
+  { marker: 'host-memory.jsonl', label: 'probe output file' },
+  { marker: 'installRuntimeMemoryProbe', label: 'runtime memory probe' },
+];
+
+function assertNoDiagnosticsInPackage(files, unpackedRuntimeDist) {
+  const shippedTestEntries = files.filter(entry => entry.replace(/\\/g, '/').includes('/dist/tests/'));
+  if (shippedTestEntries.length) {
+    throw new Error(`app.asar ships ${shippedTestEntries.length} compiled test/diagnostic entries (e.g. ${shippedTestEntries[0]})`);
+  }
+  const probeEntries = files.filter(entry => /memoryProbe/i.test(entry));
+  if (probeEntries.length) {
+    throw new Error(`app.asar ships diagnostic probe modules (${probeEntries.slice(0, 3).join(', ')})`);
+  }
+  const hostBundle = path.join(unpackedRuntimeDist, 'conversation-utility-host.bundle.cjs');
+  const bundleText = fs.readFileSync(hostBundle, 'utf8');
+  for (const { marker, label } of packagedDiagnosticsForbidden) {
+    if (bundleText.includes(marker)) throw new Error(`packaged utility host still contains the ${label} (${marker})`);
+  }
+}
+
 function tryRm(target) {
   if (!fs.existsSync(target)) return true;
   try {
@@ -110,6 +145,8 @@ function verifyUnpackedOutput() {
   if (!files.includes('\\dist\\ui\\index.html')) throw new Error('app.asar missing dist/ui/index.html');
   if (!files.includes('\\dist\\ui\\lucide-sprite.svg')) throw new Error('app.asar missing dist/ui/lucide-sprite.svg');
   if (!files.includes('\\config.example.json')) throw new Error('app.asar missing config.example.json');
+  // dev-0.6.6: diagnostics, probes and compiled tests are source-only.
+  assertNoDiagnosticsInPackage(files, unpackedRuntimeDist);
 
   const extractDir = path.join(outputDir, '.verify-asar');
   tryRm(extractDir);
@@ -229,6 +266,9 @@ try {
   if (!tryRm(outputDir)) {
     throw new Error(`Refusing to build into a partially locked release directory: ${outputDir}`);
   }
+  // Strip source-only diagnostics before electron-builder copies `dist/` into
+  // the package, so no probe code can reach app.asar / the unpacked host bundle.
+  buildPackagedUtilityHost();
   runBuilder(['--win', 'dir', '--publish', 'never'], 'electron-builder dir');
   ensureNodePtyConptyAssets(nodePtyRoot);
   ensureNodePtyConptyAssets(path.join(unpackedDir, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty'));

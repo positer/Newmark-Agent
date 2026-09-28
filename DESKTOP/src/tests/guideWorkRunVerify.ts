@@ -9,6 +9,7 @@ import { Agent } from '../core/agent';
 import { ConversationKernel, type AgentPromptMessage } from '../core/conversationKernel';
 import { FlowEngine } from '../core/flow';
 import { filterPublicAssistantDelta, resetPublicAssistantDeltaFilter } from '../core/agentKernelRunner';
+import { readConversationStateDocument } from '../core/conversationStateDocument';
 import type { AgentWorkEvent, ConversationTarget, GuideReceipt, StreamToken } from '../core/types';
 
 const VALID_GUIDE_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWP4DwQACfsD/c8LaHIAAAAASUVORK5CYII=';
@@ -888,7 +889,7 @@ async function verifyImageOnlyDeferredGuideSurvivesCheckpointReloadExactlyOnce()
     assert.equal(stopped.checkpointed, true, 'first stop checkpoints the deferred image-only Guide');
     assert.equal(firstKernel.snapshot(target).continuations.length, 1,
       'checkpoint retains an image-only continuation even though its text is empty');
-    const checkpointState = fs.readFileSync(path.join(workspace!.path, 'conversations', 'state.json'), 'utf8');
+    const checkpointState = readConversationStateDocument(workspace!.path).hydratedText;
     assert.match(checkpointState, /user-image-[a-f0-9]{64}/,
       'checkpoint stores a stable attachment reference for the deferred Guide');
     assert.doesNotMatch(checkpointState, /data:image\/(?:png|jpe?g);base64,/i,
@@ -1076,7 +1077,7 @@ function verifyExactlyOnceAndV3Persistence(): void {
     agent.finishConversationWorkRun('run-managed-continuation', 'completed', '2026-07-13T00:03:05.000Z');
 
     const statePath = path.join(workspace!.path, 'conversations', 'state.json');
-    const raw = fs.readFileSync(statePath, 'utf-8');
+    const raw = readConversationStateDocument(workspace!.path).hydratedText;
     const stored = JSON.parse(raw) as {
       version: number;
       conversations: Record<string, { workRuns?: Array<Record<string, unknown>> }>;
@@ -1293,7 +1294,7 @@ function verifyStatefulHiddenReasoningAndLiveToolArgsSanitization(): void {
     assert.match(serializedLive, /visible answer/);
     assert.match(serializedLive, /visible tail/);
     agent.finishConversationWorkRun('hidden-stream-run', 'interrupted');
-    const stored = fs.readFileSync(path.join(workspace!.path, 'conversations', 'state.json'), 'utf8');
+    const stored = readConversationStateDocument(workspace!.path).hydratedText;
     assert.doesNotMatch(stored, /never expose|unfinished hidden|split reasoning secret|split thinking secret|reasoning_content|LIVE_PRIVATE_RESULT/i);
     const storedState = JSON.parse(stored) as { conversations: Record<string, { workRuns?: Array<{ events?: AgentWorkEvent[] }> }> };
     const storedEvents = Object.values(storedState.conversations).flatMap(conversation => conversation.workRuns || []).flatMap(run => run.events || []);

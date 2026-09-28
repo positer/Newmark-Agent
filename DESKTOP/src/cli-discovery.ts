@@ -62,6 +62,7 @@ const VALUE_FLAGS = new Set<string>([
   '--viewer-request',
   '--msi',
   '--log-dir',
+  '--timeout',
 ]);
 const BOOLEAN_FLAGS = new Set<string>([
   '--tui',
@@ -107,6 +108,8 @@ const BOOLEAN_FLAGS = new Set<string>([
   '--no-elevate',
   '--on',
   '--off',
+  '--enable',
+  '--disable',
 ]);
 
 /** Public version spellings accepted by every Newmark entrypoint. */

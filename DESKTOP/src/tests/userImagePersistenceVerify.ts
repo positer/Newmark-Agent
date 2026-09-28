@@ -6,6 +6,7 @@ import { PNG } from 'pngjs';
 import { Agent } from '../core/agent';
 import { persistSubmittedConversationImages } from '../core/conversationAttachments';
 import { decodeInspectionImage } from '../core/imageInspect';
+import { readConversationStateDocument } from '../core/conversationStateDocument';
 import type { StreamToken } from '../core/types';
 
 function pngDataUrl(width: number, height: number, rgba: [number, number, number, number]): string {
@@ -77,7 +78,7 @@ async function main(): Promise<void> {
     assert.ok(fs.existsSync(path.join(root, submitted.attachments[0].assetPath)), 'content-addressed user image asset exists below the Newmark root');
 
     const statePath = path.join(workspace.path, 'conversations', 'state.json');
-    const stored = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+    const stored = readConversationStateDocument(workspace.path);
     const serialized = JSON.stringify(stored);
     assert.ok(serialized.includes(submitted.attachments[0].id), 'conversation state persists the stable attachment id');
     assert.ok(!serialized.includes('newmark-computer-use'), 'conversation state never contains Computer Use screenshot paths');

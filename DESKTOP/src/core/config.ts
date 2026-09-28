@@ -129,9 +129,10 @@ export class ConfigManager {
         }
         const providerIdsMigrated = migrateProviderIdsInConfig(normalized);
         const marqueeConfigRemoved = removeDeprecatedMarqueeConfig(normalized);
-        if (providerIdsMigrated || marqueeConfigRemoved) {
-          // Provider ids are routing identities, so legacy/malformed catalogs must
-          // not wait for an unrelated settings save before becoming collision-safe.
+        const legacyJevRuntimeRemoved = removeLegacyJevDecisionRuntimeConfig(normalized);
+        if (providerIdsMigrated || marqueeConfigRemoved || legacyJevRuntimeRemoved) {
+          // Persist migrations immediately so obsolete JEV slot settings are not
+          // left in the active user config until an unrelated settings save.
           try {
             if (!this.readOnly) fs.writeFileSync(cp, JSON.stringify(normalized, null, 2), 'utf-8');
           } catch {
@@ -391,10 +392,7 @@ export class ConfigManager {
   autoSwitchEnabled(): boolean { return this.getBool('models', 'auto_switch'); }
   autoSwitchPreference(): string {
     const value = this.getStr('models', 'auto_switch_preference');
-    if (value === 'performance') return 'quality';
-    if (value === 'cheap_save') return 'cost';
-    if (value === 'speed') return 'speed';
-    return value === 'quality' || value === 'cost' || value === 'balanced' ? value : 'balanced';
+    return value === 'conservative' || value === 'balanced' || value === 'aggressive' ? value : 'balanced';
   }
   autoSwitchScope(): string { return this.getStr('models', 'auto_switch_scope') || 'all'; }
   autoSwitchAnchorProvider(): string { return this.getStr('models', 'auto_switch_anchor_provider'); }
@@ -512,6 +510,24 @@ function removeDeprecatedMarqueeConfig(config: Record<string, Record<string, Con
     }
   }
   return changed;
+}
+
+function removeLegacyJevDecisionRuntimeConfig(config: Record<string, Record<string, ConfigEntry>>): boolean {
+  const models = config.models;
+  if (!models) return false;
+  const retiredKeys = [
+    'jev_runtime', 'jev_model_id', 'jev_model_path',
+    'jev_fallback_strategy', 'jev_fallback_provider_id', 'jev_fallback_model_id',
+  ];
+  const hadRetiredInterface = retiredKeys.some(key => Object.prototype.hasOwnProperty.call(models, key));
+  if (!hadRetiredInterface) return false;
+
+  const legacyTimeout = models.jev_timeout_ms?.value;
+  if (legacyTimeout === 100 && models.jev_timeout_ms) {
+    models.jev_timeout_ms.value = 3000;
+  }
+  for (const key of retiredKeys) delete models[key];
+  return true;
 }
 
 function isConfigEntry(value: unknown): value is ConfigEntry {
@@ -922,7 +938,7 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
       default_intelligence: { _description: "Default reasoning effort", _type: "choice", _values: ["low","medium","high","xhigh","max","ultra"], value: "medium" },
       agent_engine: { _description: "Agent engine", _type: "choice", _values: ["builtin","codex","opencode"], value: "builtin" },
       auto_switch: { _description: "Auto-switch models", _type: "boolean", value: false },
-      auto_switch_preference: { _description: "Auto route policy", _type: "choice", _values: ["quality","balanced","cost","speed"], value: "balanced" },
+      auto_switch_preference: { _description: "Qualitative tendency for current-model Auto decisions", _type: "choice", _values: ["conservative","balanced","aggressive"], value: "balanced" },
       auto_switch_scope: { _description: "Auto-switch scope", _type: "choice", _values: ["all","provider"], value: "all" },
       auto_switch_anchor_provider: { _description: "Stable provider id anchor for provider-scoped Auto routing", _type: "string", value: "" },
       auto_switch_subset: { _description: "Explicit deployment allowlist for Auto; new catalog models are never added automatically", _type: "array", value: [] },
@@ -931,6 +947,8 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
       auto_data_region: { _description: "Required Auto data region; empty disables the region filter", _type: "string", value: "" },
       auto_required_protocol_parameters: { _description: "Protocol parameters every Auto candidate must support", _type: "array", value: [] },
       auto_max_expected_cost_usd: { _description: "Hard expected request cost ceiling; 0 disables the ceiling", _type: "number", value: 0 },
+      jev_enabled: { _description: "Use the current eligible conversation model for strict-JSON Auto decisions", _type: "boolean", value: true },
+      jev_timeout_ms: { _description: "Hard timeout for one current-model JEV decision in milliseconds", _type: "number", value: 3000 },
       fallback_on_unavailable: { _description: "Fallback when model unavailable", _type: "boolean", value: true },
       openai_api_mode: { _description: "OpenAI-compatible API mode", _type: "choice", _values: ["chat_stream","chat","responses"], value: "chat_stream" },
       openai_streaming: { _description: "Legacy streaming flag for OpenAI-compatible chat completions", _type: "boolean", value: true },

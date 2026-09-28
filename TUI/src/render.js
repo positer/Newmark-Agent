@@ -987,7 +987,7 @@ function settingsView(state, width, p) {
         const style = state.focusRegion === "content" && state.contentColumn === 1 && i === state.selected ? `${p.selected}` : "";
         if (style) state.contentFocusLine = 4 + i * 2;
         return [
-          `${style} ${p.bold}${pad(row.label, 27)}${p.reset} ${p.cyan}${displaySettingValue(row.value)}${p.reset}${row.extension ? ` ${p.amber}TUI EXTENSION${p.reset}` : ""}`,
+          `${style} ${p.bold}${pad(row.label, 27)}${p.reset} ${p.cyan}${displaySettingValue(row.value)}${p.reset}${row.locked ? ` ${p.amber}LOCKED${p.reset}` : ""}${row.extension ? ` ${p.amber}TUI EXTENSION${p.reset}` : ""}`,
           `   ${p.muted}${settingDescription(state.settingsTab, row.key)}${p.reset}`
         ];
       }),
@@ -1030,7 +1030,13 @@ function settingDescription(tab, key) {
     channel: "Stable or prerelease update stream.",
     autoCheck: "Check for updates during application startup.",
     autoDownload: "Download only after a successful simulated check.",
-    source: "GitHub release or local package source."
+    source: "GitHub release or local package source.",
+    enabled: "Enable or disable model-backed Auto decisions; disabled means Auto keeps the current model.",
+    decisionModel: "Use the current eligible conversation model, or the configured default on the first Auto route.",
+    thinkingMode: "JEV requests the provider's no-thinking mode.",
+    outputFormat: "JEV uses native strict JSON Schema output and validates the returned object before routing.",
+    timeoutMs: "Hard budget for one current-model Auto decision; a timeout stops Auto routing without selecting another model.",
+    autoSwitch: "Auto routing master switch; while it is off current-model decision settings are locked and no model changes."
   };
   return descriptions[key] || `${tab} setting`;
 }
@@ -1077,6 +1083,7 @@ function settingsActionHint(tab) {
   if (tab === "general") return "Enter opens Guide/Next list for Input mode · O open config · R refresh";
   if (tab === "archive") return "L list archive inventory";
   if (tab === "updates") return "U check version and GitHub update";
+  if (tab === "jev") return "Enter changes current-model decision settings · thinking off · strict JSON Schema · failures stop routing";
   return "Enter cycles or toggles the selected setting";
 }
 

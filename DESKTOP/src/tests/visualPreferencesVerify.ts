@@ -196,9 +196,12 @@ function main(): void {
     assert.ok(cssBlock('.sec-btn:focus-visible').includes('box-shadow: 0 0 0 3px var(--accent-glow)')
       && cssBlock('.sec-btn:disabled').includes('cursor: not-allowed'),
     'secondary buttons retain visible keyboard focus and disabled states');
-    assert.ok(ui.includes('type="button" class="sec-btn settings-action-btn"')
-      && cssBlock('.settings-action-btn').includes('display: inline-flex'),
-    'adaptive preference reset reuses the themed secondary-button design instead of the browser default');
+    assert.ok(ui.includes('<option value="conservative"')
+      && ui.includes('<option value="balanced"')
+      && ui.includes('<option value="aggressive"')
+      && !ui.includes('window.clearLearnedAutoPreferences')
+      && !ui.includes('model.clearLearnedPreference'),
+    'automatic tendency offers model decision styles without the retired feedback-history control');
     assert.ok(ui.includes('.terminal-timeout-control input[type="number"],')
       && ui.includes('.setting-control input[type="number"] {\n  color-scheme: var(--select-color-scheme);')
       && ui.includes('::-webkit-inner-spin-button')

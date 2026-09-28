@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { Agent } from '../core/agent';
 import { agentKernelRunnerInternals, toolResultObjectiveOutcome } from '../core/agentKernelRunner';
+import { CURRENT_MODEL_JEV_VERSION } from '../core/jevDecision';
 import { LLMProvider } from '../llm/provider';
 import { seedToolchainFromDefinitions } from '../toolchain';
 
@@ -40,6 +41,67 @@ function model(name: string, cost: number, logicalModelGroupId?: string, toolUse
 }
 
 async function main(): Promise<void> {
+  // Exercise the production current-model strict-JSON request path without
+  // relying on external credentials or the removed deterministic fallback.
+  const nativeFetch = globalThis.fetch;
+  const currentModelHosts = new Set([
+    'chat.invalid',
+    'tool.invalid',
+    'openai-side.invalid',
+    'anthropic-side.invalid',
+  ]);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const requestUrl = input instanceof Request
+      ? new URL(input.url)
+      : input instanceof URL
+        ? input
+        : new URL(String(input));
+    if (!currentModelHosts.has(requestUrl.hostname)) return nativeFetch(input, init);
+
+    const body = JSON.parse(String(init?.body ?? '{}')) as { messages?: Array<{ role?: string; content?: unknown }> };
+    const userMessage = body.messages?.find(message => message.role === 'user');
+    const routeRequest = JSON.parse(String(userMessage?.content ?? '{}')) as {
+      task?: { requiredCapabilities?: string[] };
+      candidates?: Array<{
+        deployment: { providerId: string; modelId: string; logicalModelGroupId?: string };
+        capabilities?: string[];
+        cost?: { inputPerM?: number; outputPerM?: number };
+      }>;
+    };
+    const required = new Set(routeRequest.task?.requiredCapabilities ?? []);
+    const eligible = (routeRequest.candidates ?? []).filter(candidate =>
+      [...required].every(capability => candidate.capabilities?.includes(capability)),
+    );
+    eligible.sort((left, right) =>
+      (left.cost?.inputPerM ?? Number.POSITIVE_INFINITY) + (left.cost?.outputPerM ?? Number.POSITIVE_INFINITY)
+      - ((right.cost?.inputPerM ?? Number.POSITIVE_INFINITY) + (right.cost?.outputPerM ?? Number.POSITIVE_INFINITY)),
+    );
+    const primary = eligible[0];
+    if (!primary) {
+      return new Response(JSON.stringify({ error: { message: 'No eligible fixture candidate' } }), {
+        status: 422,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    const content = JSON.stringify({
+      primary: {
+        ...primary.deployment,
+        logicalModelGroupId: primary.deployment.logicalModelGroupId ?? '',
+      },
+      alternates: eligible.slice(1, 3).map(candidate => ({
+        ...candidate.deployment,
+        logicalModelGroupId: candidate.deployment.logicalModelGroupId ?? '',
+      })),
+      reasonCodes: ['fixture_current_model_selection'],
+      confidence: 1,
+      modelVersion: CURRENT_MODEL_JEV_VERSION,
+    });
+    const payload = requestUrl.pathname.endsWith('/messages')
+      ? { content: [{ type: 'text', text: content }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }
+      : { choices: [{ message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+
   const splitRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-auto-tool-split-'));
   try {
     fs.writeFileSync(path.join(splitRoot, 'config.json'), JSON.stringify({
@@ -246,6 +308,34 @@ async function main(): Promise<void> {
     fs.rmSync(root, { recursive: true, force: true });
   }
 
+  const unavailableRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-auto-current-model-unavailable-'));
+  try {
+    fs.writeFileSync(path.join(unavailableRoot, 'config.json'), JSON.stringify({
+      models: {
+        providers: { value: [
+          { id: 'current-provider', name: 'Current', base_url: 'http://127.0.0.1:1/v1', api_key: 'fixture-key', protocol: 'openai', enabled: true, models: [model('first-model', 0.1), model('second-model', 9)] },
+        ] },
+        default_model: { value: 'first-model' },
+        auto_switch: { value: true },
+        auto_switch_preference: { value: 'cost' },
+        auto_switch_scope: { value: 'all' },
+        jev_enabled: { value: true },
+      },
+      workspace: { auto_create_timestamp_workspace: { value: false } },
+    }, null, 2));
+    const currentModelAgent = new Agent(unavailableRoot, { agentOnly: true, conversationId: 'current-model-unavailable' });
+    currentModelAgent.setModel('auto');
+    const switched = await currentModelAgent.evaluateAndSwitch('Implement a fix for this repository bug');
+    ok(!switched
+      && currentModelAgent.lastRouteDecision?.decisionSource === 'jev'
+      && currentModelAgent.lastRouteDecision?.finalStatus === 'no_candidate'
+      && currentModelAgent.lastRouteDecision?.resolvedDeployment === undefined
+      && currentModelAgent.lastRouteDecision?.decisionError,
+    'Agent uses only the current LLM decision and fails closed when that provider cannot answer');
+  } finally {
+    fs.rmSync(unavailableRoot, { recursive: true, force: true });
+  }
+
   const fixedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-fixed-fallback-'));
   try {
     fs.writeFileSync(path.join(fixedRoot, 'config.json'), JSON.stringify({
@@ -285,7 +375,13 @@ async function main(): Promise<void> {
     && toolResultObjectiveOutcome('{"postcondition":true}') === true
     && toolResultObjectiveOutcome('{"test_result":{"passed":false}}') === false
     && toolResultObjectiveOutcome('{"objective_evidence":true,"ok":true}') === true,
-  'objective quality accepts explicit postcondition/test evidence but ignores ordinary JSON ok fields');
+  'objective postconditions accept explicit postcondition/test evidence but ignore ordinary JSON ok fields');
+  const objectiveRunnerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
+  const objectiveAgentSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
+  ok(!objectiveRunnerSource.includes('recordObjectiveRouteResult')
+    && objectiveRunnerSource.includes('agent.recordRouteToolOutcome(objectiveResult)')
+    && !objectiveAgentSource.includes('recordObjectiveRouteResult'),
+  'objective tool outcomes are operational health evidence only and never a model-preference observation');
 
   const originalFetch = globalThis.fetch;
   try {

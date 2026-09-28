@@ -39,7 +39,7 @@ export function verifyDev009SourceContracts(): Assertion[] {
   const subagents = source('core/subagent.ts');
   const browserControl = source('core/browserControl.ts');
   const browserUsePageAdapter = source('core/browserUsePageAdapter.ts');
-  const electronUtilityClient = source('core/electronUtilityAgentClient.ts');
+  const electronUtilityClient = source('core/electronUtilityAgentClient.ts').replace(/\r\n/g, '\n');
   const electronUtilityPool = source('core/electronUtilityRuntimePool.ts');
   const runtimeShutdown = source('core/runtimeShutdown.ts');
   const wslClient = source('core/wslAgentClient.ts');

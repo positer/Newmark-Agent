@@ -5757,6 +5757,8 @@ export class Agent {
       conversationId: this.activeConversationId || 'default',
       actorId: this.runtimeActorId,
       workspaceId: this.workspace.current?.id || '',
+      runtimeKey: process.env.NEWMARK_RUNTIME_KEY || undefined,
+      runId: this.currentWorkRunId() || undefined,
       backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
       signal,
     }).then((content) => {

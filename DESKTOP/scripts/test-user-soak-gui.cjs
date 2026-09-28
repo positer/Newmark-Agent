@@ -332,8 +332,14 @@ function sparseMeasurementIn(messages) {
 }
 async function scheduleRealVisualPulse() {
   if (!realProvider || report.computerUseVisualPulse?.scheduled) return;
-  const pulse = await evaluate(`(()=>{if(window.__soakSparseVisualPulseState)return window.__soakSparseVisualPulseState;const state=window.__soakSparseVisualPulseState={scheduled:true,visible:false,changes:0,intervalMs:170,durationMs:12000,label:${JSON.stringify(realProvider.imageLabel)}};setTimeout(()=>{const marker=document.createElement('div');marker.id='soak-sparse-cu-visual-pulse';marker.textContent=state.label;marker.setAttribute('aria-hidden','true');marker.style.cssText='position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:520px;height:400px;z-index:2147483647;display:grid;place-items:center;border:8px solid white;border-radius:16px;color:#ff00ff;font:700 24px sans-serif;text-shadow:0 1px 3px white;pointer-events:none;box-shadow:0 0 0 3px black';document.body.appendChild(marker);state.visible=true;let phase=0;const paint=()=>{marker.style.backgroundColor=phase++%2?'#000000':'#ffffff';state.changes++;};paint();const pulseTimer=setInterval(paint,state.intervalMs);setTimeout(()=>{clearInterval(pulseTimer);marker.remove();state.visible=false;state.finished=true;},state.durationMs);},500);return state;})()`);
-  report.computerUseVisualPulse = { scheduled: pulse?.scheduled === true, delayMs: 500, intervalMs: 170, durationMs: 12000, label: realProvider.imageLabel, purpose: 'synthetic visible label and high-contrast pulse for real-provider CU screenshot validation' };
+  const pulse = await evaluate(`(()=>{if(window.__soakSparseVisualPulseState)return window.__soakSparseVisualPulseState;const state=window.__soakSparseVisualPulseState={scheduled:true,visible:false,everVisible:false,changes:0,intervalMs:350,durationMs:60000,label:${JSON.stringify(realProvider.imageLabel)}};setTimeout(()=>{const marker=document.createElement('div');marker.id='soak-sparse-cu-visual-pulse';marker.setAttribute('aria-hidden','true');marker.style.cssText='position:fixed;top:16px;left:16px;width:560px;height:150px;box-sizing:border-box;z-index:2147483647;display:flex;align-items:center;justify-content:center;border:8px solid #ffffff;border-radius:16px;pointer-events:none;box-shadow:0 0 0 4px #000000';const label=document.createElement('span');label.textContent=state.label;label.style.cssText='display:block;padding:12px 16px;border:4px solid #000000;border-radius:10px;background:#ffea00;color:#000000;font:900 22px/1.15 Arial,sans-serif;letter-spacing:1px;white-space:nowrap;text-shadow:none';marker.appendChild(label);document.body.appendChild(marker);const rect=marker.getBoundingClientRect();state.visible=rect.right>0&&rect.bottom>0&&rect.left<innerWidth&&rect.top<innerHeight;state.everVisible=state.visible;state.labelText=label.innerText;state.bounds={x:rect.x,y:rect.y,width:rect.width,height:rect.height,viewportWidth:innerWidth,viewportHeight:innerHeight};let phase=0;const paint=()=>{marker.style.backgroundColor=phase++%2?'#000000':'#ffffff';state.changes++;};paint();const pulseTimer=setInterval(paint,state.intervalMs);setTimeout(()=>{clearInterval(pulseTimer);marker.remove();state.visible=false;state.finished=true;},state.durationMs);},250);return state;})()`);
+  const visiblePulse = await until(
+    () => evaluate('window.__soakSparseVisualPulseState || null'),
+    value => value?.everVisible === true && value.labelText === realProvider.imageLabel,
+    'synthetic CU label visible inside the isolated Electron viewport',
+    5000,
+  );
+  report.computerUseVisualPulse = { scheduled: pulse?.scheduled === true, visibleBeforeProviderCall: true, delayMs: 250, intervalMs: 350, durationMs: 60000, label: realProvider.imageLabel, bounds: visiblePulse.bounds, purpose: 'synthetic visible label and high-contrast pulse for real-provider CU screenshot validation' };
   save();
 }
 function captureProviderResponseEvent(record, event, toolCalls) {
@@ -527,6 +533,10 @@ provider.on('connection', socket => { sockets.add(socket); socket.on('close', ()
 async function launch(round) {
   const cdpPort = await freePort();
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  delete env.NEWMARK_WSL_DISTRO;
+  delete env.NEWMARK_ISOLATED_RUNTIME;
+  if (realProvider && cuSparseOnly) env.NEWMARK_TEST_CU_OBSERVE_ONLY = '1';
+  else delete env.NEWMARK_TEST_CU_OBSERVE_ONLY;
   const entryArgs = packaged ? [] : [desktop];
   logFd = fs.openSync(path.join(evidence, round + '-electron.log'), 'wx');
   child = spawn(exe, [...entryArgs, '--allow-multiple-instances', '--remote-debugging-port=' + cdpPort, '--root', root, '--user-data-dir=' + path.join(root, 'ElectronData')], { cwd: desktop, env, windowsHide: true, stdio: ['ignore', logFd, logFd] });
@@ -911,7 +921,7 @@ async function computerUseSparseGuiSmoke() {
   const sparse = sparseRequests.map(item => item.sparseMeasurement);
   const validReason = measurement => ['wait_elapsed', 'coarse_change', 'screen_geometry_changed'].includes(String(measurement?.reason || ''));
   const run = (state?.workRuns || []).find(item => String(item.primaryPrompt || '').includes(marker));
-  const assistantText = (run?.events || []).filter(event => event.type === 'text' || event.type === 'response').map(event => String(event.content || '')).join('\n');
+  const assistantText = (run?.events || []).filter(event => event.type === 'text' || event.type === 'response' || event.type === 'final_response').map(event => String(event.content || '')).join('\n');
   const modelCalledComputerUse = requests.some(item => item.responseToolNames?.includes('computer_use'));
   const modelRequestedProvision = requests.some(item => item.responseToolNames?.includes('tool_provision'));
   const allProviderRequestsUseConfiguredModel = requests.filter(item => item.stream).every(item => item.model === (realProvider?.model || fixtureModelId));
@@ -923,6 +933,7 @@ async function computerUseSparseGuiSmoke() {
   const completionInAssistantText = realProvider
     ? assistantText.includes(completionMarker) && assistantText.toLowerCase().includes(realProvider.imageLabel.toLowerCase())
     : transcript.includes(completionMarker);
+  const observationOnlyGuardHit = JSON.stringify(run?.events || []).includes('[computer_use test guard]');
   report.computerUseSparseGui = {
     mode: realProvider ? 'packaged GUI with live remote provider through local evidence proxy' : 'packaged GUI with loopback fixture provider',
     marker,
@@ -933,6 +944,8 @@ async function computerUseSparseGuiSmoke() {
     assistantText: assistantText.slice(-1600),
     modelCalledComputerUse,
     modelRequestedProvision,
+    observationOnlyGuardEnabled: !!realProvider && cuSparseOnly,
+    observationOnlyGuardHit,
     run: run ? { runId: run.runId, status: run.status, targetConversationId: run.target?.conversationId || '', primaryPromptContainsMarker: String(run.primaryPrompt || '').includes(marker) } : null,
     sparseMeasurements: sparse,
     visualPulse: visualPulse,
@@ -943,6 +956,14 @@ async function computerUseSparseGuiSmoke() {
     errors: { settledError: settled?.error || null, runtimeError: settled?.runtimeError || state?.runtimeError || null, providerErrors: report.providerErrors.filter(error => String(error).includes('Computer Use')) },
   };
   if (realProvider) {
+    check('Live-model Electron only permits read-only ComputerUse actions', report.computerUseSparseGui.observationOnlyGuardEnabled && !observationOnlyGuardHit, { observationOnlyGuardEnabled: report.computerUseSparseGui.observationOnlyGuardEnabled, observationOnlyGuardHit });
+    const bounds = visualPulse?.bounds || {};
+    const labelInsideCapturedViewport = visualPulse?.everVisible === true
+      && visualPulse?.labelText === realProvider.imageLabel
+      && Number(bounds.x) >= 0 && Number(bounds.y) >= 0
+      && Number(bounds.x) + Number(bounds.width) <= Number(bounds.viewportWidth)
+      && Number(bounds.y) + Number(bounds.height) <= Number(bounds.viewportHeight);
+    check('Synthetic CU label is positioned fully inside the captured viewport', labelInsideCapturedViewport, visualPulse);
     check('Real model itself returned a computer_use tool call', modelCalledComputerUse, { stages: report.computerUseSparseGui.providerStages });
     check('The model used the sparse-wait argument through the production Computer Use tool result', hasFreshSparseResult, { sparse, stages: report.computerUseSparseGui.providerStages });
     check('Sparse sensing woke on the visible synthetic change and then produced a fresh full observation', wakesOnChange && visualPulse?.scheduled && Number(visualPulse.changes) > 0 && !!report.computerUseSparseImage?.file, { sparse, visualPulse, computerUseSparseImage: report.computerUseSparseImage || null });

@@ -17,7 +17,7 @@
 
 - 跨主题组件强调色由 --accent 派生；文本选择使用 --editor-selection。已有组件若使用语义变量别名，须将别名映射到项目令牌，避免出现暗色硬编码和未定义填充色。
 - 不为普通按钮和静态卡片添加 translateZ(0) 促层。玻璃按压片静止时不挂 backdrop-filter；按下时启用，释放后保留既有 90ms 淡出。保留 --marquee-border::before 的单独 translateZ(0)，除非实测证明可以移除。
-- 源码级动效改动不能当作 FPS 结果。固定历史、窗口和交互基准后再比较；RAF 回调间隔不等于屏幕实际呈现帧时间。2026-09-27 使用 1200 条历史、同一 Electron UI/脚本的 CSS-only 45 秒对照中，候选 RAF cadence 为 59.02 callbacks/s，对照为 60.55；可信输入绘制 p95 有所改善，历史分页 p95 反而升至 931.3 ms。单次结果只能支持“混合表现”，不能宣称整体帧率提高或 165 Hz 达标；完整数据与 27 场景截图见 archive/20260927-gui-shell-validation/REPORT.md。
+- 源码级动效改动不能当作 FPS 结果。固定历史、窗口和交互基准后再比较；RAF 回调间隔不等于屏幕实际呈现帧时间。2026-09-27 使用 1200 条历史、同一 Electron UI/脚本的 CSS-only 45 秒对照中，候选 RAF cadence 为 59.02 callbacks/s，对照为 60.55；可信输入绘制 p95 有所改善，历史分页 p95 反而升至 931.3 ms。单次结果只能支持“混合表现”，不能宣称整体帧率提高或 165 Hz 达标；完整数据与 27 场景截图见 本地归档（未纳入公开仓库）。
 
 ## 2026-09-26 CU 生产边界
 
@@ -355,7 +355,7 @@
 - Reapply system-bar appearance on composition commit and lifecycle resume, resolve wrapped Activity contexts, and dispose lifecycle observers. Verify both theme directions using rendered icon pixels and actual window appearance flags.
 
 - Windows MSI release work uses synchronized semantic versions, completes the full release gate before packaging, records the MSI SHA-256, and verifies both uninstall-registry and installed executable versions. For elevated silent installation, resolve literal absolute paths and pass one explicitly quoted argument line to `Start-Process`/`msiexec.exe`; keep `/quiet /norestart` and a verbose archive log.
-- Keep only the current deliverable set in `release/` and `APK/`. Historical release binaries and unpacked package trees may be removed from `archive/`, while textual reports, logs, screenshots, test data, conversations, and other non-release evidence remain cold archival material.
+- Keep only the current deliverable set in `release/` and `APK/`. Historical binaries and all reports, logs, screenshots, test data, and conversations stay in a local-only ignored archive directory; never commit those artifacts to the public repository.
 
 - Development releases use tag/title `dev-X.Y.Z` / `Newmark Agent dev-X.Y.Z`, numeric package version X.Y.Z, synchronized Android versionCode, and the established six Windows/Linux/Android assets. Release notes contain complete English then complete Simplified Chinese, version-local changes, measured validation and asset hashes. Never substitute auto-generated notes for the reviewed bilingual body. Preserve the existing Android signing certificate across release updates.
 
@@ -645,7 +645,7 @@
 
 - Every release plan goes in `tasks/plan.md` and its executable checklist in `tasks/todo.md`.
 - Preserve historical plans below the current release section.
-- Record planning and implementation evidence in timestamped files under `archive/`.
+- Keep planning and implementation evidence in timestamped local archive files excluded from Git; publish source and the maintained project README/OVERVIEW/taste documents only.
 - Update `README.md` for public release intent and `OVERVIEW.md` for code map, file responsibilities, tests, and current project state.
 - A release-ready claim must name the exact host-built asset matrix, verify every asset independently, record byte size and SHA-256, disclose signing identity, and separate local packaging from external publication. Never imply a macOS artifact was built from Windows or that an APK signed by the Android Debug certificate is store-ready.
 - Treat Windows Installer exit `0` as necessary but not sufficient for same-version repair. When a required packaged file is already absent, verify the installed boundary explicitly; if repair leaves it absent, use one elevated uninstall-plus-fresh-install transaction and require installed/package ASAR equality, CLI version success, preserved user-state hashes, and a responsive GUI process set.
@@ -1010,3 +1010,13 @@ Never report installed-runtime performance from the old installed version. Separ
 - `prefers-reduced-motion` 要覆盖后置且带 `!important` 的材质动画规则；把 CSS duration 压到接近零后，仍需单独测量 JS 驱动的宽度/布局过渡，因为 CSS 媒体规则不会自动缩短脚本计时器。
 - 样式性能对照使用同一源码的 CSS 开关和交错多轮负载。报告 renderer RAF callback cadence 与间隔分布，不把 callback 频率写成屏幕呈现 FPS；单个输入或侧栏节点变快不构成整体帧率提升。
 - 场景审计保留截图、交互事件、动效采样和错误计数，并用一份可浏览的截图总览连接原始 PNG。Loopback fixture 的成功只说明该隔离 UI 场景通过，不代表真实 provider 或已安装包通过。
+
+## 2026-09-28 文件写入前观察回执
+
+- 写文件的授权放在实际工具执行边界，不以模型提示词、grep/glob 或写工具内部读取代替用户可见的目标读取。
+- 回执按 workspace、conversation、actor、Build run、backend/runtime 和规范化目标路径隔离；五分钟过期，一次成功变更后失效。读取后必须比较目标指纹，变更或路径身份漂移时失败关闭。
+- 整文件覆盖与删除要求完整读取；局部编辑要求 old_str 出现在已读取范围并在当前文件中唯一。大文件用行范围累积覆盖，不能把截断输出当作完整读取。
+- 新建文件需要精确路径不存在的观察；创建时再次核对父路径身份并使用排他创建，避免覆盖读后抢先出现的目标。
+- 对同一路径串行化内部读写；只有专用文件变更入口和明确写入目标的 web_catch 适用。Shell、终端、浏览器/CDP、ComputerUse、Flow、Memory Lab、技能下载及结构化状态修改需要独立对象回执，不能声称本门禁已经拦截这些旁路。
+- 写入门禁压力测试必须走实际 ToolExecutor，并覆盖过期/漂移拒绝、分段完整读取、回执单次消费和跨执行器同路径争写；可另用异步门禁回调确定性验证路径锁，且最多只能有一个提交者成功。
+- 真实 ComputerUse 模型测试使用隔离 Electron 与合成视觉目标，记录模型工具调用、稀疏变化唤醒、新鲜全图上传和模型语义完成；实时测试进程设置只读动作保护，不能让模型点击或输入。

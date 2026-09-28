@@ -2258,6 +2258,9 @@ async function main() {
   assert(readMissing.startsWith('[read]'), 'read: missing file reports error');
 
   // write
+  const writeTarget = path.join(TEST_DIR, 'write-test.txt');
+  const writeTargetRead = await tools.execute('read', JSON.stringify({ path: writeTarget }), TEST_DIR);
+  assert(writeTargetRead.includes('does not exist'), 'write: exact new target absence must be read first');
   const writeResult = await tools.execute('write', '{"path":"write-test.txt","content":"Written content"}', TEST_DIR);
   assert(writeResult.includes('OK'), 'write: succeeds');
   assert(fs.existsSync(path.join(TEST_DIR, 'write-test.txt')), 'write: file exists');
@@ -2268,13 +2271,16 @@ async function main() {
   assert(editResult.includes('OK'), 'edit: succeeds');
   const edited = fs.readFileSync(path.join(TEST_DIR, 'test.txt'), 'utf-8');
   assert(edited.includes('Hi Earth') && !edited.includes('Hello World'), 'edit: replaced text');
+  await tools.execute('read', JSON.stringify({ path: path.join(TEST_DIR, 'test.txt') }), TEST_DIR);
   const editMissing = await tools.execute('edit', '{"path":"test.txt","old_str":"NOTFOUND","new_str":"XXX"}', TEST_DIR);
-  assert(editMissing.includes('not found'), 'edit: missing string reports');
+  assert(editMissing.includes('[write gate blocked]') && editMissing.includes('read'), 'edit: an old_str absent from the observed range is refused before execution');
 
   // delete_file (dev-0.4.2: 受监管的单文件删除)
   fs.writeFileSync(path.join(TEST_DIR, 'delete-me.txt'), 'to delete');
+  await tools.execute('read', JSON.stringify({ path: path.join(TEST_DIR, 'delete-me.txt') }), TEST_DIR);
   const deleteFileOk = await tools.execute('delete_file', JSON.stringify({ path: path.join(TEST_DIR, 'delete-me.txt') }), TEST_DIR);
   assert(deleteFileOk.includes('OK') && !fs.existsSync(path.join(TEST_DIR, 'delete-me.txt')), 'delete_file: deletes one file under supervision');
+  await tools.execute('read', JSON.stringify({ path: path.join(TEST_DIR, 'no-such-file.txt') }), TEST_DIR);
   const deleteFileMissing = await tools.execute('delete_file', JSON.stringify({ path: path.join(TEST_DIR, 'no-such-file.txt') }), TEST_DIR);
   assert(deleteFileMissing.startsWith('[delete_file]'), 'delete_file: missing file reports');
   const deleteFileWildcard = await tools.execute('delete_file', JSON.stringify({ path: path.join(TEST_DIR, '*.txt') }), TEST_DIR);
@@ -2523,7 +2529,7 @@ async function main() {
   assert(tools.definitions('plan').some((tool: any) => tool.function?.name === 'browser_snapshot'), 'definitions: plan exposes browser_snapshot');
   assert(!tools.definitions('plan').some((tool: any) => tool.function?.name === 'browser_click'), 'definitions: plan hides browser_click');
   const planComputerUse = tools.definitions('plan').find((tool: any) => tool.function?.name === 'computer_use') as any;
-  assert(process.platform !== 'win32' || (JSON.stringify(planComputerUse?.function?.parameters?.properties?.action?.enum) === JSON.stringify(['observe', 'app_list', 'app_observe']) && !!planComputerUse.function.parameters.properties.capture_max_width && !!planComputerUse.function.parameters.properties.capture_max_height && !planComputerUse.function.parameters.properties.x && !planComputerUse.function.parameters.properties.steps), 'definitions: Plan exposes only observation-class Computer Use schema, including bounded capture dimensions when available');
+  assert(process.platform !== 'win32' || (JSON.stringify(planComputerUse?.function?.parameters?.properties?.action?.enum) === JSON.stringify(['observe', 'app_list', 'app_observe', 'wait_for']) && !!planComputerUse.function.parameters.properties.capture_max_width && !!planComputerUse.function.parameters.properties.capture_max_height && !planComputerUse.function.parameters.properties.x && !planComputerUse.function.parameters.properties.steps), 'definitions: Plan exposes only observation-class Computer Use schema, including bounded capture dimensions when available');
   const canonicalTools = tools.canonicalDefinitions();
   const writeCanonical = canonicalTools.find(t => t.name === 'write');
   assert(!!writeCanonical && writeCanonical.inputSchema.type === 'object' && writeCanonical.sideEffects === 'write', 'compat tools: canonical definitions preserve schema and side effects');
@@ -2533,7 +2539,9 @@ async function main() {
   assert(openAiChatTool?.function?.parameters?.type === 'object', 'compat tools: emits OpenAI Chat Completions function shape');
   const anthropicTool = tools.anthropicDefinitions().find((t: any) => t.name === 'write') as any;
   assert(anthropicTool?.input_schema?.type === 'object', 'compat tools: emits Anthropic input_schema shape');
-  const envelope = await tools.executeEnvelope('write', JSON.stringify({ path: path.join(TEST_DIR, 'tool-envelope.txt'), content: 'enveloped' }), TEST_DIR);
+  const envelopeTarget = path.join(TEST_DIR, 'tool-envelope.txt');
+  await tools.execute('read', JSON.stringify({ path: envelopeTarget }), TEST_DIR);
+  const envelope = await tools.executeEnvelope('write', JSON.stringify({ path: envelopeTarget, content: 'enveloped' }), TEST_DIR);
   assert(envelope.ok === true && envelope.output.includes('[write] OK') && envelope.metadata?.tool === 'write', 'compat tools: executeEnvelope returns structured result');
 
   BrowserControl.setBackend(null);
@@ -2628,21 +2636,24 @@ async function main() {
   assert(cliCompatTools.tools.canonical.some((t: any) => t.name === 'write') && cliCompatTools.tools.openai_responses.some((t: any) => t.name === 'write'), 'cli compat: exposes canonical and provider-specific tool definitions');
   const cliToolFile = path.join(TEST_DIR, 'cli-tool-write.txt');
   const cliToolOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'write', JSON.stringify({ path: cliToolFile, content: 'cli wrote file' }), '--root', TEST_DIR]));
-  assert(cliToolOut.includes('[write] OK') && fs.existsSync(cliToolFile), 'cli tool: executes ToolExecutor command');
-  assert(fs.readFileSync(cliToolFile, 'utf-8') === 'cli wrote file', 'cli tool: writes expected content');
+  assert(cliToolOut.includes('[write gate blocked]') && !fs.existsSync(cliToolFile), 'cli tool: one-shot write is refused without a prior model-visible target read');
+  process.exitCode = 0;
   const cliToolArgsFile = path.join(TEST_DIR, 'cli-tool-args-bom.json');
   const cliToolBomFile = path.join(TEST_DIR, 'cli-tool-write-bom.txt');
-  fs.writeFileSync(cliToolArgsFile, `\uFEFF${JSON.stringify({ path: cliToolBomFile, content: 'cli wrote from bom args file' })}`, 'utf-8');
-  const cliToolBomOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'write', '--args-file', cliToolArgsFile, '--root', TEST_DIR]));
-  assert(cliToolBomOut.includes('[write] OK') && fs.readFileSync(cliToolBomFile, 'utf-8') === 'cli wrote from bom args file', 'cli tool: accepts UTF-8 BOM JSON args files from Windows PowerShell');
+  fs.writeFileSync(cliToolArgsFile, `\uFEFF${JSON.stringify({ path: cliToolBomFile })}`, 'utf-8');
+  const cliToolBomOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'read', '--args-file', cliToolArgsFile, '--root', TEST_DIR]));
+  const cliToolBomEnvelope = JSON.parse(cliToolBomOut);
+  assert(cliToolBomEnvelope.ok === true && cliToolBomEnvelope.tool === 'read' && String(cliToolBomEnvelope.result).includes(cliToolBomFile) && String(cliToolBomEnvelope.result).includes('Target does not exist'), 'cli tool: accepts UTF-8 BOM JSON args files from Windows PowerShell');
   const cliKvFile = path.join(TEST_DIR, 'cli-tool-kv.txt');
-  const cliKvOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'write', `path=${cliKvFile}`, 'content=cli kv wrote file', '--root', TEST_DIR]));
-  assert(cliKvOut.includes('[write] OK') && fs.readFileSync(cliKvFile, 'utf-8') === 'cli kv wrote file', 'cli tool: supports key=value args');
+  const cliKvOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'read', `path=${cliKvFile}`, '--root', TEST_DIR]));
+  const cliKvEnvelope = JSON.parse(cliKvOut);
+  assert(cliKvEnvelope.ok === true && cliKvEnvelope.tool === 'read' && String(cliKvEnvelope.result).includes(cliKvFile) && String(cliKvEnvelope.result).includes('Target does not exist'), 'cli tool: supports key=value args');
   const cliArgsFileTarget = path.join(TEST_DIR, 'cli-tool-args-file.txt');
   const cliArgsFile = path.join(TEST_DIR, 'cli-tool-args.json');
-  fs.writeFileSync(cliArgsFile, JSON.stringify({ path: cliArgsFileTarget, content: 'cli args-file wrote file' }), 'utf-8');
-  const cliArgsFileOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'write', '--args-file', cliArgsFile, '--root', TEST_DIR]));
-  assert(cliArgsFileOut.includes('[write] OK') && fs.readFileSync(cliArgsFileTarget, 'utf-8') === 'cli args-file wrote file', 'cli tool: supports args-file JSON input');
+  fs.writeFileSync(cliArgsFile, JSON.stringify({ path: cliArgsFileTarget }), 'utf-8');
+  const cliArgsFileOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'read', '--args-file', cliArgsFile, '--root', TEST_DIR]));
+  const cliArgsFileEnvelope = JSON.parse(cliArgsFileOut);
+  assert(cliArgsFileEnvelope.ok === true && cliArgsFileEnvelope.tool === 'read' && String(cliArgsFileEnvelope.result).includes(cliArgsFileTarget) && String(cliArgsFileEnvelope.result).includes('Target does not exist'), 'cli tool: supports args-file JSON input');
   process.exitCode = 0;
   const cliBadJsonOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'write', '{bad-json', '--root', TEST_DIR]));
   const cliBadJson = JSON.parse(cliBadJsonOut);
@@ -3316,6 +3327,16 @@ async function main() {
     async *chatStreamWithTools(modelName: string): AsyncGenerator<StreamToken> {
       this.modelsSeen.push(modelName);
       if (toolCallRound++ === 0) {
+        yield {
+          type: 'tool_call',
+          text: '',
+          toolCall: {
+            id: 'sub-read-1',
+            name: 'read',
+            arguments: JSON.stringify({ path: subagentToolFile }),
+          },
+        };
+      } else if (toolCallRound === 2) {
         yield {
           type: 'tool_call',
           text: '',

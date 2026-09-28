@@ -6,25 +6,35 @@
 
 实现沿用 Newmark 持久化 PowerShell 与 Windows UI Automation 通道、现有一次性视觉输入和 ComputerUse 会话授权，不增加外部 Windows-MCP 服务或 Python 运行依赖。UIA 查询限定到前台或明确选择的窗口；缺少有效句柄或目标属于 Newmark 宿主进程时跳过树采集。截图专用观察会清空旧语义目标，防止后续动作使用过期 ID。
 
-0.6.8 的 Windows-MCP 风格增量已并入主分支 `master`，当前仍处于开发阶段，Windows GUI 验收与发布构建待完成。调研依据、实现清单与验证边界见[开发记录](archive/20260928-dev-0.6.8-windows-mcp/REPORT.md)。
+0.6.8 的 ComputerUse 与文件写入安全门禁已合并到 `master`。源码构建、`test:full-release` 与隔离 Electron 的 CU 真模型场景均已通过；版本仍处于开发阶段，正式发行包和安装态尚未验收。
+
+## 2026-09-28 文件变更前读取门禁（0.6.8 开发）
+
+Newmark 的专用文件工具现在要求先用 **read** 读取精确目标。覆盖和删除必须完整读取；**edit** 必须读取包含旧文本的对应行，并要求旧文本在文件中唯一。大文件可通过起止行分段读取，只有完整行覆盖才授权整文件覆盖或删除。读取回执绑定工作区、会话、执行者与 Build run，五分钟过期，目标内容或文件身份变化后拒绝变更。新建文件先记录精确路径不存在，创建时使用排他模式；成功变更会消费回执。
+
+此门禁覆盖 **write、edit、delete_file** 和写入本地目标的 **web_catch**。任意 Shell/终端命令、浏览器/CDP、ComputerUse、Flow、Memory Lab、技能下载及其他结构化状态变更仍由各自入口处理，本节不表示这些通道已闭合。
+
+完整门禁运行 `npm run test:full-release`。写入压力测试覆盖 32 个并发 `ToolExecutor` 实例，并用 32 个异步门禁回调验证进程内同路径互斥；真实 CU 模型场景单独运行 `npm run test:computer-use-real-model -- --provider DeepSeek`，使用隔离 Electron 与合成视觉标记，并强制只读观察动作，不纳入无凭据的常规全量套件。
+
+`archive/` 仅用于本机保存操作报告与证据，已由 `.gitignore` 排除，不随公开源码仓库发布。
 
 ## 2026-09-28 Auto 决策倾向与反馈历史退役
 
-Auto 模型切换倾向现为“保守 / 均衡 / 激进”三档定性引导；每次切换仍由当前符合条件的对话模型根据任务与候选事实作出判断。资格过滤、用户明确的部署选择与硬成本约束继续生效。旧 Auto 点赞/点踩、评分持久化与历史清理入口已移除；过去遗留的本地文件不再读写或自动删除。0.6.7.0 MSI 已安装并核对：292 个文件、Program Files EXE/ASAR 哈希、注册信息和 CLI 版本均匹配，既有 `.Newmark` 文件清单无变化。本次安装后未启动 GUI；构建、针对性验证、截图与安装边界见[本轮归档](archive/20260928-auto-tendency-cleanup/REPORT.md)。
+Auto 模型切换倾向现为“保守 / 均衡 / 激进”三档定性引导；每次切换仍由当前符合条件的对话模型根据任务与候选事实作出判断。资格过滤、用户明确的部署选择与硬成本约束继续生效。旧 Auto 点赞/点踩、评分持久化与历史清理入口已移除；过去遗留的本地文件不再读写或自动删除。0.6.7.0 MSI 已安装并核对：292 个文件、Program Files EXE/ASAR 哈希、注册信息和 CLI 版本均匹配，既有 `.Newmark` 文件清单无变化。本次安装后未启动 GUI；构建、针对性验证、截图与安装边界见本地归档（未纳入公开仓库）。
 
 ## 2026-09-28 PC GUI 视觉、动效与全场景验收
 
 本轮将桌面 GUI 外壳交由 Claude Code 使用 claude-opus-5-5 自主打磨，重点是视觉协调、键盘焦点、减少动态效果偏好及渲染质感。两个 Claude 会话均自行因网关/API 错误退出（先 503 并发错误，后 403 预扣额度不足）；没有中断 Claude。保留的候选更改只在 `DESKTOP/src/ui/index.html` 的 `<style>` 区域。与本轮交接快照比较，换行符归一化后 `style` 外全文相同；renderer/preload API、IPC、HTTP/provider 协议、持久化和功能逻辑未改。
 
-最终源码构建成功。隔离 Electron + loopback fixture 的全场景验收记录 48 个状态截图、133 项交互、91 段动效采样和 64 项检查；失败、软失败、renderer error、console error 均为 0。交错四轮 CSS A/B 的 RAF callback 均值是候选 60.08、基线 60.47 次/秒，证明不了整体帧率提升；输入绘制 p95 与 RAF 间隔 p95 有回退，侧栏开合和历史分页 p95 小幅改善。RAF callback 不是屏幕实际呈现帧率，结果不代表达到 165 Hz。完整数据、所有截图、Claude 错误、构建和性能限制见[本轮验收报告](archive/20260927-gui-shell-motion-pass/REPORT.md)。
+最终源码构建成功。隔离 Electron + loopback fixture 的全场景验收记录 48 个状态截图、133 项交互、91 段动效采样和 64 项检查；失败、软失败、renderer error、console error 均为 0。交错四轮 CSS A/B 的 RAF callback 均值是候选 60.08、基线 60.47 次/秒，证明不了整体帧率提升；输入绘制 p95 与 RAF 间隔 p95 有回退，侧栏开合和历史分页 p95 小幅改善。RAF callback 不是屏幕实际呈现帧率，结果不代表达到 165 Hz。完整数据、所有截图、Claude 错误、构建和性能限制见本地归档（未纳入公开仓库）。
 
 ## 2026-09-27 PC GUI 帧性能优化与本机安装
 
-长历史恢复与分页显示不再给每条历史消息分配入场动画或持久合成层；新到消息仍保留轻量二维位移动画。0.6.7.0 unpack 在 1200 条历史、165 Hz PC 桌面下连续运行约 5 分钟，375 项检查通过、renderer/provider/runtime 错误为 0，长历史、活动完成和冷启动截图均无明显显示异常。与同负载 0.6.6.0 unpack 基线相比，renderer RAF callback cadence 从 65.31 提升到 75.58 次/秒；历史分页 p95 从 791.9 降到 663.4 ms，可信输入至绘制 p95 从 151.8 降到 51.8 ms。RAF callback 不是屏幕实际呈现帧率；本次仍未达到 165 Hz 流畅目标，也不是隔离单条 CSS 修改的多轮因果实验。该报告记录的旧 0.6.7.0 构建当时安装在 Program Files 并完成 GUI 启动验收；它已于 2026-09-28 被 Auto 倾向更新 MSI 替换。当前安装版字节见本节上方归档；本次新安装未重复启动 GUI。[完整测试、安装与限制记录](archive/20260927-pc-gui-fps-optimization/REPORT.md)。
+长历史恢复与分页显示不再给每条历史消息分配入场动画或持久合成层；新到消息仍保留轻量二维位移动画。0.6.7.0 unpack 在 1200 条历史、165 Hz PC 桌面下连续运行约 5 分钟，375 项检查通过、renderer/provider/runtime 错误为 0，长历史、活动完成和冷启动截图均无明显显示异常。与同负载 0.6.6.0 unpack 基线相比，renderer RAF callback cadence 从 65.31 提升到 75.58 次/秒；历史分页 p95 从 791.9 降到 663.4 ms，可信输入至绘制 p95 从 151.8 降到 51.8 ms。RAF callback 不是屏幕实际呈现帧率；本次仍未达到 165 Hz 流畅目标，也不是隔离单条 CSS 修改的多轮因果实验。该报告记录的旧 0.6.7.0 构建当时安装在 Program Files 并完成 GUI 启动验收；它已于 2026-09-28 被 Auto 倾向更新 MSI 替换。当前安装版字节见本节上方归档；本次新安装未重复启动 GUI。本地归档（未纳入公开仓库）。
 
 ## 2026-09-27 用户级 PC GUI 性能压力测试
 
-在当前 Program Files 安装版与最新 0.6.6.0 unpack 候选上，以同一 1200 条长历史、loopback provider 和 165 Hz PC GUI 流程实测。安装版在 6 个循环后未通过历史分页节点保留检查；最新 unpack 版完成 310 秒、336/336 检查及冷重启恢复，但 RAF callback p95 为 46.3 ms、长任务 p95 为 168 ms，仍未达到流畅目标。两个 0.6.6.0 包的 `app.asar` 哈希不同；unpack 结果不代表已安装版。帧回调不等同屏幕实际呈现率。[完整报告与原始证据](archive/20260927-user-level-debugger-performance/REPORT.md)。
+在当前 Program Files 安装版与最新 0.6.6.0 unpack 候选上，以同一 1200 条长历史、loopback provider 和 165 Hz PC GUI 流程实测。安装版在 6 个循环后未通过历史分页节点保留检查；最新 unpack 版完成 310 秒、336/336 检查及冷重启恢复，但 RAF callback p95 为 46.3 ms、长任务 p95 为 168 ms，仍未达到流畅目标。两个 0.6.6.0 包的 `app.asar` 哈希不同；unpack 结果不代表已安装版。帧回调不等同屏幕实际呈现率。本地归档（未纳入公开仓库）。
 
 ## 2026-09-26 JEV 仅由当前对话模型的严格 JSON 决策
 
@@ -32,33 +42,33 @@ Auto 路由的 JEV 判断直接调用当前符合条件的对话模型及其 Pro
 
 请求使用 Provider 原生的严格 JSON Schema，固定返回部署标识、理由码、置信度和 schema 版本；本地还会复核字段、类型、数量和边界，随后继续经过 `RouteDecisionValidator`。Provider 必须原生关闭思考。若 Provider/模型不支持关闭思考或严格 schema、输出不合约或请求超时，本次 Auto 路由失败关闭，不选择备用模型。JEV 默认硬超时为 3 秒。
 
-GUI、TUI、CLI 只编辑启用状态和超时，不再配置独立 JEV runtime、模型标识、模型产物路径或回退选路。升级时会清除旧槽位和回退字段。当前行为、协议边界与验证记录见 [JEV 操作归档](archive/20260926-current-model-jev/REPORT.md)。
+GUI、TUI、CLI 只编辑启用状态和超时，不再配置独立 JEV runtime、模型标识、模型产物路径或回退选路。升级时会清除旧槽位和回退字段。当前行为、协议边界与验证记录见 本地归档（未纳入公开仓库）。
 
 ## 2026-09-26 CU 迁移为稀疏唤醒 + 远端视觉
 
 桌面端已彻底停用 CULab/NES-T/NMEP/ONNX 端侧推理接口与依赖。`computer_use observe` 先用最多 5 Hz 的 32×18 灰度摘要等待变化或有界超时，再采集新鲜的完整截图和 UIA；截图交给当前对话配置的视觉 Provider。稀疏摘要只负责唤醒，不重构图像，也不等于严格压缩感知。完整截图仍会产生采集、传输和远端推理成本。
 
-本轮代码、隔离 unpack 包、真实 DeepSeek 与 APInebula CU 闭环结果和限制见 [CU 稀疏迁移归档](archive/20260926-cu-local-model-retirement/REPORT.md)。`newmark-cu-lab/` 作为独立历史训练研究目录保留，不再与桌面 App 共用 schema、模型 loader 或运行时接口。
+本轮代码、隔离 unpack 包、真实 DeepSeek 与 APInebula CU 闭环结果和限制见 本地归档（未纳入公开仓库）。`newmark-cu-lab/` 作为独立历史训练研究目录保留，不再与桌面 App 共用 schema、模型 loader 或运行时接口。
 
 ## 2026-09-26 Android 模拟器高压、互联与本地对话复测
 
-Android 15 x86_64 模拟器上的流式、队列、取消、重启恢复、远端目标绑定和 UI 压力功能门禁通过，未见崩溃或 ANR。UI 流畅度未通过：60 轮队列动画 jank 52.94% / p90 48 ms；混合高压 jank 79.25% / p90 150 ms。测试用隔离 stress/benchmark 包及 loopback fixtures，未覆盖物理手机、生产网络或真实 provider。完整环境、帧率口径、Astra 建议和限制见[模拟器复测报告](archive/20260926-mobile-stress-interconnect-local-chat/REPORT.md)。
+Android 15 x86_64 模拟器上的流式、队列、取消、重启恢复、远端目标绑定和 UI 压力功能门禁通过，未见崩溃或 ANR。UI 流畅度未通过：60 轮队列动画 jank 52.94% / p90 48 ms；混合高压 jank 79.25% / p90 150 ms。测试用隔离 stress/benchmark 包及 loopback fixtures，未覆盖物理手机、生产网络或真实 provider。完整环境、帧率口径、Astra 建议和限制见本地归档（未纳入公开仓库）。
 
 ## 2026-09-26 CU 稀疏变化唤醒接入
 
 `computer_use observe` 可选使用 `sparse_wait_ms`（默认 0、最大 5000 ms）：独立 PowerShell lane 每 200 ms 至多采样一次 32×18 灰度摘要，不需要端侧视觉模型。每次等待之后都会重新获取完整截图和 UIA 树。它是低分辨率变化唤醒，不是严格压缩感知；超时不代表屏幕无变化，微小/短暂/色相变化仍可能漏过，完整桌面读取成本仍在。
 
-0.6.6 v6 精确 unpack 候选包通过包内校验、CU 稀疏 GUI、双运行对话目标绑定，以及 120 秒 / 130 项 GUI soak。冷/热 sparse 实测分别为 4.082 秒 / 12 个样本和 486 毫秒 / 3 个样本；双流并发切换 10 次后，两条 completed run 均在关闭前落盘并通过冷启动恢复。1200 条长历史下，可信输入事件到绘制 p95 为 34.5 ms，对话切换 p95 为 1.095 s、历史分页 p95 为 1.663 s；长对话导航仍有明显等待。完整哈希、测试报告与 MSI/安装边界见 [v6 unpack 完整验收记录](archive/20260926-unpack-complete-v6/REPORT.md)。
+0.6.6 v6 精确 unpack 候选包通过包内校验、CU 稀疏 GUI、双运行对话目标绑定，以及 120 秒 / 130 项 GUI soak。冷/热 sparse 实测分别为 4.082 秒 / 12 个样本和 486 毫秒 / 3 个样本；双流并发切换 10 次后，两条 completed run 均在关闭前落盘并通过冷启动恢复。1200 条长历史下，可信输入事件到绘制 p95 为 34.5 ms，对话切换 p95 为 1.095 s、历史分页 p95 为 1.663 s；长对话导航仍有明显等待。完整哈希、测试报告与 MSI/安装边界见 本地归档（未纳入公开仓库）。
 
 截图语义仍由当前对话配置的视觉模型处理。本轮用隔离 loopback provider 验证真实 Electron GUI 与图像输入，没有验证外部 provider，也未接入专用远端快速模型路由；这些测试不能证明减少了端侧整帧采集或整机负载。候选 unpack 不是已安装的生产版本，MSI 没有生成或安装。
 
 ## 2026-09-26 CU 压缩感知与远端视觉可行性
 
-理论与代码路径核查见[陶哲轩参与的压缩感知与 CU 远端视觉可行性报告](archive/20260926-000508-tao-cs-cu/REPORT.md)。结论：严格压缩感知要有稀疏表示、合格测量算子和接收端重构器；当前多模态模型通道只接收普通图像，本项目没有配套的远端 CS 重构服务。生产 `computer_use` 已接入可选稀疏变化唤醒；完整截图仍交给当前对话的视觉模型，未绑定专用远端快速模型。候选包和生产路径验证见上节及[生产验证报告](archive/20260926-cu-sparse-production-validation/REPORT.md)。
+理论与代码路径核查见本地归档（未纳入公开仓库）。结论：严格压缩感知要有稀疏表示、合格测量算子和接收端重构器；当前多模态模型通道只接收普通图像，本项目没有配套的远端 CS 重构服务。生产 `computer_use` 已接入可选稀疏变化唤醒；完整截图仍交给当前对话的视觉模型，未绑定专用远端快速模型。候选包和生产路径验证见上节及本地归档（未纳入公开仓库）。
 
 ## 2026-09-24 CU 权重与桌面 UI 稳定性复测
 
-复测记录与原始证据见 [CU 权重与 UI 性能诊断](archive/20260924-160722-cu-stability-ui-performance/REPORT.md)。复测暴露出发现层会优先选中检测/追踪门禁失败的旧 `INTEGRATION_CANDIDATE`；A2 QDQ 是 32 维描述子，而 App 当前使用 16 维 ABI。修复记录见 [权重加载与滚动门禁修复](archive/20260924-170617-cu-weight-load-and-scroll-guards/REPORT.md)。
+复测记录与原始证据见 本地归档（未纳入公开仓库）。复测暴露出发现层会优先选中检测/追踪门禁失败的旧 `INTEGRATION_CANDIDATE`；A2 QDQ 是 32 维描述子，而 App 当前使用 16 维 ABI。修复记录见 本地归档（未纳入公开仓库）。
 
 加载器现要求模型声明 16 维输入/输出描述子；`INTEGRATION_CANDIDATE` 和 `ACCEPTED_FOR_RELEASE` 必须同时带 `detectorPass=true`、`trackingPass=true`。发现排序会跳过 App ABI 不兼容或晋级门禁失败的模型，并保留来源优先级。工作状态增量更新改用被动滚动监听维护的贴底标记，避免 DOM 修改前同步读取 `scrollHeight`。原 GUI 压测峰值仍为 122/224/129 ms；修改后的同口径复测尚未运行，所以不据此宣称 100 ms 门禁已通过。
 
@@ -68,7 +78,7 @@ Newmark 当前模型 session 固定使用 ONNX Runtime CPU：旧模型本机 p50
 
 ## 2026-09-23 外部复核落地：撤回三条自家结论 + 采集语义门禁
 
-外部复核包（[archive/20260923-culab-repair-pack](newmark-cu-lab/archive/20260923-culab-repair-pack)）
+外部复核包（本地归档（未纳入公开仓库））
 对本项目上一轮的批评全部成立，本轮逐条更正并落地第一轮修复。
 
 **被推翻/更正**：① "91.9% 找到目标、30.4% 是定位上限"**撤回**——在 GT 框内取 argmax 等于用真值找信号，
@@ -87,7 +97,7 @@ Newmark 当前模型 session 固定使用 ONNX Runtime CPU：旧模型本机 p50
 训练语料按目标级审计为 **432/700 clip 无目标级证据**、全局唯一帧 **3,160/8,400**；遥测里 backbone 梯度
 step 1/3/5/9/17 = NaN、step 4462 = +Inf。
 
-**交接包 v2**：[CU-Lab-handoff-20260923-v2.zip](newmark-cu-lab/archive/20260923-cu-external-handoff/CU-Lab-handoff-20260923-v2.zip)
+**交接包 v2**：本地归档（未纳入公开仓库）
 （0.82 MiB / 70 文件，SHA-256 全通过），含外部复核原文、`WHAT-CHANGED-IN-V2.md` 逐条更正说明与全部新证据。
 边界：采集**能力**本身未修、未重采、未重训；外部清单的任务 1/3/4/5/6 未执行。
 
@@ -113,7 +123,7 @@ Computer Use 通道不再依赖 CU-Lab 权重，也不依赖 CU-Lab 目录存在
   （`normal_translation` 76%、`stable_jitter` 96%、`disappear_reappear` 61% 命中）；留出集 24/60。
   布局类场景与合成渲染器 **0 命中** ⇒ 缺陷只在真实采集的事件类场景上。训练语料的有效唯一帧因此只有
   **3,353/8,400**；§9.2 的 `movingTargetContinuation` PASS 建立在"15 个平移 episode 里 12 个没平移"之上。
-- **外部交接包**：[CU-Lab-handoff-20260923.zip](newmark-cu-lab/archive/20260923-cu-external-handoff/CU-Lab-handoff-20260923.zip)
+- **外部交接包**：本地归档（未纳入公开仓库）
   （0.77 MiB / 59 文件，逐文件 SHA-256 已校验通过）：双语 README（列出要外部专家回答的 4 个问题）、
   每个数字的确切复现命令、两份评测报告、训练记录含逐步 `telemetry.jsonl`、Lab+App 两侧全部评测 JSON、
   发货 artifact 元数据、数据集 manifest、一个非退化 `scroll_global` 样本 clip 与三套数据一致性审计。
@@ -134,7 +144,7 @@ App 自己的 NES-T 解码 → App 自己的身份注册表），用带精确真
 另发现一处完整性缺口：`export --stage INTEGRATION_CANDIDATE` 会**先写完整产物、再抛错拒绝**，
 而 App 的 `validateCuArtifact()` 不核对 `manifest.benchmark.detectorPass|trackingPass`，
 于是被路线判定不该晋级的产物在 `13/13` ABI 校验与 `11/11` 真实推理门禁上全绿。
-完整报告与全部证据见 [newmark-cu-lab/archive/20260923-cu-workflow-recognition-eval/REPORT.md](newmark-cu-lab/archive/20260923-cu-workflow-recognition-eval/REPORT.md)；
+完整报告与全部证据见 本地归档（未纳入公开仓库）；
 复现命令：`DESKTOP\scripts\verify-cu-workflow-recognition.cjs`（`--graph-override` 做 fp32 对照）与
 `DESKTOP\scripts\probe-cu-graph-latency.cjs`。本轮未改动导出器、App 校验器或训练代码。
 
@@ -175,7 +185,7 @@ App 自己的 NES-T 解码 → App 自己的身份注册表），用带精确真
 
 App 门禁：`npm run test:computer-use-runtime` **77/77 全绿**（契约 16、SceneVersion 8、身份 7、动作事务 8、视觉能力 7、感知回退 13、产物校验 9、真实推理 9），其中真实推理门禁用 CU-Lab 真实渲染帧驱动 App 的 ONNX Runtime：14 个候选、全部通过冻结契约、16D 描述子范数 1.0000、hints 全部进入 Registry 且每个观测恰有一个身份归属（续用 0、歧义拒绝 14 —— 即"宁可 LOST 不要 WRONG-ID"在弱模型下的正确表现）。`node scripts/verify-cu-nmep-candidate.cjs <candidate.nmep>` 13/13 通过（App 自己重算哈希与体积，ABI PASS）。
 
-已知边界与下一步：训练数据仍是合成精确真值（未验证真实泛化）；0.99M 参数 / 1500 CPU 步处于**欠训练**状态，§8.1 目标是 8–10M 参数 + 35/5/30 epoch，需要 CUDA fp16 才算真正跑到预算；disappearance 正样本只有 0.16%，visibility 头需要类别加权或过采样；关联头 InfoNCE 仍在 1.7 附近。Phase 12–17 未开始。完整数字与诊断过程见 [archive/20260921-dev066-cu-nest/REPORT.md](archive/20260921-dev066-cu-nest/REPORT.md)。
+已知边界与下一步：训练数据仍是合成精确真值（未验证真实泛化）；0.99M 参数 / 1500 CPU 步处于**欠训练**状态，§8.1 目标是 8–10M 参数 + 35/5/30 epoch，需要 CUDA fp16 才算真正跑到预算；disappearance 正样本只有 0.16%，visibility 头需要类别加权或过采样；关联头 InfoNCE 仍在 1.7 附近。Phase 12–17 未开始。完整数字与诊断过程见 本地归档（未纳入公开仓库）。
 
 
 ## 历史记录：dev-0.6.6 Auto 路由重构
@@ -202,24 +212,24 @@ Auto 的「生态位」现在有了显式的决策模型槽位，三端都能就
 
 **Auto 关闭即冻结**：`auto_switch` 关闭时，Agent 不调用 JEV，也不改动当前部署；GUI/TUI 锁定策略控件，CLI 写入返回退出码 2。`jev_enabled` 关闭、当前 Provider 不可调用或严格 JSON 请求失败时，路由均失败关闭。
 
-历史界面证据仍在 `archive/20260921-dev066-jev-settings-ui/`。当前源码门禁 `jevModelEditorVerify` 检查已移除的 runtime/model/fallback 字段与 GUI、TUI、CLI 的当前策略入口。
+历史界面证据仍在 本地归档（未纳入公开仓库）。当前源码门禁 `jevModelEditorVerify` 检查已移除的 runtime/model/fallback 字段与 GUI、TUI、CLI 的当前策略入口。
 
 
 ## dev-0.6.5 弹窗与模型配置
 
-移动端返回项不再参与色块移动，模型菜单打开时定位当前选项，浏览器按钮采用外扩玻璃画布；供应商模型行落地后进入配置页。双端分别设置调用模型标识与显示名，并加强同名模型的供应商隔离。PC 实际窗口与 Android 模拟器触控/截图验证已执行，实体手机尚未连接。见 [本轮报告](archive/20260915-dev065-popup-models/REPORT.md)。
+移动端返回项不再参与色块移动，模型菜单打开时定位当前选项，浏览器按钮采用外扩玻璃画布；供应商模型行落地后进入配置页。双端分别设置调用模型标识与显示名，并加强同名模型的供应商隔离。PC 实际窗口与 Android 模拟器触控/截图验证已执行，实体手机尚未连接。见 本地归档（未纳入公开仓库）。
 
 
 ## dev-0.6.5 低内存适配与流式显示
 
-针对 8GB 电脑收紧闲置会话进程驻留预算，限制分支消息快照缓存，并阻止切换会话后的过期流式绘制。真实 DeepSeek 部署完成运行中 Next、暂停/恢复与出队回复验收。当前为源码开发版，未打包安装；8GB 实机性能仍待测。见 [验证报告](archive/20260915-dev065-memory-ui/REPORT.md)。
+针对 8GB 电脑收紧闲置会话进程驻留预算，限制分支消息快照缓存，并阻止切换会话后的过期流式绘制。真实 DeepSeek 部署完成运行中 Next、暂停/恢复与出队回复验收。当前为源码开发版，未打包安装；8GB 实机性能仍待测。见 本地归档（未纳入公开仓库）。
 
 
 ## dev-0.6.4 hotfix #2 排队进入对话后的用户输入显示与连续出队
 
 修复「通过排队进入的对话没有显示在对话区作为用户输入」与「队列没有连续进入」：后端在出队时已经把这一轮写成正式用户消息（`chatMessages` 里可见 `[user]` 与 work run 的 `primaryPrompt`），但渲染端既没有乐观气泡也没有发送回执，**从不为排队回合刷新转录**，所以对话区看不到用户输入、队列面板清空后又“什么都没有发生”。现在 `applyConversationCommandSnapshot` 比较权威 `queueItems` 的 id 集合，检测到出队即按目标去抖刷新（150ms/1200ms/3000ms，覆盖用户消息落盘与助手回复两个时刻），并且只在当前前台会话、渲染端无发送在飞时执行；运行终态（`done`/`error`/`interrupted`）也走同一条刷新。验证（已安装 exe、隔离 root + mock provider、连续两行）：账本 `seq1:SUCCEEDED seq2:SUCCEEDED`，后端与对话区都得到 `[user] DEV064_QUEUED_DISPLAY | [assistant] … | [user] DEV064_QUEUED_DISPLAY_2 | [assistant] …`，DOM 出现两个用户气泡。
 
-本版已打包并安装：MSI SHA-256 `614BE64B…F9E4CE`、便携包 `06D403D1…BE5642`；安装器 `Success=true`、`ProductCode={ECF2B123-F441-4141-97AF-6E46694F40D7}`、`VerifiedPayloadFileCount=292`、`InstalledAsarSha256=C91A06A1…24EC82`；安装目录 `app.asar` 与打包目录一致，注册表/安装目录 exe/CLI 均为 `0.6.4`。记录与安装态截图见 [hotfix #2 报告](archive/20260910-dev064-queue-drain-fix/REPORT.md)。
+本版已打包并安装：MSI SHA-256 `614BE64B…F9E4CE`、便携包 `06D403D1…BE5642`；安装器 `Success=true`、`ProductCode={ECF2B123-F441-4141-97AF-6E46694F40D7}`、`VerifiedPayloadFileCount=292`、`InstalledAsarSha256=C91A06A1…24EC82`；安装目录 `app.asar` 与打包目录一致，注册表/安装目录 exe/CLI 均为 `0.6.4`。记录与安装态截图见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.4 hotfix 受阻队列修复、排队/Guide 显示规则
 
@@ -229,7 +239,7 @@ Auto 的「生态位」现在有了显式的决策模型槽位，三端都能就
 
 验证：新增 `queueBlockedRepairVerify`（复现用户账本形状 → 修复 → 依次 SUCCEEDED + 审计事件 + 幂等）；真实内核 + UI 端到端（mock provider）验证 `ledger: seq1:FAILED seq2:SUCCEEDED seq3:SUCCEEDED`、受阻标记与修复按钮出现、修复+恢复后队列清空；`verify.js`、`test-shared-conversation-commands.cjs`、`test-queue-start-failure.cjs`、`test-queue-acceptance-boundary.cjs`、`test-queue-continuation-identity.cjs`、`guideUiReconcileVerify`、`branchPageQueueIdentityVerify` 等门禁全部通过。
 
-修复版已打包并**在本机完成 UAC 提升安装**：MSI SHA-256 `C174A886…E391F`、便携包 `5DA8CA31…CFC6`；安装器结果 `Success=true`、`Version=0.6.4.0`、`ProductCode={A45790C3-50B4-42F1-B58D-ED0CD2094398}`、`VerifiedPayloadFileCount=292`。独立复核：注册表 `0.6.4.0`、安装目录 exe `0.6.4.0`、安装目录 CLI `0.6.4`、安装目录 `resources/app.asar` SHA-256 `44935476…D3F7`（与打包目录一致）。已安装 exe 的隔离 root 门禁：受阻队列两行显示 `DEPENDENCY_FAILED` + 修复按钮，显式修复并恢复后账本 `seq1:FAILED seq2:SUCCEEDED seq3:SUCCEEDED`；视觉门禁分页条 `<2/2>`、队列 2 行（1 行等待所属分页）、内联排队气泡 0、Guide 仅“复制”。记录见 [hotfix 报告](archive/20260910-dev064-hotfix/REPORT.md)。
+修复版已打包并**在本机完成 UAC 提升安装**：MSI SHA-256 `C174A886…E391F`、便携包 `5DA8CA31…CFC6`；安装器结果 `Success=true`、`Version=0.6.4.0`、`ProductCode={A45790C3-50B4-42F1-B58D-ED0CD2094398}`、`VerifiedPayloadFileCount=292`。独立复核：注册表 `0.6.4.0`、安装目录 exe `0.6.4.0`、安装目录 CLI `0.6.4`、安装目录 `resources/app.asar` SHA-256 `44935476…D3F7`（与打包目录一致）。已安装 exe 的隔离 root 门禁：受阻队列两行显示 `DEPENDENCY_FAILED` + 修复按钮，显式修复并恢复后账本 `seq1:FAILED seq2:SUCCEEDED seq3:SUCCEEDED`；视觉门禁分页条 `<2/2>`、队列 2 行（1 行等待所属分页）、内联排队气泡 0、Guide 仅“复制”。记录见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.4 分支分页身份、排队输入可见与 Guide 只读
 
@@ -239,19 +249,19 @@ PC 端修复三处对话接续表现：(1) 从 Build 开头编辑输入生成分
 
 保留既有边界：预览分支与运行分支分离时，新分支绝不接管另一条分页的排队输入，跨分支不共享 provider 会话与折叠历史，Guide 行为不变（`test-shared-conversation-commands.cjs` 51/51 通过）。
 
-验证：`verify.js` 1717/1717；`test-shared-conversation-commands.cjs` 51/51；`queueAttachmentIsolationVerify` 渲染器命令 57/57；`test-long-conversation-ui-ordering.cjs` 18/18；新增 `branchPageQueueIdentityVerify` 分支身份/排队可见/Guide 只读回归；真实 Electron 渲染器视觉复核脚本 `test:branch-page-queue-visual`，截图见 [归档](archive/20260910-dev064-branch-page-queue/)。版本已同步为 `0.6.4`／Android `versionCode 604`（Android 行为未改动）。
+验证：`verify.js` 1717/1717；`test-shared-conversation-commands.cjs` 51/51；`queueAttachmentIsolationVerify` 渲染器命令 57/57；`test-long-conversation-ui-ordering.cjs` 18/18；新增 `branchPageQueueIdentityVerify` 分支身份/排队可见/Guide 只读回归；真实 Electron 渲染器视觉复核脚本 `test:branch-page-queue-visual`，截图见 本地归档（未纳入公开仓库）。版本已同步为 `0.6.4`／Android `versionCode 604`（Android 行为未改动）。
 
 本地已生成并核对：`release/Newmark-Agent-0.6.4-x64.msi`（246,759,622 bytes，SHA-256 `1BEABA08…B54E4A`）、`release/Newmark-Agent-0.6.4-win-unpacked-x64.zip`（321,900,311 bytes，SHA-256 `C807ECC6…4419D6`）。打包后 context-compress CLI stress、console wrapper boundary stress（`version=0.6.4`）与真实 loopback sshd SSH TUI 压力（4 轮重启）全部通过。
 
-Windows MSI 已在本机完成一次 UAC 提升安装并独立复核：注册表 `0.6.4.0`、安装目录 `Newmark Agent.exe` FileVersion/ProductVersion `0.6.4.0`、安装目录 CLI `0.6.4`、`C:\Program Files\Newmark Agent\resources\app.asar` SHA-256 `92842DCB…D38804`（与打包目录字节一致）、安装器核对 292 个 payload 文件。安装前已关闭 6 个运行中的 0.6.3 实例；安装器的“用户数据未被触碰”守卫因安装窗口内仍有运行时写入 `.Newmark`（`startup.log`、`.newmark-runtime`、`.newmark-context-v2`、Electron session-data）而报 `failed`，但 MSI 退出码为 `0`、payload 无误、该目录下安装后无任何 Newmark 进程 —— 判定为并发写入误报。安装后 GUI 运行验收：以隔离 root 启动**已安装**的 exe，通过 CDP 断言 `<2/2>` 分页条、队列行 2（1 行标记等待所属分页）、排队用户气泡 1 个与 Guide 仅“复制”动作并截图，`GuiRuntimeVerified=true`（渲染器层面；真实 provider 端到端仍是独立边界）。记录见 [打包安装报告](archive/20260910-dev064-package/REPORT.md)。
+Windows MSI 已在本机完成一次 UAC 提升安装并独立复核：注册表 `0.6.4.0`、安装目录 `Newmark Agent.exe` FileVersion/ProductVersion `0.6.4.0`、安装目录 CLI `0.6.4`、`C:\Program Files\Newmark Agent\resources\app.asar` SHA-256 `92842DCB…D38804`（与打包目录字节一致）、安装器核对 292 个 payload 文件。安装前已关闭 6 个运行中的 0.6.3 实例；安装器的“用户数据未被触碰”守卫因安装窗口内仍有运行时写入 `.Newmark`（`startup.log`、`.newmark-runtime`、`.newmark-context-v2`、Electron session-data）而报 `failed`，但 MSI 退出码为 `0`、payload 无误、该目录下安装后无任何 Newmark 进程 —— 判定为并发写入误报。安装后 GUI 运行验收：以隔离 root 启动**已安装**的 exe，通过 CDP 断言 `<2/2>` 分页条、队列行 2（1 行标记等待所属分页）、排队用户气泡 1 个与 Guide 仅“复制”动作并截图，`GuiRuntimeVerified=true`（渲染器层面；真实 provider 端到端仍是独立边界）。记录见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.3 对话接续身份、分支绑定与缓存隔离
 
-PC 与 Android 修复“底部显示的模型不等于实际发送的 provider/model”、新对话首轮长时间无反馈、排队 Next 被误接到上一个 Build、排队项落到错误分支，以及正常回复被客户端输出上限截断的问题。队列项在受理时固定 `targetRuntimeKey`、`workspaceKey`、`branchNodeId`、`branchPath` 与 `modelSelection`；Next 在上一 Build 完整结束后以新 runId 启动为同会话新用户轮次，Guide 仍内联干预当前 Build；跨会话队列项进入暂停而不是改投当前对话。受理、抢占、心跳与最终提交现在经过工作区级 `GuardedContinuationStore`：CAS/幂等回执、固定 parent、BranchGuard/fence、唯一 final、head/tail 分离、失败/取消阻断后继、分叉 lineage 校验与 append-only 事件；受理后重排被显式拒绝，必须取消后缀后以新命令重新提交。可选的 provider session 身份按分支隔离，每次模型请求记录 `branchId` 与实际 payload 的 `contextHash`。正常回复不再发送客户端 `max_tokens`/`max_output_tokens` 上限，只有明确短输出的辅助请求才传正值；移动端预算耗尽保留部分答案并标记未完成。PC 远程对话与 hosted mobile 命令共用同一 kernel/ledger；Android 本地对话仍使用独立的 `LocalQueueContract` 持久队列。验证记录见 [报告](archive/20260909-continuation-identity/REPORT.md)。
+PC 与 Android 修复“底部显示的模型不等于实际发送的 provider/model”、新对话首轮长时间无反馈、排队 Next 被误接到上一个 Build、排队项落到错误分支，以及正常回复被客户端输出上限截断的问题。队列项在受理时固定 `targetRuntimeKey`、`workspaceKey`、`branchNodeId`、`branchPath` 与 `modelSelection`；Next 在上一 Build 完整结束后以新 runId 启动为同会话新用户轮次，Guide 仍内联干预当前 Build；跨会话队列项进入暂停而不是改投当前对话。受理、抢占、心跳与最终提交现在经过工作区级 `GuardedContinuationStore`：CAS/幂等回执、固定 parent、BranchGuard/fence、唯一 final、head/tail 分离、失败/取消阻断后继、分叉 lineage 校验与 append-only 事件；受理后重排被显式拒绝，必须取消后缀后以新命令重新提交。可选的 provider session 身份按分支隔离，每次模型请求记录 `branchId` 与实际 payload 的 `contextHash`。正常回复不再发送客户端 `max_tokens`/`max_output_tokens` 上限，只有明确短输出的辅助请求才传正值；移动端预算耗尽保留部分答案并标记未完成。PC 远程对话与 hosted mobile 命令共用同一 kernel/ledger；Android 本地对话仍使用独立的 `LocalQueueContract` 持久队列。验证记录见 本地归档（未纳入公开仓库）。
 
 版本号已同步为 `0.6.3`／Android `versionCode 603`。`release:version-check`、主验证套件 `1717/1717`、共享命令/Flow handoff `51/51` 以及缓存/动态多级压缩专项全部通过。`beginExternalRun` 接管前会从工作区持久状态重载并按 clientMessageId 合并队列投影，Flow 完成后的 `waiting-b`/Goal 行不再丢失。
 
-本地已生成并核对：`release/Newmark-Agent-0.6.3-x64.msi`（SHA-256 `E739B6…60E3`）、`release/Newmark-Agent-0.6.3-win-unpacked-x64.zip`（SHA-256 `EF9973…EA67`）、`APK/Newmark-Agent-0.6.3-release.apk`（SHA-256 `DD9559…A3260`，`com.newmark.mobile` 0.6.3/603）。完整 `test:full-release` 仍被既有 `test-subagent-settlement-receipts.cjs` 挂起阻塞；打包时 SSH TUI stress 按显式 CI 边界跳过，Linux/macOS 未在本机生成。记录见 [打包报告](archive/20260909-dev063-package/REPORT.md)。
+本地已生成并核对：`release/Newmark-Agent-0.6.3-x64.msi`（SHA-256 `E739B6…60E3`）、`release/Newmark-Agent-0.6.3-win-unpacked-x64.zip`（SHA-256 `EF9973…EA67`）、`APK/Newmark-Agent-0.6.3-release.apk`（SHA-256 `DD9559…A3260`，`com.newmark.mobile` 0.6.3/603）。完整 `test:full-release` 仍被既有 `test-subagent-settlement-receipts.cjs` 挂起阻塞；打包时 SSH TUI stress 按显式 CI 边界跳过，Linux/macOS 未在本机生成。记录见 本地归档（未纳入公开仓库）。
 
 Windows MSI 已在本机完成一次 UAC 静默安装并独立复核：注册表 `0.6.3.0`、安装目录 CLI `0.6.3`、`resources/app.asar` SHA-256 `799E1753…A0C5D3`、安装器校验 292 个 payload 文件。安装后未自动启动 GUI，`GuiRuntimeVerified=false` 仍作为独立边界保留。
 
@@ -259,35 +269,35 @@ Windows MSI 已在本机完成一次 UAC 静默安装并独立复核：注册表
 
 ## dev-0.6.2 移动端输出预算续写
 
-修复本地 Agent 在标题已完成后因 `max_output_tokens` 直接失败的问题：供应商明确报告预算耗尽时保留进度、提高预算并有限次续写，截断工具参数不执行；断网、取消及未知不完整状态仍分别处理。见 [记录](archive/20260909-mobile-output-budget/REPORT.md)。
+修复本地 Agent 在标题已完成后因 `max_output_tokens` 直接失败的问题：供应商明确报告预算耗尽时保留进度、提高预算并有限次续写，截断工具参数不执行；断网、取消及未知不完整状态仍分别处理。见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.2 双端推理模型标题预算
 
-PC 与 Android 标题总结保留当前模型及思考档位，使用该档位的正常输出预算，避免短标题上限挤占模型生成正文前所需的思考空间。移动端图片文字退路继续保留。见 [验证记录](archive/20260909-title-reasoning-budget/REPORT.md)。
+PC 与 Android 标题总结保留当前模型及思考档位，使用该档位的正常输出预算，避免短标题上限挤占模型生成正文前所需的思考空间。移动端图片文字退路继续保留。见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.2 移动端整篇回复重复修复
 
-移动端按协议区分流式增量与完整回复快照，保留独立换行、空格和合法重复字词；Responses 的完成快照按消息片段核对，非流式聚合正文与结构化正文只取一份。见 [回归记录](archive/20260909-mobile-duplicate-response/REPORT.md)。
+移动端按协议区分流式增量与完整回复快照，保留独立换行、空格和合法重复字词；Responses 的完成快照按消息片段核对，非流式聚合正文与结构化正文只取一份。见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.2 移动端运行彩边
 
-本地与远程对话胶囊采用与 PC 一致的黑白动态运行边框：3 秒连续渐变，任务结束后消失，玻璃抬起和覆盖期间避让。后台运行的本地对话也独立显示运行状态。验证记录见 [报告](archive/20260909-mobile-runtime-border/REPORT.md)。
+本地与远程对话胶囊采用与 PC 一致的黑白动态运行边框：3 秒连续渐变，任务结束后消失，玻璃抬起和覆盖期间避让。后台运行的本地对话也独立显示运行状态。验证记录见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.2 免费搜索服务更新
 
-PC 与 Android 默认搜索组更新为 Exa 官方免密钥搜索优先、You.com 官方免费搜索备用。移动端可以直接连接两项 HTTP MCP，无需配对 PC；PC 远程 MCP 复用网页工具的代理设置。旧抓取服务保留为可选配置，Bing 与 DuckDuckGo 仍承担最终退路。免费服务存在额度和网络限制；调研、双端真实搜索及打包记录见 [报告](archive/20260909-search-refresh/REPORT.md)。
+PC 与 Android 默认搜索组更新为 Exa 官方免密钥搜索优先、You.com 官方免费搜索备用。移动端可以直接连接两项 HTTP MCP，无需配对 PC；PC 远程 MCP 复用网页工具的代理设置。旧抓取服务保留为可选配置，Bing 与 DuckDuckGo 仍承担最终退路。免费服务存在额度和网络限制；调研、双端真实搜索及打包记录见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.2 移动端带图交互与公式修复
 
-移动端将对话保存和图片缩略图解码移出主线程，连续操作合并待保存状态，并保留标题提交的持久化与取消校验。本地、远程对话胶囊长按弹出菜单时提供系统触感反馈。Markdown 支持紧接正文的多行块公式，并使用离线原生引擎排版行内公式、上下标和分段大括号；解析失败保留可读退路，代码示例保持原文。验证范围及交付记录见 [报告](archive/20260909-mobile-image-navigation/REPORT.md)。
+移动端将对话保存和图片缩略图解码移出主线程，连续操作合并待保存状态，并保留标题提交的持久化与取消校验。本地、远程对话胶囊长按弹出菜单时提供系统触感反馈。Markdown 支持紧接正文的多行块公式，并使用离线原生引擎排版行内公式、上下标和分段大括号；解析失败保留可读退路，代码示例保持原文。验证范围及交付记录见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.2 图片首轮标题退路
 
-移动端首轮带图时，标题总结失败会改用用户文字和图片数量进行纯文字分析，不发送图片数据。该重试仍失败时保存中性标题“图片内容分析”，继续正式带图请求；用户取消、对话状态失效和保存失败仍遵循原有启动门禁。见 [验证记录](archive/20260909-image-title-fallback/REPORT.md)。
+移动端首轮带图时，标题总结失败会改用用户文字和图片数量进行纯文字分析，不发送图片数据。该重试仍失败时保存中性标题“图片内容分析”，继续正式带图请求；用户取消、对话状态失效和保存失败仍遵循原有启动门禁。见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.2 代码块复制与双端视觉复查
 
-PC 与 Android 的 Markdown 围栏代码块均提供独立复制按钮，仅复制对应代码原文；代码卡片为左右对话时间线留出间距，PC 横向滚动代码时保留可见的复制工具栏。PC 窄窗口浏览器工具栏和上下文弹窗边界同步修正。双主题、移动端横竖屏截图、剪贴板测试及压力测试的实际结果见 [本轮报告](archive/20260908-full-visual-stress/REPORT.md)。
+PC 与 Android 的 Markdown 围栏代码块均提供独立复制按钮，仅复制对应代码原文；代码卡片为左右对话时间线留出间距，PC 横向滚动代码时保留可见的复制工具栏。PC 窄窗口浏览器工具栏和上下文弹窗边界同步修正。双主题、移动端横竖屏截图、剪贴板测试及压力测试的实际结果见 本地归档（未纳入公开仓库）。
 
 移动端 Goal 与队列操作按钮使用静态图标，取消按钮玻璃边框、按压缩放、位移、底色和涟漪，仅执行点击操作。
 
@@ -295,31 +305,31 @@ PC 与 Android 的 Markdown 围栏代码块均提供独立复制按钮，仅复�
 
 移动端修复 PC 合并流式片段与历史快照重叠导致的过程回复重复，按原片段 ID 合并。
 
-PC 与 Android 的 `browser_use` 按 DOM/PDF 二进制文本 → 已配置视觉模型 → 本地 OCR 的顺序读取页面；文本足够时不调用视觉模型。`visual_mode: "vision"` 可显式请求视觉协作，`viewport: {"width": 390, "height": 844}` 可设置会话内浏览器 CSS 画幅，`pdf_page` 可选择 PDF 页码。网页 PDF 按二进制解析，扫描页先渲染后识别；不把 PDF 阅读器工具栏当作正文。检查范围和交付记录见 [报告](archive/20260908-browser-vision-viewport/REPORT.md)。
+PC 与 Android 的 `browser_use` 按 DOM/PDF 二进制文本 → 已配置视觉模型 → 本地 OCR 的顺序读取页面；文本足够时不调用视觉模型。`visual_mode: "vision"` 可显式请求视觉协作，`viewport: {"width": 390, "height": 844}` 可设置会话内浏览器 CSS 画幅，`pdf_page` 可选择 PDF 页码。网页 PDF 按二进制解析，扫描页先渲染后识别；不把 PDF 阅读器工具栏当作正文。检查范围和交付记录见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.2 内置浏览器本地 HTML
 
-Android 与 PC 内置浏览器支持本地绝对路径、`file://`（兼容 `files://` 输入），本地 HTML 的相对 CSS、JavaScript 和页面链接正常加载。Android 同时接受有读取授权的 `content://` 文档地址；文件能否读取仍遵循系统权限。网页不能通过跳转或弹窗提升为本地文件访问。验证与交付记录见 [报告](archive/20260908-local-html-browser/REPORT.md)。
+Android 与 PC 内置浏览器支持本地绝对路径、`file://`（兼容 `files://` 输入），本地 HTML 的相对 CSS、JavaScript 和页面链接正常加载。Android 同时接受有读取授权的 `content://` 文档地址；文件能否读取仍遵循系统权限。网页不能通过跳转或弹窗提升为本地文件访问。验证与交付记录见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.2 全界面主题与玻璃协调
 
-两端统一状态语义色、Lucide 导航和开关反馈，Memory Lab 图谱随亮暗主题调整。PC 修复快速重开弹窗被旧退出动画误关的问题，空白浏览器画布跟随应用主题。已完成 72 个 PC 与 54 个 Android 双主题截图场景及玻璃手势回归；[检查报告与验证边界](archive/20260908-dev-0.6.2-full-visual/REPORT.md)、[原始截图图册](archive/20260908-dev-0.6.2-full-visual/gallery.html)。
+两端统一状态语义色、Lucide 导航和开关反馈，Memory Lab 图谱随亮暗主题调整。PC 修复快速重开弹窗被旧退出动画误关的问题，空白浏览器画布跟随应用主题。已完成 72 个 PC 与 54 个 Android 双主题截图场景及玻璃手势回归；本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库）。
 
 ## dev-0.6.2 双端视觉一致性
 
-PC 与 Android 统一采用 Lucide 线框图标及亮暗主题的三级文字色。移动端主界面、侧栏、设置、终端和 Memory Lab 的图标语言保持一致，亮色 Material 容器使用中性配色；PC 导航、工具栏、标签和展开区的悬停反馈统一跟随当前主题。沿用既有玻璃动效与触控布局。构建、截图和交付边界见 [本轮验证](archive/20260908-dev-0.6.2-ui-consistency/REPORT.md)。
+PC 与 Android 统一采用 Lucide 线框图标及亮暗主题的三级文字色。移动端主界面、侧栏、设置、终端和 Memory Lab 的图标语言保持一致，亮色 Material 容器使用中性配色；PC 导航、工具栏、标签和展开区的悬停反馈统一跟随当前主题。沿用既有玻璃动效与触控布局。构建、截图和交付边界见 本地归档（未纳入公开仓库）。
 
 ## dev-0.6.2 移动端图标主题跟随
 
-移动端默认图标统一继承当前亮暗主题的前景色；状态栏与导航栏图标在主题切换和页面恢复时重新应用。首帧读取已保存的主题覆盖设置，避免先按系统主题绘制图标。版本已同步为 0.6.2／602，本轮构建与验证记录见 [报告](archive/20260908-dev-0.6.2-mobile-theme/REPORT.md)。下方 0.6.1 安装与发行记录保留历史边界。
+移动端默认图标统一继承当前亮暗主题的前景色；状态栏与导航栏图标在主题切换和页面恢复时重新应用。首帧读取已保存的主题覆盖设置，避免先按系统主题绘制图标。版本已同步为 0.6.2／602，本轮构建与验证记录见 本地归档（未纳入公开仓库）。下方 0.6.1 安装与发行记录保留历史边界。
 
 ## 0.6.2 Windows MSI（本地构建）
 
-Windows x64 MSI 已打包并安装到本机，主程序版本为 `0.6.2.0`。292 个安装文件与包一致，21,145 个既有用户文件未改变；实际 GUI/CLI 启动与安装后搜索通过。产物为 [Newmark-Agent-0.6.2-x64.msi](release/Newmark-Agent-0.6.2-x64.msi)，SHA-256 `F01A369A1B536CB4A9C298BFFC5FC4AA3AF1CAF6FF4E937004A0DC73D6051033`。发布检查分段执行与安装证据见 [记录](archive/20260909-062-msi-install/REPORT.md)。本轮未发布 GitHub/npm Release。
+Windows x64 MSI 已打包并安装到本机，主程序版本为 `0.6.2.0`。292 个安装文件与包一致，21,145 个既有用户文件未改变；实际 GUI/CLI 启动与安装后搜索通过。产物为 [Newmark-Agent-0.6.2-x64.msi](release/Newmark-Agent-0.6.2-x64.msi)，SHA-256 `F01A369A1B536CB4A9C298BFFC5FC4AA3AF1CAF6FF4E937004A0DC73D6051033`。发布检查分段执行与安装证据见 本地归档（未纳入公开仓库）。本轮未发布 GitHub/npm Release。
 
 ## 0.6.1 Windows MSI（历史记录）
 
-此前 Windows x64 MSI 完成全量 Desktop release 回归、打包和 UAC 提权后的静默安装。当时安装版本与主程序文件版本均为 `0.6.1.0`；产物为 `release/Newmark-Agent-0.6.1-x64.msi`，SHA-256 为 `BC491848286DB2C8ED5162CF9C070E66C3358B65C8BB01BB96FBD0AE32D7CBBF`。构建、PowerShell 参数格式和历史安装证据见 [记录](archive/20260907-061-msi-install/REPORT.md)。
+此前 Windows x64 MSI 完成全量 Desktop release 回归、打包和 UAC 提权后的静默安装。当时安装版本与主程序文件版本均为 `0.6.1.0`；产物为 `release/Newmark-Agent-0.6.1-x64.msi`，SHA-256 为 `BC491848286DB2C8ED5162CF9C070E66C3358B65C8BB01BB96FBD0AE32D7CBBF`。构建、PowerShell 参数格式和历史安装证据见 本地归档（未纳入公开仓库）。
 
 Android 0.6.1 Release APK 位于 `APK/Newmark-Agent-0.6.1-release.apk`，SHA-256 为 `286479F2E5733885850C5F75F20BCD7CD8D5E55715BD7DD6F0B4340F18F64A6A`。旧 APK、根目录历史 `release-*` 以及 archive 内历史发行安装包和解包目录已清理；非发行归档资料保留。
 
@@ -335,13 +345,13 @@ PC 的上下文模型、默认供应商和回退池现在统一保留供应商�
 
 供应商模型行统一左右留白，信息左对齐，右侧依次为开关、编辑、删除。PC 与 Android 开关点击反转状态；长按拖动按松手档位提交，取消手势不提交。玻璃浮块从源端浮起，连续移动到目标端后再落下。PC 浮块复用现有折射渲染器，Android 视觉伸缩不改变中心锚点。
 
-本轮不修改 OpenCode 特殊请求头。DeepSeek 首轮标题请求另修正 64-token 截断问题，保留简短标题约束并提供 2048-token 完成预算。验证、已知边界与候选交付见 [本轮记录](archive/20260907-p0-pc-model-binding/REPORT.md)。
+本轮不修改 OpenCode 特殊请求头。DeepSeek 首轮标题请求另修正 64-token 截断问题，保留简短标题约束并提供 2048-token 完成预算。验证、已知边界与候选交付见 本地归档（未纳入公开仓库）。
 
 ### dev-0.6.0 移动端侧栏修复
 
 移动端供应商详情的名称与 API 接口独立显示；API 接口支持编辑并显式保存。横向协议轨道与下方竖向模型轨道隔离，竖向玻璃浮块不会进入名称、接口或跨过协议轨道。
 
-对话胶囊支持重排后的连续长按与反向拖动；竖屏抽屉允许玻璃浮块完整绘制在侧栏边界之外。浮块保持原有扩展尺寸，向右的中心位移减半，起点和终点仍与对应色块重合。已通过 365 项 JVM 测试、30 项模拟器设备测试和 Release 构建；本轮验证与交付边界见 [记录](archive/20260907-dev-0.6.0-mobile-sidebar/REPORT.md)。
+对话胶囊支持重排后的连续长按与反向拖动；竖屏抽屉允许玻璃浮块完整绘制在侧栏边界之外。浮块保持原有扩展尺寸，向右的中心位移减半，起点和终点仍与对应色块重合。已通过 365 项 JVM 测试、30 项模拟器设备测试和 Release 构建；本轮验证与交付边界见 本地归档（未纳入公开仓库）。
 
 Newmark Agent 将桌面、命令行与原生 Android 客户端连接到同一套会话和工作区能力，面向需要本地工具执行、多模型协作及跨设备工作连续性的开发者。
 
@@ -351,7 +361,7 @@ Newmark Agent 将桌面、命令行与原生 Android 客户端连接到同一套
 
 Ultra 主代理按责任、文件范围、依赖和验收要求分工，执行子代理保持自己的任务范围，通过有用的新证据和定向 mailbox 消息协作。普通档位和 Ultra 分别保留 4／16 个执行槽；相同子代理续作沿用身份和工作历史。重复递送、同一子代理重叠执行及重启丢失已读指令的问题已修复，运行中的完整工具结果和已提交输入通过检查点保存。
 
-同一子代理保存稳定的请求元数据和已供给工具顺序，模型、权限、协议或压缩变化会使相应快照失效；内存中的供应商兼容实例按子代理独立复用并有数量上限。真实供应商缓存读取以实际 usage 为准。可重复门禁为 `npm run test:subagent-continuity`，压力规模、真实模型观测和验收边界见[本轮记录](archive/20260907-003824-subagent-mailbox-cache-stress/REPORT.md)。
+同一子代理保存稳定的请求元数据和已供给工具顺序，模型、权限、协议或压缩变化会使相应快照失效；内存中的供应商兼容实例按子代理独立复用并有数量上限。真实供应商缓存读取以实际 usage 为准。可重复门禁为 `npm run test:subagent-continuity`，压力规模、真实模型观测和验收边界见本地归档（未纳入公开仓库）。
 
 子代理可向同对话的主代理或其他子代理发送消息。`wakeup` 默认为 `false`：已停止的接收者只保存邮件，设为 `true` 才请求唤醒；运行中的接收者照常处理两种消息。发送方自行选择摘要、文本历史或工具历史及范围，未指定内容时发送最后一条可见文本历史。工具调用与结果成对传递，列表只提供摘要，静默投递不改写接收者已有上下文或静态请求缓存。
 
@@ -363,31 +373,31 @@ WSL 停止要求发行版提供 Python 3 的 Linux pidfd 能力；无法确认�
 
 Build 的空响应、仅思考响应和短暂连接故障统一进入有界恢复；有效工具进展刷新恢复预算，已经完成的工具保留结果，当前请求已输出正文或工具调用后不自动重放。等待重试期间可以立即停止。明确失败或缺少完成依据的流不会冒充成功，也不会执行尚未完整接收的工具参数。停止或连接失败前已经显示的正文片段按未完成响应保存，重新打开会话后仍可查看。
 
-Chat Completions、Responses 和原生协议使用匹配的请求头与接口地址，保留网关前缀、查询参数和各自鉴权。上下文窗口中的实测用量与缓存统计保持原口径。GUI 通过目标、Build 和原始流事件身份保护连续显示，旧停止回包及重叠的快照/批次不能覆盖新响应。代码原因、失败复现与验收边界见[本轮记录](archive/20260906-223658-build-response-continuity/REPORT.md)。
+Chat Completions、Responses 和原生协议使用匹配的请求头与接口地址，保留网关前缀、查询参数和各自鉴权。上下文窗口中的实测用量与缓存统计保持原口径。GUI 通过目标、Build 和原始流事件身份保护连续显示，旧停止回包及重叠的快照/批次不能覆盖新响应。代码原因、失败复现与验收边界见本地归档（未纳入公开仓库）。
 
 ### 上下文管理与真实计量（2026-09-06）
 
 上下文窗口分别展示服务端实际输入/输出、对话累计缓存命中率及本地上下文分项估算。缺失计量显示未上报；只有完整覆盖的请求才能给出全会话命中率，部分数据单独列出已上报部分的加权命中率。同一请求的累计 usage 更新不会重复计费，标题、压缩等本会话辅助调用也纳入累计。历史计量与最新主请求快照随会话保存，切换会话后的晚回包保持原归属。
 
-运行中的分项来自实际提交的消息、系统提示和工具定义，区分长期历史与当前 Build；普通输入和工具结果保留 Build 归属。供应商未提供分项 tokenizer 用量时，界面明确标注本地估算，图片编码长度不当作 token 数。空闲时展示当前保存历史的估算，并单列最近主请求的实测输入。上下文面板适配较小窗口，可滚动访问全部信息和压缩操作。[代码原因与验收记录](archive/20260906-214235-context-inspector-accounting/REPORT.md)。
+运行中的分项来自实际提交的消息、系统提示和工具定义，区分长期历史与当前 Build；普通输入和工具结果保留 Build 归属。供应商未提供分项 tokenizer 用量时，界面明确标注本地估算，图片编码长度不当作 token 数。空闲时展示当前保存历史的估算，并单列最近主请求的实测输入。上下文面板适配较小窗口，可滚动访问全部信息和压缩操作。本地归档（未纳入公开仓库）。
 
 ### Build 内请求与缓存效率（2026-09-06）
 
-同一 Build 保留稳定请求前缀，并复用配置一致的供应商实例，避免重复探测已知不支持的参数。Guide 后的同模型重试保留原系统与工具序列；真实模型、认证或代理变化会使相应缓存失效。未开启诊断时不再对完整长历史重复计算指纹。服务端返回零缓存仍如实显示，不作为客户端修复失败或追加重试的理由。[修复与测量记录](archive/20260906-211514-build-cache-performance/REPORT.md)。
+同一 Build 保留稳定请求前缀，并复用配置一致的供应商实例，避免重复探测已知不支持的参数。Guide 后的同模型重试保留原系统与工具序列；真实模型、认证或代理变化会使相应缓存失效。未开启诊断时不再对完整长历史重复计算指纹。服务端返回零缓存仍如实显示，不作为客户端修复失败或追加重试的理由。本地归档（未纳入公开仓库）。
 
 ### 长对话、缓存统计与实时上下文（2026-09-06）
 
 供应商输入、输出和缓存读写计数按会话保存，切换工作区、重启或恢复归档后保持归属；旧历史中不存在的计量不反推。Responses 与 Chat 的缓存明细按真实 usage 解析，历史分页和上下文状态刷新对齐当前会话及加载代次，防止晚到的旧回包污染当前页面。
 
-1,200 条消息的正文、身份和时间戳已通过真实持久化/冷加载检查。旧历史重复分页已修复；此前 unpack 的实际 PC/HTTP 450 条分页、过期回包隔离、上下文计数显示及重启恢复通过 21 项检查，详见[长对话验收](archive/20260906-124619-user-flow-stability/remote-flow-queue/long-conversation/PACKAGED-HISTORY-REPORT.md)。Build 内保留完整初始系统提示和已发送的消息前缀，按需加载工具保留已有 schema 顺序。真实 APInebula 观测中的零缓存计数保留，按最新验收边界不强求服务端每轮命中。
+1,200 条消息的正文、身份和时间戳已通过真实持久化/冷加载检查。旧历史重复分页已修复；此前 unpack 的实际 PC/HTTP 450 条分页、过期回包隔离、上下文计数显示及重启恢复通过 21 项检查，详见本地归档（未纳入公开仓库）。Build 内保留完整初始系统提示和已发送的消息前缀，按需加载工具保留已有 schema 顺序。真实 APInebula 观测中的零缓存计数保留，按最新验收边界不强求服务端每轮命中。
 
 ### PC 弹窗 4px 反馈与 80ms 长按（2026-09-06）
 
-模型列表、普通选择列表及会话操作列表的外框与裁剪圆角统一为 25px，与内部胶囊色块的弧线协调；选项高度、内边距及既有运动逻辑不变。新 unpack 的 16 项菜单及 4 组长按时序检查通过，最终证据见[本轮实包验收](archive/20260906-124619-user-flow-stability/remote-flow-queue/FINAL-CONTEXT-RADIUS-REPORT.md)。
+模型列表、普通选择列表及会话操作列表的外框与裁剪圆角统一为 25px，与内部胶囊色块的弧线协调；选项高度、内边距及既有运动逻辑不变。新 unpack 的 16 项菜单及 4 组长按时序检查通过，最终证据见本地归档（未纳入公开仓库）。
 
 外拉反馈按最新要求朝受力方向延展，反侧及其未受力角部固定；单轴最大 4px，斜拉按方向分配同一预算。按压内缩、文字布局、轨道和色块移动保持既有逻辑，新的方向结果记录在 `pc-directional-pull/`，旧均匀扩展截图仅为历史证据。
 
-PC 弹窗的弹性形变上限调整为每侧 4 CSS px，长按拖动激活时间按最新要求缩短为 80ms。保留按下内缩、长按进入色块移动时恢复、受限外拉放大的既有交互；色块起终点、移动动画时长、轨道、弹窗材质与透明度保持原样。移动端不受这两项参数调整影响。构建与实际像素/时序结果记录在[本轮验收记录](archive/20260906-124619-user-flow-stability/remote-flow-queue/pc-popup-4px/report.md)。本次不更新已安装 MSI；下方 8px 安装说明是历史交付记录。
+PC 弹窗的弹性形变上限调整为每侧 4 CSS px，长按拖动激活时间按最新要求缩短为 80ms。保留按下内缩、长按进入色块移动时恢复、受限外拉放大的既有交互；色块起终点、移动动画时长、轨道、弹窗材质与透明度保持原样。移动端不受这两项参数调整影响。构建与实际像素/时序结果记录在本地归档（未纳入公开仓库）。本次不更新已安装 MSI；下方 8px 安装说明是历史交付记录。
 
 ### 远程会话与双端队列（2026-09-06，验收进行中）
 
@@ -395,7 +405,7 @@ PC 与配对手机使用共同的会话命令和持久化队列。两端提交�
 
 本轮也修复后台会话更新后 PC 队列按钮沿用旧索引、远程新建会话不出现在 PC 列表，以及 Flow 保存期间被空闲快照误取消的问题。移动端队列编辑等待实际接收结果，失败保留草稿，切换会话隔离编辑目标。静态布局、玻璃和交互视觉规则保持既有约定。
 
-最终 unpack 已通过 36 项快速取消 Flow 检查；与已安装 Android Release 的实际队列显示、手机编辑、继续及 Flow 运行/暂停/退出增量通过，详见[双端队列证据](archive/20260906-124619-user-flow-stability/remote-flow-queue/report.md)。候选测试中捕获的一次桌面无响应仍需定位，不能用重启恢复或当前通过的用例代替归因。下方“响应生命周期”结果属于此前已完成阶段。
+最终 unpack 已通过 36 项快速取消 Flow 检查；与已安装 Android Release 的实际队列显示、手机编辑、继续及 Flow 运行/暂停/退出增量通过，详见本地归档（未纳入公开仓库）。候选测试中捕获的一次桌面无响应仍需定位，不能用重启恢复或当前通过的用例代替归因。下方“响应生命周期”结果属于此前已完成阶段。
 
 ### 双端响应生命周期与 PC 列表性能（2026-09-06）
 
@@ -407,33 +417,33 @@ Android 通过统一的可取消 HTTP 生命周期连接响应头、正文读取
 
 PC 列表按实际内容变化更新 DOM。源码 Electron 对照中，500 条静态会话连续刷新 30 次的无谓 DOM 写入由 45,000 次降至 0，单次刷新均值由约 11.13 ms 降至 2.95 ms。思考内容缓存同时区分完整文本与运行状态，修复等长内容漏更新和结束后 Markdown 未恢复，并复用未变化的 Guide 与图片节点。现有主题、玻璃、8px 反馈、轨道及鼠标无泛光规则保持不变。
 
-上述性能对照来自隔离源码测试；实际 unpack、APK 安装身份、设备流程与最终发布门禁分别记录在[本轮验收报告](archive/20260906-124619-user-flow-stability/report.md)。最终 PC 完整发布测试通过，unpack 通过九项 GUI 流程；最终 APK 通过 315 项 JVM、56 项设备测试与九项导航。按指定 `APInebula / gpt-5.6-sol` 完成的 PC 两轮 CLI、两轮 GUI 和移动端两轮真实对话均已通过，移动端进程重启后回复仍可恢复。
+上述性能对照来自隔离源码测试；实际 unpack、APK 安装身份、设备流程与最终发布门禁分别记录在本地归档（未纳入公开仓库）。最终 PC 完整发布测试通过，unpack 通过九项 GUI 流程；最终 APK 通过 315 项 JVM、56 项设备测试与九项导航。按指定 `APInebula / gpt-5.6-sol` 完成的 PC 两轮 CLI、两轮 GUI 和移动端两轮真实对话均已通过，移动端进程重启后回复仍可恢复。
 
-本轮产物为 [Windows unpack](archive/20260906-124619-user-flow-stability/package-diagnostics-final/win-unpacked/) 和 [Android APK](archive/20260906-124619-user-flow-stability/Newmark-Agent-0.5.15-stability-final.apk)。下方历史 APK/MSI 不包含本轮改动，不能用旧版本号或旧安装替代新包证据。
+本轮产物为 本地归档（未纳入公开仓库） 和 本地归档（未纳入公开仓库）。下方历史 APK/MSI 不包含本轮改动，不能用旧版本号或旧安装替代新包证据。
 
 ### 灰黑暗色主题与右侧栏（2026-09-06，源码更新）
 
 桌面与 Android 暗色界面统一采用中性灰黑画布、分层面板和清晰的灰白文字，保留功能强调色与玻璃透明度。Android 右侧栏补齐宽屏底层，避免应用暗色、系统浅色时整栏反白；分页静止显示色块，交互使用共享玻璃浮块，图标保持清晰并在落地后恢复色块。分页图标短按由整组手势统一处理。
 
-已通过 Android 288 项单元测试、28 项硬件渲染与手势测试，以及真实 Electron 14 个状态和 121 项配色检查。本轮源码与验证记录见[灰黑主题与右栏修复](archive/20260906-115315-neutral-dark-theme/report.md)。下方 APK/MSI 是此前交付的安装包，不包含本轮源码更新。
+已通过 Android 288 项单元测试、28 项硬件渲染与手势测试，以及真实 Electron 14 个状态和 121 项配色检查。本轮源码与验证记录见本地归档（未纳入公开仓库）。下方 APK/MSI 是此前交付的安装包，不包含本轮源码更新。
 
 ### 移动端触控玻璃与对话浮块（2026-09-06）
 
 移动端泛光现在跟随真实手指位置，并始终裁剪在玻璃内部；浮块加入轻微阻尼，松手后从实际显示位置继续移动再落地。弹窗内容与玻璃共享弹性响应。对话浮块向右展开，保留完整横向扩展和原色块起终点；本地、远程对话连续慢拖后都能保持重排结果。
 
-本次仅修改移动端，PC 界面与安装保持原状。[当前 APK](APK/Newmark-Agent-0.5.15-mobile-pointer-20260906.apk) 已通过 287 项单元测试、25 项设备渲染与手势测试及九项最终包导航检查，并复制到剪贴板。API 35 模拟器中的实际安装包与交付包 SHA-256 一致：`B12B10A02219C5517803548EABFDB129A66C941DE7089503A7FA455480D70895`。实际截图核验了右侧完整包边、触点泛光、文字位置和落点；交付及证据见[本轮记录](archive/20260906-mobile-pointer-glow/report.md)。
+本次仅修改移动端，PC 界面与安装保持原状。[当前 APK](APK/Newmark-Agent-0.5.15-mobile-pointer-20260906.apk) 已通过 287 项单元测试、25 项设备渲染与手势测试及九项最终包导航检查，并复制到剪贴板。API 35 模拟器中的实际安装包与交付包 SHA-256 一致：`B12B10A02219C5517803548EABFDB129A66C941DE7089503A7FA455480D70895`。实际截图核验了右侧完整包边、触点泛光、文字位置和落点；交付及证据见本地归档（未纳入公开仓库）。
 
 ### PC 8px 方向反馈与更通透的弹窗（2026-09-06，已打包并安装）
 
 按最新要求，PC 光学弹性上限调整为 8px：按下立即内缩，达到既有 300ms 长按阈值、色块开始移动时弹性恢复，之后受限外拉才向外放大；拖动松手直接恢复。弹窗默认底色不透明度维持约 56%，现有色块移动、轨道约束、落地和文字布局保持不变，移动端输入未改动。
 
-当前 [MSI](release/Newmark-Agent-0.5.15-x64.msi) 已一次管理员提升、一次事务安装至 `C:\Program Files\Newmark Agent`；完整 `test:full-release` 返回 0，真实 Electron 时序、材质和滚动验证通过。294 个程序文件与包一致，20,982 个既有用户文件在安装期间保持不变，开始菜单已实际激活正确程序。版本仍为 `0.5.15`，本次 MSI SHA-256 为 `A94264A8D2703CC04BD769211F6BA3DF8F8D86209B1A0C6936625783EDE92F30`。详见[按压时序交付记录](archive/20260905-232550-pc-8px-press-phases/report.md)。10px 中间包和初版 8px 构建保留为历史记录，初版 8px 未安装。
+当前 [MSI](release/Newmark-Agent-0.5.15-x64.msi) 已一次管理员提升、一次事务安装至 `C:\Program Files\Newmark Agent`；完整 `test:full-release` 返回 0，真实 Electron 时序、材质和滚动验证通过。294 个程序文件与包一致，20,982 个既有用户文件在安装期间保持不变，开始菜单已实际激活正确程序。版本仍为 `0.5.15`，本次 MSI SHA-256 为 `A94264A8D2703CC04BD769211F6BA3DF8F8D86209B1A0C6936625783EDE92F30`。详见本地归档（未纳入公开仓库）。10px 中间包和初版 8px 构建保留为历史记录，初版 8px 未安装。
 
-Android 0.5.15 的上一修复包于 2026-09-05 19:49 完成发布构建检查及 APK 复制：[历史 APK](APK/Newmark-Agent-0.5.15-recovery-20260905.apk)。该次移动端源码未变，产物与当时设备验证通过的修复包逐字节一致；签名、对齐及包内容重新核验通过。详见[历史打包记录](archive/20260905-194552-apk-package/report.md)。
+Android 0.5.15 的上一修复包于 2026-09-05 19:49 完成发布构建检查及 APK 复制：[历史 APK](APK/Newmark-Agent-0.5.15-recovery-20260905.apk)。该次移动端源码未变，产物与当时设备验证通过的修复包逐字节一致；签名、对齐及包内容重新核验通过。详见本地归档（未纳入公开仓库）。
 
 ### PC 安装器修复后的历史构建（2026-09-05，已被上方构建取代）
 
-包含下述绘制修复的历史 [MSI](release-0.5.15-frosted-safe-20260905/Newmark-Agent-0.5.15-x64.msi) 曾安装至 `C:\Program Files\Newmark Agent`，版本为 `0.5.15`。该次 294 个程序文件、产品身份及 20,965 个既有用户文件核验通过；3 组可能在重启后破坏程序的旧任务已清除，其余 15 组原样保留。普通用户 GUI 与真实开始菜单启动通过。该包 SHA-256 为 `10B5167E3B5C099A62FC80BC532FDA623AAC97143BE72557EF5505FB211F367C`，详见[历史交付记录](archive/20260905-203600-msi-reboot-safe/report.md)。
+包含下述绘制修复的历史 [MSI](release-0.5.15-frosted-safe-20260905/Newmark-Agent-0.5.15-x64.msi) 曾安装至 `C:\Program Files\Newmark Agent`，版本为 `0.5.15`。该次 294 个程序文件、产品身份及 20,965 个既有用户文件核验通过；3 组可能在重启后破坏程序的旧任务已清除，其余 15 组原样保留。普通用户 GUI 与真实开始菜单启动通过。该包 SHA-256 为 `10B5167E3B5C099A62FC80BC532FDA623AAC97143BE72557EF5505FB211F367C`，详见本地归档（未纳入公开仓库）。
 
 安装器已修复 MSI 格式化破坏清理脚本、旧进程停止顺序及历史重启任务漏清问题；该次重封装仅安装助手资源变更，其余 293 个程序文件保持逐字节一致。此历史 MSI/ZIP 保存在 `release-0.5.15-frosted-safe-20260905/`；标准 `release/` 用于最新完成交付的构建。
 
@@ -441,7 +451,7 @@ Android 0.5.15 的上一修复包于 2026-09-05 19:49 完成发布构建检查�
 
 PC 弹窗改为均匀半透明磨砂材质，移除固定彩色照面和大面积明暗渐变；菜单选中色块在点击、长按、拖动及落地期间保持原色块样式。菜单边框与触控光直接绘制在滚动视口上，避免装饰 Canvas 和第二圈圆角边框随选项滚走。布局、文字、菜单 JavaScript 及现有位移时序保持不变。
 
-已通过实际 Electron 暗亮主题截图、滚动像素比较和手势回归，详见[本轮绘制记录](archive/20260905-182712-pc-uniform-frosted/report.md)。最终 MSI 的界面和 ASAR 与该验证构建一致；最新安装状态以上方交付记录为准。
+已通过实际 Electron 暗亮主题截图、滚动像素比较和手势回归，详见本地归档（未纳入公开仓库）。最终 MSI 的界面和 ASAR 与该验证构建一致；最新安装状态以上方交付记录为准。
 
 ### 0.5.15 交互与首次安装恢复（2026-09-05，历史记录）
 
@@ -451,7 +461,7 @@ PC 修复选中色块被 CSS 覆盖位置、轨道与弹窗争抢手势、宽浮
 
 Windows GUI、CLI 和手动安装统一使用受监控的 MSI 原生 API 流程，避免含空格路径被 PowerShell 拆开及新 ProductCode 错用重装参数。同版本构建通过包哈希和安装后逐文件核验区分，不能仅凭版本号判断安装成功。
 
-本轮逐项验收、构建与真实安装结果以[修复证据记录](archive/20260905-171101-glass-recovery/recovery-report.md)为准；[需求对照](archive/20260905-171101-glass-recovery/requirements.md)列出对应验证。Android 设备证据来自复现旧包闪退的 API 35 模拟器，尚无已连接真机。下面的旧版本记录保留为历史，不能用其中的安装结论代替本轮证据。
+本轮逐项验收、构建与真实安装结果以本地归档（未纳入公开仓库）为准；本地归档（未纳入公开仓库）列出对应验证。Android 设备证据来自复现旧包闪退的 API 35 模拟器，尚无已连接真机。下面的旧版本记录保留为历史，不能用其中的安装结论代替本轮证据。
 
 本轮交付已完成：[APK](APK/Newmark-Agent-0.5.15-recovery-20260905.apk) 已通过 281 项单测、14 项设备绘制测试及九项最终包导航检查，并复制到系统剪贴板；[MSI](release-0.5.15-recovery-20260905/Newmark-Agent-0.5.15-x64.msi) 已一次提升、一次事务覆盖安装至 Program Files，292 个文件和产品身份校验一致，20,956 个既有用户状态文件保持不变。开始菜单已实际启动正确程序，普通用户 GUI/IPC 检查通过。版本仍为 0.5.15，当前构建必须用上述文件路径及记录中的哈希识别。
 
@@ -553,7 +563,7 @@ Agent 现在可通过扩展后的 `image_inspect` 将活动工作区内经过校
 
 PC 对话中的 Build 展开/折叠标题在暗色模式按住时继续保持透明时间线，不再回退到 Chromium 原生白色按钮背景。修复不改变展开状态、内容布局、折叠箭头、键盘按钮语义或既有无动效规则。
 
-验证已覆盖 Desktop 编译、1676 项主断言、PC 玻璃聚焦契约与真实 Electron 暗色按住态；按住帧计算背景为完全透明，并保存视觉证据到 `archive/20260831-dev-0.5.13-build-toggle-dark-held.png`。本轮未构建或发布安装包。
+验证已覆盖 Desktop 编译、1676 项主断言、PC 玻璃聚焦契约与真实 Electron 暗色按住态；按住帧计算背景为完全透明，并保存视觉证据到 本地归档（未纳入公开仓库）。本轮未构建或发布安装包。
 
 ### dev-0.5.12 全平台预发布
 
@@ -787,7 +797,7 @@ Windows / Linux GUI     TUI / CLI          Android
        Local state, Memory Lab, archives and workspaces
 ```
 
-桌面端远程服务只在用户明确开启后监听；移动端远端操作继续使用桌面端的工作区、对话和运行时身份，不把前台选择当作写入目标。完整内部结构、文件树和历史验收记录见 `OVERVIEW.md` 与 `archive/`，README 仅保留产品使用与发布说明。
+桌面端远程服务只在用户明确开启后监听；移动端远端操作继续使用桌面端的工作区、对话和运行时身份，不把前台选择当作写入目标。完整内部结构、文件树和历史验收记录见 `OVERVIEW.md` 与 本地归档（未纳入公开仓库），README 仅保留产品使用与发布说明。
 
 ## 安全与隐私
 
@@ -810,7 +820,7 @@ Android 16 实时活动恢复为历史实机可工作的
 移动端本地与远程对话胶囊的点按、长按拖动统一增加 180ms 落地回缩，动画完成后才移除
 玻璃层。光学包边仍固定为 6dp；胶囊半圆端帽使用固定 12dp 横向捕获外扩，补偿左右可见
 折射区，不随组件宽度等比放大。记录见
-`archive/20260825-fluid-cloud-conversation-glass-final.md`。
+本地归档（未纳入公开仓库）。
 
 后续实测校正将对话落地改为“先锁定唯一目标色块，再让玻璃在其上收缩”，落地使用更明显的
 240ms、1.00→0.68 回缩，消除父状态延迟造成的新旧色块闪动。移动端本地/远程对话胶囊、
@@ -826,13 +836,13 @@ Android 16 实时活动恢复为历史实机可工作的
 就是选中色块，浮起时连续淡出填色并增强折射；落地前先吸附目标中心，再同步收回外扩边界、
 退去折射并显回同一层色块。最后一帧与目标静态色块同形同色后才交接，因此不再是玻璃缩没
 后色块突然出现。对话胶囊按实际目标宽高计算横纵回缩比例。记录见
-`archive/20260825-mobile-fill-glass-fill-closed-loop.md`。
+本地归档（未纳入公开仓库）。
 
 PC List 类弹窗（模型列表、Newmark Select、对话操作列表）不再叠加旧版固定外泛光/阴影底，
 只保留当前承载玻璃的实时磨砂与折射边缘。PC 对话长按拖动也从自由二维跟手改为单一纵向
 轨道：横坐标固定在对话胶囊列，纵坐标限制在同一置顶分组的首尾槽位之间。Android 本地与
 远程对话同步夹取可见浮块位移，排序目标与浮块位置使用相同的首尾边界。记录见
-`archive/20260825-pc-list-shadow-and-conversation-drag-track.md`。
+本地归档（未纳入公开仓库）。
 
 实机截图复核发现 List 虽已取消容器 `box-shadow`，仍继承通用玻璃伪元素绘制的整面固定明暗
 渐变与内阴影，形成底部灰黑带。模型列表、Newmark Select 与对话操作菜单现同步关闭这两层
@@ -841,18 +851,18 @@ PC List 类弹窗（模型列表、Newmark Select、对话操作列表）不再�
 跨端对话拖动的落地分层已校正：收缩只属于玻璃光学外壳，携带的标题、图标和状态内容保持
 原尺寸。PC 对话拖动浮块为内容层增加反向缩放补偿，并在进入落地前停止速度拉伸；Android
 本地/远程对话内容行仅在实际跟手阶段应用速度形变，归轨和玻璃回落阶段恢复 1:1。浮起阶段
-的现有液态形变保持不变。记录见 `archive/20260825-conversation-shell-content-landing-separation.md`。
+的现有液态形变保持不变。记录见 本地归档（未纳入公开仓库）。
 
 实机复核后，Android 对话玻璃进一步取消对整个 backdrop 采样层的 `scaleX/scaleY` 落地缩放。
 本地与远程浮层改为围绕目标色块中心，动态收回左右 12dp、上下 6dp 的固定外扩尺寸与坐标；
 折射外壳连续落成色块，但下层标题、图标和状态始终保持 1:1，也消除了胶囊落地时的左偏。
 对话拖动轨道同时扩展到同置顶分组的首项前与末项后完整插入槽，移动端速度按夹取后的实际
-位移计算且仅唯一玻璃外壳形变。记录见 `archive/20260825-conversation-drag-end-slots-and-mobile-shell-landing.md`。
+位移计算且仅唯一玻璃外壳形变。记录见 本地归档（未纳入公开仓库）。
 
 同一落地分层现已同步到移动端左栏三按钮和右栏子分页：折叠左栏的 40dp 外壳收回到居中的
 36dp 色块，展开左栏从整行外壳收回四周 4dp，右栏分页从 44×40dp 外壳收回到 32×28dp
 按钮色块。三者均通过动态尺寸与中心偏移收边，不再缩放 backdrop 采样层，因此图标、文字
-保持原尺寸。记录见 `archive/20260825-mobile-sidebar-selector-shell-only-landing.md`。
+保持原尺寸。记录见 本地归档（未纳入公开仓库）。
 
 当前 Windows MSI：`release/Newmark-Agent-0.5.7-x64.msi`，SHA-256
 `F90E44A6BA82A30FD56EC5A97403E4FF6337F341164C4F52BA090F96FC3FD777`。本机已通过 UAC
@@ -863,31 +873,31 @@ PC 对话区的审查摘要现按逻辑 Build 运行执行 upsert：增量 diff 
 runId 到达时接管本地 provisional runId，状态缓存与 DOM 均不会追加第二张审查卡。对话区
 同时在全部滚动内容和透明玻璃之下增加随明暗主题变化的实色主题本底，稳定正文对比度而不
 覆盖轨道、玻璃折射或用户自定义背景色。回归记录见
-`archive/20260825-work-review-incremental-upsert-chat-canvas.md`。
+本地归档（未纳入公开仓库）。
 
 包含该修复的 Windows MSI 已重新构建并完成本机 UAC 升级安装：
 `release/Newmark-Agent-0.5.7-x64.msi`，SHA-256
 `F8DF62267671B263349F1EEB21017704501F07FE7A7CABDC4D0DC0166A07A3BF`。安装目录为
 `C:\Program Files\Newmark Agent`，安装后 `app.asar` 与候选产物哈希一致。性能与安装记录见
-`archive/20260825-review-upsert-performance-msi-install.md`。
+本地归档（未纳入公开仓库）。
 
 后续实测定位到 Build 行内审查徽标仍存在独立的展开重复问题：徽标生成类为
 `.conversation-work-change-badge`，增量更新误查成 `.conversation-work-run-change-badge`，导致
 每次展开/收起都追加一份。选择器已统一，连续 8 次展开/收起仍恒为一个徽标；Build 标题也
 加入无玻璃、无按压缩放的展开控件排除规则。记录见
-`archive/20260825-build-toggle-review-badge-dedup.md`。
+本地归档（未纳入公开仓库）。
 
 包含该最终展开修复的 MSI 已再次构建并 UAC 安装：
 `release/Newmark-Agent-0.5.7-x64.msi`，SHA-256
 `36A1893143FB4DC46C25073FDC431F1CF6409948CD9DD698F666FEAEAA8DB357`。安装版
 `app.asar` SHA-256 为 `4BA2C12C6C2EDB83A5CF3B3F4F11A8546C738233333B38DEF9441CB544CC9B3E`，
-与 release 候选一致。记录见 `archive/20260825-build-toggle-msi-uac-install.md`。
+与 release 候选一致。记录见 本地归档（未纳入公开仓库）。
 
 移动端浮动选择器的实测几何再次校正：本地/远程对话胶囊的测量矩形统一转换到玻璃宿主
 坐标系，修复远程列表 8dp 内边距造成的左偏；右栏子分页直接记录每个 32×28dp 色块的实际
 边界，玻璃落地终点不再依赖槽宽硬编码。Memory Lab 总览/详细切换删除整体 scale 落地，
 改为只收回玻璃外壳的固定 6dp 外扩，采样内容始终保持 1:1。记录见
-`archive/20260825-mobile-selector-coordinate-and-shell-landing.md`。
+本地归档（未纳入公开仓库）。
 
 包含上述修复的 Android Release APK 已完成 R8、Vital lint、资源优化与签名构建：
 `android/app/build/outputs/apk/release/app-release.apk`，大小 45,954,544 bytes，SHA-256
@@ -897,7 +907,7 @@ runId 到达时接管本地 provisional runId，状态缓存与 DOM 均不会追
 松手后保留当前手势变换，由外层退出动画直接接管，不再闪回原位；Memory Lab 详细页返回
 总览仍在同一 surface 内从松手进度平滑复原。左侧栏本地/远程对话玻璃的移动态增加随材质
 浮起进度生效的 2dp 右向视觉中心校正，色块态进度为零，因此不改变准确的浮起起点和落地
-终点。记录见 `archive/20260825-mobile-predictive-back-and-conversation-travel-alignment.md`。
+终点。记录见 本地归档（未纳入公开仓库）。
 
 包含该修复的最新 Android Release APK 已完成 R8、Vital lint、资源优化与签名构建：
 `android/app/build/outputs/apk/release/app-release.apk`，大小 45,954,544 bytes，SHA-256
@@ -907,7 +917,7 @@ runId 到达时接管本地 provisional runId，状态缓存与 DOM 均不会追
 右栏自身不再作为全高折射透镜采样聊天画面，消除拖到一半时左边缘出现的宽条镜像。亮色
 右栏改用 98% 的明亮 `bgTertiary` 本底，不再被 0.74 透明度稀释；外形为仅左上/左下 18dp
 圆角、右侧贴屏直角，并只绘制左侧分隔线。记录见
-`archive/20260825-mobile-right-sidebar-pc-carrier-parity.md`。
+本地归档（未纳入公开仓库）。
 
 包含该右栏修复的 Android Release APK 已重新构建：
 `android/app/build/outputs/apk/release/app-release.apk`，大小 45,954,544 bytes，SHA-256
@@ -920,7 +930,7 @@ runId 到达时接管本地 provisional runId，状态缓存与 DOM 均不会追
 移动端“移动端权限”页新增“后台联网”系统状态开关。开关读取
 `ConnectivityManager.restrictBackgroundStatus`，点击时打开本应用专属的后台数据/不受限流量
 设置页，系统不提供该入口时回退应用详情页；从系统页返回后重新读取真实状态。应用不会伪造
-或静默修改该系统特殊权限。记录见 `archive/20260825-mobile-background-network-setting.md`。
+或静默修改该系统特殊权限。记录见 本地归档（未纳入公开仓库）。
 
 包含后台联网入口的 Android Release APK 已完成 R8、Vital lint、资源优化与签名构建，大小
 45,970,928 bytes，SHA-256 `79A5577EEF1B0A92F2489B0BDCAA2933422DFA6474EBED03900CDED91ECDEB1D`。
@@ -934,13 +944,13 @@ PC 与移动端所有选择型玻璃浮块现统一采用并行状态机：玻�
 220/360ms 行程。长按与对话排序拖动在按住期间维持完整浮起，松手归轨到最终色块后才落地；
 页面切换、弹窗命令和对话切换仍等落地完成后提交。覆盖菜单、左右栏、设置/插件/MemoryLab
 分页、工作区/模式选择、移动端侧栏三按钮、输入复合菜单及 PC/移动端对话点击与拖动。记录见
-`archive/20260826-liquid-motion-concurrent-flight.md`。
+本地归档（未纳入公开仓库）。
 
 包含上述并行运动状态机的 Android Release APK 已完成 Vital lint、R8、资源优化与签名构建：
 `android/app/build/outputs/apk/release/app-release.apk`，大小 45,970,928 bytes，SHA-256
 `298E11F7A27000A7770956AB99AAEF1C3046E2BC5E3F1BA0DEDD44A0CABB8532`。当前工作区最新 Electron
 dev 也已使用独立临时用户数据目录启动，避免与已安装版配置和单实例锁冲突。记录见
-`archive/20260826-liquid-motion-apk-electron-dev.md`。
+本地归档（未纳入公开仓库）。
 
 包含全平台玻璃并行运动改造的 Windows MSI 已重新构建并完成本机 UAC 升级安装：
 `release/Newmark-Agent-0.5.7-x64.msi`，大小 226,383,951 bytes，SHA-256
@@ -948,7 +958,7 @@ dev 也已使用独立临时用户数据目录启动，避免与已安装版配�
 22 项结构断言与 12 项安全断言全部通过；安装返回 3010（成功、建议重启），安装目录
 `C:\Program Files\Newmark Agent` 的 `app.asar` 与 release 候选 SHA-256 同为
 `E6F3F777E803DF9804054E7D86712B9B8605A768C78E7B74EDD744AAAEF0C233`，安装版 GUI 已成功启动。
-记录见 `archive/20260826-liquid-motion-msi-uac-install.md`。
+记录见 本地归档（未纳入公开仓库）。
 
 dev-0.5.8 补齐移动端对话操作反馈：更多按钮与长按打开的菜单分别从真实触发锚点弹出，并在
 关闭时反向收回；归档操作会在菜单退出后让对话胶囊淡出并轻微收缩，动画结束才从本地或远端
@@ -1193,19 +1203,19 @@ pm run test:liquid-renderer-electron 全部通过。渲染器测量保持单 Web
 验证：Android :app:testDebugUnitTest 全部通过。
 
 ## dev-0.6.5 release runtime gate
-Release APK installed on emulator and MSI built. MSI elevation was canceled, so installed-0.6.5 runtime queue/Goal/Flow measurements remain pending; see [release runtime report](archive/20260915-dev065-release-runtime/REPORT.md).
+Release APK installed on emulator and MSI built. MSI elevation was canceled, so installed-0.6.5 runtime queue/Goal/Flow measurements remain pending; see 本地归档（未纳入公开仓库）.
 
 
 ## dev-0.6.5 cross-platform release artifacts
-Windows MSI, Windows portable ZIP, Linux AppImage/deb/portable ZIP, and Android release APK were rebuilt and hash-verified. See [release artifact manifest](archive/20260916-dev065-release-packaging/REPORT.md).
+Windows MSI, Windows portable ZIP, Linux AppImage/deb/portable ZIP, and Android release APK were rebuilt and hash-verified. See 本地归档（未纳入公开仓库）.
 
 ## 2026-09-26 PC GUI frame-pressure validation
 
-At the active 2560×1600, 165 Hz PC display, the installed 0.6.6.0 GUI and the packaged v6 unpack candidate both passed their long-history functional and cold-restart checks, but both showed renderer stalls under a 3000-message interactive soak. Renderer RAF p95 intervals were 40.5 ms and 40.4 ms. RAF intervals longer than 9.091 ms accounted for 43.39% and 31.23%; these callback intervals are not actual dropped-present counts. The v6 result is from the unpacked app, not an installed build. Its MSI payload was hash-matched to the unpacked candidate, but Windows canceled elevation; the installed 0.6.6.0 hashes were confirmed unchanged. [Full PC GUI report](archive/20260926-pc-gui-frame-pressure/REPORT.md).
+At the active 2560×1600, 165 Hz PC display, the installed 0.6.6.0 GUI and the packaged v6 unpack candidate both passed their long-history functional and cold-restart checks, but both showed renderer stalls under a 3000-message interactive soak. Renderer RAF p95 intervals were 40.5 ms and 40.4 ms. RAF intervals longer than 9.091 ms accounted for 43.39% and 31.23%; these callback intervals are not actual dropped-present counts. The v6 result is from the unpacked app, not an installed build. Its MSI payload was hash-matched to the unpacked candidate, but Windows canceled elevation; the installed 0.6.6.0 hashes were confirmed unchanged. 本地归档（未纳入公开仓库）.
 
 ## 2026-09-27 Build cancellation and sparse Computer Use verification
 
 The desktop build now runs through a phase-logged supervisor with bounded step timeouts and process-tree termination. A live Ctrl+C during `npm run build` stopped the active TypeScript process tree, left no `build-driver` or `tsc` descendants, and a follow-up build succeeded. The packaged Windows x64 0.6.6.0 candidate passed its unpacked CLI, SSH/TUI, context-compression, MSI, and ZIP smoke checks; it was not installed.
 
-The 165 Hz unpacked GUI A/B improved renderer RAF callback cadence from 66.02/s to 76.98/s, while history-page p95 and the longest callback interval regressed. These callback measurements are not compositor presentation FPS, and the GUI remains visibly short of a smooth 165 Hz target. DeepSeek reached sparse-change wakeup and full-image upload, but neither real-provider run completed the semantic task; Windows Firewall prompts obscured the synthetic target. [Build, package, GUI, and real-provider evidence](archive/20260927-user-level-debugger-stress/REPORT.md).
+The 165 Hz unpacked GUI A/B improved renderer RAF callback cadence from 66.02/s to 76.98/s, while history-page p95 and the longest callback interval regressed. These callback measurements are not compositor presentation FPS, and the GUI remains visibly short of a smooth 165 Hz target. DeepSeek reached sparse-change wakeup and full-image upload, but neither real-provider run completed the semantic task; Windows Firewall prompts obscured the synthetic target. 本地归档（未纳入公开仓库）.
 

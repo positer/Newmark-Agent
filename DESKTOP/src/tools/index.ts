@@ -44,6 +44,7 @@ import { LocalOcrEngine, LocalOcrResult } from '../core/localOcr';
 import { browserVisualFallback, registerBrowserVisualFallback } from '../core/visualTextFallback';
 import { COMPUTER_USE_LOCK_TTL_MS, ComputerUseSessionScope, defaultComputerUseSessionRegistry } from '../core/computerUseSession';
 import { SearchMcpAttempt, SearchMcpPool, SearchMcpPoolResult } from '../core/searchMcpPool';
+import { FileWriteObservationGate } from '../core/fileWriteObservation';
 
 export interface ToolExecutionContext {
   mode?: string;
@@ -54,6 +55,7 @@ export interface ToolExecutionContext {
   actorId?: string;
   workspaceId?: string;
   runtimeKey?: string;
+  runId?: string;
   backend?: string;
   invocation?: 'agent' | 'cli';
   signal?: AbortSignal;
@@ -283,6 +285,7 @@ export class ToolExecutor {
   private readonly localOcr: LocalOcrEngine;
   private readonly argumentValidators = new ToolArgumentValidatorRegistry();
   private readonly searchMcpPool: SearchMcpPool;
+  private readonly fileWriteObservationGate = new FileWriteObservationGate();
   private hostProfile: ToolHostProfile = {
     kind: 'desktop',
     platform: process.platform,
@@ -361,15 +364,15 @@ export class ToolExecutor {
     const tools = [
       t('bash', `${shellDescription} Optional timeout_ms lets the Agent choose this command timeout in milliseconds; 0 requests no limit, but a nonzero terminal.interrupt_timeout_ms setting is the upper cap.`, { command: { type: 'string' }, timeout_ms: { type: 'number', description: 'Per-command timeout in milliseconds. 0 means no requested limit unless capped by settings.' } }, ['command']),
       t('pwd', 'Print working directory (current folder path)', {}, []),
-      t('read', 'Read file contents. Use ABSOLUTE paths. The working directory is given in system prompt.', { path: { type: 'string' } }, ['path']),
-      t('write', 'Write/create a file. Use ABSOLUTE paths.', { path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']),
-      t('edit', 'Edit file with find-and-replace. Use ABSOLUTE paths.', { path: { type: 'string' }, old_str: { type: 'string' }, new_str: { type: 'string' } }, ['path', 'old_str', 'new_str']),
-      t('delete_file', 'Delete ONE file under Agent supervision. Use ABSOLUTE paths. This tool refuses directory deletion and wildcard paths; delete files one by one. Never use bash rm/del/Remove-Item for batch (recursive/wildcard/loop/pipe/multi-target) deletion — the runtime hard-blocks such commands.', { path: { type: 'string' } }, ['path']),
+      t('read', 'Read file contents. Use ABSOLUTE paths. A complete read or explicit line range records a short-lived, conversation/workspace/run-scoped observation for write/edit/delete_file. Read an exact target path before changing it. Large files can be read with start_line/end_line; overwrite/delete requires full line coverage, while edit requires the exact old_str lines.', { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1, description: 'Optional inclusive first line for a bounded read. Provide together with end_line.' }, end_line: { type: 'integer', minimum: 1, description: 'Optional inclusive last line for a bounded read. Provide together with start_line.' } }, ['path']),
+      t('write', 'Write/create a file only after the exact target path has been read in this conversation, workspace, actor, and Build run. Existing files require a complete read; new files require an exact-path absence observation. Changed targets are refused until read again.', { path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']),
+      t('edit', 'Edit a file with find-and-replace only after reading the exact target lines in this conversation, workspace, actor, and Build run. The old_str must have appeared in a successful read range; stale or ambiguous matches are refused.', { path: { type: 'string' }, old_str: { type: 'string' }, new_str: { type: 'string' } }, ['path', 'old_str', 'new_str']),
+      t('delete_file', 'Delete ONE file only after reading its complete contents at the exact target path in this conversation, workspace, actor, and Build run. This tool refuses directory deletion and wildcard paths; delete files one by one. Never use bash rm/del/Remove-Item for batch (recursive/wildcard/loop/pipe/multi-target) deletion — the runtime hard-blocks such commands.', { path: { type: 'string' } }, ['path']),
       t('glob', 'Find files by glob pattern (e.g. **/*.ts, src/**/*.html)', { pattern: { type: 'string' } }, ['pattern']),
       t('grep', 'Search file content with regex', { pattern: { type: 'string' }, path: { type: 'string' } }, ['pattern', 'path']),
       t('web_search', 'Search the web', { query: { type: 'string' } }, ['query']),
       t('web_fetch', 'Fetch and extract URL content', { url: { type: 'string' } }, ['url']),
-      t('web_catch', 'Download a public web resource, save a webpage, or capture one page component into an exact workspace destination. Advanced Build/Goal tool; unavailable in Plan and Chat. This writes only the requested local output and never changes the remote page.', {
+      t('web_catch', 'Download a public web resource, save a webpage, or capture one page component into an exact workspace destination. Read the exact destination first; existing files require a complete read and new files require an exact-path absence observation. Advanced Build/Goal tool; unavailable in Plan and Chat. This writes only the requested local output and never changes the remote page.', {
         action: { type: 'string', enum: ['download', 'save_page', 'capture_component'], description: 'download saves response bytes; save_page stores the HTML response; capture_component selects one CSS element and saves its src/href asset, or its outer HTML when no asset attribute exists.' },
         url: { type: 'string', description: 'Public http:// or https:// URL.' },
         destination: { type: 'string', description: 'Exact output file path. Relative paths resolve inside the active workspace.' },
@@ -807,15 +810,86 @@ export class ToolExecutor {
       switch (tool) {
         case 'bash': return await this.bash(g('command'), wsPath, args.timeout_ms, context.signal);
         case 'pwd': return `Current directory: ${wsPath}`;
-        case 'read': return this.fread(resolve(g('path')));
-        case 'write': return this.fwrite(resolve(g('path')), g('content'));
-        case 'edit': return this.fedit(resolve(g('path')), g('old_str'), g('new_str'));
-        case 'delete_file': return this.fdelete(resolve(g('path')));
+        case 'read':
+          return await this.fileWriteObservationGate.read(resolve(g('path')), this.fileWriteObservationScope(context, wsPath), {
+            startLine: args.start_line === undefined ? undefined : Number(args.start_line),
+            endLine: args.end_line === undefined ? undefined : Number(args.end_line),
+          });
+        case 'write': {
+          const target = resolve(g('path'));
+          const mutation = await this.fileWriteObservationGate.mutate(target, this.fileWriteObservationScope(context, wsPath), { kind: 'full' }, gate => {
+            const denied = this.checkWorkspaceAccess('write', gate.canonicalPath, context.workspacePath || wsPath);
+            if (denied) return { value: denied, committed: false };
+            if (gate.exists) {
+              gate.assertBeforeCommit();
+              fs.writeFileSync(target, g('content'), 'utf-8');
+            } else {
+              fs.mkdirSync(path.dirname(target), { recursive: true });
+              gate.assertBeforeCommit();
+              fs.writeFileSync(target, g('content'), { encoding: 'utf-8', flag: 'wx' });
+            }
+            return { value: '[write] OK: ' + target, committed: true };
+          });
+          return mutation.ok ? mutation.value : mutation.error;
+        }
+        case 'edit': {
+          const target = resolve(g('path'));
+          const oldText = g('old_str');
+          const replacement = g('new_str');
+          const mutation = await this.fileWriteObservationGate.mutate(target, this.fileWriteObservationScope(context, wsPath), { kind: 'edit', oldText }, gate => {
+            const denied = this.checkWorkspaceAccess('edit', gate.canonicalPath, context.workspacePath || wsPath);
+            if (denied) return { value: denied, committed: false };
+            if (!gate.exists || gate.text === undefined) return { value: '[edit] Target file does not exist: ' + target, committed: false };
+            const first = gate.text.indexOf(oldText);
+            if (first < 0) return { value: '[edit] String not found in ' + target + '.', committed: false };
+            if (gate.text.indexOf(oldText, first + oldText.length) >= 0) {
+              return { value: '[edit] Refused: old_str matches more than one position in ' + target + '; read a more specific context and retry.', committed: false };
+            }
+            gate.assertBeforeCommit();
+            const updated = gate.text.slice(0, first) + replacement + gate.text.slice(first + oldText.length);
+            fs.writeFileSync(target, updated, 'utf-8');
+            return { value: '[edit] OK: ' + target, committed: true };
+          });
+          return mutation.ok ? mutation.value : mutation.error;
+        }
+        case 'delete_file': {
+          const target = resolve(g('path'));
+          if (/[*?]/.test(target)) return '[delete_file] Refused: wildcard paths are not allowed. Delete one file per call.';
+          try {
+            if (fs.lstatSync(target).isDirectory()) {
+              return '[delete_file] Refused: deleting a directory is not allowed. Delete files one by one under Agent supervision.';
+            }
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+              return '[delete_file] ' + (error instanceof Error ? error.message : String(error));
+            }
+          }
+          const mutation = await this.fileWriteObservationGate.mutate(target, this.fileWriteObservationScope(context, wsPath), { kind: 'full' }, gate => {
+            const denied = this.checkWorkspaceAccess('delete_file', gate.canonicalPath, context.workspacePath || wsPath);
+            if (denied) return { value: denied, committed: false };
+            if (!gate.exists) return { value: '[delete_file] Target does not exist: ' + target, committed: false };
+            gate.assertBeforeCommit();
+            fs.unlinkSync(target);
+            return { value: '[delete_file] OK: ' + target, committed: true };
+          });
+          return mutation.ok ? mutation.value : mutation.error;
+        }
         case 'glob': return this.glob(g('pattern'), wsPath);
         case 'grep': return this.grep(g('pattern'), resolve(g('path')));
         case 'web_search': return await this.wsearch(g('query'), context.signal);
         case 'web_fetch': return await this.wfetch(g('url'), context.signal);
-        case 'web_catch': return await this.wcatch(args, resolve(g('destination')), context.signal);
+        case 'web_catch': {
+          const destination = resolve(g('destination'));
+          const mutation = await this.fileWriteObservationGate.mutate(destination, this.fileWriteObservationScope(context, wsPath), { kind: 'full' }, async gate => {
+            const denied = this.checkWorkspaceAccess('web_catch', gate.canonicalPath, context.workspacePath || wsPath);
+            if (denied) return { value: denied, committed: false };
+            const value = await this.wcatch(args, destination, context.signal, () => gate.assertBeforeCommit());
+            let committed = false;
+            try { committed = (JSON.parse(value) as Record<string, unknown>).ok === true; } catch {}
+            return { value, committed };
+          });
+          return mutation.ok ? mutation.value : mutation.error;
+        }
         case 'browser_open': return await this.browserRun({ action: 'open', url: g('url') }, context.signal, context, wsPath);
         case 'browser_snapshot': return await this.browserRun({ action: 'snapshot', maxChars: Number((args as Record<string, unknown>).max_chars || 12000) }, context.signal, context, wsPath);
         case 'browser_click': return await this.browserRun({ action: 'click', selector: g('selector') }, context.signal, context, wsPath);
@@ -1014,6 +1088,14 @@ export class ToolExecutor {
         }
         case 'computer_use': {
           const action = normalizeComputerUseAction(g('action'));
+          if (process.env.NEWMARK_TEST_CU_OBSERVE_ONLY === '1'
+            && !['observe', 'app_observe', 'app_list', 'wait_for'].includes(action)) {
+            return JSON.stringify({
+              ok: false,
+              action,
+              error: '[computer_use test guard] The live-model smoke only permits read-only desktop observation.',
+            });
+          }
           const owner = `${computerUseOwner(context, wsPath)}:${String(context.actorId || 'root')}`;
           const lockGuard = action === 'takeover_stop'
             ? assertComputerUseLockOwner(action, owner, context, wsPath)
@@ -1308,6 +1390,19 @@ export class ToolExecutor {
     return `[permission] ${action}: ${tool} cannot access outside workspace (${target}).`;
   }
 
+  private fileWriteObservationScope(context: ToolExecutionContext, wsPath: string): string {
+    const workspacePath = path.resolve(context.workspacePath || wsPath || this.root);
+    return JSON.stringify({
+      runtimeKey: String(context.runtimeKey || process.env.NEWMARK_RUNTIME_KEY || ''),
+      runId: String(context.runId || ''),
+      workspaceId: String(context.workspaceId || workspacePath),
+      workspacePath,
+      conversationId: String(context.conversationId || 'default'),
+      actorId: String(context.actorId || ROOT_TERMINAL_ACTOR_ID),
+      backend: String(context.backend || (process.env.NEWMARK_WSL_DISTRO ? 'wsl' : process.platform)),
+    });
+  }
+
   private checkBashWorkspaceAccess(command: string, wsPath: string): string | null {
     const perm = this.config.getStr('workspace', 'access_permission');
     if (perm === 'full_access') return null;
@@ -1388,44 +1483,6 @@ export class ToolExecutor {
     } catch (e: unknown) {
       return `[bash] ${e instanceof Error ? e.message : String(e)}`;
     }
-  }
-
-  private fread(p: string): string {
-    try {
-      const c = fs.readFileSync(p, 'utf-8');
-      return c.length > 30000 ? c.slice(0, 30000) + '...\n[truncated]' : c;
-    } catch (e) { return `[read] ${e}`; }
-  }
-
-  private fwrite(p: string, content: string): string {
-    try {
-      fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, content, 'utf-8');
-      return `[write] OK: ${p}`;
-    } catch (e) { return `[write] ${e}`; }
-  }
-
-  private fedit(p: string, oldStr: string, newStr: string): string {
-    try {
-      const c = fs.readFileSync(p, 'utf-8');
-      if (!c.includes(oldStr)) return `[edit] String not found in ${p}.`;
-      const updated = c.replace(oldStr, newStr);
-      fs.writeFileSync(p, updated, 'utf-8');
-      return `[edit] OK: ${p}`;
-    } catch (e) { return `[edit] ${e}`; }
-  }
-
-  private fdelete(p: string): string {
-    try {
-      if (/[*?]/.test(p)) return '[delete_file] Refused: wildcard paths are not allowed. Delete one file per call.';
-      const resolved = path.resolve(p);
-      const stat = fs.lstatSync(resolved);
-      if (stat.isDirectory()) {
-        return '[delete_file] Refused: deleting a directory is not allowed. Delete files one by one under Agent supervision.';
-      }
-      fs.unlinkSync(resolved);
-      return `[delete_file] OK: ${resolved}`;
-    } catch (e) { return `[delete_file] ${e instanceof Error ? e.message : String(e)}`; }
   }
 
   private glob(pattern: string, ws: string): string {
@@ -1848,7 +1905,7 @@ export class ToolExecutor {
     }
   }
 
-  private async wcatch(args: Record<string, unknown>, destination: string, signal?: AbortSignal): Promise<string> {
+  private async wcatch(args: Record<string, unknown>, destination: string, signal?: AbortSignal, beforeCommit?: () => void): Promise<string> {
     const action = String(args.action || 'download');
     const maxBytes = Math.max(1, Math.min(100 * 1024 * 1024, Number(args.max_bytes || 50 * 1024 * 1024)));
     const sourceUrl = this.checkedPublicWebUrl(String(args.url || ''));
@@ -1886,8 +1943,17 @@ export class ToolExecutor {
     const backup = destinationExists ? `${destination}.newmark-${crypto.randomUUID()}.bak` : '';
     try {
       fs.writeFileSync(temp, bytes, { flag: 'wx' });
-      if (destinationExists) fs.renameSync(destination, backup);
-      fs.renameSync(temp, destination);
+      beforeCommit?.();
+      const currentDestinationExists = fs.existsSync(destination);
+      if (currentDestinationExists !== destinationExists) throw new Error('Destination changed during download; read it again and retry.');
+      if (currentDestinationExists && !fs.statSync(destination).isFile()) throw new Error('Destination changed to a non-file during download.');
+      if (destinationExists) {
+        fs.renameSync(destination, backup);
+        fs.renameSync(temp, destination);
+      } else {
+        fs.linkSync(temp, destination);
+        fs.unlinkSync(temp);
+      }
       if (backup) fs.unlinkSync(backup);
     } catch (error) {
       if (backup && fs.existsSync(backup) && !fs.existsSync(destination)) fs.renameSync(backup, destination);

@@ -207,7 +207,7 @@ async function main(): Promise<void> {
     const planBrowser = planCatalog.find(definition => toolName(definition) === 'browser_use')!;
     const planComputer = planCatalog.find(definition => toolName(definition) === 'computer_use')!;
     assert.deepEqual((planBrowser.function.parameters as any).properties.action.enum, ['observe', 'navigate', 'wait', 'extract']);
-    assert.deepEqual((planComputer.function.parameters as any).properties.action.enum, ['observe', 'app_list', 'app_observe']);
+    assert.deepEqual((planComputer.function.parameters as any).properties.action.enum, ['observe', 'app_list', 'app_observe', 'wait_for']);
     const blockedPlanInvocation = agent.tools.validateInvocation(
       'computer_use',
       JSON.stringify({ action: 'click', x: 1, y: 1 }),

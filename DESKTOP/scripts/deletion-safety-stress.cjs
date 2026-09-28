@@ -214,6 +214,7 @@ async function runToolSandbox(sandboxRoot) {
   // 受监管单文件删除
   fs.writeFileSync(path.join(ws, 'one.txt'), 'x');
   fs.writeFileSync(path.join(ws, 'two.txt'), 'y');
+  await tools.execute('read', JSON.stringify({ path: path.join(ws, 'one.txt') }), ws);
   const delOk = await tools.execute('delete_file', JSON.stringify({ path: path.join(ws, 'one.txt') }), ws);
   check(delOk.includes('OK') && !fs.existsSync(path.join(ws, 'one.txt')), 'delete_file: 单文件删除成功且文件消失');
 
@@ -228,6 +229,7 @@ async function runToolSandbox(sandboxRoot) {
   check(delWild.includes('Refused') && fs.existsSync(path.join(ws, 'two.txt')), 'delete_file: 通配符路径被拒绝');
 
   // 不存在的文件
+  await tools.execute('read', JSON.stringify({ path: path.join(ws, 'nope.txt') }), ws);
   const delMissing = await tools.execute('delete_file', JSON.stringify({ path: path.join(ws, 'nope.txt') }), ws);
   check(delMissing.startsWith('[delete_file]'), 'delete_file: 不存在的文件返回受控错误');
 
@@ -247,6 +249,8 @@ async function runToolSandbox(sandboxRoot) {
   // 受监管通道完整性：剩余文件被 delete_file 逐个清理
   fs.writeFileSync(path.join(ws, 'three.txt'), 'w');
   fs.writeFileSync(path.join(ws, 'four.txt'), 'v');
+  await tools.execute('read', JSON.stringify({ path: path.join(ws, 'three.txt') }), ws);
+  await tools.execute('read', JSON.stringify({ path: path.join(ws, 'four.txt') }), ws);
   const delThree = await tools.execute('delete_file', JSON.stringify({ path: path.join(ws, 'three.txt') }), ws);
   const delFour = await tools.execute('delete_file', JSON.stringify({ path: path.join(ws, 'four.txt') }), ws);
   check(delThree.includes('OK') && delFour.includes('OK') && fs.readdirSync(ws).filter(n => n.endsWith('.txt')).length === 0, 'delete_file: 逐个删除后无残留 .txt');

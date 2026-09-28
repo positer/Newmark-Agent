@@ -2,13 +2,22 @@
 
 ## dev-0.6.8 Computer Use：Windows-MCP 原生化
 
-- 0.6.8 的 ComputerUse 增量已并入主分支 `master`；当前仍待 Windows GUI 验收与发布构建。
+- 0.6.8 的 ComputerUse 与文件写入安全门禁已合并到 `master`；源码构建、全量发布门禁与隔离 Electron CU 真模型场景通过，正式发行包和安装态尚未验收。
 - `DESKTOP/src/tools/computerUse.ts`：桌面截图支持显式跳过 UIA 树；完整观察继续生成语义对象。UIA 只从有效窗口句柄开始，不再回退到桌面根树，并跳过 Newmark 宿主进程。`wait_for` 在当前观察或指定窗口中以有界轮询匹配 UIA 文本、`target_id` 或可见窗口，并返回匹配、超时、取消或 UIA 不可用状态。观察缓存绑定窗口句柄；截图专用模式清除语义目标。
 - `DESKTOP/src/tools/index.ts`：公布 `include_ui_tree`、`timeout_ms` 与 `wait_for` 参数，映射工具输入，并将只读观察参数保留在 Plan 模式工具投影中。
 - `DESKTOP/src/core/toolPolicy.ts`、`DESKTOP/src/core/computerUseSession.ts`：把 `wait_for` 归入只读 ComputerUse 操作，允许 Plan 模式查询。
 - `DESKTOP/src/tools/computerUsePowerShellHost.ts`：继续提供持久 PowerShell/UIA worker；ComputerUse 不启动独立 Windows-MCP 服务。
 - `VERSION`、Desktop package/lock 与 Android 版本标记进入 0.6.8；Android 业务代码未改，仅更新 `versionCode` / `versionName`。
-- `archive/20260928-dev-0.6.8-windows-mcp/REPORT.md`：Windows-MCP 一手资料摘要、集成取舍、隔离方式与验证状态。
+
+## 2026-09-28 文件变更前读取门禁
+
+- DESKTOP/src/core/fileWriteObservation.ts：读取目标、生成带作用域和有效期的观察回执、聚合已读行范围，并在变更前重新核对文件指纹。对同一规范路径加锁；并发中的第二次变更无法复用已消费或过期的回执。
+- DESKTOP/src/tools/index.ts：read 支持 start_line/end_line；write、edit、delete_file 和 web_catch 经门禁执行。edit 只允许改动已读范围中出现且在目标文件唯一的 old_str；新建文件确认目标路径仍不存在并排他创建。
+- DESKTOP/src/core/agentKernelRunner.ts、DESKTOP/src/core/agent.ts：把 runtime、Build run、workspace、conversation、actor 和 backend 身份传入文件门禁。
+- DESKTOP/src/tests/fileWriteObservationStressVerify.ts：覆盖回执范围、单次消费、过期和目标变更、32 个并发 ToolExecutor 实例，以及 32 个异步门禁回调的进程内同路径互斥；纳入 test:desktop:built 与 test:full-release。
+- DESKTOP/scripts/test-computer-use-real-model.cjs：要求明确选择已配置的线上视觉 Provider，复用隔离 GUI 流程验证真实模型发起 ComputerUse、收到新鲜图像并完成语义检查；测试进程仅允许只读桌面观察。
+- 范围边界：bash/terminal_takeover、浏览器/CDP、ComputerUse、Flow、Memory Lab、技能下载等通用或结构化写入口没有纳入本轮，不能宣称全局写入闭合。
+- 根目录 `本机私有归档（已从公开仓库排除）` 与 `本机私有归档（已从公开仓库排除）` 仅在本机保存冷数据，已从 Git 跟踪中移除并由 `.gitignore` 排除；README 与本概览不链接这些私有报告。
 
 ## 2026-09-28 Auto 决策倾向与反馈历史退役
 
@@ -16,27 +25,22 @@
 - `DESKTOP/src/core/jevDecision.ts`：把倾向作为 `objective.tendency` 交给当前对话模型，明确由模型综合任务适配、健康、验证、费用、延迟和上下文事实决策；倾向不变成固定排序或数值阈值。
 - `DESKTOP/src/core/agent.ts`、`DESKTOP/src/core/conversationKernel.ts`、preload/main/server 与 utility/WSL transport：移除 Auto 路由评分、`ratings.jsonl` 写入、清理历史入口及对应专用 IPC/RPC；遗留用户数据不会被新代码读取、覆写或删除。其他聊天/provider通信接口未改。
 - `npm run build`、5 组针对性验证、UI 一致性与六张打包版截图通过。MSI `release/Newmark-Agent-0.6.7-x64.msi` 已安装；Program Files 中 `0.6.7.0` EXE/ASAR 哈希、HKLM ProductCode/PackageCode、CLI `0.6.7` 和 292 个 payload 文件全部与包相符，安装前后的 `.Newmark` 清单无差异。本次安装未启动 GUI（`GuiRuntimeVerified=false`）。
-- 版本身份、安装核验、哈希、截图与归档事故恢复记录见 [本轮报告](archive/20260928-auto-tendency-cleanup/REPORT.md)。
+- 版本身份、安装核验、哈希、截图与归档事故恢复记录见 本地归档（未纳入公开仓库）。
 
 ## 2026-09-28 PC GUI 视觉、动效与全场景验收
 
 - `DESKTOP/src/ui/index.html`：桌面 GUI 单文件外壳；本轮候选只修改 CSS。样式交接快照与当前文件在归一化换行后，`style` 区域以外的全文完全相同，功能逻辑与通信接口未动。
-- `archive/20260927-gui-shell-motion-pass/REPORT.md`：本轮范围、Claude Code 自行退出错误、样式边界、性能结果和验收限制。
-- `archive/20260927-gui-shell-motion-pass/scenes-accepted2-20260928/index.html`：48 个 GUI 场景截图总览；同目录 PNG 为各场景原图。
-- `archive/20260927-gui-shell-motion-pass/scenario-audit-accepted2-20260928.json`：133 项交互、91 段动效采样、64 项检查的原始记录，所有失败与运行时错误计数均为 0。
-- `archive/20260927-gui-shell-motion-pass/build-final-20260928.log`：当前源码构建日志，所有阶段成功。
 - 交错四轮 CSS A/B 的 RAF callback 均值为候选 60.08、基线 60.47 次/秒。侧栏开合和历史分页 p95 小幅改善，但输入绘制与整段 RAF 间隔 p95 回退；不能宣称整体帧率提升或达到 165 Hz。测试使用隔离 Electron 与 loopback fixture，不是已安装版本或真实 provider 验证。
 
 ## 2026-09-27 用户级 PC GUI 性能压力测试
 
 - `DESKTOP/scripts/test-user-soak-gui.cjs`：以真实 Electron GUI、preload 和 Agent/IPC 对本机 loopback provider 做隔离压力，不替换生产 handler；运行时绑定 exe 与 `app.asar` SHA-256。
-- `archive/20260927-user-level-debugger-performance/REPORT.md`：对照 Program Files 安装版和最新 unpack 候选；涵盖 1200 条历史、连续 5 分钟交互、history paging 锚点、消息输入、侧栏/弹层、Build/队列、GPU/Long Task/RAM 采样和冷重启。
 - 安装版在短测内未通过历史分页原节点保留检查；新 unpack 完成 336/336 检查和 310.6 秒活动，但 RAF callback p95 46.3 ms、最高间隔 1089.1 ms、Long Task p95 168 ms，不能称为 165 Hz 流畅达标。两个包虽同为 0.6.6.0，ASAR 哈希不同；本轮没有安装新候选。
 - 对测试报告和原始采样的解释遵循：RAF 是 renderer callback，不是 compositor present；稀疏 GPU 样本不能单独证明渲染瓶颈或排除瞬时合成器工作。
 
 ## 2026-09-26 CU 端侧模型接口退役
 
-桌面生产 Computer Use 现采用稀疏灰度摘要变化唤醒，再执行新鲜全尺寸截图/UIA，并把图像交给当前对话视觉 Provider。App 源码、依赖和打包产物不再包含 CULab/NES-T/NMEP/ONNX loader、工件发现或 schema emitter。`newmark-cu-lab/` 保留为隔离的历史研究项目，使用自身冻结 schema，不读取桌面源码；其 `.nmep` 输出不属于可部署产物。真实 Provider 和 unpack 证据见 [CU 迁移归档](archive/20260926-cu-local-model-retirement/REPORT.md)。
+桌面生产 Computer Use 现采用稀疏灰度摘要变化唤醒，再执行新鲜全尺寸截图/UIA，并把图像交给当前对话视觉 Provider。App 源码、依赖和打包产物不再包含 CULab/NES-T/NMEP/ONNX loader、工件发现或 schema emitter。`newmark-cu-lab/` 保留为隔离的历史研究项目，使用自身冻结 schema，不读取桌面源码；其 `.nmep` 输出不属于可部署产物。真实 Provider 和 unpack 证据见 本地归档（未纳入公开仓库）。
 
 ## 2026-09-26 JEV 只用当前模型关闭思考后的严格 JSON
 
@@ -50,7 +54,7 @@ Auto 路由只使用当前符合资格的对话模型完成 JEV 判断，不配�
 | `DESKTOP/src/core/config.ts`、`DESKTOP/config.example.json` | 默认决策超时为 3000 ms；升级时移除旧 JEV runtime/model/path 和回退选路字段。 |
 | `DESKTOP/src/main.ts`、`DESKTOP/src/ui/index.html`、`DESKTOP/src/cli-commands.ts`、`TUI/src/` | 只暴露当前模型策略的启用状态和超时；没有外接 JEV 模型、运行时或备用选路接口。 |
 | `DESKTOP/src/tests/jevDecisionVerify.ts`、`DESKTOP/src/tests/jevRoutingInvarianceVerify.ts`、`DESKTOP/src/tests/jevModelEditorVerify.ts` | 覆盖当前模型严格 JSON、原生关闭思考、守卫复验和失败关闭；测试执行结果见 JEV 归档。 |
-| `archive/20260926-current-model-jev/REPORT.md` | 当前决策边界、旧配置迁移和实际验证记录。 |
+| 本地归档（未纳入公开仓库） | 当前决策边界、旧配置迁移和实际验证记录。 |
 
 首次 Auto 路由从符合资格的当前/默认部署发起 JSON 决策。Schema 对所有字段使用 required 与封闭对象约束；Newmark 再逐项执行类型和边界校验。平台不接受原生关闭思考或严格输出时，不降低为提示词约束，也不回退到另一个模型。默认硬超时 3 秒。
 
@@ -63,14 +67,14 @@ Auto 路由只使用当前符合资格的对话模型完成 JEV 判断，不配�
 | `android/scripts/mobile-agent-stress.ps1` | 120 条远端流事件、60 轮 UI 压力、目标状态可见性、队列写入、旧事件拒绝与 gfxinfo 采样；报告包含完整采样窗时长和窗口帧吞吐。 |
 | `android/scripts/mobile-queue-animation-benchmark.ps1` | 事件流结束后以固定坐标驱动 60 轮队列展开/收起，隔离截图和 UI 树观察，记录 jank 与帧时延。 |
 | `android/scripts/mobile-remote-target-switch-stress.ps1` | 在两个唯一工作区/对话间切换，核验 SSE 生命周期、目标读取与状态隔离。 |
-| `archive/20260926-mobile-stress-interconnect-local-chat/mobile-local-runtime-stability.ps1` | 选择 Local fixture，验证流式输出、FIFO 队列、取消、持久化、强制停止和重启恢复。 |
-| `archive/20260926-mobile-stress-interconnect-local-chat/local-provider-fixture.cjs` | 为本地运行时稳定性测试提供 loopback SSE / completion mock。 |
-| `archive/20260926-mobile-stress-interconnect-local-chat/local-runtime.json`、`evidence/` | 本地运行时门禁结果与逐阶段模拟器截图。 |
-| `archive/20260926-mobile-stress-interconnect-local-chat/REPORT.md` | 汇总 AVD、build/test、四类运行证据、Astra 复核与生产边界。 |
-| `archive/mobile-stress-20260926-144304.json`、`archive/mobile-queue-animation-benchmark-20260926-144025.json`、`archive/mobile-remote-target-switch-20260926-141513.json` | 三类自动化运行的原始门禁与设备测量数据。 |
-| `archive/mobile-stress-20260926-144304/` | 高压 UI 检查的关键截图。 |
+| 本地归档（未纳入公开仓库） | 选择 Local fixture，验证流式输出、FIFO 队列、取消、持久化、强制停止和重启恢复。 |
+| 本地归档（未纳入公开仓库） | 为本地运行时稳定性测试提供 loopback SSE / completion mock。 |
+| 本地归档（未纳入公开仓库）、`evidence/` | 本地运行时门禁结果与逐阶段模拟器截图。 |
+| 本地归档（未纳入公开仓库） | 汇总 AVD、build/test、四类运行证据、Astra 复核与生产边界。 |
+| 本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库） | 三类自动化运行的原始门禁与设备测量数据。 |
+| 本地归档（未纳入公开仓库） | 高压 UI 检查的关键截图。 |
 
-关键结果：混合压力 79.25% jank / p90 150 ms，单项队列动画 52.94% / p90 48 ms；两者功能门禁通过、流畅度有明显缺口。完整采样窗的 `deliveredFramesPerSecond` 包含驱动脚本输入间隔，不等于动画活动时的实际显示 FPS。具体门槛和建议见[复测报告](archive/20260926-mobile-stress-interconnect-local-chat/REPORT.md)。
+关键结果：混合压力 79.25% jank / p90 150 ms，单项队列动画 52.94% / p90 48 ms；两者功能门禁通过、流畅度有明显缺口。完整采样窗的 `deliveredFramesPerSecond` 包含驱动脚本输入间隔，不等于动画活动时的实际显示 FPS。具体门槛和建议见本地归档（未纳入公开仓库）。
 
 ## 2026-09-26 CU 稀疏观察接入
 
@@ -86,30 +90,30 @@ Auto 路由只使用当前符合资格的对话模型完成 JEV 判断，不配�
 | `DESKTOP/src/tests/computerUsePerformanceVerify.ts` | 覆盖 Windows 冷启动与暖调用的稀疏采样、等待预算和 UI event-loop 性能。 |
 | `DESKTOP/scripts/test-user-soak-gui.cjs` | 对精确 unpack 包运行隔离 loopback GUI：稀疏采样、队列、并发对话切换、冷重启与 UI 指标。 |
 | `DESKTOP/src/tests/runtimeIsolationVerify.ts`、`DESKTOP/scripts/test-cross-process-workrun-persistence.cjs` | 保护跨 shard / 进程 WorkRun 完成状态，防止旧 `running` 快照覆盖终态。 |
-| `archive/20260926-003001-cu-sparse-observation/` | 实现取舍、Astra 审阅、风险和未验证事项的操作记录。 |
-| `archive/20260926-cu-sparse-production-validation/` | 候选包哈希、CU canary、真实 provider 长上下文/队列/多对话测试、GUI soak 与安装门禁记录。 |
-| `archive/20260926-unpack-complete-v6/` | 最新精确 unpack v6 的包身份、源码回归、隔离 GUI 压力结果及 MSI 未生成/未安装边界。 |
+| 本地归档（未纳入公开仓库） | 实现取舍、Astra 审阅、风险和未验证事项的操作记录。 |
+| 本地归档（未纳入公开仓库） | 候选包哈希、CU canary、真实 provider 长上下文/队列/多对话测试、GUI soak 与安装门禁记录。 |
+| 本地归档（未纳入公开仓库） | 最新精确 unpack v6 的包身份、源码回归、隔离 GUI 压力结果及 MSI 未生成/未安装边界。 |
 
-此实现采用固定低分辨率变化测量，不是严格压缩感知重构。它允许等待阶段不依赖本地神经网络，但不能消除原生桌面采集，也未建立专属远端快速视觉模型路由。研究基线见[压缩感知应用边界](archive/20260926-000508-tao-cs-cu/REPORT.md)。
+此实现采用固定低分辨率变化测量，不是严格压缩感知重构。它允许等待阶段不依赖本地神经网络，但不能消除原生桌面采集，也未建立专属远端快速视觉模型路由。研究基线见本地归档（未纳入公开仓库）。
 
-**候选包实测（不是已安装验收）**：精确 unpack v6 通过 CU sparse GUI 12/12、双流 A/B 目标绑定 29/29、120 秒长历史 GUI soak 130/130。冷/热 sparse 为 4.082 秒/12 个样本与 486 毫秒/3 个样本；两个并发 run 经 10 次切换和冷启动后均保持正确目标。长对话 1200 条历史连续活动 122.439 秒，provider、renderer、runtime 错误为 0；输入绘制 p95 34.5 ms，切换/分页 p95 1.095/1.663 s。所有 GUI provider 均为隔离 loopback fixture。包内 `verifyUnpackedOutput()` 与随包 SSH/TUI restart 压力通过；WiX MSI 阶段在生成文件前停止，所以无 MSI/安装验收，后续 CLI/ZIP 阶段未运行。完整证据见 [v6 unpack 验收归档](archive/20260926-unpack-complete-v6/REPORT.md)。
+**候选包实测（不是已安装验收）**：精确 unpack v6 通过 CU sparse GUI 12/12、双流 A/B 目标绑定 29/29、120 秒长历史 GUI soak 130/130。冷/热 sparse 为 4.082 秒/12 个样本与 486 毫秒/3 个样本；两个并发 run 经 10 次切换和冷启动后均保持正确目标。长对话 1200 条历史连续活动 122.439 秒，provider、renderer、runtime 错误为 0；输入绘制 p95 34.5 ms，切换/分页 p95 1.095/1.663 s。所有 GUI provider 均为隔离 loopback fixture。包内 `verifyUnpackedOutput()` 与随包 SSH/TUI restart 压力通过；WiX MSI 阶段在生成文件前停止，所以无 MSI/安装验收，后续 CLI/ZIP 阶段未运行。完整证据见 本地归档（未纳入公开仓库）。
 
 ## 2026-09-26 CU 压缩感知应用边界（研究阶段）
 
-理论、当前链路证据、Astra 专家建议和最小远端视觉原型边界见 [archive/20260926-000508-tao-cs-cu/REPORT.md](archive/20260926-000508-tao-cs-cu/REPORT.md)。当时为文档/架构可行性工作，没有生产代码变更；接入后的工具状态见上节。
+理论、当前链路证据、Astra 专家建议和最小远端视觉原型边界见 本地归档（未纳入公开仓库）。当时为文档/架构可行性工作，没有生产代码变更；接入后的工具状态见上节。
 
 | 路径 | 作用与本轮发现 |
 | --- | --- |
 | `DESKTOP/src/tools/computerUse.ts` | 生产 `observe` 并行捕获按需截图与 UIA；临时图像随工具结果供当前视觉模型读取。 |
 | `DESKTOP/src/core/agentKernelRunner.ts` | 把工具截图加入当前模型输入，并在物化本轮输入后消费临时图像；当前路径不保证指定远端快速部署。 |
 | `DESKTOP/src/core/computerUse/perceptionRouter.ts`、`frameStore.ts` | 描述本地 cadence、云端升级与稀疏关键帧的独立 CU 组件；尚未接入生产 `computer_use`。 |
-| `archive/20260926-000508-tao-cs-cu/` | CRT 压缩感知原理、CU 适配评估、Astra 方向审阅和后续原型门槛。 |
+| 本地归档（未纳入公开仓库） | CRT 压缩感知原理、CU 适配评估、Astra 方向审阅和后续原型门槛。 |
 
 推荐先验证“事件触发观察 + 明确绑定的远端快速视觉模型”；严格 CS 需要服务端重构，并先证明真实 UI 帧差分可压缩且重建后保住微小控件/文字。详情与性能归因边界见报告。
 
 ## 2026-09-24 CU 权重稳定性与 UI 性能复测
 
-完整复测、逐次日志和可重复 soak 脚本位于 archive/20260924-160722-cu-stability-ui-performance/。默认无权重发现结果为 UIA-only，原门禁 18/18 通过。复测后已修复模型装载筛选：发现阶段标出 App ABI 不兼容项，App loader 强制 16D，并拒绝检测/追踪门禁失败的晋级模型。详情见 archive/20260924-170617-cu-weight-load-and-scroll-guards/。
+完整复测、逐次日志和可重复 soak 脚本位于 本地归档（未纳入公开仓库）/。默认无权重发现结果为 UIA-only，原门禁 18/18 通过。复测后已修复模型装载筛选：发现阶段标出 App ABI 不兼容项，App loader 强制 16D，并拒绝检测/追踪门禁失败的晋级模型。详情见 本地归档（未纳入公开仓库）/。
 
 代码结构与本轮判断：
 
@@ -119,13 +123,13 @@ Auto 路由只使用当前符合资格的对话模型完成 JEV 判断，不配�
 | DESKTOP/src/core/computerUse/model/ | App 自有 artifact discovery、16D ABI 与 producer gate 校验、CPU ONNX session、provider；目前通过独立模块门禁和评测运行 |
 | DESKTOP/src/ui/index.html | 对话工作状态增量渲染；更新路径改用滚动监听缓存的贴底状态，原性能门槛仍需同口径复测 |
 | newmark-cu-lab/var/candidates/ | 本机候选权重；是否被 discovery 看见取决于显式根目录和 artifact stage |
-| archive/20260924-160722-cu-stability-ui-performance/、archive/20260924-170617-cu-weight-load-and-scroll-guards/ | 原复测报告/CPU 图延迟/provider 80 帧 soak/GUI 压测日志；本轮装载修复报告与 MANIFEST |
+| 本地归档（未纳入公开仓库）/、本地归档（未纳入公开仓库）/ | 原复测报告/CPU 图延迟/provider 80 帧 soak/GUI 压测日志；本轮装载修复报告与 MANIFEST |
 
 基线无权重 GUI 两轮输入 tick 峰值为 122.4/223.9 ms；A2 CPU 推理并行一轮为 128.7 ms。三轮都超过 100 ms 压测门槛；滚动布局读取已作低风险优化，尚未复跑同一探针。A2 provider 原 80 帧无推理错误，但阶段仍为 CANDIDATE、描述子为 32D，且 detectorPass/trackingPass 为 false；现有 App loader 会拒绝它。CU-Lab RyzenAI NPU 稳定性数据不代表 Newmark 当前 CPU provider 或完整 GUI 端到端延迟。
 
 ## 2026-09-23 外部复核落地：撤回过强结论 + 采集语义门禁 + 隔离入库
 
-用户交来外部复核包（`newmark-cu-lab/archive/20260923-culab-repair-pack/`，CULab_Repair_20260923）。
+用户交来外部复核包（本地归档（未纳入公开仓库），CULab_Repair_20260923）。
 该复核对本项目上一轮结论的批评**全部成立**，本轮逐条接受并落地第一轮修复。
 
 | 文件/目录 | 变更与职责 |
@@ -133,8 +137,8 @@ Auto 路由只使用当前符合资格的对话模型完成 JEV 判断，不配�
 | `newmark-cu-lab/nculab/scenarios/windows_ui.py` | `globalShift` 从"按命令参数推算"改为**实测**（归一化 / 输入空间 / 逐帧增量 + `basis` / `cumulative` / `windowShiftDesktopPx`）；新增 `_verify_episode()` 场景语义门禁与每 episode 的 `verification` 块（`verified` / `failed` / `static-by-design` + 原因） |
 | `newmark-cu-lab/nculab/dataset/builder.py` | `verification.status=failed` 的 episode **不入库**，写入 `manifest.quarantine`（原因 + 路径）；合成 suite 无 verification 段时不受影响 |
 | `newmark-cu-lab/scripts/audit_episode_motion.py` | 升级为四级审计：文件哈希 → RGB 哈希 → 实体框 → **控件 ROI**；新增 `--quick` / `--limit-clips` |
-| `newmark-cu-lab/archive/20260923-cu-workflow-recognition-eval/REPORT.md` | 顶部新增**修正块**：撤回"30.4% 是定位上限"、更正 INT8 parity 口径（0.327 属 interactability）、更正 fp32 体积方向（25.179 MiB，超出首选门禁 183 KiB）、共享身份率改报 N/A、F6 数字按目标级审计更正 |
-| `newmark-cu-lab/archive/20260923-cu-external-handoff/CU-Lab-handoff-20260923-v2.zip` | 交接包 v2（0.82 MiB / 70 文件，SHA-256 全通过）：新增 `reviews/`（复核原文 + 审计脚本 + `WHAT-CHANGED-IN-V2.md`）、ROI 级审计、非有限梯度证据、采集门禁摘要；fp32 profile 证据已重跑修正 |
+| 本地归档（未纳入公开仓库） | 顶部新增**修正块**：撤回"30.4% 是定位上限"、更正 INT8 parity 口径（0.327 属 interactability）、更正 fp32 体积方向（25.179 MiB，超出首选门禁 183 KiB）、共享身份率改报 N/A、F6 数字按目标级审计更正 |
+| 本地归档（未纳入公开仓库） | 交接包 v2（0.82 MiB / 70 文件，SHA-256 全通过）：新增 `reviews/`（复核原文 + 审计脚本 + `WHAT-CHANGED-IN-V2.md`）、ROI 级审计、非有限梯度证据、采集门禁摘要；fp32 profile 证据已重跑修正 |
 
 **被推翻的三条自家结论**：① "91.9% 找到目标 / 30.4% 是回归上限"——GT 框内 argmax 等于用真值找信号，
 且 recall@0.2=0.3369、@0.1=0.528 都高于 0.304，从来不是上界（改为"中心选择/编码/筛选链有缺陷、贡献不可分离"）；
@@ -175,7 +179,7 @@ step 1/3/5/9/17 = NaN、step 4462 = +Inf。**实跑验证**：12 episode 真实�
 
 ### 二、外部交接包
 
-`newmark-cu-lab/archive/20260923-cu-external-handoff/CU-Lab-handoff-20260923.zip`（0.77 MiB / 59 文件，
+本地归档（未纳入公开仓库）（0.77 MiB / 59 文件，
 manifest 逐文件 SHA-256 校验通过）：README（双语，含要外部专家回答的 4 个问题）、HOW-TO-REPRODUCE
 （每个数字的确切命令）、两份报告 + STATUS、训练记录（`run.json`/`stages.jsonl`/`telemetry.jsonl` 等）、
 Lab 与 App 两侧全部评测 JSON、发货 artifact 的元数据（不含权重）、数据集 manifest、
@@ -197,7 +201,7 @@ Lab 与 App 两侧全部评测 JSON、发货 artifact 的元数据（不含权�
 WinForms 采集路径。后果：训练语料有效唯一帧只有 3,353/8,400；§9.2 的 `movingTargetContinuation`
 "PASS"建立在 12/15 平移 episode 从未平移之上，`disappearanceDetection` 同批样本亦不可信；
 而 App 侧身份层在**逐字节相同**的相邻帧之间仍产出 0 次 `CONTINUATION`，该结论因此更硬。
-详见 `newmark-cu-lab/STATUS.md` §5bis-13 与 `archive/20260923-cu-workflow-recognition-eval/REPORT.md` F6。
+详见 `newmark-cu-lab/STATUS.md` §5bis-13 与 本地归档（未纳入公开仓库） F6。
 
 边界：本轮**未**改动采集管线、未重采数据、未改动导出器与 App 校验器（上轮报告中的 INT8/门禁接线
 三项修复仍待裁决）。
@@ -213,7 +217,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | --- | --- |
 | `DESKTOP/scripts/verify-cu-workflow-recognition.cjs` | **新增**：App 工作流端到端识别评测。加载真实 `.nmep`、逐帧驱动生产 provider 与身份注册表，对真值框做 IoU 0.3 一对一贪心匹配，输出 recall/precision/meanIoU、尺寸分桶、稳定身份率/共享身份率、延迟 p50/p95 与 §9.1 门禁判决；`--profile` 拆分预处理/ORT/解码耗时；`--graph-override` 用于同帧 fp32↔INT8 单变量对照（只换图，manifest 与校验不动）。JSON 证据落 `var/probes/`。 |
 | `DESKTOP/scripts/probe-cu-graph-latency.cjs` | **新增**：纯图延迟探针，使用与 App `inferenceSession.ts` 完全相同的 ONNX Runtime 选项，回答"慢的是图还是 App 代码"。 |
-| `newmark-cu-lab/archive/20260923-cu-workflow-recognition-eval/` | **新增**：完整报告 `REPORT.md` + `MANIFEST.json` + `evidence/`（App 路径 INT8/fp32 评测 JSON、Lab 检测/追踪日志、纯图延迟、两端门禁输出）。 |
+| 本地归档（未纳入公开仓库） | **新增**：完整报告 `REPORT.md` + `MANIFEST.json` + `evidence/`（App 路径 INT8/fp32 评测 JSON、Lab 检测/追踪日志、纯图延迟、两端门禁输出）。 |
 | `newmark-cu-lab/STATUS.md` | 新增 §5bis-12（五条结论与待裁决动作）；§0 结论改为"识别与运行双双未达标"；D5/D7 按新事实更正（撤回"延迟已满足调度"的旧结论）。 |
 
 **量出来的数字（全部可复现）**
@@ -274,7 +278,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `newmark-cu-lab/nculab/export/size_check.py` | **新增**：`ncu-lab size-check`（§21）——按目录实测安装体积、逐条 entry 分解（最大几项）、manifest 声明值对比、hard/preferred 双门禁。 |
 | `newmark-cu-lab/scripts/snapshot_dataset.py` | **新增**：数据集快照版本化（§14）——复制已有数据集到 `dataset-v0.1-tracking` 这类名字，写入 `snapshot{role,sourceDatasetId,generator,truthSource,labelSchema,splitHash}` 并注册到 SQLite；同名直接报错拒绝覆盖。 |
 | `newmark-cu-lab/scripts/install-torch-cuda.cmd` | **新增**：安装 cu126 版 PyTorch 到实验室 venv（Stage A 的算力前提）。 |
-| `README.md` / `taste.md` / `archive/20260921-dev066-cu-nest/REPORT.md` | 同步记录路线对齐结论：按代冻结、参数带核对、GPU 前提、稀有类加权、每代必留 system benchmark 与 ablation。 |
+| `README.md` / `taste.md` / 本地归档（未纳入公开仓库） | 同步记录路线对齐结论：按代冻结、参数带核对、GPU 前提、稀有类加权、每代必留 system benchmark 与 ablation。 |
 
 ### 2026-09-22 实测：三次训练迭代各自修掉的缺陷
 
@@ -290,7 +294,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 
 ## 2026-09-21 dev-0.6.6 Computer Use 主线：CU-Lab 数据/训练/量化导出 + App CU 运行时
 
-指导文件为 `Newmark_CU_Master_Sequential_Execution_Guide_v1.0_20260921.md`（Phase 0–17）。本轮完成 Phase 2–8 的实质执行与 Phase 9–11 的 App 侧落地，执行记录见 [archive/20260921-dev066-cu-nest/REPORT.md](archive/20260921-dev066-cu-nest/REPORT.md)。
+指导文件为 `Newmark_CU_Master_Sequential_Execution_Guide_v1.0_20260921.md`（Phase 0–17）。本轮完成 Phase 2–8 的实质执行与 Phase 9–11 的 App 侧落地，执行记录见 本地归档（未纳入公开仓库）。
 
 | 文件/目录 | 变更与职责 |
 | --- | --- |
@@ -333,7 +337,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `TUI/src/adapters/core-runtime-adapter.js` | `stateFields()` 暴露 `autoSwitchEnabled/autoSwitchScope/jevDecisionModel`；`applyConfig` 新增 `jevDecisionModel` 分支，直接走 `agent.updateJevDecisionModel()` 并在拒绝时返回 `{ok:false, reason}`。 |
 | `DESKTOP/src/cli-commands.ts`、`DESKTOP/src/cli-discovery.ts` | 新增 `Newmark.exe jev` 命令（查看 + 编辑 + `--json`），帮助文本、值参数表与布尔参数表同步登记；Auto 关闭时编辑返回退出码 2 且不改配置。 |
 | `DESKTOP/src/tests/jevModelEditorVerify.ts` | **新增门禁（24 项）**：槽位默认值、非法值不落盘、合法补丁落库、Auto 关闭时锁定与拒绝、Auto 关闭/决策模型关闭/槽位无适配器三种情况下不调用引擎且不改变已选模型；GUI/TUI 源码入口断言；真实 CLI 进程的查看/编辑/拒绝。 |
-| `DESKTOP/scripts/dev-0.6.6-jev-settings-ui-monitor.cjs` | **新增视觉监控**：真实 Electron 渲染器 → Settings → Models & Providers，断言卡片与 8 个编辑位置的几何可见性、真实 DOM 编辑落库、Auto 关闭后整卡禁用 + 写入被拒、重新开启后解锁，输出 4 张截图与 `REPORT.json` 到 `archive/20260921-dev066-jev-settings-ui/`。 |
+| `DESKTOP/scripts/dev-0.6.6-jev-settings-ui-monitor.cjs` | **新增视觉监控**：真实 Electron 渲染器 → Settings → Models & Providers，断言卡片与 8 个编辑位置的几何可见性、真实 DOM 编辑落库、Auto 关闭后整卡禁用 + 写入被拒、重新开启后解锁，输出 4 张截图与 `REPORT.json` 到 本地归档（未纳入公开仓库）。 |
 | `DESKTOP/scripts/dev-0.6.6-jev-tui-cli-evidence.cjs` | **新增终端证据**：用生产适配器渲染 TUI 的 JEV 分区（Auto 开/关两份画面，含 `LOCKED` 状态）并抓取 CLI 的查看/编辑/拒绝输出，落盘为归档文本；已接入 `test:desktop:built`。 |
 
 验收：`npm run dev:jev-settings-ui` 7/7 通过（截图见归档）；`npm run dev:jev-tui-cli-evidence` 7/7 通过；`node dist/tests/jevModelEditorVerify.js` 24/24 通过；`npm run test:auto-router` 与 `npm run test:desktop:built` 全绿（verify.js 1721/1721）。
@@ -377,8 +381,8 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `android/.../vm/ChatViewModel.kt` | `archiveConversation()` 不再同步写盘；新增 `persistArchived()`：在 `LocalAgentForegroundService.launchRuntime { withContext(Dispatchers.IO) { … } }` 内写归档，并用 `archivedRevision` 做「最新状态优先」的合并（连续归档只写一次，旧快照绝不覆盖新快照），失败置 `error`。 |
 | `android/.../vm/ChatViewModel.kt`（本轮追加） | ① `interruptLocalConversation(conversationId)`：把 `stop()` 的收尾抽成共用函数（取消 job、关闭 Guide 通道、移除 runtime、写入 `interrupted` 记录、排水）。② `archiveConversation()` **先立即打断**该对话正在跑的本地运行，再取最新快照归档 —— 不再把一条仍在写的工作留在列表之外。③ `persistArchived()` 由「失败即退出」改为**退避重试到成功**（500ms→1s→…上限 30s），成功清除错误位。 |
 | `DESKTOP/scripts/dev-0.6.6-mobile-local-archive-soak.cjs` | 新增设备级监督门禁：`adb root` 播种 6 条活跃 + 120 条已归档（×300 条消息，含图片附件，55.4 MiB）本地对话 → 真实 UI 点「⋯ → 归档」→ 用 `dumpsys gfxinfo framestats` 的单帧耗时 + Choreographer 丢帧 + 归档文件落盘时刻判定。断言「行离开列表 / 有帧数据 / 单帧 < 250 ms / 无丢帧爆发」。 |
-| `DESKTOP/scripts/dev-0.6.6-mobile-local-archive-surfaces.cjs` | 新增影响面监控：S1 启动期旧 `archived=true` 迁移、S2 连续快速归档（合并不丢写）、S3 归档"正在看"的对话、S4 冷启动持久性、S5 写入失败时旧归档字节不变、S6 **归档立即打断正在运行的本地轮次**（mock provider 流在点击后 1118 ms 被关闭、归档快照含 interrupted 记录）、S7 **写入失败自动重试到成功**（只读期间不落盘，恢复可写后自动落盘）。7 个场景 **29/29 PASS**（证据 `archive/20260917-160509-mobile-local-archive-surfaces/`）。 |
-| `archive/20260917-mobile-local-archive-soak/` | `REPORT.md` + 逐次运行证据（截图、UI dump、JSON 报告）。 |
+| `DESKTOP/scripts/dev-0.6.6-mobile-local-archive-surfaces.cjs` | 新增影响面监控：S1 启动期旧 `archived=true` 迁移、S2 连续快速归档（合并不丢写）、S3 归档"正在看"的对话、S4 冷启动持久性、S5 写入失败时旧归档字节不变、S6 **归档立即打断正在运行的本地轮次**（mock provider 流在点击后 1118 ms 被关闭、归档快照含 interrupted 记录）、S7 **写入失败自动重试到成功**（只读期间不落盘，恢复可写后自动落盘）。7 个场景 **29/29 PASS**（证据 本地归档（未纳入公开仓库））。 |
+| 本地归档（未纳入公开仓库） | `REPORT.md` + 逐次运行证据（截图、UI dump、JSON 报告）。 |
 
 实测（55.4 MiB 归档，同一台模拟器）：修复前**单帧阻塞 1386 ms**（>250 ms 帧 1 个），修复后 **171 / 178 ms**（两次复跑，>250 ms 帧 0 个），12.5 MiB 配置 185 ms；落盘时刻基本不变（说明写入只是搬到了 IO 线程）。归档文件内容核对：`archived.json` 121 条 `"archived":true`、活跃文件剩 5 条、被归档对话不再出现在活跃列表。
 产物：`android/app/build/outputs/apk/release/app-release.apk`（76,134,350 bytes，SHA-256 `9FBA5145…BF2F`，已安装到模拟器）；`APK/Newmark-Agent-0.6.5-release.apk` 仍是修复前分发包，未替换。
@@ -393,7 +397,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `DESKTOP/src/core/mobilePairing.ts`、`DESKTOP/src/server.ts` | 新增 `NEWMARK_MOBILE_PORT` 端口覆盖（默认仍是 47890）：`MOBILE_PORT` 与 server 的 `HOSTED_PORT` 共用同一来源，使第二个隔离实例可以在不占用生产端口、不打扰用户正在运行的实例的前提下托管已配对客户端。`const PORT = 47890;` 仍原样保留，既有隔离端口门禁的替换缝不变。 |
 | `DESKTOP/scripts/dev-0.6.6-mobile-emulator-supervised.cjs` | 新增设备级监督脚本：临时 root 播种唯一标题的桌面对话 → 隔离端口起真实 Electron 主机（`NEWMARK_MOBILE_PORT`）→ 端口代理记录客户端全部请求 → `adb install -r` 安装 release APK → 深链配对 → 真实 UI 导航（侧栏→设备→工作区→对话）→ 发送永不结束的轮次 → 菜单点「归档」→ 逐步截图与计时 → 校验桌面归档载荷/索引/分片/无复活。 |
 | `DESKTOP/scripts/dev-0.6.6-mobile-apk-string-probe.cjs` | 新增 APK 内容探针（解包后按字符串查证产物是否真的包含某段代码），用于回答「磁盘上的 APK 是否落后于源码」。 |
-| `archive/20260917-mobile-emulator-supervised/` | `REPORT.md` + 逐次运行的证据目录（截图、UI dump、客户端 HTTP 轨迹、桌面 stdout/stderr、JSON 报告）。 |
+| 本地归档（未纳入公开仓库） | `REPORT.md` + 逐次运行的证据目录（截图、UI dump、客户端 HTTP 轨迹、桌面 stdout/stderr、JSON 报告）。 |
 
 边界：未改移动端网络层（`MobileApiClient` 的 `readTimeout(0)` 是合约，不加上限）；未改版本号、未重新打包 MSI/APK 产物清单；设备实测在模拟器 `emulator-5554`（Android 15、`com.newmark.mobile` 0.6.5/605）上进行，用户正在运行的桌面实例（47890）全程未被触碰。实测结果：深链配对成功、永不结束的轮次由手机发出、电话端菜单点「归档」后 **5895 ms** 自行完成、载荷含该轮输入、索引与分片清干净、无复活；归档窗口内客户端每秒轮询全部 200（修复前全是 500）。回归：`verify.js` 1721/1721、`runtimePoolCapacityVerify` 27、`runtimeIsolationVerify`、`remoteTouchServerStatusVerify`、`test-hosted-command-transport` 37、`mobileWorkspaceApiVerify` 55、`test:archive-while-running` 13/13、`npm run test:desktop:built` **EXIT=0**。
 
@@ -408,7 +412,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `DESKTOP/src/tests/conversationArchiveRuntimeVerify.ts` | 「永不结束的运行不得扣住归档」改为三条更严格的断言：(a) 真实结束的运行**真的被 await**（1200 ms 的运行实测 await 1200+ ms）；(b) 只有释放占用才会结束的等待**由释放结束**（实测 0–1 ms）；(c) 不释放时归档**一直等**（2500 ms 仍在等）。另加跨进程归档用例（第二实例归档分片条目 → 载荷完整、manifest 2 条消息、分片回收）。 |
 | `DESKTOP/scripts/dev-0.6.6-mobile-archive-affected-surfaces.cjs` | 新增影响面监控脚本：复用延迟取证夹具，在隔离端口起真实 `dist/server.js` 打真实 HTTP（暂停 goal / 暂停 Flow 归档、分支创建与激活、以及「真正在跑」对照组），再在进程内驱动内核归档等待。600 轮与 1500 轮两次运行均 **15/15**。 |
 | `DESKTOP/scripts/verify-archive-while-running.cjs` | 新增真实 Electron + CDP 用户级门禁（npm `test:archive-while-running`）：mock provider 的 SSE 永不结束 → 轮次运行中点归档。断言行离开列表、provider 流被真正取消、载荷含该轮输入、索引无该对话、分片已回收、4 秒内无复活；再加「空闲归档仍是快路径且载荷完整」对照。**13/13 PASS**（运行中 5600 ms、空闲 262 ms）。 |
-| `archive/20260917-archive-occupancy-release/`、`archive/20260917-102951-archive-while-running/` | `REPORT.md` + `evidence/`（影响面日志、`verify.js`、完整 `test:desktop:built` 日志、用户级门禁 JSON）。同日修订了 `archive/20260917-mobile-archive-latency/REPORT.md` 中被取代的上限说明。 |
+| 本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库） | `REPORT.md` + `evidence/`（影响面日志、`verify.js`、完整 `test:desktop:built` 日志、用户级门禁 JSON）。同日修订了 本地归档（未纳入公开仓库） 中被取代的上限说明。 |
 
 边界：未改 `claimBuild` 准入语义、未改移动端网络层（`readTimeout(0)` 仍是独立 UX 议题）、未重新打包/安装；版本仍 `0.6.5`。回归：`verify.js` 1721/1721、`conversationArchiveRuntimeVerify`（48 并发归档 + 跨进程归档 + 三条等待断言）、`conversationArchiveConcurrencyVerify` 19、`mobileWorkspaceApiVerify` 55、`test-hosted-command-transport` 37、`test-shared-conversation-commands` 51、`test:archive-while-running` 13/13、`npm run test:desktop:built` **EXIT=0**。
 
@@ -437,7 +441,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `DESKTOP/src/core/electronUtilityRuntimePool.ts` | 新增 `sampleProcessMemoryBytes` / `visualBudget` 选项、`hostOverMemoryBudget()` 与 `reclaimIdleHostsOverMemory()`：空闲宿主 RSS 超过机器档位回收线时被回收（而非复用），下次从干净进程开始。 |
 | `DESKTOP/src/main.ts` | 以 `app.getAppMetrics()` 的 `workingSetSize`（KB→bytes）为运行时池提供宿主 RSS 采样。 |
 | `DESKTOP/src/tests/conversationVisualBudgetVerify.ts` | 新增 33 项断言（npm `test:visual-budget`，已接入 `test:desktop:built`）：档位与总内存夹紧、RSS 升级、保留计划（字节+张数、释放统计）、回收线、真实大图降采样到 96 KiB/32 KiB、不可解码拒绝、12 张历史截图只物化最新 2 张并补释放说明、零预算退化为纯文本、真实 `visualFallbackImageInput` 不超当前单图上限。 |
-| `archive/20260916-visual-memory-budget/` | `REPORT.md`：阈值表、执行点、证据（现场 OOM 3017 MB / 本机 31.12 GiB 总 13.38 GiB 可用 / 实测单张观察图 65,665 字节）与未决说明。 |
+| 本地归档（未纳入公开仓库） | `REPORT.md`：阈值表、执行点、证据（现场 OOM 3017 MB / 本机 31.12 GiB 总 13.38 GiB 可用 / 实测单张观察图 65,665 字节）与未决说明。 |
 
 边界：只回收**可视材料**与**空闲宿主**；不改文本、工具结果、计划、转录与模型上下文预算；被释放的只是“更早请求里已经发过”的历史截图，最新一张始终保留（必要时降采样）。回归：`verify.js` 1717/1717、`conversationVisualBudgetVerify` 33、`computerUsePerformanceVerify`、`screenCaptureIndependentVerify`、`browserUseVerify` 93、`runtimePoolCapacityVerify` 27、`runtimeIsolationVerify`、`runtimeMemoryBudgetVerify`、真实 Electron 门禁 `verify-queue-sequencing-and-drag-landing` 23/23。
 
@@ -451,7 +455,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `DESKTOP/src/core/conversationKernel.ts` | ⑤ 排队回合执行期间按 `leaseRenewalMs`（20s）续租心跳；⑥ `settleLedgerScope()` 幂等结算 + `.finally` 兜底，任何退出路径都不再把 scope 留在 RUNNING；⑦ `maybeRecoverOrphanedAttempt()`（`kernel:<pid>` 判活 + 120s 宽限 + 5s 节流）在运行时创建、每次状态投影、每次入队时回收，并在队列未暂停时重新触发排水。 |
 | `DESKTOP/src/ui/index.html` | ⑧ `reconcileLocalRuntimeFromSnapshot()` + 15s 看门狗：权威快照说 idle/completed/interrupted 而本地仍认为在跑时清掉幻影运行态（修复「时间戳一直在走但没有工作、输入被当 Next 排队」）；⑨ 持久化遗留的 `running` work run 只有在后端确实报告在跑时才恢复运行态，否则本地按 `interrupted` 关闭。 |
 | `DESKTOP/src/tests/queueOrphanRecoveryVerify.ts` | 新增 21 项断言并接入 `test:desktop:built`：长回合跨过原租约仍能提交终态；死所有者被回收后队列继续按序执行；活着的所有者不被抢占；悬空 guard 可释放；截断账本从 `.bak` 恢复；回收写审计事件。 |
-| `archive/20260916-live-forensics/` | `REPORT.md` + `ledger-report.json`（真实账本取证）+ `live-ledger-recovery-replay.json`（真实账本回放 7/7）。核心事实链：60s 租约无心跳 → 长回合终态被拒 → `finals=0`；utility host V8 OOM（exit 4294930435，3017MB）崩溃 → attempt 永远 RUNNING → 排队进入但永不执行。 |
+| 本地归档（未纳入公开仓库） | `REPORT.md` + `ledger-report.json`（真实账本取证）+ `live-ledger-recovery-replay.json`（真实账本回放 7/7）。核心事实链：60s 租约无心跳 → 长回合终态被拒 → `finals=0`；utility host V8 OOM（exit 4294930435，3017MB）崩溃 → attempt 永远 RUNNING → 排队进入但永不执行。 |
 
 边界：未改 `claimBuild` 准入语义与失败前置阻断契约；未删除账本历史；未修 3GB V8 OOM 本身（内存问题另案）；版本仍 `0.6.5`，未打包、未安装。回归：`verify.js` 1717/1717、`queueOrphanRecoveryVerify` 21、`continuationStoreVerify`、`queueBlockedRepairVerify`、`queueUnifyStressVerify`、`queueDrainUserMessageVerify`、`branchPageQueueIdentityVerify`、`runtimePoolCapacityVerify`、`runtimeIsolationVerify`、`conversationArchiveRuntimeVerify`、`test-long-conversation-ui-ordering` 18/18、`test-ui-consistency`、`mode-conversation-state-stress`、`pcGlassMigrationVerify`，以及真实 Electron 门禁 `verify-queue-sequencing-and-drag-landing` 23/23、`verify-background-question-hold`、`verify-fixed-control-centering`。
 
@@ -463,9 +467,9 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `DESKTOP/src/core/conversationKernel.ts` | ① 按 `workspace::rootId::branchId` 缓存 `GuardedContinuationStore`（读路径仍按文件指纹校验缓存，跨进程写入依然可见），队列投影不再每次重新构造并解析账本；② `queueItems()` 改用 `queuedBlockedReasons()`。 |
 | `DESKTOP/src/ui/index.html` | ① 新增 `conversationRowOrderDuringDrag()`：拖动持有期间以 DOM 现序为准，只把新出现的会话行按 state 位置补进去；`renderConversations()` 用它落位，权威列表推送不再抹掉用户让出的落点。② `commitConversationDomOrder()` 在 DOM 与 state 成员不一致时以 DOM 顺序为准、缺失会话补末尾后提交，不再整表重渲染放弃拖动。③ 转录渲染的「消息是否属于已持久化 work run」判定改用 `persistedRunIdSet` 查表，去掉每消息一次 `persistedRuns.some()` 的 O(轮次²) 扫描。 |
 | `DESKTOP/src/tests/continuationStoreVerify.ts` | 新增 8 条断言：正在执行的回合之后两行排队都不得带 `DEPENDENCY_FAILED` 且仍不可 claim；真实失败仍阻断整条后继链；显式修复后整条链清空且首行可 claim；既有 root/branch 的 `ensureRoot()` 零写入、新 root/branch 仍落盘。 |
-| `DESKTOP/scripts/verify-queue-sequencing-and-drag-landing.cjs` | 新增真实 Electron 门禁（mock provider + CDP，npm `test:queue-sequencing-and-drag-landing`）：长回合运行中经 `queue_enqueue` 排三行 → 面板三行可见、无 `data-queue-blocked`、后端投影无 `waitingReason`；三行按提交顺序依次执行且都在长回合结束后开始；拖动越位后注入权威列表推送 → 落点保持、松手落在让位处并持久化；反证控制组还原旧行为证明推送确实会抹掉落点；640 条消息转录渲染耗时、12 个连续回合每轮耗时（356 ms → 362 ms，无轮次劣化）与零渲染器错误。24/24 PASS，evidence=`archive/20260916-153102-queue-sequencing-and-drag-landing/`。 |
+| `DESKTOP/scripts/verify-queue-sequencing-and-drag-landing.cjs` | 新增真实 Electron 门禁（mock provider + CDP，npm `test:queue-sequencing-and-drag-landing`）：长回合运行中经 `queue_enqueue` 排三行 → 面板三行可见、无 `data-queue-blocked`、后端投影无 `waitingReason`；三行按提交顺序依次执行且都在长回合结束后开始；拖动越位后注入权威列表推送 → 落点保持、松手落在让位处并持久化；反证控制组还原旧行为证明推送确实会抹掉落点；640 条消息转录渲染耗时、12 个连续回合每轮耗时（356 ms → 362 ms，无轮次劣化）与零渲染器错误。24/24 PASS，evidence=本地归档（未纳入公开仓库）。 |
 | `DESKTOP/scripts/dev-0.6.6-ledger-growth-measure.cjs` | 账本增长与投影成本诊断（npm `dev:ledger-growth`）：每轮 final ≈1.4KB 时，400 轮账本 2514 KiB，一次投影 35.1 ms（修复前，整文件写）→ 12.4 ms（首次读）/ 0.44 ms（稳态读）。 |
-| `archive/20260916-151057-queue-sequencing-and-drag-landing/` | `REPORT.md` + `evidence/`（门禁 JSON、运行中队列截图、拖动落点截图）。 |
+| 本地归档（未纳入公开仓库） | `REPORT.md` + `evidence/`（门禁 JSON、运行中队列截图、拖动落点截图）。 |
 
 边界：不改 `claimBuild` 准入语义（仍只认「父 = 已提交 frontier」），失败前置继续阻断后继、必须显式修复；不删除账本历史 build/attempt/final；版本仍 `0.6.5`，未打包、未安装、未发布。回归：`verify.js` 1717/1717、`continuationStoreVerify`、`queueBlockedRepairVerify`、`queueUnifyStressVerify`、`queueDrainUserMessageVerify`、`queueAttachmentIsolationVerify` 57/57、`branchPageQueueIdentityVerify`、`test-queue-continuation-identity` 61/61、`test-queue-acceptance-boundary` 109/109、`test-queue-start-failure` 40/40、`test-shared-conversation-commands` 51/51、`test-long-conversation-ui-ordering` 18/18、`pcGlassMigrationVerify`、`conversationBranchStressVerify`、`mode-conversation-state-stress`。
 
@@ -475,8 +479,8 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | --- | --- |
 | `DESKTOP/src/ui/index.html` | `renderChatMessagesUnsafe()` 新增 `state.renderedChatTargetKey`（记录当前占据 `#chat-area` 的对话）；`applyConversationSnapshot()` 在 `syncQueueItemsFromSnapshot()` 写完 per-target 投影之后，若该目标是当前关注对话且仍占据屏幕转录，则用同一投影源 `state.pendingOptions` 重绘一次选项块。修复「Build 以 question 结束时用户正关注其他对话，返回后问题既不 hold 也不展示」；owner 契约与作答后的乐观清空不变。 |
 | `DESKTOP/scripts/verify-background-question-hold.cjs` | 新增真实 Electron 门禁（npm `test:background-question-hold`）：mock provider 按真实 runtime 顺序 `tool_provision → question`，在问题落地前切到新对话，断言「不泄漏进当前对话」「返回后恰好一个被 hold 的问题块、owner 正确」「仍可作答并继续 Build」「单份携带问题的快照必须画出选项块（确定性复现顺序缺陷）」「已作答问题不会因离开再返回而复活」。18/18 PASS。 |
-| `archive/20260916-133413-background-question-hold/` | `REPORT.md` + `evidence/`（门禁 JSON、B 中无泄漏截图、返回 A 后被 hold 的问题截图、CDP 时序轨迹） |
-| `archive/20260916-131906-background-question-hold/` | A/B 反证：临时移除重绘块后同一门禁的「单份快照」断言失败（`blocks=0`），证明门禁有判别力。 |
+| 本地归档（未纳入公开仓库） | `REPORT.md` + `evidence/`（门禁 JSON、B 中无泄漏截图、返回 A 后被 hold 的问题截图、CDP 时序轨迹） |
+| 本地归档（未纳入公开仓库） | A/B 反证：临时移除重绘块后同一门禁的「单份快照」断言失败（`blocks=0`），证明门禁有判别力。 |
 
 边界：只调整渲染器排布顺序与屏幕转录归属标记；不改后端 pendingOptions 生命周期、owner 校验与作答路径；不涉及版本号提升（仍 0.6.5），不打包、不安装、不停止进程。回归：`dev-0.6.4-option-owner-check`、`pcGlassMigrationVerify` 57 项、`test-renderer-conversation-commands` 57/57、`test-conversation-history-window` 39/39、`test-long-conversation-ui-ordering` 18/18、`test-ui-consistency`、`verify-fixed-control-centering` 24/24 全部通过。
 
@@ -486,18 +490,18 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | --- | --- |
 | `DESKTOP/src/ui/index.html` | 在通用堆叠兜底规则 `.liquid-selection-float > :not(.liquid-selection-canvas)` 之后新增同特异度、更后来源顺序的 `.liquid-selection-float > .liquid-fixed-control-content, .liquid-selection-float > .conversation-drag-content { position: absolute; }`。修复 PC 左侧栏底部固定控件（`#left-ws-add`「+ 新建」、`.left-collapse-btn`，连同同一桥接器覆盖的 `.sec-btn`/`.right-open-btn`/`.shell-btn`/`.option-btn`/`.stack-icon-btn`/`#submit-btn`）按下时被玻璃浮块接管后内容左顶格的问题，并同时修复对话拖动浮块 `inset:9px` 丢失。仅覆盖 `position`，不动浮块几何/动画/材质与命令派发。 |
 | `DESKTOP/scripts/verify-fixed-control-centering.cjs` | 新增真实 Electron 渲染器门禁（npm `test:fixed-control-centering`）：同一构建内先注入等价旧声明复现缺陷帧、再移除取修复帧，按住控件比较承载内容盒与浮块盒中心偏移；同时断言按下期间玻璃浮块可见且源按钮保持 `liquid-fixed-source-covered`、松手无残留浮块、每次按压只派发一次点击、真实折叠提交后左栏宽度 48px、渲染器零错误。 |
-| `archive/20260916-132405-pc-left-rail-fixed-control-centering/` | `REPORT.md` + `evidence/`（before/after 截图、左右对照图、门禁 JSON）。实测中心偏移：`#left-ws-add` −62.98px → 0，`.left-collapse-btn` −88.50px → 0。 |
+| 本地归档（未纳入公开仓库） | `REPORT.md` + `evidence/`（before/after 截图、左右对照图、门禁 JSON）。实测中心偏移：`#left-ws-add` −62.98px → 0，`.left-collapse-btn` −88.50px → 0。 |
 
 边界：不涉及版本号提升（`VERSION`/`DESKTOP/package.json` 仍为 0.6.5），不打包、不安装、不停止进程；`DESKTOP/dist/ui/index.html` 由 `node scripts/build-ui-icons.cjs` 重生成且 style 块与 src 逐字节一致。既有失败 `scripts/dev-popup-direction-regression.cjs`（弹窗外部材质条纹背景模糊判定）已用 A/B 还原验证为与本次修复无关。
 
 ## 2026-09-15 弹窗及模型配置增量
 
-`android/ui/ChatScreen.kt`（完整路径见报告）管理返回项和选中滚动；`RightSidebar.kt` 使用外扩按钮画布；`SettingsScreen.kt` 增加供应商模型编辑导航；`vm/ChatViewModel.kt` 按供应商身份重命名。`Dev065PopupModelsTest.kt` 提供触控/视觉门禁，PC `src/ui/index.html` 分离模型字段及稳定身份，`scripts/dev065-model-settings-visual.cjs` 验证实际配置路径。`archive/20260915-dev065-popup-models/` 存放截图、报告与日志。目标是交互稳定且配置不跨供应商。
+`android/ui/ChatScreen.kt`（完整路径见报告）管理返回项和选中滚动；`RightSidebar.kt` 使用外扩按钮画布；`SettingsScreen.kt` 增加供应商模型编辑导航；`vm/ChatViewModel.kt` 按供应商身份重命名。`Dev065PopupModelsTest.kt` 提供触控/视觉门禁，PC `src/ui/index.html` 分离模型字段及稳定身份，`scripts/dev065-model-settings-visual.cjs` 验证实际配置路径。本地归档（未纳入公开仓库） 存放截图、报告与日志。目标是交互稳定且配置不跨供应商。
 
 
 ## 2026-09-15 dev-0.6.5
 
-目标：降低低内存电脑会话驻留开销，保持历史、分支与队列身份正确。文件树增量：`DESKTOP/src/core/runtimeMemoryBudget.ts` 提供物理内存策略，由两类 RuntimePool 消费；`DESKTOP/src/ui/index.html` 限制消息快照和防止过期绘制；`DESKTOP/src/tests/runtimeMemoryBudgetVerify.ts` 覆盖预算边界；`DESKTOP/scripts/test-dev065-renderer-memory.cjs` 覆盖缓存与导航；`DESKTOP/scripts/dev-0.6.5-real-queue-deepseek.cjs` 锁定真实部署验收。`archive/20260915-dev065-memory-ui/` 保存报告、文档原始快照和门禁日志；`archive/20260915-dev065-real-deepseek-queue/` 保存真实模型证据/截图。其余目录作用保持下方记录。
+目标：降低低内存电脑会话驻留开销，保持历史、分支与队列身份正确。文件树增量：`DESKTOP/src/core/runtimeMemoryBudget.ts` 提供物理内存策略，由两类 RuntimePool 消费；`DESKTOP/src/ui/index.html` 限制消息快照和防止过期绘制；`DESKTOP/src/tests/runtimeMemoryBudgetVerify.ts` 覆盖预算边界；`DESKTOP/scripts/test-dev065-renderer-memory.cjs` 覆盖缓存与导航；`DESKTOP/scripts/dev-0.6.5-real-queue-deepseek.cjs` 锁定真实部署验收。本地归档（未纳入公开仓库） 保存报告、文档原始快照和门禁日志；本地归档（未纳入公开仓库） 保存真实模型证据/截图。其余目录作用保持下方记录。
 
 
 ## 2026-09-10 dev-0.6.4 hotfix 受阻队列修复与显示规则
@@ -511,7 +515,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `DESKTOP/src/ui/index.html` | `setQueueItemsForTarget` 保留 `waitingReason`/`blocked`；受阻行标记 `data-queue-blocked`；队列头部在存在受阻行时渲染「修复受阻队列」按钮（`#queue-repair-btn` → `window.repairBlockedQueue()`）；删除内联「排队中」用户气泡（`renderPendingQueuedUserMessages` 及相关样式），排队内容只显示在队列面板；`renderPendingGuideMessages` 只渲染 accepted/applied 的 Guide（awaitingAck、deferred、rejected 不进入对话区）。 |
 | `DESKTOP/src/tests/queueBlockedRepairVerify.ts` | 复现用户账本形状（失败 → DEPENDENCY_FAILED → 失败后入队同样受阻 → claim 返回 null），验证修复后顺序 SUCCEEDED、审计事件内容与数量、健康队列幂等。 |
 | `DESKTOP/scripts/dev-0.6.4-queue-resume-e2e.cjs` | 真实内核 + UI 端到端门禁（mock provider）：暂停 → 入队失败行 → 恢复并失败 → 再入队两行（受阻可见 + 修复按钮出现）→ 显式修复 → 恢复 → 队列清空，账本 `seq1:FAILED seq2:SUCCEEDED seq3:SUCCEEDED`。 |
-| `archive/20260910-dev064-hotfix/REPORT.md` | 根因证据（真实账本）、修复说明、门禁结果、打包哈希与「安装待一次 UAC 确认」的边界。 |
+| 本地归档（未纳入公开仓库） | 根因证据（真实账本）、修复说明、门禁结果、打包哈希与「安装待一次 UAC 确认」的边界。 |
 
 ## 2026-09-10 dev-0.6.4 分支分页身份、排队可见与 Guide 只读
 
@@ -522,13 +526,13 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `DESKTOP/src/core/agentKernelRunner.ts` | `providerSessionIdentity` 改为绑定 Build 所属分支（`agent.activeWorkRunBranchId()`），不再读取「当前激活/查看的分支」，兄弟分支的远端会话序列完全分割。 |
 | `DESKTOP/src/ui/index.html` | 分支身份与分支级缓存键：`conversationBranchIdentity`/`rememberViewedBranchNodeId`/`viewedBranchNodeIdFor`/`branchConversationViewKey`；`conversationMessageCache`/`cacheConversationMessages` 按分支节点缓存，`workRunsForTarget` 读当前浏览分支的 Build 账本；`renderConversationBranchPagers` 锚点三级回退（message-id → 渲染索引 → 锚点文本）；`queueIndexesForTarget` 不再按分支过滤排队行并新增 `queueRequestBranchMismatch` 标记、队列面板新增行自动展开、`renderPendingQueuedUserMessages` 把本页排队输入渲染为带「排队中」徽标的用户气泡；`rebindQueueToRuntimeBranch` 不再改写受理时捕获的 `branchPath`；`renderWorkRunGuideMessage` 只保留复制动作。 |
 | `DESKTOP/src/tests/branchPageQueueIdentityVerify.ts` | 新回归：分支身份唯一性与 core/UI 单一路径、分页缓存隔离、跨分页排队行可见且不被改绑、排队输入内联渲染、Guide 卡片只读复制、分页编辑不清空队列投影。 |
-| `DESKTOP/scripts/dev-0.6.4-branch-page-queue-visual.cjs` | 真实 Electron 渲染器视觉复核：注入 Build 开头编辑分页 + 排队输入 + Guide 卡片，断言分页条文本、锚点、队列行、排队气泡与 Guide 动作数量，并输出截图到 `archive/`。 |
+| `DESKTOP/scripts/dev-0.6.4-branch-page-queue-visual.cjs` | 真实 Electron 渲染器视觉复核：注入 Build 开头编辑分页 + 排队输入 + Guide 卡片，断言分页条文本、锚点、队列行、排队气泡与 Guide 动作数量，并输出截图到 本地归档（未纳入公开仓库）。 |
 | `DESKTOP/scripts/test-renderer-conversation-commands.cjs`、`DESKTOP/scripts/test-long-conversation-ui-ordering.cjs`、`DESKTOP/src/tests/conversationHistoryFirstVerify.ts`、`DESKTOP/src/tests/guideUiReconcileVerify.ts`、`DESKTOP/src/tests/verify.ts` | 抽取式渲染器夹具补齐新增 helper；Guide 编辑断言改为「保留复制、移除编辑」；`test-long-conversation-ui-ordering.cjs` 命中真实 `right-status-content` 与模型选择分支后 18/18。 |
-| `archive/20260910-dev064-branch-page-queue/` | 本轮截图、报告与未执行边界（打包/安装/CI 发布未在本轮执行）。 |
+| 本地归档（未纳入公开仓库） | 本轮截图、报告与未执行边界（打包/安装/CI 发布未在本轮执行）。 |
 
 保留边界：预览分支 ≠ 运行分支时，新分支绝不接管另一条分页的排队输入（内核执行投影仍只跟随当前激活节点）；Guide 仍是当前 Build 的内联干预；跨分支不共享 provider 会话序列与折叠历史。版本：`VERSION`/`DESKTOP/package.json`/`package-lock.json`/Android `versionName 0.6.4`+`versionCode 604`（Android 行为未改动）。`release:version-check` 通过。
 
-本轮同时完成 Windows 打包与本地安装：`release/Newmark-Agent-0.6.4-x64.msi`（SHA-256 `1BEABA08…B54E4A`）、`release/Newmark-Agent-0.6.4-win-unpacked-x64.zip`（SHA-256 `C807ECC6…4419D6`）、打包 `app.asar` SHA-256 `92842DCB…D38804`；本机 UAC 提升安装后注册表 `0.6.4.0`、安装目录 CLI `0.6.4`、安装目录 `app.asar` 与打包字节一致、292 个 payload 文件核对通过；已安装 exe 以隔离 root 通过分页/队列/Guide 渲染器门禁并截图。记录：`archive/20260910-dev064-package/REPORT.md`、`archive/20260910-dev064-install-2/`。
+本轮同时完成 Windows 打包与本地安装：`release/Newmark-Agent-0.6.4-x64.msi`（SHA-256 `1BEABA08…B54E4A`）、`release/Newmark-Agent-0.6.4-win-unpacked-x64.zip`（SHA-256 `C807ECC6…4419D6`）、打包 `app.asar` SHA-256 `92842DCB…D38804`；本机 UAC 提升安装后注册表 `0.6.4.0`、安装目录 CLI `0.6.4`、安装目录 `app.asar` 与打包字节一致、292 个 payload 文件核对通过；已安装 exe 以隔离 root 通过分页/队列/Guide 渲染器门禁并截图。记录：本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库）。
 
 ## 2026-09-09 dev-0.6.3 对话接续身份、分支绑定与缓存隔离
 
@@ -545,15 +549,14 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `DESKTOP/src/main.ts`、`DESKTOP/src/server.ts` | `ConversationCommandOptions.model` 与 `hostedCommandOptions.model` 把渲染端可见模型带入发送；`queue_enqueue` 传递分支身份与模型选择。 |
 | `android/.../ApiClient.kt`、`ChatViewModel.kt` | 正常回复省略输出上限；预算耗尽保留部分答案并标记 `interrupted`，不再丢弃进度。 |
 | `DESKTOP/scripts/test-queue-continuation-identity.cjs` | 60 项断言：每个 Next 新开 Build、每次 process 都在目标 conversation、跨会话队列项绝不执行并保持暂停。 |
-| `archive/20260909-continuation-identity/REPORT.md` | 本轮规范接入、验证记录与尚未实现的 SQLite GuardedStore/fence/Attempt 边界。 |
-| `archive/20260909-dev063-package/REPORT.md` | dev-0.6.3 本地打包资产、SHA-256、Android 包信息、门禁结果与未执行边界。 |
+| 本地归档（未纳入公开仓库） | 本轮规范接入、验证记录与尚未实现的 SQLite GuardedStore/fence/Attempt 边界。 |
+| 本地归档（未纳入公开仓库） | dev-0.6.3 本地打包资产、SHA-256、Android 包信息、门禁结果与未执行边界。 |
 
 版本：`VERSION`、`DESKTOP/package.json`、`DESKTOP/package-lock.json` 与 Android `versionName 0.6.3`／`versionCode 603` 已同步。`release:version-check`、`verify.js`（1717/1717）、`test-shared-conversation-commands.cjs`（51/51）以及缓存/动态多级压缩专项全部通过；`beginExternalRun` 接管前通过 `reconcilePendingContinuations` 重载并合并持久队列，修复 pool→flow owner handoff。当前正在执行 `test:desktop:built` 发布门禁全链。
 
 ## 2026-09-09 dev-0.6.2 发布完成
 
 - `dev-0.6.2` 标签绑定 `781307e`；GitHub Actions 已完成 Windows MSI/便携包、Linux AppImage/deb/便携包、Android APK 六个资产的发布，npm `newmark-agent@0.6.2` 同步发布。
-- `archive/20260909-dev062-release/`：本地完整检查日志、SSH 超时后的独立重跑、Android Release 构建、CI 结果和发布资产 SHA256 记录；发布包与本机安装状态分别记录。
 - 发布页：https://github.com/positer/Newmark-Agent/releases/tag/dev-0.6.2
 
 ## 2026-09-09 移动端输出预算续写
@@ -561,28 +564,24 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 - `android/app/src/main/java/com/newmark/mobile/data/ApiClient.kt`、`MobileResponseRecovery.kt`：区分供应商预算结束、完成及错误，保护未完成工具调用。
 - `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt`：最多三次提高预算的续写、请求级检查点、正文拼接与持久化。
 - `android/app/src/androidTest/java/com/newmark/mobile/ui/OutputBudgetContinuationTest.kt`：真实 ViewModel 的思考截断、正文截断、成功完成与落库测试。
-- `archive/20260909-mobile-output-budget/`：用户截图问题与验证记录。
 
 ## 2026-09-09 双端标题推理预算
 
 - `DESKTOP/src/core/agent.ts`：标题预算从固定 2048 改为冻结档位的 maxTokens。
 - `android/app/src/main/java/com/newmark/mobile/vm/FirstInputTitleRequest.kt`：主标题取消 64-token 覆盖，图片 metadata 退路使用正常 low 档预算。
 - `DESKTOP/src/tests/verify.ts`、`android/app/src/test/java/com/newmark/mobile/vm/FirstInputTitleRequestTest.kt`：标题预算、思考映射、启动门禁及 HTTP 回归。
-- `archive/20260909-title-reasoning-budget/`：双端构建、测试、问题边界和交付记录。
 
 ## 2026-09-09 移动端整篇重复回复
 
 - `android/app/src/main/java/com/newmark/mobile/data/ApiClient.kt`：协议增量与快照分离，Responses 按输出片段合并，非流式正文别名互斥。
 - `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt`：UI 批量发布保留空白片段，防止流式与完成态 Markdown 不一致。
 - `android/app/src/test/java/com/newmark/mobile/data/ApiClientStreamTest.kt`：真实 HTTP/SSE 回归覆盖完整快照、重复字词、空白、多个输出项及聚合别名。
-- `archive/20260909-mobile-duplicate-response/`：诊断、测试和 APK 交付记录。
 
 ## 2026-09-09 移动端对话运行彩边
 
 - `android/app/src/main/java/com/newmark/mobile/ui/components/ConversationRuntimeBorder.kt`：固定胶囊路径、旋转黑白 shader，绘制阶段读取动画，仅运行时启用。
 - `ui/Sidebar.kt`、`ui/NewmarkApp.kt`、`vm/ChatViewModel.kt`（Android 主源码目录下）：本地运行 ID 集合传递与远程运行状态接入，避让浮动玻璃。
 - `android/app/src/androidTest/java/com/newmark/mobile/ui/ConversationRuntimeBorderTest.kt`：双主题、本地/远程运行帧差与结束静止验证。
-- `archive/20260909-mobile-runtime-border/`：编译、设备测试与截图证据。
 
 ## 2026-09-09 免费搜索组更新
 
@@ -595,8 +594,8 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `DESKTOP/src/tests/verify.ts`, `pcGlassMigrationVerify.ts`, `startupPrewarmVerify.ts` | 发布门源码断言与当前协议写法、Windows 换行和前后台浏览器函数边界对齐；保留对应行为回归。 |
 | `android/app/src/test/java/com/newmark/mobile/data/MobileSearchMcpTest.kt` | 双端同名默认服务、顺序、参数边界与原有容灾测试。 |
 | `android/app/src/androidTest/java/com/newmark/mobile/data/SearchOnlyHttpMcpDeviceTest.kt` | 可显式启用的 Exa/You.com 真实联网准入，以及 HTTP/SSE 设备协议测试。 |
-| `archive/20260909-search-refresh/` | 上游调研、候选 schema、原始公开查询结果、设备与发布验证记录。 |
-| `archive/20260909-062-msi-install/` | Windows 0.6.2 发布测试、MSI 打包与实际安装记录。 |
+| 本地归档（未纳入公开仓库） | 上游调研、候选 schema、原始公开查询结果、设备与发布验证记录。 |
+| 本地归档（未纳入公开仓库） | Windows 0.6.2 发布测试、MSI 打包与实际安装记录。 |
 
 ## 2026-09-09 带图导航、触感与公式
 
@@ -613,7 +612,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `android/app/src/test/java/com/newmark/mobile/vm/ConversationPersistenceTest.kt` | 保存挂起期间新建、删除、取消、失败的竞态验证。 |
 | `android/app/src/test/java/com/newmark/mobile/ui/DisplayMathRegressionTest.kt` | 截图同类 cases、多行公式、代码保护与流式未闭合公式回归。 |
 | `android/app/src/androidTest/java/com/newmark/mobile/ui/ImageNavigationAndMathTest.kt` | 实际带图 ViewModel 发送、退出重入、键盘关闭循环与双主题公式截图。 |
-| `archive/20260909-mobile-image-navigation/` | 构建、测试、实际截图和性能边界记录。 |
+| 本地归档（未纳入公开仓库） | 构建、测试、实际截图和性能边界记录。 |
 
 ## 2026-09-09 图片首轮标题退路
 
@@ -625,7 +624,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `android/app/src/test/java/com/newmark/mobile/vm/FirstInputTitleAndNetworkRecoveryContractTest.kt` | 既有首轮门禁契约增加图片文字退路例外。 |
 | `android/app/src/test/java/com/newmark/mobile/vm/MobileEmptyResponseRetryContractTest.kt` | 标题请求计数允许图片专属文字退路，正式轮次请求契约保持不变。 |
 | `android/app/src/test/java/com/newmark/mobile/ui/QueuePanelVisualContractTest.kt` | 按既有视觉证据校正队列按钮契约，要求无边界及按压反馈。 |
-| `archive/20260909-image-title-fallback/` | 本次请求回归、构建日志与交付记录。 |
+| 本地归档（未纳入公开仓库） | 本次请求回归、构建日志与交付记录。 |
 
 ## 2026-09-08 代码块与全量视觉压力复查
 
@@ -640,7 +639,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `DESKTOP/scripts/release-ui-incremental-render-stress.cjs`, `ui-stress-electron-bootstrap.cjs` | 当前开发构建及打包构建的增量节点、滚动与输入延迟压力检查，保存阶段耗时。 |
 | `android/scripts/mobile-agent-stress.ps1` | 独立 stress 包的远端事件、队列、菜单与侧栏压力检查，通过 UI 进入远端对话并留存截图。 |
 | `DESKTOP/scripts/mobile-mock-server.cjs` | 隔离 SSE/API 夹具，按真实 PC 的统一 send 入口处理运行中 Next 入队。 |
-| `archive/20260908-full-visual-stress/` | 本轮报告、双端截图、图册、构建日志、成功与失败测试证据；无效诊断截图不计入验收。 |
+| 本地归档（未纳入公开仓库） | 本轮报告、双端截图、图册、构建日志、成功与失败测试证据；无效诊断截图不计入验收。 |
 
 ## 2026-09-08 Browser-Use 视觉、画幅与 PDF
 
@@ -658,7 +657,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `DESKTOP/scripts/test-browser-vision-viewport.cjs` | 真实 Electron、PDF 流与模型 HTTP 协议回归。 |
 | `android/app/src/androidTest/java/com/newmark/mobile/ui/BrowserVisionViewportTest.kt` | 设备端压缩/扫描 PDF、视觉/OCR、前后台画幅、无后缀 PDF 和 Cookie 回归。 |
 | `android/app/src/main/java/com/newmark/mobile/data/MobileModels.kt`, `RemoteTrackingContract.kt`, `vm/DesktopLinkViewModel.kt` | 保留并展开 PC coalescedDeltas，按原片段 ID 合并快照和 SSE，消除过程文本双重显示。 |
-| `archive/20260908-browser-vision-viewport/` | 构建日志、截图、合成 PDF、测试报告和交付摘要。 |
+| 本地归档（未纳入公开仓库） | 构建日志、截图、合成 PDF、测试报告和交付摘要。 |
 
 ## dev-0.6.2 内置浏览器本地 HTML
 
@@ -672,7 +671,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `DESKTOP/src/core/browserUse.ts` | Browser-Use 主动导航支持本地绝对路径与 file URL，保留可执行协议和远程 file authority 拒绝。 |
 | `DESKTOP/src/core/electronBrowserUseHost.ts` | 本地页面间的 file 导航通过，网页发起的本地导航保持阻止。 |
 | `DESKTOP/scripts/test-local-html-browser.cjs` | 隔离配置与本地 HTML fixture，真实 Electron guest 加载、样式、脚本及链接验证。 |
-| `archive/20260908-local-html-browser/` | 本轮构建、回归日志、PC 截图和修复说明。 |
+| 本地归档（未纳入公开仓库） | 本轮构建、回归日志、PC 截图和修复说明。 |
 
 ## dev-0.6.2 全界面主题与玻璃协调
 
@@ -690,7 +689,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `android/app/src/main/java/com/newmark/mobile/ui/theme/NewmarkTheme.kt` | 补充 warning 与亮色可读状态色。 |
 | `android/app/src/main/java/com/newmark/mobile/ui/{ChatScreen,Sidebar,RightSidebar,MemoryLabScreen,SettingsScreen}.kt` | 状态与图谱配色跟随主题，设置导航箭头统一 Lucide。 |
 | `android/app/src/androidTest/java/com/newmark/mobile/ui/FullVisualAuditTest.kt` | 27 个移动端页面/状态、离线数据、PixelCopy 画面同步与系统栏主题。 |
-| `archive/20260908-dev-0.6.2-full-visual/` | REPORT、COVERAGE、gallery、逐页截图、玻璃动态探针和构建/测试日志；历史失败采集单独保留。 |
+| 本地归档（未纳入公开仓库） | REPORT、COVERAGE、gallery、逐页截图、玻璃动态探针和构建/测试日志；历史失败采集单独保留。 |
 
 
 ## dev-0.6.2 双端视觉一致性
@@ -707,7 +706,7 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `android/app/src/main/java/com/newmark/mobile/ui/theme/NewmarkTheme.kt` | 亮色文字层级与 PC 一致；补齐中性 Material 容器、次级色、反色和透明 surfaceTint。 |
 | `android/app/src/androidTest/java/com/newmark/mobile/ui/CrossPlatformUiRenderingTest.kt` | 渲染真实侧栏与供应商详情页，保存双主题手机宽度截图。 |
 | `android/app/src/test/java/com/newmark/mobile/ui/InputComposerAndModelMenuContractTest.kt` | 更新上箭头为 Lucide 资源的断言，保留输入栏几何约束。 |
-| `archive/20260908-dev-0.6.2-ui-consistency/` | 构建和回归日志、双端截图、报告及交付哈希。 |
+| 本地归档（未纳入公开仓库） | 构建和回归日志、双端截图、报告及交付哈希。 |
 
 复验：先运行 Desktop build，再运行 `npm --prefix DESKTOP run test:ui-consistency`；Android 执行 JVM、指定设备回归和 Release 编译。
 
@@ -721,23 +720,23 @@ App 自有模型 loader/provider/decoder/registry 模块进行隔离联测（发
 | `android/app/src/main/java/com/newmark/mobile/ui/theme/ThemeSystemBars.kt` | 解析宿主 Activity，在组合提交和生命周期恢复时应用系统栏图标亮暗属性，并清理观察者。 |
 | `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` | 首次组合读取持久化主题，再驱动应用颜色和系统栏外观。 |
 | `android/app/src/androidTest/java/com/newmark/mobile/ui/ThemeIconRenderingTest.kt` | 真实 Compose 图标像素、双向主题切换和恢复时系统栏属性回归。 |
-| `archive/20260908-dev-0.6.2-mobile-theme/` | 本轮报告、Gradle 日志、模拟器日志与图标截图。 |
+| 本地归档（未纳入公开仓库） | 本轮报告、Gradle 日志、模拟器日志与图标截图。 |
 
 统一版本源与 Desktop 元数据同步到 0.6.2，Android 为 0.6.2／602；本次未执行桌面打包安装或远程发行。
 
 ## 0.6.1 MSI 构建与安装状态
 
-根目录 `VERSION`、`DESKTOP/package.json`、`DESKTOP/package-lock.json` 与 `android/app/build.gradle.kts` 已同步为 0.6.1／601。Windows 交付物位于 `release/Newmark-Agent-0.6.1-x64.msi`，已通过完整 release 门禁并安装到 `C:\Program Files\Newmark Agent\`。`archive/20260907-061-msi-install/` 保存报告与 Windows Installer 详细日志。
+根目录 `VERSION`、`DESKTOP/package.json`、`DESKTOP/package-lock.json` 与 `android/app/build.gradle.kts` 已同步为 0.6.1／601。Windows 交付物位于 `release/Newmark-Agent-0.6.1-x64.msi`，已通过完整 release 门禁并安装到 `C:\Program Files\Newmark Agent\`。本地归档（未纳入公开仓库） 保存报告与 Windows Installer 详细日志。
 
-Android 当前交付物为 `APK/Newmark-Agent-0.6.1-release.apk`。`release/` 仅保留 0.6.1 MSI 与 Windows ZIP，`APK/` 仅保留 0.6.1 APK；根目录历史 `release-*` 已删除。`archive/` 中历史发行二进制与解包目录已删除，项目报告、日志、测试数据和媒体等冷数据继续保留。
+Android 当前交付物为 `APK/Newmark-Agent-0.6.1-release.apk`。`release/` 仅保留 0.6.1 MSI 与 Windows ZIP，`APK/` 仅保留 0.6.1 APK；根目录历史 `release-*` 已删除。本地归档（未纳入公开仓库） 中历史发行二进制与解包目录已删除，项目报告、日志、测试数据和媒体等冷数据继续保留。
 
 ## dev-0.6.0 全平台发行
 
-`VERSION`、Desktop package/lock 与 Android Gradle 绑定 0.6.0／600。`.github/workflows/release-linux.yml` 构建既有六平台资产，并读取 `DESKTOP/scripts/release-notes-dev-0.6.0.md` 的英文／简体中文发行说明。`archive/20260907-dev-0.6.0-release/` 保存本轮构建、哈希和上传校验记录。
+`VERSION`、Desktop package/lock 与 Android Gradle 绑定 0.6.0／600。`.github/workflows/release-linux.yml` 构建既有六平台资产，并读取 `DESKTOP/scripts/release-notes-dev-0.6.0.md` 的英文／简体中文发行说明。本地归档（未纳入公开仓库） 保存本轮构建、哈希和上传校验记录。
 
 ## 2026-09-07 PC P0 与跨端开关修复
 
-移动端 `SettingsScreen.kt` 的 `ProviderDetailPanel` 将静态供应商名、可编辑 API 接口、横向协议轨道、竖向模型轨道拆为独立区域；端点保存调用现有 ProviderStore 持久化路径。`ProviderDetailEditingTest.kt` 检查浮块上界、端点保存及无效地址不写入。交付验证记录位于 `archive/20260907-p0-pc-model-binding/`。
+移动端 `SettingsScreen.kt` 的 `ProviderDetailPanel` 将静态供应商名、可编辑 API 接口、横向协议轨道、竖向模型轨道拆为独立区域；端点保存调用现有 ProviderStore 持久化路径。`ProviderDetailEditingTest.kt` 检查浮块上界、端点保存及无效地址不写入。交付验证记录位于 本地归档（未纳入公开仓库）。
 
 | 文件或目录 | 构造与作用 |
 | --- | --- |
@@ -751,12 +750,12 @@ Android 当前交付物为 `APK/Newmark-Agent-0.6.1-release.apk`。`release/` �
 | `android/app/src/androidTest/java/com/newmark/mobile/ui/LiquidSwitchRenderingTest.kt` | 四项实际 Compose 手势、浮块阶段及端点坐标回归。 |
 | `DESKTOP/scripts/test-conversation-model-binding.cjs`、`test-model-response-health.cjs`、`test-image-ocr-recovery.cjs` | 实际 HTTP、跨部署隔离、冷加载、视觉重试及内置 OCR 恢复测试。 |
 | `DESKTOP/scripts/test-liquid-switch-ui.cjs`、`test-live-pc-model-recovery.cjs` | Electron 实际输入/布局/截图与隔离真实供应商首轮测试；真实调用测试不加入自动测试链。 |
-| `archive/20260907-p0-pc-model-binding/` | 本轮复现、被否决中间候选、测试日志、截图及最终验证边界。 |
+| 本地归档（未纳入公开仓库） | 本轮复现、被否决中间候选、测试日志、截图及最终验证边界。 |
 
 
 ## dev-0.5.15 本机 MSI 安装（2026-09-07）
 
-已通过共享 MSI 安装器安装到 `C:\Program Files\Newmark Agent`，机器注册版本 `0.5.15.0`，MSI 返回 0。292 个安装文件与发行包一致，21,021 个既有 `.Newmark` 文件哈希未变；普通用户实际 CLI／GUI 均验证为 `0.5.15`。`archive/20260907-132934-install-dev0515/REPORT.md` 记录结果；同目录 `result.json`、`request.json` 和 MSI 日志记录身份与过程，`installed-smoke.log`／`installed-runtime.json` 记录独立运行验证，用户文件清单和 pending-operation 记录用于本地审计。此前发布报告的“未安装”边界保留为历史记录；本次安装未改变并行移动端工作。
+已通过共享 MSI 安装器安装到 `C:\Program Files\Newmark Agent`，机器注册版本 `0.5.15.0`，MSI 返回 0。292 个安装文件与发行包一致，21,021 个既有 `.Newmark` 文件哈希未变；普通用户实际 CLI／GUI 均验证为 `0.5.15`。本地归档（未纳入公开仓库） 记录结果；同目录 `result.json`、`request.json` 和 MSI 日志记录身份与过程，`installed-smoke.log`／`installed-runtime.json` 记录独立运行验证，用户文件清单和 pending-operation 记录用于本地审计。此前发布报告的“未安装”边界保留为历史记录；本次安装未改变并行移动端工作。
 
 ## dev-0.6.0 移动端侧栏修复
 
@@ -766,11 +765,11 @@ Android 当前交付物为 `APK/Newmark-Agent-0.6.1-release.apk`。`release/` �
 | `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` | `UnclippedSidebarDrawer` 分离背景材质与内容，保留抽屉尺寸及系统栏避让，允许浮块溢出。 |
 | `android/app/src/main/java/com/newmark/mobile/ui/Sidebar.kt` | 本地和远程浮块的中心右移从 16dp 减为 8dp，起落归零。 |
 | `android/app/src/androidTest/java/com/newmark/mobile/ui/ConversationLiftRenderingTest.kt` | 实际抽屉材质下的包边像素、起落色块绑定和连续反向重排验证。 |
-| `archive/20260907-dev-0.6.0-mobile-sidebar/` | `REPORT.md` 为验收报告；`*.log` 为中间与最终门禁，`geometry.log` 为坐标；`validation.json` 为源码及包身份，`changes.patch` 为评审补丁；`pixels/` 保留初版截图，`*-held-final.png` 为最终截图，`installed-base.apk` 为安装回读字节。不代表 dev-0.6.0 已发布。 |
+| 本地归档（未纳入公开仓库） | `REPORT.md` 为验收报告；`*.log` 为中间与最终门禁，`geometry.log` 为坐标；`validation.json` 为源码及包身份，`changes.patch` 为评审补丁；`pixels/` 保留初版截图，`*-held-final.png` 为最终截图，`installed-base.apk` 为安装回读字节。不代表 dev-0.6.0 已发布。 |
 
 ## dev-0.5.15 发布构造（2026-09-07）
 
-`VERSION`、`DESKTOP/package.json`／lock 与 `android/app/build.gradle.kts` 绑定 0.5.15／515。`.github/workflows/release-linux.yml` 提供 Windows／Linux／Android 原生 runner 构建；手工 dispatch 只构建，dev 标签触发预发布；`publish.yml` 同标签触发 npm。`DESKTOP/scripts/dist-portable.cjs` 与 `dist-linux.cjs` 生成桌面资产；`verify-github-release-assets.cjs` 重新下载六资产并校验。当前发布计划与检查表位于 `tasks/`，每项执行日志、候选和最终身份在 `archive/20260907-113605-dev-0.5.15-release/`。
+`VERSION`、`DESKTOP/package.json`／lock 与 `android/app/build.gradle.kts` 绑定 0.5.15／515。`.github/workflows/release-linux.yml` 提供 Windows／Linux／Android 原生 runner 构建；手工 dispatch 只构建，dev 标签触发预发布；`publish.yml` 同标签触发 npm。`DESKTOP/scripts/dist-portable.cjs` 与 `dist-linux.cjs` 生成桌面资产；`verify-github-release-assets.cjs` 重新下载六资产并校验。当前发布计划与检查表位于 `tasks/`，每项执行日志、候选和最终身份在 本地归档（未纳入公开仓库）。
 
 `dev-0.5.15` 标签绑定 `ec2e67642421545dd1f0de220b7edd09becf7304`，六资产实际构建提交为 `6210c9c118791aea4a9336f942ec667f2c5a845f`；差异仅为三个发行测试与说明，生产输入相同。标签平台 CI `34083419351` 四项成功并保留已验证资产，npm CI `34083419355` 成功，公开 npm 包通过来源签名与实际入口验证。GitHub 六资产全部重新下载，大小与 SHA256 逐件一致。GitHub Release 与 npm 为独立验收对象。
 
@@ -807,8 +806,8 @@ Android 当前交付物为 `APK/Newmark-Agent-0.6.1-release.apk`。`release/` �
 | `DESKTOP/scripts/test-wsl-runtime-process-tree.cjs` | 两个真实 WSL client 与生产 asyncProcess 分离子孙进程，验证目标树停止、其他对话存活、过期身份拒绝、取消和失败隔离。 |
 | `DESKTOP/package.json` | `test:subagent-continuity[:built]` 可重复专项门禁并纳入完整 Desktop 回归；`test:wsl-stop-isolation[:built]` 覆盖真实 WSL 停止，并随 `test:runtime-isolation` 执行。 |
 | `DESKTOP/src/tools/index.ts` | `subagent_send` 的 `wakeup`、主代理目标、内容类型与范围参数；动态内容只进入消息尾部，不嵌入静态工具定义。 |
-| `archive/20260907-003824-subagent-mailbox-cache-stress/` | 本轮计划、修改前快照、原始失败、测试日志、真实模型 usage、独立审阅与最终 `REPORT.md`。 |
-| `archive/20260907-subagent-mailbox-scheduler/` | 调度器独立红绿测试、隔离 bundle、原始失败和场景报告。 |
+| 本地归档（未纳入公开仓库） | 本轮计划、修改前快照、原始失败、测试日志、真实模型 usage、独立审阅与最终 `REPORT.md`。 |
+| 本地归档（未纳入公开仓库） | 调度器独立红绿测试、隔离 bundle、原始失败和场景报告。 |
 
 ## Build 连续性与协议兼容（2026-09-06）
 
@@ -824,7 +823,7 @@ Android 当前交付物为 `APK/Newmark-Agent-0.6.1-release.apk`。`release/` �
 | `DESKTOP/src/tests/providerCompletionIntegrityVerify.ts`、`workEventCoalescerVerify.ts` | 真实本地HTTP协议终止与工具完整性、批次聚合/原始事件转发回归。 |
 | `DESKTOP/scripts/test-build-recovery-continuity.cjs`、`test-build-retry-cancellation.cjs`、`test-build-continuity-http.cjs`、`test-build-continuity-ui.cjs` | 实际Agent恢复矩阵、取消等待、完整HTTP Build和真实renderer快照/停止竞态。 |
 | `DESKTOP/scripts/test-provider-request-compat.cjs`、`test-provider-header-metadata.cjs` | 实际HTTP头/接口地址与响应限流头的兼容检查。 |
-| `archive/20260906-223658-build-response-continuity/` | 本轮计划、原始失败、独立审阅、源码/编译与实际GUI证据；`REPORT.md`为入口。 |
+| 本地归档（未纳入公开仓库） | 本轮计划、原始失败、独立审阅、源码/编译与实际GUI证据；`REPORT.md`为入口。 |
 
 ## GUI 上下文计量（2026-09-06）
 
@@ -838,7 +837,7 @@ Android 当前交付物为 `APK/Newmark-Agent-0.6.1-release.apk`。`release/` �
 | `DESKTOP/src/ui/index.html` | 上下文计量口径、缺失数据提示、目标/代次/刷新序号保护及面板可用高度约束；其余玻璃交互保持既有规则。 |
 | `DESKTOP/src/tests/providerUsageAccountingVerify.ts`、`providerUsageReportingVerify.ts` | 计量 reducer 与真实本地 HTTP 协议/回调回归。 |
 | `DESKTOP/scripts/test-context-usage-ownership.cjs`、`test-context-request-accounting.cjs`、`test-context-inspector-accounting.cjs` | 会话归属和延迟保存竞态、实际 Build 请求链路、前端显示与过期快照验证。 |
-| `archive/20260906-214235-context-inspector-accounting/` | 原始失败、修复前后源码、独立审阅、完整 Build/真实 Electron 测试及最终文件身份；`REPORT.md` 为本轮入口。 |
+| 本地归档（未纳入公开仓库） | 原始失败、修复前后源码、独立审阅、完整 Build/真实 Electron 测试及最终文件身份；`REPORT.md` 为本轮入口。 |
 
 ## Build 内缓存性能（2026-09-06）
 
@@ -850,11 +849,11 @@ Android 当前交付物为 `APK/Newmark-Agent-0.6.1-release.apk`。`release/` �
 | `DESKTOP/src/tests/buildCacheDiagnosticsVerify.ts` | 实际 Build 中切换 sink/日志，检查不开诊断就不遍历请求，同时保留前缀和包括零值的 usage。 |
 | `DESKTOP/src/tests/buildCacheRetryVerify.ts` | Guide、同 deployment 重试、失败耗尽及真实能力 fallback 的前缀和权限回归。 |
 | `DESKTOP/src/tests/buildProviderReuseVerify.ts` | 缓存配置失效、跨 Build 隔离、真实 Chat/Responses 温度兼容重试及停滞取消恢复。 |
-| `archive/20260906-211514-build-cache-performance/` | 红绿回归、诊断成本基准、编译及真实 Agent/本地 HTTP 证据；`REPORT.md` 为验收入口。 |
+| 本地归档（未纳入公开仓库） | 红绿回归、诊断成本基准、编译及真实 Agent/本地 HTTP 证据；`REPORT.md` 为验收入口。 |
 
 ## 长对话持久化与实时状态（2026-09-06）
 
-最终 `95F391A6…` unpack 的 PC/HTTP 450 条历史窗口、真实回包延迟隔离、上下文计量和正常重启验收为 21/21；证据入口为 `archive/20260906-124619-user-flow-stability/remote-flow-queue/long-conversation/PACKAGED-HISTORY-REPORT.md`。此报告明确区分本地计量夹具与真实 APInebula Build 缓存观测。
+最终 `95F391A6…` unpack 的 PC/HTTP 450 条历史窗口、真实回包延迟隔离、上下文计量和正常重启验收为 21/21；证据入口为 本地归档（未纳入公开仓库）。此报告明确区分本地计量夹具与真实 APInebula Build 缓存观测。
 
 `DESKTOP/src/core/agentKernelRunner.ts` 在单次 Build 内保存请求专用任务快照，系统提示从首轮起保持完整；`ToolProvisionSession` 追加已获准的原生工具 schema，避免重排已有序列。`contextCacheHitStressVerify.ts` 验证完整首轮前缀与历史追加，供应商真实命中另由归档中的实际 Build 调用记录证明，不能以 fixture usage 代替。
 
@@ -867,7 +866,7 @@ Android 当前交付物为 `APK/Newmark-Agent-0.6.1-release.apk`。`release/` �
 | `DESKTOP/scripts/test-long-conversation-ui-ordering.cjs` | 真实界面函数与受控晚回包的顺序、目标和缓存隔离回归。 |
 | `DESKTOP/scripts/test-conversation-history-window.cjs` | 实际 Agent/Kernel、运行池、client/host、IPC 与认证 HTTP 的窗口传递、游标、实时消息和停止缓存保护回归。 |
 | `DESKTOP/scripts/test-flow-start-cancellation.cjs` | 实际 main 命令与 utility pool 停止保护，复现并验证 Flow 预启动时停止/继续队列的交接竞态。 |
-| `archive/20260906-124619-user-flow-stability/remote-flow-queue/long-conversation/` | 首轮失败、源码回归、真实 APInebula usage 与专项验收计划；测试数据和用户生产状态隔离。 |
+| 本地归档（未纳入公开仓库） | 首轮失败、源码回归、真实 APInebula usage 与专项验收计划；测试数据和用户生产状态隔离。 |
 
 ## PC 弹窗 4px 与 80ms 参数边界（2026-09-06）
 
@@ -879,7 +878,7 @@ Android 当前交付物为 `APK/Newmark-Agent-0.6.1-release.apk`。`release/` �
 
 历史窗口由 `main.ts` 选择当前会话的实际 owner，`conversationKernel.ts`、Electron/WSL runtime pool、client、protocol 和 host 逐层传递可选 `{window,before}` 至 `Agent.getConversationSnapshot`。返回绝对游标，main 不再次切片；历史页不替换运行池的最新状态缓存。`server.ts` 的认证移动端历史读取复用相同 owner，独立 server 保留原本直接 Agent 路径。
 
-`DESKTOP/src/ui/index.html` 中 `LIQUID_POPUP_MAX_EDGE_JITTER_PX` 是 PC 弹窗统一的边缘形变预算，当前为 4 CSS px。按压沿用该预算的 0.4 比例，外拉通过原有材料扩展层使用完整预算。原有 PC 长按拖动入口统一改为 80ms 激活；色块轨道、选择提交、移动动画时长、CSS 与布局不变。`DESKTOP/src/tests/pcGlassMigrationVerify.ts` 执行真实弹窗函数，检查不同尺寸、方向、按压与清理后的边界；`archive/20260906-124619-user-flow-stability/remote-flow-queue/pc-popup-4px/` 保存旧值失败、新值通过、源码差异和打包验证。实际 Electron 采样继续保存在相邻 `pc-popup-anchor/` 目录。此前 8px、4px/300ms 文档与包作为历史证据保留。
+`DESKTOP/src/ui/index.html` 中 `LIQUID_POPUP_MAX_EDGE_JITTER_PX` 是 PC 弹窗统一的边缘形变预算，当前为 4 CSS px。按压沿用该预算的 0.4 比例，外拉通过原有材料扩展层使用完整预算。原有 PC 长按拖动入口统一改为 80ms 激活；色块轨道、选择提交、移动动画时长、CSS 与布局不变。`DESKTOP/src/tests/pcGlassMigrationVerify.ts` 执行真实弹窗函数，检查不同尺寸、方向、按压与清理后的边界；本地归档（未纳入公开仓库） 保存旧值失败、新值通过、源码差异和打包验证。实际 Electron 采样继续保存在相邻 `pc-popup-anchor/` 目录。此前 8px、4px/300ms 文档与包作为历史证据保留。
 
 ## 共同会话命令与双端队列（2026-09-06，验收进行中）
 
@@ -897,9 +896,9 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 | `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` | 队列显示、完整 ID 重排、按会话保留编辑草稿和实际接受后清理输入。 |
 | `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` | 连接本地与远程界面回调，保持模式、附件和编辑目标归属。 |
 | `android/app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt` / `data/MobileApiClient.kt` | 冻结提交参数，传输图文消息，按目标代次消费 HTTP/SSE，等待真实接受结果；不自动重放结果不明的修改请求。 |
-| `archive/20260906-124619-user-flow-stability/remote-flow-queue/` | 保存旧版本失败、修复回归、构建身份、实际配对操作和未完成的无响应调查；历史候选包不等同最终交付。 |
+| 本地归档（未纳入公开仓库） | 保存旧版本失败、修复回归、构建身份、实际配对操作和未完成的无响应调查；历史候选包不等同最终交付。 |
 
-完整架构边界见[共同命令说明](archive/20260906-124619-user-flow-stability/remote-flow-queue/architecture-doc-fragment.md)。本节的最终包与设备验收尚在执行，不能沿用下一节此前阶段的通过结论。
+完整架构边界见本地归档（未纳入公开仓库）。本节的最终包与设备验收尚在执行，不能沿用下一节此前阶段的通过结论。
 
 ## 双端响应生命周期与桌面增量渲染（2026-09-06，实包校准）
 
@@ -907,7 +906,7 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 
 桌面渲染以内容变化决定 DOM 更新，缓存完整文本、语言和运行/终态上下文；等长思考文本、终态 Markdown、Guide 与图片节点得到正确更新或复用。隔离源码 Electron 的 500 条静态会话、30 次刷新对照记录了 45,000 → 0 次无谓 DOM 写入，单次均值约 11.13 → 2.95 ms；这不是最终包性能数据，也不代表所有场景都获得相同比例提速。主题、玻璃、轨道、8px 光学预算和鼠标无泛光保持原状。
 
-最终 PC 完整发布测试退出 0；本轮 unpack 通过九项实际 GUI 流程，以及指定 `APInebula / gpt-5.6-sol` 的两轮 CLI、两轮 GUI 真实对话。最终 Android APK 通过 315 项 JVM、56 项设备测试和九项安装包导航，模拟器两轮真实 Sol 对话及进程重启恢复通过。供应商 503 后重启、恢复通道并重发也已实测，首输入没有重复提交。包身份、渲染与启动性能、失败记录和未覆盖环境统一见[本轮验收报告](archive/20260906-124619-user-flow-stability/report.md)；本轮未生成或安装 MSI。
+最终 PC 完整发布测试退出 0；本轮 unpack 通过九项实际 GUI 流程，以及指定 `APInebula / gpt-5.6-sol` 的两轮 CLI、两轮 GUI 真实对话。最终 Android APK 通过 315 项 JVM、56 项设备测试和九项安装包导航，模拟器两轮真实 Sol 对话及进程重启恢复通过。供应商 503 后重启、恢复通道并重发也已实测，首输入没有重复提交。包身份、渲染与启动性能、失败记录和未覆盖环境统一见本地归档（未纳入公开仓库）；本轮未生成或安装 MSI。
 
 | 路径 | 构造与作用 |
 | --- | --- |
@@ -928,10 +927,10 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 | `android/app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt` | 桌面 SSE 连接使用相同可取消交换，保留重连间隔、连接代次、事件批处理和目标约束。 |
 | `android/app/src/test/java/com/newmark/mobile/data/ApiClientStreamLifecycleTest.kt` / `android/app/src/test/java/com/newmark/mobile/vm/FirstInputTitleRequestTest.kt` | 本地 socket 生命周期与标题行为 JVM 回归；标题用临时文件验证持久化先于模拟正式续行。 |
 | `android/app/src/androidTest/java/com/newmark/mobile/data/ApiClientStreamLifecycleDeviceTest.kt` / `android/app/src/androidTest/java/com/newmark/mobile/vm/FirstInputTitleRequestDeviceTest.kt` | 在设备网络栈重复生产交换/标题辅助函数场景，不把辅助函数测试冒充完整 ViewModel 或真实供应商验收。 |
-| `archive/20260906-124619-user-flow-stability/desktop-network/` | 原始分包/终止失败、真实长静默期限及 JSON 探测、隔离编译、Node/Electron 局部回归与源码身份。 |
-| `archive/20260906-124619-user-flow-stability/desktop-render/` | 静态列表/内容复现及源码测量、10 项渲染场景、标题前后证据与 `TITLE-GATE-REPORT.md`；后续包测试不得沿用源码数字充当结果。 |
-| `archive/20260906-124619-user-flow-stability/android-network/` | 旧生产 API 的 socket/标题期限复现、修复范围与源码冻结身份；最终构建和设备结果由根任务归档。 |
-| `archive/20260906-124619-user-flow-stability/` | 本轮统一操作记录、修改前资料、完整构建日志、模拟器诊断和 unpack 实测证据；中间状态不能替代最终验收。 |
+| 本地归档（未纳入公开仓库） | 原始分包/终止失败、真实长静默期限及 JSON 探测、隔离编译、Node/Electron 局部回归与源码身份。 |
+| 本地归档（未纳入公开仓库） | 静态列表/内容复现及源码测量、10 项渲染场景、标题前后证据与 `TITLE-GATE-REPORT.md`；后续包测试不得沿用源码数字充当结果。 |
+| 本地归档（未纳入公开仓库） | 旧生产 API 的 socket/标题期限复现、修复范围与源码冻结身份；最终构建和设备结果由根任务归档。 |
+| 本地归档（未纳入公开仓库） | 本轮统一操作记录、修改前资料、完整构建日志、模拟器诊断和 unpack 实测证据；中间状态不能替代最终验收。 |
 | `DESKTOP/scripts/release-real-provider-stress.cjs` / `test-real-provider-stress-harness.cjs` | 隔离凭据与运行根的真实供应商 CLI/GUI 压测；按本次目标、新 runId 判断终止失败，保留错误类别与启动清理；受控夹具核验旧运行不干扰、错误即时退出与原成功标记。 |
 
 ## 灰黑暗色主题与右栏渲染（2026-09-06）
@@ -947,13 +946,13 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 | `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` | 宽屏透明预留槽下的主题画布、系统栏图标对手动主题的响应。 |
 | `android/app/src/main/java/com/newmark/mobile/ui/RightSidebar.kt` | 静止分页色块、共享浮起玻璃、独立图标前景；折射仅采样载体底色，保留 alpha 与统一触控入口。 |
 | `android/app/src/androidTest/java/com/newmark/mobile/ui/RightSidebarRenderingTest.kt` | 真正硬件像素验证右栏载体、静止/长按/落地、图标和图标中心短按。 |
-| `archive/20260906-115315-neutral-dark-theme/` | 本轮源码快照、调色清单、原始失败、构建日志与双端画面对照；交付状态见 `report.md`。 |
+| 本地归档（未纳入公开仓库） | 本轮源码快照、调色清单、原始失败、构建日志与双端画面对照；交付状态见 `report.md`。 |
 
 ## 移动端触点、阻尼与对话浮块（2026-09-06）
 
 浮块的轨道位置与手指光源位置分离：在原手势处记录窗口坐标，在实际移动的玻璃内重新投影绘制，保留 66dp 泛光半径和形状裁剪。55ms 阻尼仅影响显示位置，原轨道、选项与重排目标继续由真实输入决定。释放时将显示位置交接给原有移动后落地动画。弹窗的玻璃与内容共享实际图层变换。
 
-本地与远程对话浮块显式从左上角测量超宽布局，消除 requiredWidth 的隐式居中偏移；28dp 横向扩展朝右呈现，2dp 抬起右移量落地归零。拖动位移使用同一事件坐标系内的前后点，并累计小步位移，避免行跟随手指后在松手时反向复位或误判为静止长按。287 项单元测试、25 项设备测试及九项最终 APK 导航检查通过，已复制 APK 并核验模拟器实际安装字节。交付状态见[本轮记录](archive/20260906-mobile-pointer-glow/report.md)。PC 源文件哈希与本轮开始时一致。
+本地与远程对话浮块显式从左上角测量超宽布局，消除 requiredWidth 的隐式居中偏移；28dp 横向扩展朝右呈现，2dp 抬起右移量落地归零。拖动位移使用同一事件坐标系内的前后点，并累计小步位移，避免行跟随手指后在松手时反向复位或误判为静止长按。287 项单元测试、25 项设备测试及九项最终 APK 导航检查通过，已复制 APK 并核验模拟器实际安装字节。交付状态见本地归档（未纳入公开仓库）。PC 源文件哈希与本轮开始时一致。
 
 | 路径 | 构造与作用 |
 | --- | --- |
@@ -971,13 +970,13 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 | `android/scripts/verify-utility-apk.py` | 对最终发行 APK 执行九项真实导航、进程连续性、页面内容及截图检查，仅作用于指定模拟器。 |
 | `android/isolated-release-mobile-pointer-20260906/` | 本轮独立 Release 构建输出，保留原发行目录。 |
 | `APK/Newmark-Agent-0.5.15-mobile-pointer-20260906.apk` | 当前移动端交付包，66,784,518 字节，版本 0.5.15 / 515；已复制到剪贴板。 |
-| `archive/20260906-mobile-pointer-glow/` | 原始快照、失败及被拒绝的截图证据、最终硬件绘制截图、源码/包身份、构建、测试和交付记录。 |
+| 本地归档（未纳入公开仓库） | 原始快照、失败及被拒绝的截图证据、最终硬件绘制截图、源码/包身份、构建、测试和交付记录。 |
 
 ## PC 8px 方向反馈与透明度调整（2026-09-06，已打包并安装）
 
 最新请求将 PC 光学弹性限定为 8px：按下立即内缩，原有 300ms 长按阈值触发色块移动时开始弹性恢复，之后受限外拉使单层真实磨砂面均匀向外扩展；拖动松手直接恢复。原内容和文字不缩放，色块轨道、目标和落地流程保留。弹窗独立 alpha 为共享偏好 alpha 的 0.82 倍，默认 0.5576；同时修复浅色通用样式误关闭命令弹窗磨砂的问题。
 
-最终完整发布测试返回 0，暗亮四组按压时序、六组方向材质、15 项手势和八次滚动像素对照通过；最终源与包内 UI 字节一致。MSI 已完成一次提升与原生安装，294 个载荷、20,982 个既有用户文件、产品身份及重启队列核验通过，隔离资料 GUI 和实际开始菜单激活分别通过。当前产品 `{BFEDA7BF-0B0E-4578-A8FA-31B57ACBE932}`、包 `{737E20AA-55E0-4190-86F5-4085DDED49F0}`，安装 ASAR 为 `F6E9E0D2AC3A79828D1BDEC288B6CE074F72ACAAC9B2506637A65125C29BE637`。已核验 MSI/ZIP 同步标准 `release/`，完整证据见[本轮记录](archive/20260905-232550-pc-8px-press-phases/report.md)。10px 中间安装、未安装的初版 8px 包及下方各次 MSI 身份均为历史构建。
+最终完整发布测试返回 0，暗亮四组按压时序、六组方向材质、15 项手势和八次滚动像素对照通过；最终源与包内 UI 字节一致。MSI 已完成一次提升与原生安装，294 个载荷、20,982 个既有用户文件、产品身份及重启队列核验通过，隔离资料 GUI 和实际开始菜单激活分别通过。当前产品 `{BFEDA7BF-0B0E-4578-A8FA-31B57ACBE932}`、包 `{737E20AA-55E0-4190-86F5-4085DDED49F0}`，安装 ASAR 为 `F6E9E0D2AC3A79828D1BDEC288B6CE074F72ACAAC9B2506637A65125C29BE637`。已核验 MSI/ZIP 同步标准 `release/`，完整证据见本地归档（未纳入公开仓库）。10px 中间安装、未安装的初版 8px 包及下方各次 MSI 身份均为历史构建。
 
 | 路径 | 构造与作用 |
 | --- | --- |
@@ -989,17 +988,17 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 | `DESKTOP/scripts/dev-liquid-gesture-regression.cjs` | 实际 Electron 点击、长按、端点和宽浮块位置测量，并记录 UI 字节身份。 |
 | `DESKTOP/scripts/dev-uniform-popup-visuals.cjs` | 等待设置真实内容就绪，再比较暗亮 14 阶段、文字几何和选项移动。 |
 | `DESKTOP/scripts/dev-popup-scroll-regression.cjs` | 独立目录输出、实际材质透明度对照及滚动像素稳定性检查。 |
-| `archive/20260905-232550-pc-8px-press-phases/` | 方向复现、材质原型、最终像素/交互证据、源码与 Android 范围核对、发布日志和安装后 GUI/开始菜单交付证据。 |
-| `archive/20260905-232550-pc-8px-press-phases-install/` | 本轮独立安装事务、完整载荷及用户文件、产品身份和重启队列核验。 |
+| 本地归档（未纳入公开仓库） | 方向复现、材质原型、最终像素/交互证据、源码与 Android 范围核对、发布日志和安装后 GUI/开始菜单交付证据。 |
+| 本地归档（未纳入公开仓库） | 本轮独立安装事务、完整载荷及用户文件、产品身份和重启队列核验。 |
 | `release-0.5.15-8px-press-phases-20260905/` | 本轮新建 MSI、ZIP 与对应 unpacked 载荷的输出目录。 |
 | `release/` | 已核验并完成安装的当前 MSI 与配套 ZIP；替换前的标准产物保存在本轮归档的 `previous-standard-assets/`。 |
-| `archive/20260905-214203-pc-10px-transparency*/` | 已被本次要求取代的 10px 构建与安装证据，保留其并发用户启动导致原始用户状态校验失败的完整记录。 |
+| 本地归档（未纳入公开仓库） | 已被本次要求取代的 10px 构建与安装证据，保留其并发用户启动导致原始用户状态校验失败的完整记录。 |
 
 ## PC 安装器与重启队列修复历史（2026-09-05，已完成，上方为最新构建）
 
 该次构建位于 `release-0.5.15-frosted-safe-20260905/`，曾同步标准 `release/`，包含均匀磨砂弹窗、全程色块移动及固定滚动视口绘制。该 MSI 曾实际安装至 Program Files：ProductCode `{9AA8281A-1835-4674-AA60-FE1D4034874A}`、PackageCode `{039EC3F2-B615-443F-951D-0B072EC4AB0D}`、版本 `0.5.15.0`，294 个载荷与包一致，20,965 个既有用户文件未被安装改写。该次清除 3 组 Newmark 重启任务并原样保留其他 15 组；普通用户 GUI 和无测试参数的真实开始菜单启动通过。以上为历史身份，当前交付以上方章节为准。
 
-首个中间 MSI 在后续审计中被发现仍受旧重启任务影响，已标记为被取代；最终提升曾被 Windows 取消，用户明确要求继续后，最终 worker 一次 MSI 事务完成并通过全路径核验。详细原因、原始失败与最终证据保存在[交付记录](archive/20260905-203600-msi-reboot-safe/report.md)。
+首个中间 MSI 在后续审计中被发现仍受旧重启任务影响，已标记为被取代；最终提升曾被 Windows 取消，用户明确要求继续后，最终 worker 一次 MSI 事务完成并通过全路径核验。详细原因、原始失败与最终证据保存在本地归档（未纳入公开仓库）。
 
 | 路径 | 构造与作用 |
 | --- | --- |
@@ -1009,14 +1008,14 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 | `DESKTOP/scripts/test-install-process-stop.ps1` | 真实隔离进程及错误场景，确认同目录进程退出、其他目录进程保留、残存时失败。 |
 | `DESKTOP/scripts/test-msi-authoring.cjs` | 生产形态模板编译、实际 MSI 表与原生格式化、缺失目录声明、新建/特殊字符路径及编码脚本执行检查。 |
 | `DESKTOP/scripts/test-install-windows-msi.ps1` / `test-install-update-msi.cjs` | 原有发布验证入口，已接入新增 pending、进程及原生作者回归。 |
-| `archive/20260905-195145-pc-frosted-msi/` | 完整应用发布检查、首个中间构建及 GUI 记录；该 MSI 因后续队列审计被取代。 |
-| `archive/20260905-203600-msi-reboot-safe/` | 最终重封装日志、仅一项载荷差异证明、包身份、最终 GUI/开始菜单检查、被拒绝中间包归档及交付记录。 |
-| `archive/20260905-203600-msi-reboot-safe-install/` | 根因诊断、回归、实际发行 MSI 表/旧安装根检查、最终安装及队列/文件/用户数据证据。 |
+| 本地归档（未纳入公开仓库） | 完整应用发布检查、首个中间构建及 GUI 记录；该 MSI 因后续队列审计被取代。 |
+| 本地归档（未纳入公开仓库） | 最终重封装日志、仅一项载荷差异证明、包身份、最终 GUI/开始菜单检查、被拒绝中间包归档及交付记录。 |
+| 本地归档（未纳入公开仓库） | 根因诊断、回归、实际发行 MSI 表/旧安装根检查、最终安装及队列/文件/用户数据证据。 |
 | `release-0.5.15-frosted-safe-20260905/` | 最终 MSI、ZIP 及对应 unpacked 载荷，应用 ASAR 与完整发布检查通过的构建一致。 |
 
 ## Android APK 再次交付（2026-09-05 19:49）
 
-`archive/20260905-194552-apk-package/` 保存本轮 `assembleRelease`/`lintVitalRelease` 日志、203 个输入文件哈希、签名/对齐/二进制 Manifest 检查、735 个 ZIP 条目校验及复制回执。`verify-content.py` 核对 DEX 修复标记和已知路径/令牌形态；`copy-apk.ps1` 核对源/副本哈希并写入、回读文件剪贴板。交付继续使用 `APK/Newmark-Agent-0.5.15-recovery-20260905.apk`，SHA-256 `A81F58BCC44814DD9B0DEE4EB6278B9056C97A9636BE62AFE9B2665740E32B63`。移动端源码和包内容未变，因此复用相同字节包的九项既有模拟器导航证据；本轮无新设备运行。
+本地归档（未纳入公开仓库） 保存本轮 `assembleRelease`/`lintVitalRelease` 日志、203 个输入文件哈希、签名/对齐/二进制 Manifest 检查、735 个 ZIP 条目校验及复制回执。`verify-content.py` 核对 DEX 修复标记和已知路径/令牌形态；`copy-apk.ps1` 核对源/副本哈希并写入、回读文件剪贴板。交付继续使用 `APK/Newmark-Agent-0.5.15-recovery-20260905.apk`，SHA-256 `A81F58BCC44814DD9B0DEE4EB6278B9056C97A9636BE62AFE9B2665740E32B63`。移动端源码和包内容未变，因此复用相同字节包的九项既有模拟器导航证据；本轮无新设备运行。
 
 ## PC 材质与滚动装饰层（2026-09-05 后续源码变更）
 
@@ -1029,16 +1028,16 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 | `DESKTOP/scripts/dev-popup-scroll-regression.cjs` | 30 项滚动菜单，可信滚轮事件、逐像素固定外壳验证、均匀底色/背景透射/可见触控光检查。 |
 | `DESKTOP/scripts/dev-liquid-renderer-performance-smoke.cjs` | 独立控件 WebGL 合成和资源预算检查；保留原生 pointer capture，固定可见的 CDP 测量视口。 |
 | `DESKTOP/src/tests/pcGlassMigrationVerify.ts` | 新磨砂/色块材质契约及既有轨道、裁剪、5px 边缘约束。 |
-| `archive/20260905-182712-pc-uniform-frosted/` | 原始 CSS、文档快照、滚动复现与修复记录、构建及测试日志。 |
-| `archive/20260905-182710-uniform-popup-visuals/` | 实际 Electron 暗亮主题前后 PNG 和几何、材质、时序采样 JSON。 |
+| 本地归档（未纳入公开仓库） | 原始 CSS、文档快照、滚动复现与修复记录、构建及测试日志。 |
+| 本地归档（未纳入公开仓库） | 实际 Electron 暗亮主题前后 PNG 和几何、材质、时序采样 JSON。 |
 
-验证结论及范围以[绘制修复记录](archive/20260905-182712-pc-uniform-frosted/report.md)为准。
+验证结论及范围以本地归档（未纳入公开仓库）为准。
 
 ## 当前修复状态与文件职责（2026-09-05）
 
-项目目标是让桌面、CLI/TUI 和原生 Android 共享可持续的会话与工作区体验。本轮保留既有并行工作，集中修复液态玻璃的形状、位置、裁剪、手势生命周期及同版本 Windows 安装。最终状态与产物身份以[本轮记录](archive/20260905-171101-glass-recovery/recovery-report.md)为准；下方旧版本完成勾选只代表历史记录。
+项目目标是让桌面、CLI/TUI 和原生 Android 共享可持续的会话与工作区体验。本轮保留既有并行工作，集中修复液态玻璃的形状、位置、裁剪、手势生命周期及同版本 Windows 安装。最终状态与产物身份以本地归档（未纳入公开仓库）为准；下方旧版本完成勾选只代表历史记录。
 
-当前验收已完成：Android 281 单测、14 设备绘制及九项最终 APK 导航通过；PC 15 项实际 Electron 交互及适用发布检查通过（WSL 环境不可用，记录跳过）。MSI 一次管理员事务安装成功，292 文件/产品身份/20,956 用户状态文件/CLI 与普通用户 GUI 均核验通过，实际开始菜单启动正确程序。最终安装记录见 `archive/20260905-windows-recovery-install/VERIFIED-INSTALL.md`。
+当前验收已完成：Android 281 单测、14 设备绘制及九项最终 APK 导航通过；PC 15 项实际 Electron 交互及适用发布检查通过（WSL 环境不可用，记录跳过）。MSI 一次管理员事务安装成功，292 文件/产品身份/20,956 用户状态文件/CLI 与普通用户 GUI 均核验通过，实际开始菜单启动正确程序。最终安装记录见 本地归档（未纳入公开仓库）。
 
 | 路径 | 本轮构造与作用 |
 | --- | --- |
@@ -1055,13 +1054,13 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 | `DESKTOP/scripts/install-windows-msi.ps1` | 准备 MSI 身份/管理映像、一次提升后的原生 API 事务、状态监控及安装逐文件验证。 |
 | `DESKTOP/scripts/install-current-msi.ps1` / `DESKTOP/src/core/installUpdate.ts` | 手动、GUI、CLI 共用安装入口；旧根目录安装脚本转发至此。 |
 | `DESKTOP/scripts/test-install-windows-msi.ps1` / `test-install-update-msi.cjs` | 路径转义、错误分类/重试、事务证据及内置安装调用回归。 |
-| `archive/20260905-171101-glass-recovery/` | 原包崩溃、需求矩阵、移动设备/构建结果及文档旧版归档。 |
-| `archive/20260905-172834-desktop-gesture-audit/` / `archive/20260905-installer-helper-preparation/` | PC 真实交互前后证据与安装器诊断/旧入口归档。 |
+| 本地归档（未纳入公开仓库） | 原包崩溃、需求矩阵、移动设备/构建结果及文档旧版归档。 |
+| 本地归档（未纳入公开仓库） / 本地归档（未纳入公开仓库） | PC 真实交互前后证据与安装器诊断/旧入口归档。 |
 | `release-0.5.15-recovery-20260905/` / `APK/` | 本轮隔离发布结果与已核验的 Android 交付副本；以修复记录中的最终哈希确认当前包。 |
 
 ## dev-0.5.14 上一发行版状态
 
-当前统一版本为 Desktop/root `0.5.14`、Android `versionName=0.5.14` / `versionCode=514`。本轮修改覆盖：`DESKTOP/src/main.ts` 的退出生命周期和桌面队列 IPC，`DESKTOP/scripts/patch-msi-project.cjs` 的安装目录进程/待删除保护，`DESKTOP/src/core/agent.ts` 与 `DESKTOP/src/ui/index.html` 的首标题、Guide 和 PC 队列时间线，`DESKTOP/src/tools/` 的 provision-only `web_catch`，以及 Android `LocalTool*`、`NewmarkApp.kt` 的本地工具与跨端投影；`ChatScreen.kt` 既有的中点阈值避让/落点实现由全量契约继续覆盖。`DESKTOP/src/llm/provider.ts`、`providers/provider-events.ts`、`tools/index.ts` 新增统一的 `undici.ProxyAgent` 模型/网页代理链路；Android `LocalAgentForegroundService.kt` 接受 `TRANSPORT_VPN`、不依赖 VALIDATED 回调快照，并使用 API 29+ 低延迟 Wi-Fi 锁。`archive/` 保存每轮诊断、验证和发行证据；历史 `dev-0.5.13` 交付物保持原样，不冒充 0.5.14 候选。
+当前统一版本为 Desktop/root `0.5.14`、Android `versionName=0.5.14` / `versionCode=514`。本轮修改覆盖：`DESKTOP/src/main.ts` 的退出生命周期和桌面队列 IPC，`DESKTOP/scripts/patch-msi-project.cjs` 的安装目录进程/待删除保护，`DESKTOP/src/core/agent.ts` 与 `DESKTOP/src/ui/index.html` 的首标题、Guide 和 PC 队列时间线，`DESKTOP/src/tools/` 的 provision-only `web_catch`，以及 Android `LocalTool*`、`NewmarkApp.kt` 的本地工具与跨端投影；`ChatScreen.kt` 既有的中点阈值避让/落点实现由全量契约继续覆盖。`DESKTOP/src/llm/provider.ts`、`providers/provider-events.ts`、`tools/index.ts` 新增统一的 `undici.ProxyAgent` 模型/网页代理链路；Android `LocalAgentForegroundService.kt` 接受 `TRANSPORT_VPN`、不依赖 VALIDATED 回调快照，并使用 API 29+ 低延迟 Wi-Fi 锁。本地归档（未纳入公开仓库） 保存每轮诊断、验证和发行证据；历史 `dev-0.5.13` 交付物保持原样，不冒充 0.5.14 候选。
 
 `DESKTOP/src/ui/index.html` 的 `workRunDisplayImages`/`appendWorkDisplayImages`、`ChatItem.Bubble.displayedImages`/`WorkDisplayImagePreviews` 以及 TUI `appendChatMessage` 共同承担 `image_display` 的最终回复投影：Build 工具页证据保留，PC GUI、PC TUI 与移动端最终回复均按调用顺序在正文之前展示公开图片。
 
@@ -1073,7 +1072,7 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 
 ## dev-0.5.13 双端累计交付与当前 r5 APK + Windows MSI
 
-全平台 `dev-0.5.13` 发行规范：Tag `dev-0.5.13`，Release 标题 `Newmark Agent dev-0.5.13`；`DESKTOP/scripts/release-tag-audit.cjs` 强制该格式，并保留远端历史 `dev-*` 正式 Tag。Windows、Linux、Android 六资产已通过本地 release-assets 校验，随后又通过 GitHub 远端下载哈希核对与 Windows/MSI、WSL AppImage/deb/ZIP 打包态 smoke，完整路径记录在 `DESKTOP/scripts/release-notes-dev-0.5.13.md`；发布归档见 `archive/20260902-182301-dev-0.5.13-full-platform-release.md`。
+全平台 `dev-0.5.13` 发行规范：Tag `dev-0.5.13`，Release 标题 `Newmark Agent dev-0.5.13`；`DESKTOP/scripts/release-tag-audit.cjs` 强制该格式，并保留远端历史 `dev-*` 正式 Tag。Windows、Linux、Android 六资产已通过本地 release-assets 校验，随后又通过 GitHub 远端下载哈希核对与 Windows/MSI、WSL AppImage/deb/ZIP 打包态 smoke，完整路径记录在 `DESKTOP/scripts/release-notes-dev-0.5.13.md`；发布归档见 本地归档（未纳入公开仓库）。
 
 - PC 当前源码与构建产物已覆盖标题先行门禁、Search MCP 池、`browser_use.visible`、图片视觉、PDF 整体工具超时、局部快照稳定性、Build 暗色按压和中断回复恢复；typecheck、build 与完整 `test:full-release` 通过，包括 1702/1702 主验证、thinking tier 68/68、压缩压力 34/34、模型恢复、TUI、SSH/WSL、CLI 与三端压力。无供应商标题门禁错误同时保留 `No LLM configured` 可操作诊断。`pdf_read` 一个累计 deadline 覆盖异步文件读取、pdf.js 全文解析和扫描页浏览器观察，阶段性超时返回可恢复回执并允许同一 Agent 继续响应。既有 PC MSI/ZIP 早于本轮最终源码，因此本次不把它们作为当前交付物。
 - Android 当前源码已覆盖标题先行门禁、冻结 provider/model/intelligence/native reasoning、OpenAI Responses、Search MCP 兼容层、后台 Agent 服务与恢复、输入/Guide、设置玻璃返回按钮、模型视觉 `image_inspect`、离线 Markdown/LaTeX 字体、代码块约束内软换行与亮暗主题高亮色板；Responses 聚焦 32/32、70 suites / 269/269 JVM、Vital Lint、R8、资源收缩及隔离 clean Release assembly 通过。
@@ -1098,7 +1097,7 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 - `DESKTOP/src/server.ts`：提供 Bearer 认证 `/api/mobile/web-search-mcp`、兼容旧调用的完整 `/api/mobile/web-search` 与只读 `/api/mobile/search-mcp-manifest`；公开清单移除 stdio command/args/cwd，只公开非敏感元数据、env/header 名称和已脱敏 URL。
 - `android/app/src/main/java/com/newmark/mobile/data/MobileSearchMcp.kt`：实现严格 JSON-RPC id 匹配的 Streamable HTTP/SSE search-only 客户端；stdio 通过配对 PC 的 MCP-only bridge 执行。桌面 MCP 与 Android 直连 MCP 全部完成后，外层才按 Bing → DuckDuckGo 回退。
 - `android/app/src/androidTest/java/com/newmark/mobile/data/SearchOnlyHttpMcpDeviceTest.kt`：在 Android 设备网络栈上执行 Streamable HTTP 与 Legacy SSE 的 initialize → tools/list → tools/call 准入；固定回环用例验证非空公网 URL 和“仅非搜索工具时绝不调用”，显式 live 参数可经 `adb reverse` 连接宿主真实搜索 MCP，且不会预先写入用户清单。
-- `DESKTOP/scripts/probe-search-mcp*.cjs` 与 `archive/20260901-search-mcp-real-probe-final.json`：记录真实握手/调用证据并自动清理 Windows/POSIX 本地路径。Wuxing 因缺少 SearXNG 保持默认禁用；`@ignidor/web-search-mcp` 是唯一真实调用成功的默认节点。
+- `DESKTOP/scripts/probe-search-mcp*.cjs` 与 本地归档（未纳入公开仓库）：记录真实握手/调用证据并自动清理 Windows/POSIX 本地路径。Wuxing 因缺少 SearXNG 保持默认禁用；`@ignidor/web-search-mcp` 是唯一真实调用成功的默认节点。
 - `@ignidor/web-search-mcp` 包本身约 276 KiB，但声明可选 Playwright；当前 lock 中 Playwright/Playwright Core 文件约 18.5 MiB（不含浏览器下载）。search-only 路径不会调用其爬虫/截图工具，后续发行体积优化可通过安装阶段排除该可选依赖，但本轮保留以避免改变共享依赖解析。
 - 验证：Desktop typecheck、build、`searchMcpPoolVerify`、`browserUseVerify`、`browserUseVisibleContractVerify` 与移动 API 53 项认证/契约探测通过；Android Search MCP JVM 专项 14/14 及全量 263/263 通过。模拟器设备网络栈 instrumentation 4/4 已通过 Streamable HTTP、Legacy SSE、非搜索工具拒绝和经 `adb reverse` 连接真实 Ignidor bridge 的 live 准入。
 
@@ -1115,7 +1114,6 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 - `DESKTOP/src/core/displayImages.ts`：提供工作区内 PNG/JPEG 的统一只读视觉加载器，复用 10 MiB、格式一致性、真实路径边界和 40MP 解码限制。
 - `DESKTOP/src/core/agent.ts`：`image_inspect` 新增 `inspect + path`，只在当前模型已通过视觉验证时生成一次性模型观察。
 - `DESKTOP/src/tools/index.ts`：公开工作区图片视觉 schema；`pdf_read` 增加工具级 `timeout_ms` 与可恢复超时回执。
-- `archive/20260831-dev-0.5.13-pdf-read-runtime-incident.md`：基于真实会话、WorkRun、utility 生命周期 marker、安装版 `app.asar` 与 PDF 文本层的事故取证；区分已证实链路、第二次用户 Stop 和仍缺日志的直接退出原因。
 - `DESKTOP/src/ui/index.html`：仅在长运行局部快照明确携带 `chatMessages` 时重建文字对话。
 - `TUI/src/data.js` 与 `DESKTOP/scripts/release-linux-real-provider-smoke.cjs`：移除开发者机器路径，改用虚构演示地址和安装者本机 `.Newmark` 动态路径。
 - `DESKTOP/src/tests/verify.ts`：覆盖视觉、PDF 超时、局部快照稳定性与发行路径隐私门禁。
@@ -1170,7 +1168,7 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 - 同一交互事务增加重复结束保护，以及 pointer cancel、窗口失焦、页面卸载和超时清理。完整落下清理并恢复源按钮后才执行原始 `click()`，避免重影与组件永久消失。
 - `DESKTOP/src/tests/pcGlassMigrationVerify.ts`：新增唯一浮块/源停绘/清理先于点击的负向回归契约。
 - `DESKTOP/scripts/verify-fixed-liquid-source.cjs`：连接 Electron DevTools，实际按住 `#left-ws-add`，检查计算样式、浮块可见性及松开清理；运行页面确认是 `DESKTOP/dist/ui/index.html`。
-- 验证：`npm run build`、`node dist/tests/pcGlassMigrationVerify.js` 通过；实际 Electron 按住帧验证通过，截图为 `archive/20260828-fixed-liquid-source-held.png`。
+- 验证：`npm run build`、`node dist/tests/pcGlassMigrationVerify.js` 通过；实际 Electron 按住帧验证通过，截图为 本地归档（未纳入公开仓库）。
 
 ## 2026-08-28 dev-0.5.10 全移动浮动玻璃灵动响应与 PC 安装
 
@@ -1185,7 +1183,7 @@ PC IPC 和配对移动端 HTTP 负责传输、认证及目标校验，随后进�
 
 `npm run release` 已通过 Desktop full release、Android JVM/Vital Lint/R8/Release assembly，并生成 Windows MSI/ZIP、Linux AppImage/deb/ZIP、Android APK 六资产。Windows MSI/ZIP 完成独立打包态 smoke；Linux 三包在 Ubuntu 24.04 WSL 环境完成真实 GUI 启动、Bash/sh 终端回环和进程退出验证。APK 为 v2 签名，签名者 `C=US, O=Android, CN=Android Debug`；Windows 未做 Authenticode 签名。
 
-最终六资产位于根目录 `release/`。Android APK 为 52,717,700 bytes，SHA-256 `2BA403506ACC39B58DAFFE1AECBE53715C58302AD4B643B3AB7C448E7F8FADB3`。其他资产哈希记录于 `README.md` 与 `archive/20260827-154500-dev-0.5.9-all-platform-release.md`。回滚点为上一稳定标签 `dev-0.5.8`；macOS DMG 需要 macOS 原生主机，不属于本机发布矩阵。
+最终六资产位于根目录 `release/`。Android APK 为 52,717,700 bytes，SHA-256 `2BA403506ACC39B58DAFFE1AECBE53715C58302AD4B643B3AB7C448E7F8FADB3`。其他资产哈希记录于 `README.md` 与 本地归档（未纳入公开仓库）。回滚点为上一稳定标签 `dev-0.5.8`；macOS DMG 需要 macOS 原生主机，不属于本机发布矩阵。
 
 ## 2026-08-27 PC/移动端 Chat 模式与移动队列标题精简
 
@@ -1259,7 +1257,7 @@ Planning artifacts:
 tasks/plan.md                              # dependency-ordered dev-0.5.8 implementation plan
 tasks/todo.md                              # executable acceptance and release checklist
 taste.md                                   # persistent retry/UI interaction style contract
-archive/20260826-dev-0.5.8-planning.md     # source findings and decisions from this planning pass
+本地归档（未纳入公开仓库）     # source findings and decisions from this planning pass
 ```
 
 Verification covers the pure retry state machine, auto-agent integration, model recovery stress, normal chat regression, static PC glass contracts, and real Electron disclosure computed styles. The shared version is `0.5.8` (`versionCode 508`).
@@ -1278,7 +1276,7 @@ release/
 └─ Newmark-Agent-0.5.8-android.apk             # Android release APK, 52701316 bytes
 ```
 
-Commit `ee98a43af6b3e15dd20eab9b70ed0b4fbb4c1f5c` and annotated tag `dev-0.5.8` are published. The GitHub prerelease contains exactly the six bound assets, `newmark-agent@0.5.8` is published to npm, and both the npm workflow and Windows/Linux/Android release workflow passed. A clean remote download revalidated every byte size and SHA-256, then reran Windows MSI/ZIP and WSL AppImage/deb/ZIP packaged smokes. Windows executable signing remains disabled. The APK verifies with APK Signature Scheme v2 and the existing Android Debug certificate, so it is suitable for sideload testing but not store distribution. No ADB device was connected for install/runtime validation. The repository has a macOS DMG target, but Electron's macOS packaging constraint requires a macOS host; DMG is outside the current six-asset Windows/Linux/Android release matrix and was not produced here. Full evidence and hashes are in `archive/20260827-011341-dev-0.5.8-all-platform-release.md`.
+Commit `ee98a43af6b3e15dd20eab9b70ed0b4fbb4c1f5c` and annotated tag `dev-0.5.8` are published. The GitHub prerelease contains exactly the six bound assets, `newmark-agent@0.5.8` is published to npm, and both the npm workflow and Windows/Linux/Android release workflow passed. A clean remote download revalidated every byte size and SHA-256, then reran Windows MSI/ZIP and WSL AppImage/deb/ZIP packaged smokes. Windows executable signing remains disabled. The APK verifies with APK Signature Scheme v2 and the existing Android Debug certificate, so it is suitable for sideload testing but not store distribution. No ADB device was connected for install/runtime validation. The repository has a macOS DMG target, but Electron's macOS packaging constraint requires a macOS host; DMG is outside the current six-asset Windows/Linux/Android release matrix and was not produced here. Full evidence and hashes are in 本地归档（未纳入公开仓库）.
 
 The local Windows installation was also validated through UAC. A same-version MSI repair returned success but left the already-missing `resources/app.asar` absent, so the final accepted path performed one elevated uninstall followed by a fresh install. Both Windows Installer phases returned `0`; the new registration is `0.5.8.0` with product code `{78E73760-F636-4FF1-9D2F-C294697BA352}`. Installed and packaged `app.asar` are both 160,431,960 bytes with SHA-256 `826CB38FC9652B0E8A9BD30766DDF726598C189FDD849A86AEBCD34C66799E4D`. The existing user config hash stayed unchanged, installed CLI version checks returned `0.5.8`, shortcuts were restored, and the main/GPU/renderer/utility process set became responsive after startup.
 
@@ -1349,8 +1347,8 @@ Newmark Agent/
 ├─ tasks/
 │  ├─ plan.md                                   # detailed implementation plan and acceptance criteria
 │  └─ todo.md                                   # phase-ordered execution checklist
-├─ archive/20260825-104310-dev-0.5.7-change-plan.md # planning evidence and repository findings
-└─ archive/20260825-115010-dev-0.5.7-execution.md   # implementation, gates, artifact hash, and manual gaps
+├─ 本地归档（未纳入公开仓库） # planning evidence and repository findings
+└─ 本地归档（未纳入公开仓库）   # implementation, gates, artifact hash, and manual gaps
 ```
 
 Verification completed on the implementation tree: desktop `npm run test:full-release` exited 0, including the 1670/1670 core feature gate, Auto Router 39/39, Auto Agent integration 28 assertions, GUI/TUI/CLI stress, and the real Electron input probe. That probe kept one WebGL2 context, compiled two shaders, linked one program, uploaded two textures, and measured approximately 0.1ms p95 from pointer release to command. Android `testDebugUnitTest lintVitalRelease assembleRelease --no-daemon` completed successfully across 73 tasks. After version synchronization, `assembleRelease` rebuilt and verified the 0.5.7/507 package. The resulting 45,938,144-byte APK has SHA-256 `25A3229D531FF15395CCF8979C32AE4747D9958A1260E5A1D23181751769F965`.
@@ -1581,8 +1579,8 @@ The automated gates do not substitute for physical-device or packaged-desktop vi
 - Local Chat Completions streaming ignores explicit JSON `null` values instead of appending the literal word `null` to thought or answer buffers. Current and legacy readable reasoning fields (`reasoning_content`, `reasoning`, `thinking`, `analysis`) are normalized with Gson, and legacy response wrappers remain accepted.
 - Paired-desktop SSE accepts both `data: payload` and legacy `data:payload` lines. Public thought deltas continue to update one active thought item while `thought_result` supplies its terminal content.
 - The shared Android Markdown renderer now recognizes the PC formula delimiters `$...$`, `\(...\)`, `$$...$$`, and `\[...\]`, preserving readable fractions, roots, scripts, Greek letters, and common operators in both local and remote conversations.
-- Desktop and Android versions are synchronized to `0.5.3` (`versionCode 503`). Focused stream/projection/SSE/Markdown tests pass, followed by the complete Android unit suite and Debug APK assembly. Detailed evidence is recorded in `archive/20260821-dev-0.5.3-mobile-response-parity.md`.
-- The mobile provider compatibility fix is covered by real two- and three-request MockWebServer tests and the complete Android unit/Vital lint/R8/Release gate. Details and APK digest are recorded in `archive/20260821-mobile-chat-responses-tool-reasoning-fallback.md`.
+- Desktop and Android versions are synchronized to `0.5.3` (`versionCode 503`). Focused stream/projection/SSE/Markdown tests pass, followed by the complete Android unit suite and Debug APK assembly. Detailed evidence is recorded in 本地归档（未纳入公开仓库）.
+- The mobile provider compatibility fix is covered by real two- and three-request MockWebServer tests and the complete Android unit/Vital lint/R8/Release gate. Details and APK digest are recorded in 本地归档（未纳入公开仓库）.
 - Local completed Agent replies now render once: the persisted assistant message owns the final Markdown body, while its WorkRun remains only the adjacent Build activity. This prevents the same response from appearing once inside the Build row and once as the terminal Agent row.
 
 ## dev-0.5.2 three-platform release (2026-08-21)
@@ -1592,7 +1590,7 @@ The automated gates do not substitute for physical-device or packaged-desktop vi
 - The machine-wide MSI upgrade reports CLI `0.5.2` and registry `0.5.2.0`. Installed and candidate `app.asar` hashes match, the existing user config hash is unchanged, and the installed GUI is responsive.
 - Release tooling supports one optional unified artifact root for externally locked workspaces, binds packaged CLI smoke to the actual candidate executable, and preserves no-space Windows paths across WSL packaging. Default CI output remains `release/`.
 - Annotated tag `dev-0.5.2` points to `899f9e826d53c0f2e3e88328b3185a4174d3ee14`. GitHub prerelease publication and the Windows/Linux/Android/publish matrix completed successfully; the six server-side asset sizes and SHA-256 digests match the locally installed and gated candidates.
-- Exact asset hashes, installation evidence, recovery findings, and publication state are recorded in `archive/20260821-dev-0.5.2-three-platform-release.md`.
+- Exact asset hashes, installation evidence, recovery findings, and publication state are recorded in 本地归档（未纳入公开仓库）.
 
 ## Cross-platform live thought streaming and Android identity/accessibility fixes (2026-08-21)
 
@@ -1600,7 +1598,7 @@ The automated gates do not substitute for physical-device or packaged-desktop vi
 - Android local chat/completions requests use SSE streaming, independently accumulate thought, answer text, and fragmented tool calls, and update Compose state on the main dispatcher. Remote Android conversations consume the same desktop `thought_delta` event contract through the paired SSE bridge.
 - Android model selection identity is provider-qualified for local catalogues and deployment-qualified for remote catalogues. Providers may therefore expose the same display model name without sharing selection state or resolving the first-level label to the wrong provider.
 - Memory Lab overview tag labels use theme palette text tokens instead of a fixed pale ARGB value. Light and dark palette tests require WCAG AA contrast for both emphasized and ambient labels.
-- Desktop build, focused bridge/coalescer checks, and the complete desktop source verifier pass (`1663/1663`). Android focused projection/streaming contracts pass; the final Release unit/lint/R8/APK gate is recorded in `archive/20260821-cross-platform-live-thought-and-mobile-identity.md`.
+- Desktop build, focused bridge/coalescer checks, and the complete desktop source verifier pass (`1663/1663`). Android focused projection/streaming contracts pass; the final Release unit/lint/R8/APK gate is recorded in 本地归档（未纳入公开仓库）.
 
 ## dev-0.5.1 provider migration and release (2026-08-21)
 
@@ -1608,48 +1606,48 @@ The automated gates do not substitute for physical-device or packaged-desktop vi
 - A paired Android device can explicitly import the desktop provider catalogue with API credentials through an authenticated endpoint. Ordinary Remote Touch state and model menus remain credential-redacted; local keys are preserved during merges and providers previously imported without keys are repaired.
 - The complete release command passed desktop, context, performance, TUI, SSH, WSL, CLI, GUI/TUI/CLI, Android unit, Vital lint, R8/resource-shrink, and packaging gates. The focused desktop source verifier reports `1663/1663`.
 - Six local assets were built: Windows MSI/ZIP, Linux AppImage/deb/ZIP, and Android APK. Candidate metadata reports Windows `0.5.1`, deb `0.5.1`/`amd64`, and Android `0.5.1`/`501`.
-- Windows machine installation completed on the third interactive UAC attempt with Windows Installer exit `0`. Program Files and the registry report `0.5.1`/`0.5.1.0`; installed and packaged `app.asar` are byte-identical, the existing user config hash is unchanged, and the installed GUI reached a responsive window. The GitHub prerelease contains exactly six assets whose server-side sizes and SHA-256 digests match the local candidates. Exact evidence is recorded in `archive/20260821-dev-0.5.1-three-platform-release.md`.
+- Windows machine installation completed on the third interactive UAC attempt with Windows Installer exit `0`. Program Files and the registry report `0.5.1`/`0.5.1.0`; installed and packaged `app.asar` are byte-identical, the existing user config hash is unchanged, and the installed GUI reached a responsive window. The GitHub prerelease contains exactly six assets whose server-side sizes and SHA-256 digests match the local candidates. Exact evidence is recorded in 本地归档（未纳入公开仓库）.
 - The first tag CI reproduced all three platform builds but its publish job lacked repository context. `.github/workflows/release-linux.yml` now passes `--repo "$GITHUB_REPOSITORY"` to GitHub CLI release operations; corrected tag run `32448463305` completed Windows, Linux, Android, and publish jobs successfully while preserving the already verified release assets.
 
 ## Mobile clean-install provider baseline (2026-08-20)
 
 - `ProviderStore.kt` now persists and returns an empty provider list when `filesDir/newmark/providers.json` does not exist. Existing provider files remain authoritative and are not migrated or erased.
 - The bundled `NewmarkPresets.kt` seed catalogue was removed, so clean installs no longer contain DeepSeek, APInebula, OpenAI-Hub, or OpenCode defaults.
-- `ProviderStoreCleanInstallContractTest.kt` locks the empty first-load branch and absence of bundled presets. Full unit tests, Debug/Release assembly, and Release lint/R8/resource shrinking passed. Evidence: `archive/20260820-mobile-clean-install-empty-providers.md`.
+- `ProviderStoreCleanInstallContractTest.kt` locks the empty first-load branch and absence of bundled presets. Full unit tests, Debug/Release assembly, and Release lint/R8/resource shrinking passed. Evidence: 本地归档（未纳入公开仓库）.
 
 ## Mobile model-menu catalogue ownership (2026-08-20)
 
 - `NewmarkApp.kt` selects exactly one catalogue owner: paired desktop `remoteModelOptions()` in remote mode or `ChatViewModel.enabledModelOptions()` in local mode.
 - `ChatScreen.kt` closes and rekeys its retained input-popup state when `remoteMode` changes, preventing a remote Models page from surviving into a local conversation.
 - `selectedModelMenuLabel` resolves local labels and remote deployment identifiers through the active catalogue so the first-level row shows only the model display name; provider names remain second-level group headings.
-- `InputComposerAndModelMenuContractTest.kt`, full unit tests, Debug/Release assembly, and Release lint/R8/resource shrinking passed. Evidence: `archive/20260820-mobile-model-menu-owner-reset.md`.
+- `InputComposerAndModelMenuContractTest.kt`, full unit tests, Debug/Release assembly, and Release lint/R8/resource shrinking passed. Evidence: 本地归档（未纳入公开仓库）.
 
 ## Mobile composer popup coordinate-space fix (2026-08-20)
 
 - `ChatScreen.kt` now measures the popup container and its plus/model anchors in window coordinates, then `inputMenuAnchorInContainer` converts each live anchor into the overlay's local coordinate space.
 - This removes the duplicated 48/240/280dp primary-sidebar offset and the optional additional 220dp secondary-sidebar offset while retaining centered-above-control placement.
-- `InputComposerAndModelMenuContractTest.kt` models 280px and 500px container origins and requires both to resolve to the same local anchor. Full unit tests and Debug/Release assembly plus Release lint/R8/resource shrinking passed. Evidence: `archive/20260820-mobile-composer-popup-coordinate-space-fix.md`.
+- `InputComposerAndModelMenuContractTest.kt` models 280px and 500px container origins and requires both to resolve to the same local anchor. Full unit tests and Debug/Release assembly plus Release lint/R8/resource shrinking passed. Evidence: 本地归档（未纳入公开仓库）.
 
 ## Mobile Settings predictive-exit handoff (2026-08-20)
 
 - `android/app/src/main/java/com/newmark/mobile/ui/PredictiveBackMotion.kt` distinguishes a cancelled gesture from a committed back and can retain the committed release transform while an owning overlay exits.
 - `SettingsScreen.kt` enables that retention only on `SettingsPage.Main`. Nested settings backs still reset progress because the settings surface remains visible, while cancellation always returns the current page to rest.
 - This removes the frame where Settings first snapped to its untouched layout before `NewmarkApp.kt` began the retained `AnimatedVisibility` exit.
-- `PredictiveBackMotionContractTest.kt`, full unit tests, Debug assembly, and Release lint/R8/resource shrinking/assembly passed. Device-frame evidence remains pending because no ADB target was connected. Evidence: `archive/20260820-mobile-settings-predictive-exit-handoff.md`.
+- `PredictiveBackMotionContractTest.kt`, full unit tests, Debug assembly, and Release lint/R8/resource shrinking/assembly passed. Device-frame evidence remains pending because no ADB target was connected. Evidence: 本地归档（未纳入公开仓库）.
 
 ## Mobile wide composer menu live anchoring (2026-08-20)
 
 - `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` keeps separate live root-coordinate anchors for the composer plus and model controls. Sidebar-driven wide-layout remeasurement now moves the matching overlay with its button.
 - Anchor movement updates only popup placement and cannot restart the menu entrance animation. Dismissal retains the last valid anchor for its fade-out interval.
 - `centeredInputMenuX` aligns popup and control centers, clamps to an 8px viewport margin, and the existing vertical formula keeps the popup bottom 6dp above the control top.
-- `InputComposerAndModelMenuContractTest.kt` covers centered placement, both edge clamps, live anchor binding, and vertical attachment. Full unit tests and Release lint/R8/resource shrinking/assembly passed. Evidence: `archive/20260820-mobile-wide-composer-menu-live-anchor.md`.
+- `InputComposerAndModelMenuContractTest.kt` covers centered placement, both edge clamps, live anchor binding, and vertical attachment. Full unit tests and Release lint/R8/resource shrinking/assembly passed. Evidence: 本地归档（未纳入公开仓库）.
 
 ## Mobile independent-page exit smoothness (2026-08-20)
 
 - `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` gives compact SubAgent, Settings, Terminal, and Memory Lab separate `MutableTransitionState` owners. Their overlays stay mounted until exit completes.
 - Entry retains the existing 320 ms `PcEaseOutExpo`; exit uses a directional 260 ms `CubicBezierEasing(0.4, 0, 1, 1)` instead of replaying the entry-oriented deceleration profile.
 - The root view requests Android 15 HIGH frame rate while a sidebar or independent-page transition is active and restores DEFAULT after every transition becomes idle.
-- `MemoryLabAndSubagentAnimationContractTest.kt` and `ResponsiveSidebarContractTest.kt` lock the lifecycle, easing, and frame-rate bindings. Full unit, Release lint/R8/resource shrinking, and APK assembly passed; device-side frame timing remains pending because no ADB target was connected. Evidence: `archive/20260820-mobile-independent-page-exit-smoothness.md`.
+- `MemoryLabAndSubagentAnimationContractTest.kt` and `ResponsiveSidebarContractTest.kt` lock the lifecycle, easing, and frame-rate bindings. Full unit, Release lint/R8/resource shrinking, and APK assembly passed; device-side frame timing remains pending because no ADB target was connected. Evidence: 本地归档（未纳入公开仓库）.
 
 ## 2026-08-20 mobile formal release package
 
@@ -1688,16 +1686,16 @@ The desktop runtime reduces startup/运行中压力峰 at the cross-process even
 
 Verification completed on 2026-08-20: `npm.cmd run build` passed; `workEventCoalescerVerify` passed 6 assertions; `performanceOptimizationVerify` passed 17 assertions; `runtimeIsolationVerify` passed; `git diff --check` passed. `DESKTOP/package.json` and lock metadata are `0.5.0`. Existing user modifications in the worktree were preserved. No package publication is claimed.
 
-The complete Windows release path then passed 1664/1664 desktop assertions and the remaining context, performance, TUI, CLI, WSL, SSH, and GUI/TUI/CLI shared-backend gates. Local per-machine MSI upgrade completed with Windows Installer code `3010` (success; restart recommended). `C:\Program Files\Newmark Agent\Newmark.exe --version` reports `0.5.0`, registry display version is `0.5.0.0`, and the installed `app.asar` is byte/hash-identical to `release/win-unpacked`. Installation evidence and artifact hashes are in `archive/20260820-dev-0.5.0-local-install.md`.
+The complete Windows release path then passed 1664/1664 desktop assertions and the remaining context, performance, TUI, CLI, WSL, SSH, and GUI/TUI/CLI shared-backend gates. Local per-machine MSI upgrade completed with Windows Installer code `3010` (success; restart recommended). `C:\Program Files\Newmark Agent\Newmark.exe --version` reports `0.5.0`, registry display version is `0.5.0.0`, and the installed `app.asar` is byte/hash-identical to `release/win-unpacked`. Installation evidence and artifact hashes are in 本地归档（未纳入公开仓库）.
 
 ## dev-0.4.11 multi-dimensional verification
 
-The dev-0.4.10 history-first conversation activation, Guide reconciliation, unsupported-temperature recovery, and provider-failure continuation boundary were verified in source and in the Windows packaging path. The final Feature Verify result is 1664/1664. The package metadata was advanced to dev-0.4.11. MSI, portable ZIP, and app.asar hashes are recorded in `archive/20260820-150700-dev-0.4.11-verification-and-install.md`. Portable and installed `Newmark.exe` report 0.4.11; installed and packaged app.asar hashes match exactly.
+The dev-0.4.10 history-first conversation activation, Guide reconciliation, unsupported-temperature recovery, and provider-failure continuation boundary were verified in source and in the Windows packaging path. The final Feature Verify result is 1664/1664. The package metadata was advanced to dev-0.4.11. MSI, portable ZIP, and app.asar hashes are recorded in 本地归档（未纳入公开仓库）. Portable and installed `Newmark.exe` report 0.4.11; installed and packaged app.asar hashes match exactly.
 
 ## Mobile animated overlays and Memory Lab force graph (2026-08-20)
 
 - 移动触摸契约：Memory Lab 总览使用单一高优先级触摸循环仲裁节点点击、整图平移和双指缩放；节点保留 PC 28/32px 半圆胶囊外观，但点击命中区至少 48dp。拖动永远只修改相机，不修改任何节点坐标；交互期间物理布局、环境漂移、聚焦镜头和流光全部暂停，抬手恢复。默认/重置镜头为 0.88，缩放允许进入 `<0.28` 点模式。
-- `MemoryLabAndSubagentAnimationContractTest.kt` 锁定手势仲裁、冻结状态、点模式可达、父链/子树和胶囊契约；`archive/20260820-mobile-memory-lab-touch-pan-contract.md` 保存实机证据与冷启动风险边界。
+- `MemoryLabAndSubagentAnimationContractTest.kt` 锁定手势仲裁、冻结状态、点模式可达、父链/子树和胶囊契约；本地归档（未纳入公开仓库） 保存实机证据与冷启动风险边界。
 
 - `NewmarkApp.kt` keeps the main surface mounted while Settings, Terminal, Memory Lab, and compact SubAgent pages animate as retained overlays in both directions.
 - `PredictiveBackMotion.kt` maps Android predictive-back progress to live translation, alpha, and scale while preserving nested page back semantics.
@@ -1721,12 +1719,12 @@ Newmark Agent/
 │  ├─ core/conversationKernel.ts
 │  └─ tests/conversationHistoryFirstVerify.ts
 ├─ android/app/src/main/java/com/newmark/mobile/ui/MemoryLabScreen.kt
-└─ archive/20260820-121119-dev-0.4.10-history-first-package-install.md
+└─ 本地归档（未纳入公开仓库）
 ```
 
 ## 2026-08-20 移动形态压力续测
 
-SubAgent、MemoryLab 真实截图与 mock 失败边界记录于 `archive/20260820-mobile-shape-subagent-memorylab-continuity.md`。MemoryLabStore 已增加跨应用 coreMd 回退，Canvas 手势已移除动态 pointerInput key 以保证拖动连续跟手。
+SubAgent、MemoryLab 真实截图与 mock 失败边界记录于 本地归档（未纳入公开仓库）。MemoryLabStore 已增加跨应用 coreMd 回退，Canvas 手势已移除动态 pointerInput key 以保证拖动连续跟手。
 
 The final local Windows artifacts are MSI 226,322,512 bytes (`F3A5EF6C63B264B580AAADDB509157ACA99ACC358E0B93DBBF9C9B79C9C33690`), win-unpacked ZIP 292,453,099 bytes (`8B4181D7514AC060E4C6675E287FECCF03BA143ED7530E94778C7B2F2A37AB7D`), and app.asar 160,066,102 bytes (`C837571A10A875D0ADD0C6819E54F7816EA40EE8EAEAFD3E8555BD8019019627`). The candidate reports `0.4.10`; machine-wide installation is pending interactive UAC confirmation, while the existing Program Files installation remains `0.4.9`.
 
@@ -1744,7 +1742,7 @@ The final local Windows artifacts are MSI 226,322,512 bytes (`F3A5EF6C63B264B580
 - `ui/theme/NewmarkTheme.kt` owns the fixed 85% product glass level, PC-equivalent opacity/transparency/three-tier blur curve, and bounded mobile backdrop mapping. `NewmarkApp.kt`, `Sidebar.kt`, `RightSidebar.kt`, `ChatScreen.kt`, and `components/AnchorMenu.kt` consume the read-only `LocalGlassMode`; Android no longer exposes or persists a glass-strength slider.
 - `android/app/src/main/java/com/newmark/mobile/ui/Sidebar.kt` owns the circular local-conversation add control.
 - `android/app/src/test/java/com/newmark/mobile/ui/InputComposerAndModelMenuContractTest.kt` locks the five-line cap, fixed corner radius, provider grouping, unprefixed model rows, and legacy combined-label compatibility. `ui/theme/GlassPresentationContractTest.kt` locks the PC 85% curve and the accepted 32dp default portrait backdrop.
-- Formal emulator evidence and the data-preserving installation ledger are recorded in `archive/20260819-mobile-model-groups-and-rounded-composer.md`.
+- Formal emulator evidence and the data-preserving installation ledger are recorded in 本地归档（未纳入公开仓库）.
 
 ## Mobile system-aware launch theme (2026-08-19)
 
@@ -1752,7 +1750,7 @@ The final local Windows artifacts are MSI 226,322,512 bytes (`F3A5EF6C63B264B580
 - `android/app/src/main/res/values*/themes.xml` owns pre-Android-12 launch-window colors and Android 12+ system Splash attributes. Day resources retain `#F2F2F7`, dark resources select `#000000`, and both status/navigation icon appearances follow the same qualifier.
 - `android/app/src/main/res/values*/colors.xml` owns the day/night launch and adaptive-icon background tokens. The existing monochrome Newmark foreground therefore becomes black-on-light or white-on-black without a second application-rendered splash page.
 - `android/scripts/mobile-agent-stress.ps1` now isolates each sidebar/popup iteration, uses an ADB reverse tunnel for its same-host fixture, and records package-scoped ANR/FATAL evidence even when a UI assertion aborts early.
-- Formal Release evidence is `archive/20260819-formal-launch-dark-1.png`, `archive/20260819-formal-launch-light-1.png`, `archive/mobile-stress-20260819-225044.json`, and `archive/20260819-230500-mobile-system-splash-and-stress.md`.
+- Formal Release evidence is 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, and 本地归档（未纳入公开仓库）.
 
 ## Mobile runtime continuity pressure infrastructure (2026-08-19)
 
@@ -1761,7 +1759,7 @@ The final local Windows artifacts are MSI 226,322,512 bytes (`F3A5EF6C63B264B580
 - `android/scripts/mobile-queue-animation-benchmark.ps1` installs the non-debuggable Release-equivalent Benchmark package, locates Queue before the sample, then records an observer-free fixed-coordinate expand/collapse graphics window; cleanup uninstalls only the isolated package and restores the formal app.
 - `DESKTOP/scripts/mobile-mock-server.cjs` models real Flow suspension and two independent target-scoped workspace/conversation states. Its bounded `targetReads` ledger proves which target each conversation, UI-state, and workspace-list read addressed.
 - Current evidence covers a 300-event/90-loop remote run, local 17-tool Queue/Guide execution and restart, three live service restarts, alternating sends, Flow pause/resume, ordinary stop, foreign-target rejection, and visible live-target switching without state leakage.
-- Evidence: `archive/mobile-stress-20260819-211437.json`, `archive/20260819-214236-mobile-runtime-continuity-pressure.md`, and `archive/20260819-220500-mobile-remote-target-switch-continuity.md`.
+- Evidence: 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, and 本地归档（未纳入公开仓库）.
 
 ## dev-0.4.9 Windows/Linux release ownership and gate (2026-08-19)
 
@@ -1790,7 +1788,7 @@ Newmark Agent/
 │  ├─ Newmark-Agent-0.4.9-amd64.deb
 │  ├─ Newmark-Agent-0.4.9-linux-unpacked-x64.zip
 │  └─ {win,linux}-unpacked/
-└─ archive/
+└─ 本机私有归档（已从公开仓库排除）
    ├─ 20260819-213000-dev-0.4.9-windows-package-install.md
    ├─ 20260819-dev-0.4.9-remote-touch-dark-packaged.png
    ├─ 20260819-dev-0.4.9-remote-touch-light-packaged.png
@@ -1802,7 +1800,7 @@ Newmark Agent/
 - `release-safe-installed-shape-stress.cjs` and `release-safe-shared-root-restart-stress.cjs` verify that installed CLI/TUI/GUI lifecycles do not write mutable data into Program Files and preserve explicit roots containing spaces across GUI restart.
 - `release-pc-gui-tui-remote-service-stress.cjs` owns the installed black-box hosted-service gate. Three GUI/TUI cycles completed 200 pressure requests per phase with authentication, SSE, authoritative core reads, renderer/HTTP and CLI/HTTP equality, mutation boundaries, and clean port release.
 - `dist-linux.cjs` owns the isolated WSL/native Linux release path. The full suite, latency benchmark, AppImage/deb/unpacked GUI smoke, Bash/sh isolation, and same-root exit lifecycle passed before publication.
-- Artifact hashes and UAC install evidence are recorded in `archive/20260819-213000-dev-0.4.9-windows-package-install.md`; the Git tag and GitHub prerelease publish the five Windows/Linux distributable assets.
+- Artifact hashes and UAC install evidence are recorded in 本地归档（未纳入公开仓库）; the Git tag and GitHub prerelease publish the five Windows/Linux distributable assets.
 
 ## Mobile remote lifecycle and reconnect ownership (2026-08-19)
 
@@ -1822,7 +1820,7 @@ Newmark Agent/
 ├─ android/
 │  ├─ app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt
 │  └─ scripts/restore-formal-mobile-pair.ps1
-└─ archive/
+└─ 本机私有归档（已从公开仓库排除）
    ├─ 20260819-210840-mobile-remote-lifecycle-stability.md
    ├─ 2026-08-19T12-47-33-373Z-pc-gui-tui-remote-service-stress.json
    ├─ 20260819-formal-mobile-sse-state-restart-fixed.json
@@ -1835,7 +1833,7 @@ Newmark Agent/
 - `DESKTOP/src/main.ts` registers the GUI runtime bridge even when remote touch starts disabled, exposes `mobile:serverStatus` and `mobile:setRemoteTouchEnabled`, persists the switch, and applies the service lifecycle in the current GUI process.
 - `DESKTOP/src/preload.ts` exposes only the two purpose-scoped renderer operations. `DESKTOP/src/ui/index.html` renders the transparent status control flush left, binds it and the left-aligned pairing action to one `.remote-touch-action` geometry, gives both rows the same bold short-title plus light-gray description hierarchy, preserves green/orange/red border glow, and owns the five-second poll/timer cleanup.
 - `DESKTOP/src/tests/remoteTouchServerStatusVerify.ts` dynamically isolates the fixed server port and verifies ten complete on/listening/reachable/off cycles. `DESKTOP/scripts/release-ui-model-settings-smoke.cjs` drives the real source renderer through CDP and verifies off/error/listening mappings, transparency, toggling, and model recovery in the same Settings surface.
-- Evidence: `archive/20260819-190537-pc-remote-touch-serve-status.md`, `archive/20260819-remote-touch-serve-status-ui.png`, and `archive/20260819-remote-touch-listening-ui.png`.
+- Evidence: 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, and 本地归档（未纳入公开仓库）.
 
 Relevant tree:
 
@@ -1846,7 +1844,7 @@ Newmark Agent/
 │  ├─ src/ui/index.html
 │  ├─ src/tests/remoteTouchServerStatusVerify.ts
 │  └─ scripts/release-ui-model-settings-smoke.cjs
-└─ archive/
+└─ 本机私有归档（已从公开仓库排除）
    ├─ 20260819-190537-pc-remote-touch-serve-status.md
    ├─ 20260819-remote-touch-serve-status-ui.png
    └─ 20260819-remote-touch-listening-ui.png
@@ -1858,7 +1856,7 @@ Newmark Agent/
 - `DESKTOP/src/core/autoRouter.ts` classifies exhausted balances/quotas as non-retryable but switchable and fills the bounded three-attempt ladder with up to two distinct ordinary eligible alternates when stream/side effects remain uncommitted.
 - `DESKTOP/src/core/agentKernelRunner.ts` records balance failure against the active deployment and re-resolves the provider after switching. `DESKTOP/src/ui/index.html` carries the prior model identity through edit save and renders discovered validation as localized “未检测”.
 - `DESKTOP/src/tests/modelRecoveryStressVerify.ts` owns no-op/key/endpoint/rename edit invariants, 250 repeated edit resets, 2000 classification/routing rounds, 500 non-quota guards, fixed fallback, and 30 real three-deployment provider-process failovers. Auto and normal-chat suites cover selection and regression boundaries; the CDP Settings smoke verifies the real renderer/backend edit path.
-- Evidence: `archive/20260819-184508-model-recovery-and-quota-failover.md` and `archive/20260819-model-recovery-not-checked-ui.png`.
+- Evidence: 本地归档（未纳入公开仓库） and 本地归档（未纳入公开仓库）.
 
 Relevant tree:
 
@@ -1867,7 +1865,7 @@ Newmark Agent/
 ├─ DESKTOP/src/core/{agent.ts,autoRouter.ts,agentKernelRunner.ts}
 ├─ DESKTOP/src/tests/{modelRecoveryStressVerify.ts,autoRouterVerify.ts,autoAgentIntegrationVerify.ts,normalChatRegressionVerify.ts}
 ├─ DESKTOP/src/ui/index.html
-└─ archive/{20260819-184508-model-recovery-and-quota-failover.md,20260819-model-recovery-not-checked-ui.png}
+└─ 本机私有归档（已从公开仓库排除）
 ```
 
 ## Mobile Guide user-timeline projection (2026-08-19)
@@ -1876,21 +1874,21 @@ Newmark Agent/
 - `android/app/src/main/java/com/newmark/mobile/data/WorkRunProjection.kt` exposes the deduplicated collapsed-Guide projection shared by local and remote histories.
 - `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` exposes the remote-to-local WorkRun conversion internally for direct contract verification; runtime behavior is unchanged outside the shared projection.
 - `WorkRunProjectionTest.kt` and `RemoteGuideTimelineContractTest.kt` cover sequence, lifecycle upgrades, collapsed visibility, and complete remote receipt conversion.
-- Formal Release evidence and stress observations are recorded in `archive/20260819-mobile-guide-user-timeline.md`.
+- Formal Release evidence and stress observations are recorded in 本地归档（未纳入公开仓库）.
 
 ## Mobile secondary popover regression guard (2026-08-19)
 
 `ChatScreen.kt` 保留已验收的一级按钮原点动画；一级进入二级或由二级返回时，不创建独立弹窗，而是在同一玻璃外壳内以 `AnimatedContent + SizeTransform` 连续变换宽高。页面内容同步淡入淡出，关闭仍直接淡出。所有页面继续使用 190dp 紧凑壳与 320dp 内部滚动上限。
 
-`NewmarkApp.kt` 在 RemoteWorkRun → LocalWorkRun 边界统一正规化 Gson 可能产生的运行时 null，避免旧桌面事件缺省字段在 Release/R8 中逐字段触发 NPE。证据位于 `archive/20260819-secondary-popover-regression-fixed.mp4`、`archive/20260819-secondary-popover-compact-final.png` 和对应归档说明。
+`NewmarkApp.kt` 在 RemoteWorkRun → LocalWorkRun 边界统一正规化 Gson 可能产生的运行时 null，避免旧桌面事件缺省字段在 Release/R8 中逐字段触发 NPE。证据位于 本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库） 和对应归档说明。
 
 ## Mobile remote event terminality contract (2026-08-19)
 
-`android/app/src/main/java/com/newmark/mobile/data/RemoteTrackingContract.kt` now owns both exact target/run identity and terminal-run late-event rejection. `DesktopLinkViewModel` consults this pure contract before creating or extending a live Build, while still accepting an exact PC resident-runtime recovery identity. The deterministic injection fixture and formal input-menu/startup results are recorded in `archive/2026-08-19-mobile-0454-stale-run-and-menu-runtime-gates.md`.
+`android/app/src/main/java/com/newmark/mobile/data/RemoteTrackingContract.kt` now owns both exact target/run identity and terminal-run late-event rejection. `DesktopLinkViewModel` consults this pure contract before creating or extending a live Build, while still accepting an exact PC resident-runtime recovery identity. The deterministic injection fixture and formal input-menu/startup results are recorded in 本地归档（未纳入公开仓库）.
 
 ## Current mobile UI note (2026-08-19)
 
-`android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` owns the in-window input composite menu overlay. Its first-level Mode/File and Model/Intelligence surfaces use explicit button-centred entrance progress while retaining the PC-derived small-popover geometry and input-row anchoring. The corresponding operation record is `archive/2026-08-19-mobile-0454-input-menu-origin-animation.md`.
+`android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` owns the in-window input composite menu overlay. Its first-level Mode/File and Model/Intelligence surfaces use explicit button-centred entrance progress while retaining the PC-derived small-popover geometry and input-row anchoring. The corresponding operation record is 本地归档（未纳入公开仓库）.
 
 ## 2026-08-19 dev-0.4.8 Windows local candidate plan
 
@@ -1914,14 +1912,14 @@ Newmark Agent/
 │  │  └─ resources/app.asar
 │  ├─ Newmark-Agent-0.4.8-win-unpacked-x64.zip
 │  └─ Newmark-Agent-0.4.8-x64.msi
-└─ archive/20260819-111845-dev-0.4.8-windows-package-install.md
+└─ 本地归档（未纳入公开仓库）
 ```
 
 The MSI installed with exit code `0`; installed `Newmark.exe --version` and help return `0`, an unknown argument fails closed with exit `2`, and installed `app.asar` matches the package hash `39EBFDD407E8984970A9DD4F27767F1BCD9BE31745187ACF5A83B486D18D9CEA`. Linux AppImage, deb extraction, and unpacked ZIP all pass real GUI startup, Bash/sh terminal isolation, version checks, and clean exit/same-root relaunch. Linux artifact hashes are `F0C2221F...DB96` (AppImage), `8EC7A7D9...33AC` (deb), and `C6CA2E95...BBEA` (ZIP).
 
 ## 2026-08-19 PC active screenshot tool status
 
-`DESKTOP/src/tools/index.ts` defines the provision-only `screen_capture` read tool separately from `computer_use`. `DESKTOP/src/core/agentKernelRunner.ts` and `DESKTOP/src/core/agent.ts` route its capture through the same content-addressed user-image attachment/input channel and expose the attachment to `image_inspect` for source-size inspection and bounded pixel crop/magnification. The Electron utility and WSL bridge files carry the read-only operation to the Windows host without acquiring the Computer Use lease. `DESKTOP/src/tests/screenCaptureIndependentVerify.ts` owns cold/warm pressure, temporary-file cleanup, lease isolation, unified image-channel, and secondary crop/magnification regression coverage. Detailed evidence is archived in `archive/20260819-103201-pc-active-screenshot-tool-stress.md`.
+`DESKTOP/src/tools/index.ts` defines the provision-only `screen_capture` read tool separately from `computer_use`. `DESKTOP/src/core/agentKernelRunner.ts` and `DESKTOP/src/core/agent.ts` route its capture through the same content-addressed user-image attachment/input channel and expose the attachment to `image_inspect` for source-size inspection and bounded pixel crop/magnification. The Electron utility and WSL bridge files carry the read-only operation to the Windows host without acquiring the Computer Use lease. `DESKTOP/src/tests/screenCaptureIndependentVerify.ts` owns cold/warm pressure, temporary-file cleanup, lease isolation, unified image-channel, and secondary crop/magnification regression coverage. Detailed evidence is archived in 本地归档（未纳入公开仓库）.
 
 ## 2026-08-18 Android 0.4.52 local tool/runtime architecture and stress status
 
@@ -1933,7 +1931,7 @@ The MSI installed with exit code `0`; installed `Newmark.exe --version` and help
 - `MainActivity.kt` accepts queue/Guide diagnostics only for `.stress` packages with an explicit extra; formal builds have no automatic diagnostic path.
 - Formal verification passed Android unit tests, Release assembly, 10-file update guard, `speed-profile`, five 2208-2494 ms complete-interaction starts, and a 90-group stability window at 24.5-26.7 MB PSS / 21-24 threads with no fatal/ANR/process death. The 11-frame final graphics sample is invalid for a jank verdict.
 
-Detailed evidence: `archive/2026-08-18-mobile-0452-runtime-stress-and-local-tools.md`.
+Detailed evidence: 本地归档（未纳入公开仓库）.
 
 ## 2026-08-18 mobile complete-interaction performance, scheduler compatibility, and context lifecycle
 
@@ -1944,7 +1942,6 @@ Detailed evidence: `archive/2026-08-18-mobile-0452-runtime-stress-and-local-tool
 - `android/scripts/install-mobile-debug-safe.ps1` still fingerprints every private file before and after `adb install -r`; Release installation additionally activates the packaged baseline profile and verifies a `speed-profile` compilation path before foreground launch.
 - Formal Release `0.4.51` / `451` passed five two-vCPU complete-interaction runs at `1963, 2107, 2238, 2376, 2552 ms`, all under 4000 ms with zero fatal/ANR/not-responding/launch-timeout/process-death record. Post-start memory was about 42 MB PSS with zero swap.
 - Structure smoke retained the input/send controls, left navigation, device expansion, Settings, Memory Lab, Terminal, Files, Editor, Plan, SubAgent, Browser, current-conversation plan, linked plan, plan creation, and browser navigation controls. The remote fixture had no real workspace row, so a live second-level remote workspace drawer was not falsely claimed from that smoke.
-- `archive/mobile-stress-20260819-005444.json` is the current 160-event remote state report. All remote correctness gates passed. Its stress Debug launch/jank values are intentionally not used as formal Release performance evidence.
 - Environment note: Android Emulator 37.1.11's visible gfxstream/QEMU backend hung after prolonged pressure. The userdata QCOW2 image was read-only checked and clean; no AVD wipe occurred. `-no-window -no-cache` restored the same data image and enabled the two-core application gates; a subsequent visible `-no-cache` start restored the foreground portrait window. A transient System UI ANR immediately after the first headless recovery was rejected as evidence; the final measured windows and later UI smokes contained zero ANR/error records.
 
 Relevant tree:
@@ -1957,7 +1954,7 @@ Newmark Agent/
 │  └─ vm/ChatViewModel.kt
 ├─ android/app/src/test/java/com/newmark/mobile/data/LocalContextContractTest.kt
 ├─ android/scripts/install-mobile-debug-safe.ps1
-├─ archive/
+├─ 本机私有归档（已从公开仓库排除）
 │  ├─ 2026-08-18-mobile-complete-interaction-context-performance.md
 │  └─ mobile-stress-20260819-005444.json
 └─ tasks/{plan,todo}.md
@@ -1969,16 +1966,16 @@ Newmark Agent/
 - `android/app/src/main/java/com/newmark/mobile/data/MobileModels.kt` models the complete resident snapshot; `RemoteTrackingContract.kt` owns exact target/run reconciliation and the limited live-over-cold precedence rule.
 - `android/app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt` single-flights target-scoped refreshes and atomically projects messages, WorkRuns, Goal, Flow, queue, and runtime identity. It does not create a remote Android-owned queue.
 - `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` clips Goal/Flow brushes inside each rounded `StackCard`, follows viewport height changes when floating bars appear, and centers the Flow takeover pill in a full-width floating container like PC `.input-float-stack`.
-- `DESKTOP/scripts/mobile-mock-server.cjs` and `android/scripts/mobile-agent-stress.ps1` provide the reproducible 160-event remote runtime fixture and gates. The passing report is `archive/mobile-stress-20260818-224054.json`; the dated ledger is `archive/2026-08-18-mobile-resident-runtime-and-floating-bars.md`.
+- `DESKTOP/scripts/mobile-mock-server.cjs` and `android/scripts/mobile-agent-stress.ps1` provide the reproducible 160-event remote runtime fixture and gates. The passing report is 本地归档（未纳入公开仓库）; the dated ledger is 本地归档（未纳入公开仓库）.
 - `android/app/src/main/java/com/newmark/mobile/data/LocalQueueContract.kt` and its unit test cover local FIFO/pause/edit/delete/Guide state transitions. The local `ChatViewModel` execution backend still has a mobile-specific loop/channel and has not yet become the PC ConversationKernel; this is a recorded architecture gap.
-- `android/app/build.gradle.kts` identifies the installed formal build as `0.4.50` / `versionCode 450`. The foreground screenshot is `archive/mobile-0450-foreground.png`; it confirms the formal package is running but is not evidence of an active Flow pill because the stress fixture had already ended.
+- `android/app/build.gradle.kts` identifies the installed formal build as `0.4.50` / `versionCode 450`. The foreground screenshot is 本地归档（未纳入公开仓库）; it confirms the formal package is running but is not evidence of an active Flow pill because the stress fixture had already ended.
 
 ## 2026-08-18 mobile historical WorkRun ledger ordering
 
 - `android/app/src/main/java/com/newmark/mobile/data/RemoteTrackingContract.kt` now owns the mobile port of the desktop orphan-WorkRun placement contract. `unownedRunsBefore` consumes the backend-ordered WorkRun ledger plus visible message ownership and returns only earlier legacy/unanchored runs that must be reconstructed before the next owned run.
 - `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` uses that contract during transcript projection and no longer timestamp-sorts or blanket-appends historical runs ahead of the newest conversation edge.
-- Regression coverage lives in `android/app/src/test/java/com/newmark/mobile/data/RemoteTrackingContractTest.kt`; the dated incident ledger is `archive/2026-08-18-mobile-historical-workrun-ledger-order.md`.
-- Emulator evidence is `archive/mobile-0449-workrun-order.png`; it confirms the historical Build remains between its owning user message and Agent reply. Duplicate terminal status rows inside that block are tracked separately and are not evidence of a remaining placement failure.
+- Regression coverage lives in `android/app/src/test/java/com/newmark/mobile/data/RemoteTrackingContractTest.kt`; the dated incident ledger is 本地归档（未纳入公开仓库）.
+- Emulator evidence is 本地归档（未纳入公开仓库）; it confirms the historical Build remains between its owning user message and Agent reply. Duplicate terminal status rows inside that block are tracked separately and are not evidence of a remaining placement failure.
 
 ## 2026-08-18 mobile WorkRun identity and shared-backend boundary
 
@@ -2007,7 +2004,7 @@ Newmark Agent/
 │  ├─ vm/{ChatViewModel,DesktopLinkViewModel}.kt
 │  └─ ui/{ChatScreen,NewmarkApp}.kt
 ├─ android/app/build.gradle.kts       # 0.4.47 / versionCode 447
-├─ archive/2026-08-18-mobile-remote-goal-flow-queue-parity.md
+├─ 本地归档（未纳入公开仓库）
 ├─ README.md
 └─ tasks/{plan,todo}.md
 ```
@@ -2029,7 +2026,7 @@ Newmark Agent/
 │  ├─ ui/NewmarkApp.kt            # 当前对话限定的临时 WorkRun 投影
 │  └─ ui/ChatScreen.kt            # WorkRun 内部事件修订驱动尾部跟随
 ├─ android/app/build.gradle.kts   # 0.4.46 / versionCode 446
-├─ archive/2026-08-18-mobile-local-live-run.md
+├─ 本地归档（未纳入公开仓库）
 ├─ README.md
 └─ tasks/
    ├─ plan.md
@@ -2048,7 +2045,7 @@ Android `ChatScreen.kt` 的 `ChatTopBar` 现遵循 PC 顶栏的独立操作区�
 
 现场覆盖安装同时暴露并修复了旧 `conversations.json` 的前向兼容问题：Gson 对新增的 Kotlin 非空字段可在旧 JSON 中产生运行时 null，导致 `LocalConversation.copy()` 冷启动崩溃。`ChatViewModel.normalizeConversationMessages` 现进行完整的无损 `LocalConversation` 重建，缺失的 `mode` 规范为 `build`、`planItems` 规范为空列表；消息、分支树、归档标记、标题与时间戳全部保留。输入区还接收按对话持久化的 `selectedMode`，切换本地对话不会将 Build/Plan 标签串到另一会话。
 
-验证：`:app:testDebugUnitTest :app:assembleDebug` PASS；`android/scripts/install-mobile-debug-safe.ps1 -SkipBuild` 以 `adb install -r` 覆盖 `emulator-5554`，安装前后 7 个 app-private 文件的完整路径+SHA-256 指纹一致。`com.newmark.mobile` 已启动并显示正式聊天界面，版本为 `0.4.34` / `versionCode=434`。截图 `archive/mobile-0434-top-actions-spacing-ready.png`，详细记录 `archive/2026-08-18-mobile-top-action-spacing-and-legacy-migration.md`。
+验证：`:app:testDebugUnitTest :app:assembleDebug` PASS；`android/scripts/install-mobile-debug-safe.ps1 -SkipBuild` 以 `adb install -r` 覆盖 `emulator-5554`，安装前后 7 个 app-private 文件的完整路径+SHA-256 指纹一致。`com.newmark.mobile` 已启动并显示正式聊天界面，版本为 `0.4.34` / `versionCode=434`。截图 本地归档（未纳入公开仓库），详细记录 本地归档（未纳入公开仓库）。
 
 相关文件树：
 
@@ -2060,7 +2057,7 @@ Newmark Agent/
 │     ├─ ui/NewmarkApp.kt         # 当前本地会话模式传入输入区
 │     └─ vm/ChatViewModel.kt      # 旧本地会话无损字段迁移
 ├─ android/scripts/install-mobile-debug-safe.ps1 # 保留私有数据的覆盖安装守卫
-├─ archive/2026-08-18-mobile-top-action-spacing-and-legacy-migration.md
+├─ 本地归档（未纳入公开仓库）
 ├─ README.md
 ├─ OVERVIEW.md
 └─ tasks/
@@ -2080,7 +2077,7 @@ Newmark Agent/
 
 `DESKTOP/src/core/agentKernelRunner.ts` 负责基础集合、路由边界、能力目录、broker session 与系统 Prompt。Prompt 现在明确说明“功能存在不等于当前可调用”：进阶工具必须先以唯一工具调用执行 `tool_provision({ names: [精确工具名] })`，下一 provider 子轮拿到原始完整 schema 后才能调用目标工具。Plan policy、SubAgent sandbox、native-tool setting、删除与远程写安全策略均在目录生成和执行阶段继续硬拦截。
 
-测试归属：`toolSurfaceV2Verify.ts` 固定首轮边界；`toolProvisioningVerify.ts` 覆盖 78/78 schema 保真、78/78 provider 子轮可达、Prompt 明示和同一 user run 动态执行；`autoAgentIntegrationVerify.ts` 覆盖 Auto/固定模型边界；`verify.ts` 的 Memory Lab、Flow、Automation、Computer Use 集成夹具均先 provision 再调用。当前 `npm run build`、专项工具供给测试与主验证 1643/1643 全部通过。操作记录：`archive/2026-08-18-foundational-tool-surface-and-on-demand-provisioning.md`。
+测试归属：`toolSurfaceV2Verify.ts` 固定首轮边界；`toolProvisioningVerify.ts` 覆盖 78/78 schema 保真、78/78 provider 子轮可达、Prompt 明示和同一 user run 动态执行；`autoAgentIntegrationVerify.ts` 覆盖 Auto/固定模型边界；`verify.ts` 的 Memory Lab、Flow、Automation、Computer Use 集成夹具均先 provision 再调用。当前 `npm run build`、专项工具供给测试与主验证 1643/1643 全部通过。操作记录：本地归档（未纳入公开仓库）。
 
 相关文件树：
 
@@ -2093,7 +2090,7 @@ Newmark Agent/
 ├─ DESKTOP/src/tests/verify.ts                  # 进阶工具集成回归
 ├─ README.md                                    # 用户与开发者工具契约
 ├─ OVERVIEW.md                                  # 架构、文件职责与当前状态
-└─ archive/2026-08-18-foundational-tool-surface-and-on-demand-provisioning.md
+└─ 本地归档（未纳入公开仓库）
 ```
 
 ## mobile dev-0.4.33 对话记录 WorkRun 完整投影（2026-08-18）— source + device PASS
@@ -2102,7 +2099,7 @@ Android 不再以简化 token/work event 列表渲染对话历史。`android/app
 
 `ChatScreen.kt` 依据投影将历史布局恢复为 PC 顺序：存在真实 Agent 终态消息时显示“用户 → WorkRun → Agent 正文”，不重复 final response；仅缺失历史消息的旧快照才从 `primaryPrompt/final_response` 恢复一次。Build 标题严格跟随桌面 `workRunTitle` 中文状态词：`running=处理中`，完成态为 `已处理`，不再使用“构建”。`DesktopLinkViewModel.kt` 改用 Gson 直接读取完整远程事件字段，本地 Agent 也生成 `final_response`、稳定 ID/sequence、thought/tool completion 字段，故两条路径不再产生不同历史语义。
 
-验证：`WorkRunProjectionTest` 覆盖私密过滤、思考/工具回填、多段 response、终态去重、中断和 Guide 升级；`:app:testDebugUnitTest` 与 Kotlin 编译、clean assembleDebug 均通过。APK `0.4.33`（`versionCode=433`）已安装并在 `emulator-5554` 前台运行；当前模拟器为 1080×2400 竖屏。远程历史端点在该模拟器网络下仍不可达，故真实端点人工历史回放待网络恢复后补测；投影回归已覆盖同构事件序列。详细记录：`archive/2026-08-18-mobile-work-run-history-parity.md`。
+验证：`WorkRunProjectionTest` 覆盖私密过滤、思考/工具回填、多段 response、终态去重、中断和 Guide 升级；`:app:testDebugUnitTest` 与 Kotlin 编译、clean assembleDebug 均通过。APK `0.4.33`（`versionCode=433`）已安装并在 `emulator-5554` 前台运行；当前模拟器为 1080×2400 竖屏。远程历史端点在该模拟器网络下仍不可达，故真实端点人工历史回放待网络恢复后补测；投影回归已覆盖同构事件序列。详细记录：本地归档（未纳入公开仓库）。
 
 ## 桌面端输入卡死与工作期无响应修复（2026-08-18）— packaged PASS
 
@@ -2110,13 +2107,13 @@ Android 不再以简化 token/work event 列表渲染对话历史。`android/app
 
 `DESKTOP/src/ui/index.html` 将状态边框和 working glow 改为静态呈现，并将非终止工作事件的 Build DOM 刷新限制为每 100ms 一次；`done/error/interrupted/force_interrupted/final_response` 仍立即刷新。`DESKTOP/scripts/release-ui-render-performance-smoke.cjs` 在真实打包 renderer 中同时施加约 500Hz 工作更新和 100Hz 输入事件，实测 1.05 秒内仅 6 次 Build 重绘、99 次输入全部处理、最大输入调度延迟 42.7ms、持续状态动画为 0。隔离源码 GUI 空闲 5 秒 CPU 增量为 GPU 0.00s、两个 renderer 均 0.00s、browser 0.09s；修复前基线为 GPU 7.91 CPU 秒/3秒、renderer 3.09 CPU 秒/3秒。
 
-验证：主 verify 1641/1641 PASS；完整 `test:desktop:built` PASS；Windows 0.4.6 打包 PASS；性能 smoke PASS；图标/静态边框 smoke PASS；MSI smoke 22 + 12 断言 PASS。新 MSI 为 226,269,263 bytes，SHA-256 `510D60DF661EBFDF2CBA11431C4B1E54C5846562A0E5870911CCF0977DE7B769`；打包 app.asar 为 159,759,098 bytes，SHA-256 `0CC8C4E05EF012E80B346DF760199EF040B9574C799BBD134BF399D195AFF2EB`。UAC 安装退出码 0，Program Files 版本为 0.4.6，安装后 app.asar 与打包哈希完全一致；安装版空闲 5 秒采样 GPU/renderer/utility 均为 0.00 CPU 秒，browser 0.23 CPU 秒，所有进程均响应。详细记录见 `archive/2026-08-18-desktop-renderer-gpu-input-freeze-repair.md`。
+验证：主 verify 1641/1641 PASS；完整 `test:desktop:built` PASS；Windows 0.4.6 打包 PASS；性能 smoke PASS；图标/静态边框 smoke PASS；MSI smoke 22 + 12 断言 PASS。新 MSI 为 226,269,263 bytes，SHA-256 `510D60DF661EBFDF2CBA11431C4B1E54C5846562A0E5870911CCF0977DE7B769`；打包 app.asar 为 159,759,098 bytes，SHA-256 `0CC8C4E05EF012E80B346DF760199EF040B9574C799BBD134BF399D195AFF2EB`。UAC 安装退出码 0，Program Files 版本为 0.4.6，安装后 app.asar 与打包哈希完全一致；安装版空闲 5 秒采样 GPU/renderer/utility 均为 0.00 CPU 秒，browser 0.23 CPU 秒，所有进程均响应。详细记录见 本地归档（未纳入公开仓库）。
 
 ## 桌面端 SubAgent 工具身份、真实并行与 Build Block 硬限制（2026-08-17）— full desktop PASS
 
 桌面端已彻底分离“任务清单”和“真实子代理”两类语义：模型公开创建工具精确命名为 `SubAgent`，`task_create` 只维护当前对话的任务清单，历史 `task` / `subagent_create` 仅保留执行兼容而不进入模型公开工具面。`DESKTOP/src/tools/index.ts` 与 `DESKTOP/src/core/agentKernelRunner.ts` 定义并固定公开工具契约；`DESKTOP/src/core/agent.ts` 在创建前校验当前运行中的 Build Block，并按该 Build 的 `queued` / `working` 真实记录执行硬限制；`DESKTOP/src/core/subagent.ts` 持久化 `buildRunId`、`intelligenceTier` 并提供按 Build 精确计数；`DESKTOP/src/ui/index.html` 直接按真实 SubAgent UUID 一对一渲染右侧栏入口，入口标题使用创建时名称，Build 芯片和历史弹窗只接受真实 ID。
 
-硬约束为：Ultra 智能档位每个运行中 Build Block 最多 16 个活跃 SubAgent，其他档位最多 4 个。无运行中 Build、Build 已结束或达到上限的模型调用立即返回 `terminated: true`，不创建记录、不进入队列，也不会生成右侧栏监控入口。档位切换会同步调度器并发槽位，但计数和拒绝判定始终绑定调用所属 Build Block。`DESKTOP/src/core/toolPolicy.ts` 仅将公开 `SubAgent` 创建设为可并发的受控写操作，管理调用与其他副作用工具仍独占；Chat Completions / Responses adapter 对有工具请求显式发送 `parallel_tool_calls: true`。真实 APInebula `gpt-5.4-mini` 两种协议均得到单轮 4 调用、`maxOverlap=4`；medium 同批 5 创建严格为 4 接受 + 1 终止。完整 `test:desktop:built` 退出码 0，主 `verify` 为 `1642/1642 PASS`，工具供给 78/78×2 与删除安全 194/194 等后续门禁全绿；详细记录见 `archive/2026-08-17-desktop-subagent-tool-identity-and-build-limits.md`。
+硬约束为：Ultra 智能档位每个运行中 Build Block 最多 16 个活跃 SubAgent，其他档位最多 4 个。无运行中 Build、Build 已结束或达到上限的模型调用立即返回 `terminated: true`，不创建记录、不进入队列，也不会生成右侧栏监控入口。档位切换会同步调度器并发槽位，但计数和拒绝判定始终绑定调用所属 Build Block。`DESKTOP/src/core/toolPolicy.ts` 仅将公开 `SubAgent` 创建设为可并发的受控写操作，管理调用与其他副作用工具仍独占；Chat Completions / Responses adapter 对有工具请求显式发送 `parallel_tool_calls: true`。真实 APInebula `gpt-5.4-mini` 两种协议均得到单轮 4 调用、`maxOverlap=4`；medium 同批 5 创建严格为 4 接受 + 1 终止。完整 `test:desktop:built` 退出码 0，主 `verify` 为 `1642/1642 PASS`，工具供给 78/78×2 与删除安全 194/194 等后续门禁全绿；详细记录见 本地归档（未纳入公开仓库）。
 
 本地 Windows 发布验证已于 2026-08-18 完成：`0.4.6` MSI 从本次源码生成，打包后 SSH/TUI、CLI、上下文压缩和安装包结构 smoke 通过；UAC 安装 `msiexec` 退出码 0。`C:\Program Files\Newmark Agent\Newmark Agent.exe --version` 返回 `0.4.6`，安装后 app.asar 的 SHA-256 与打包 `win-unpacked` 完全一致（`81755096FB2187D505CB98DE6A72CE940B28099D47C2C2678E23EA38FA72A40C`）。
 
@@ -2134,7 +2131,7 @@ Android 本地模型配置由 `android/app/src/main/java/com/newmark/mobile/data
 
 折叠态不渲染右栏 Column，也不参与 `Row` 宽度分配；按钮在聊天区 `Box` 内以 `Alignment.CenterEnd` 覆盖，尺寸 `18×48dp`，使用 PC 同源 `panel-right` 图标。1600×2560 实机 dump 中按钮图标 bounds 为 `[1572,1270][1592,1290]`，点击和左滑均能展开。`Sidebar.kt` 的 rail 态现只保留一级导航及底部固定入口，不再绘制本地对话气泡缩略列。响应式规则为：仅竖屏 SubAgent 详情加页，平板/折叠屏保持弹窗；Memory Lab 仅竖屏加页，平板/折叠屏为 94%×92% 大弹窗。
 
-验证：桌面 build PASS、移动 API 38/38、桌面总回归 1641/1641、Android clean assembleDebug PASS、APK 432/0.4.32 安装成功。实机证据位于 `archive/_mobile_0432_right_collapsed_final.*`、`_right_open_final.*`、`_right_swipe_final.xml`、`_no_local_thumbs.*`；模拟器最终恢复 1080×2400、density 420。完整记录：`archive/2026-08-17-mobile-right-sidebar-pc-collapse.md`。
+验证：桌面 build PASS、移动 API 38/38、桌面总回归 1641/1641、Android clean assembleDebug PASS、APK 432/0.4.32 安装成功。实机证据位于 本地归档（未纳入公开仓库）、`_right_open_final.*`、`_right_swipe_final.xml`、`_no_local_thumbs.*`；模拟器最终恢复 1080×2400、density 420。完整记录：本地归档（未纳入公开仓库）。
 
 ## mobile dev-0.4.31 二级边栏、分支树与连续时间线（2026-08-17）— source + device PASS
 
@@ -2146,50 +2143,50 @@ Android 本地模型配置由 `android/app/src/main/java/com/newmark/mobile/data
 4. `MobileApiClient.kt`、`MobileModels.kt`、`DesktopLinkViewModel.kt` 和 `NewmarkApp.kt` 投影远程分支状态；桌面 `server.ts` 只桥接 PC 已有 `inspectConversationBranch`、`switchConversationBranch`、`branchConversation`，并严格校验 `workspaceId + conversationId` 成员关系，运行中创建/激活返回 `423`。
 5. `DESKTOP/src/tests/mobileWorkspaceApiVerify.ts` 覆盖工作区隔离、分支创建、只读浏览、显式激活、跨工作区拒绝与运行态锁；`verify.ts` 将该套件纳入总门禁。
 
-本轮还修复本地分页切换的祖先选择错误：`2/2` 页的祖先链同时含根页与当前页，切换逻辑现与分页器计算一致，选择距离当前浏览节点最近的分支节点。实机升级、冷启动和重新进入对话后，`hi2 · 2/2` 能切回 `hi · 1/2`；用户/Agent 两侧连续竖线保持可见。Android 版本为 `431 / 0.4.31`。验证：`node dist/tests/verify.js` 1630/1630、`gradlew clean assembleDebug` PASS、APK `adb install -r` PASS。证据：archive/2026-08-17-mobile-secondary-sidebar-and-branches.md。
+本轮还修复本地分页切换的祖先选择错误：`2/2` 页的祖先链同时含根页与当前页，切换逻辑现与分页器计算一致，选择距离当前浏览节点最近的分支节点。实机升级、冷启动和重新进入对话后，`hi2 · 2/2` 能切回 `hi · 1/2`；用户/Agent 两侧连续竖线保持可见。Android 版本为 `431 / 0.4.31`。验证：`node dist/tests/verify.js` 1630/1630、`gradlew clean assembleDebug` PASS、APK `adb install -r` PASS。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.5 git push + win/linux release + 本地 hash 校验（2026-08-16）— released
 
-压力测试全绿后：commit `a2c58a7` push master、annotated tag `dev-0.4.5` push；`gh release create dev-0.4.5` 上传 5 资产（win MSI/ZIP + linux AppImage/deb/unpacked ZIP），GitHub digest 与本地 SHA-256 完全一致。产物：MSI `226,125,903`/`071A143A…DE73A8`、win ZIP `291,979,308`/`4954E803…C3B2E`、AppImage `176,106,215`/`0CD30D39…FA908A8`、deb `135,690,272`/`56FB4657…C8CCE`、linux ZIP `172,214,822`/`AF235879…9A9E59`。Linux 经 WSL Ubuntu-24.04 隔离构建 + 完整 `npm test` 全绿。证据：archive/2026-08-16-dev-0.4.5-git-push-and-release.md。
+压力测试全绿后：commit `a2c58a7` push master、annotated tag `dev-0.4.5` push；`gh release create dev-0.4.5` 上传 5 资产（win MSI/ZIP + linux AppImage/deb/unpacked ZIP），GitHub digest 与本地 SHA-256 完全一致。产物：MSI `226,125,903`/`071A143A…DE73A8`、win ZIP `291,979,308`/`4954E803…C3B2E`、AppImage `176,106,215`/`0CD30D39…FA908A8`、deb `135,690,272`/`56FB4657…C8CCE`、linux ZIP `172,214,822`/`AF235879…9A9E59`。Linux 经 WSL Ubuntu-24.04 隔离构建 + 完整 `npm test` 全绿。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.5 WSL 交叉压力测试设计 + 全场景核心压力复测（2026-08-16）— source PASS
 
-新增正交交叉压力测试 `release-wsl-cross-stress.cjs` + 内层 `release-wsl-cross-stress-linux.cjs`：在 WSL Ubuntu 直接复用 Windows `dist` 的纯函数模块，交叉「命令链 × 平台 × 场景 × ×100 确定性」。验证 **62/62 PASS 0 FAIL**（单删除 ×5 链 ×3 平台 ×100 全放行、多语句 ×6 链 ×100 全拦截、`windowsDrivePathToPosix` 路径映射、git-clean/递归别名跨平台）。结合 win-wsl-backend-stress 与 deletion-safety 构成 WSL 全场景核心压力复测。证据：archive/2026-08-16-dev-0.4.5-wsl-cross-stress.md。
+新增正交交叉压力测试 `release-wsl-cross-stress.cjs` + 内层 `release-wsl-cross-stress-linux.cjs`：在 WSL Ubuntu 直接复用 Windows `dist` 的纯函数模块，交叉「命令链 × 平台 × 场景 × ×100 确定性」。验证 **62/62 PASS 0 FAIL**（单删除 ×5 链 ×3 平台 ×100 全放行、多语句 ×6 链 ×100 全拦截、`windowsDrivePathToPosix` 路径映射、git-clean/递归别名跨平台）。结合 win-wsl-backend-stress 与 deletion-safety 构成 WSL 全场景核心压力复测。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.5 win 打包版 + WSL 后端表现压力测试（2026-08-16）— source PASS
 
-新增 `release-win-wsl-backend-stress.cjs`：驱动 win-unpacked exe 的 WSL Agent 后端（Ubuntu-24.04），N 对话隔离 + 同对话连续多轮 + mock 计数精确匹配；扩展 `wsl-mock-provider.cjs` 支持 `WSL_STRESS_<n>` 序号 marker。验证 10 轮（6 对话 + 4 重复）、20 请求、10 write 工具调用全部成功，write 返回 `[write] OK: /mnt/c/...` 且文件出现在 Windows workspace（验证 WSL→Windows 跨环境路径映射）。适配三个既有约束：`prompt.disabled` 需 auto workspace、`routeToolSurfaceV2` 需消息显式命名 write、mock 取最新序号。证据：archive/2026-08-16-dev-0.4.5-win-wsl-backend-stress.md。
+新增 `release-win-wsl-backend-stress.cjs`：驱动 win-unpacked exe 的 WSL Agent 后端（Ubuntu-24.04），N 对话隔离 + 同对话连续多轮 + mock 计数精确匹配；扩展 `wsl-mock-provider.cjs` 支持 `WSL_STRESS_<n>` 序号 marker。验证 10 轮（6 对话 + 4 重复）、20 请求、10 write 工具调用全部成功，write 返回 `[write] OK: /mnt/c/...` 且文件出现在 Windows workspace（验证 WSL→Windows 跨环境路径映射）。适配三个既有约束：`prompt.disabled` 需 auto workspace、`routeToolSurfaceV2` 需消息显式命名 write、mock 取最新序号。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.5 打包 + win-unpack/MSI 压力测试新增项 + 全压力测试集合 + UAC 安装（2026-08-16）— packaged + installed
 
-版本升至 `0.4.5`；新增打包后安全 smoke `release-dev045-security-smoke.cjs`（12 断言）并挂入 ZIP/MSI 两个 smoke；`test:full-release` 全绿（verify 1598/1598、deletion-safety 194/194）。产物：MSI `226,125,903` bytes / `071A143A8D36918305856D6941E4A7F4B7B3C113BB6330B43D3047308DDE73A8`、ZIP `291,979,308` bytes / `4954E803557AD7F88B671FB5C152DECF41190564E30E3FB9A25CC3C1A96C3B2E`、app.asar `157,889,701` bytes / `6B440C48471E4F6E2B963F32D136336000404D5A5C210EC4D5A97889DE36F451`。MSI smoke（dev010 22/22 + dev045 12/12）PASS；UAC 安装 `C:\Program Files\Newmark Agent` → `--version` 0.4.5，安装与打包 app.asar 一致。已知 dev009 打包后 UI smoke 历史时序失败（非本轮回归）。证据：archive/2026-08-16-dev-0.4.5-packaging-release-gates-and-install.md。
+版本升至 `0.4.5`；新增打包后安全 smoke `release-dev045-security-smoke.cjs`（12 断言）并挂入 ZIP/MSI 两个 smoke；`test:full-release` 全绿（verify 1598/1598、deletion-safety 194/194）。产物：MSI `226,125,903` bytes / `071A143A8D36918305856D6941E4A7F4B7B3C113BB6330B43D3047308DDE73A8`、ZIP `291,979,308` bytes / `4954E803557AD7F88B671FB5C152DECF41190564E30E3FB9A25CC3C1A96C3B2E`、app.asar `157,889,701` bytes / `6B440C48471E4F6E2B963F32D136336000404D5A5C210EC4D5A97889DE36F451`。MSI smoke（dev010 22/22 + dev045 12/12）PASS；UAC 安装 `C:\Program Files\Newmark Agent` → `--version` 0.4.5，安装与打包 app.asar 一致。已知 dev009 打包后 UI smoke 历史时序失败（非本轮回归）。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.5 git 上传审查：高危信息只报类型、不向 Agent 暴露具体值（2026-08-16）— source PASS
 
-`repo_security_audit`/`formatRemoteSecurityBlock` 的 findings 由 `{path,line,type,sample}` 收紧为 `{path,line,type}`，删除脱敏 sample——密钥值、隐私地址值、用户名绝不再进入工具返回或阻挡文本，避免经 API 中转被拦截窃取；仅保留「类型 + 数量 + repo 内相对路径 + 行号」供 Agent 完成二轮审查定位。验证：`verify` **1598/1598 PASS**（净增 3 条不泄露值断言）、`typecheck`/`build` EXIT=0、`lint` 0 errors/70 warnings。证据：archive/2026-08-16-dev-0.4.5-high-risk-findings-type-only.md。
+`repo_security_audit`/`formatRemoteSecurityBlock` 的 findings 由 `{path,line,type,sample}` 收紧为 `{path,line,type}`，删除脱敏 sample——密钥值、隐私地址值、用户名绝不再进入工具返回或阻挡文本，避免经 API 中转被拦截窃取；仅保留「类型 + 数量 + repo 内相对路径 + 行号」供 Agent 完成二轮审查定位。验证：`verify` **1598/1598 PASS**（净增 3 条不泄露值断言）、`typecheck`/`build` EXIT=0、`lint` 0 errors/70 warnings。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.5 删除/git 安全策略精准拦截 + 并行串命令 + 跨平台全工具（2026-08-16）— source PASS
 
-删除审查 `evaluateDeletionGuard` 精准化与跨平台补齐：① 修复 `||`（逻辑或）被误判为管道，`echo done || rm f.txt` 单删除不再误拦；② 移除误伤的 `/\bdone\b/`（普通英文 `done` 不再判循环）；③ 补齐 CMD `for /f … do del` 循环删除、PowerShell `ri -Recurse`、CMD `erase /s` 递归删除、`git clean`（非 dry-run，`-n`/`--dry-run` 放行）批量删除的硬性拦截；并行（`&`）/串行（`;`、`&&`、`||`）多语句删除由 `deletionVerbCount>=2` 精准拦截。覆盖 bash 与 terminal_takeover(write) 两条 shell 通道，跨 POSIX/PowerShell/CMD。验证：`deletion-safety-stress` **194/194 PASS**、`verify` **1595/1595 PASS**（净增 8）、`typecheck`/`build` EXIT=0、`lint` 0 errors/70 warnings。证据：archive/2026-08-16-dev-0.4.5-deletion-git-guard-precision-cross-platform.md。
+删除审查 `evaluateDeletionGuard` 精准化与跨平台补齐：① 修复 `||`（逻辑或）被误判为管道，`echo done || rm f.txt` 单删除不再误拦；② 移除误伤的 `/\bdone\b/`（普通英文 `done` 不再判循环）；③ 补齐 CMD `for /f … do del` 循环删除、PowerShell `ri -Recurse`、CMD `erase /s` 递归删除、`git clean`（非 dry-run，`-n`/`--dry-run` 放行）批量删除的硬性拦截；并行（`&`）/串行（`;`、`&&`、`||`）多语句删除由 `deletionVerbCount>=2` 精准拦截。覆盖 bash 与 terminal_takeover(write) 两条 shell 通道，跨 POSIX/PowerShell/CMD。验证：`deletion-safety-stress` **194/194 PASS**、`verify` **1595/1595 PASS**（净增 8）、`typecheck`/`build` EXIT=0、`lint` 0 errors/70 warnings。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.5 git 上传安全策略：高危硬性阻挡 + 隐私地址扫描 + Agent 二轮审查放行（2026-08-16）— source PASS
 
-`git_push`/`gh_pr_create` 前自动跑 `repo_security_audit`，在 tracked/changed 文件里发现**个人密钥**（API key/token/私钥）或**隐私地址**（带凭据 URL、私网 IP、本地用户目录路径）时**硬性阻挡**远程写；阻挡结果脱敏列出 findings，要求 Agent 二轮审查处理/确认后，再次调用并传 `security_review_confirmed=true` 放行。实现：新增 `scanRepositoryPrivacyLeaks`/`collectRepositoryFiles`/`formatRemoteSecurityBlock`；`repoSecurityAudit` 合并 `privacy_findings` + `high_risk_findings`；`withRemoteSecurityPreamble` 增加确认参数并在高危未确认时返回阻挡；工具 schema 增加 `security_review_confirmed`；静态 prompt 同步二轮审查语义。验证：`verify` **1587/1587 PASS**（净增 4 条断言：secret 阻挡 / 确认放行 / 隐私地址阻挡 / privacy+high_risk 聚合）、`typecheck`/`build` EXIT=0、`lint` 0 errors/70 warnings。证据：archive/2026-08-16-dev-0.4.5-git-push-privacy-second-review-gate.md。
+`git_push`/`gh_pr_create` 前自动跑 `repo_security_audit`，在 tracked/changed 文件里发现**个人密钥**（API key/token/私钥）或**隐私地址**（带凭据 URL、私网 IP、本地用户目录路径）时**硬性阻挡**远程写；阻挡结果脱敏列出 findings，要求 Agent 二轮审查处理/确认后，再次调用并传 `security_review_confirmed=true` 放行。实现：新增 `scanRepositoryPrivacyLeaks`/`collectRepositoryFiles`/`formatRemoteSecurityBlock`；`repoSecurityAudit` 合并 `privacy_findings` + `high_risk_findings`；`withRemoteSecurityPreamble` 增加确认参数并在高危未确认时返回阻挡；工具 schema 增加 `security_review_confirmed`；静态 prompt 同步二轮审查语义。验证：`verify` **1587/1587 PASS**（净增 4 条断言：secret 阻挡 / 确认放行 / 隐私地址阻挡 / privacy+high_risk 聚合）、`typecheck`/`build` EXIT=0、`lint` 0 errors/70 warnings。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.5 WSL 下 Windows 工作区跨环境优化 + conversation_rename 独立并行 API（2026-08-16）— source PASS
 
 1. **WSL 下 Windows 工作区跨环境文件操作与 bash**：Linux `path.isAbsolute` 不认识 Windows 盘符，`C:\...` 会被 `resolve` 误拼到 `/mnt/...` 工作区下、并被 bash 越界检查误判。新增 `workspace.ts` 纯函数 `windowsDrivePathToPosix`（盘符 → `/mnt/<drive>/...`）；`tools/index.ts` 新增 `normalizeCrossEnvPath`（文件工具 `resolve` + bash `extractCommandPathRefs` 统一归一）与 `translateWindowsPathsForWslBash`（保守翻译 bash 命令里的盘符路径 token）；`bash()` 归一 `cwd`。仅在 `NEWMARK_WSL_DISTRO` 下启用，非 WSL 行为与旧实现完全等价。
 2. **conversation_rename 独立为「并行响应 API」**：首个完成 Build 的最终响应到达时 fire-and-forget 发起独立 `provider.chat` 请求（system 严格约束「只返回简短名词短语标题」、15s 独立 AbortController 超时），按格式拿到标题后 `renameConversation`，不阻塞主流程、不共享主前缀缓存；失败/无 provider 回退本地 `deriveConversationTitleFromSummary`。`conversation_rename` 工具与 `shouldPromptConversationRename` 判定均保留，首轮 prompt 仍不注入一次性 tool-call 指令。
 
-验证：`npm run typecheck` / `build` EXIT=0；`node dist/tests/verify.js` **1583/1583 PASS**（新增 3 条 source-contract 断言：`windowsDrivePathToPosix` 映射、tools WSL 跨环境归一、rename 独立并行 API）；`goalConversationToolVerify` 16/16、`nativeBashVerify`、`automationBashStressVerify` PASS；`npm run lint` 0 errors / 70 warnings（无新增 warning）。未打包、未 UAC 安装、未 tag / 未远程发布。证据：archive/2026-08-16-dev-0.4.5-wsl-windows-workspace-and-conversation-rename-api.md。
+验证：`npm run typecheck` / `build` EXIT=0；`node dist/tests/verify.js` **1583/1583 PASS**（新增 3 条 source-contract 断言：`windowsDrivePathToPosix` 映射、tools WSL 跨环境归一、rename 独立并行 API）；`goalConversationToolVerify` 16/16、`nativeBashVerify`、`automationBashStressVerify` PASS；`npm run lint` 0 errors / 70 warnings（无新增 warning）。未打包、未 UAC 安装、未 tag / 未远程发布。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.4 TUI 备用屏 VT 启用修复（光标追踪最终根因，2026-08-16）— packaged + installed
 
-安装版 `Newmark --TUI` 走 `Console Runtime.exe`(Electron) → `ELECTRON_RUN_AS_NODE` sidecar，该 sidecar 不像纯 Node 那样自动启用输出句柄 `ENABLE_VIRTUAL_TERMINAL_PROCESSING`，且 `setWindowsConsoleMode` 用错句柄（`-10` 输入而非 `-11` 输出）→ `?1049h` 不被 ConHost 解析 → 备用屏不进入 → 主屏保留滚动历史（滚轮能滚回旧帧、光标追踪错位）。修复：`setWindowsConsoleMode` 改为输出句柄 `-11` 设 `0x4` + 输入句柄 `-10` 设 `0x200`，并在 spawn sidecar 前调用；`app.js` 加 `enableWindowsVirtualTerminal()` 保险；`verify.ts` 加 3 条断言。重新打包 + UAC 安装（`MSI_INSTALL_EXIT=0`、app.asar `A42000BFF5BE34A250912BDF8624B02A61D100B7B53903C57B49C0E5C8EF94FC`）。commit `4ae2499`。证据：archive/20260816-dev-0.4.4-tui-vt-alternate-screen-fix.md。
+安装版 `Newmark --TUI` 走 `Console Runtime.exe`(Electron) → `ELECTRON_RUN_AS_NODE` sidecar，该 sidecar 不像纯 Node 那样自动启用输出句柄 `ENABLE_VIRTUAL_TERMINAL_PROCESSING`，且 `setWindowsConsoleMode` 用错句柄（`-10` 输入而非 `-11` 输出）→ `?1049h` 不被 ConHost 解析 → 备用屏不进入 → 主屏保留滚动历史（滚轮能滚回旧帧、光标追踪错位）。修复：`setWindowsConsoleMode` 改为输出句柄 `-11` 设 `0x4` + 输入句柄 `-10` 设 `0x200`，并在 spawn sidecar 前调用；`app.js` 加 `enableWindowsVirtualTerminal()` 保险；`verify.ts` 加 3 条断言。重新打包 + UAC 安装（`MSI_INSTALL_EXIT=0`、app.asar `A42000BFF5BE34A250912BDF8624B02A61D100B7B53903C57B49C0E5C8EF94FC`）。commit `4ae2499`。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.4 模型切换行为修复（同事）+ 重新打包 + UAC 安装（2026-08-16）— packaged + installed
 
-review 并落地同事的 GUI 模型切换修复（14 文件）：`agent:setModel` 改用 `modelSelectionValue()` 比较 qualified deployment（同名跨 provider 模型切换不再误判）；`ConversationKernel.setModel` 在 Build 运行中记录 pending 选择、下次 dequeue `syncPendingModel` 仅在变化时切换，Electron/WSL 全链路补 `set_model`；`resolveWindowModel` 经 active qualified deployment 解析上下文窗口；GUI 模型切换后立即刷新上下文环/检查器；`verify.ts` 新增同名校窗口断言 + `modelSwitchBehaviorVerify.ts` 挂入 `test:desktop:built`。`dist:windows-release` 完整门禁全绿 → 重新打包 → UAC 安装（`MSI_INSTALL_EXIT=0`、`--version` 0.4.4、安装与打包 app.asar 一致 `CFED407C...`）。产物 MSI `B661C896DCB2262F9E15A34C9AA486076E81954DF2A69F8320DF6F8D566929D2`、ZIP `A1D7B601D4761DB9DD7CC2CF28EE6F2A3929E46D00B925C85BBC72A514F83B99`。已 commit `6a869f3`。证据：archive/20260816-dev-0.4.4-model-switch-behavior-and-repackage.md。
+review 并落地同事的 GUI 模型切换修复（14 文件）：`agent:setModel` 改用 `modelSelectionValue()` 比较 qualified deployment（同名跨 provider 模型切换不再误判）；`ConversationKernel.setModel` 在 Build 运行中记录 pending 选择、下次 dequeue `syncPendingModel` 仅在变化时切换，Electron/WSL 全链路补 `set_model`；`resolveWindowModel` 经 active qualified deployment 解析上下文窗口；GUI 模型切换后立即刷新上下文环/检查器；`verify.ts` 新增同名校窗口断言 + `modelSwitchBehaviorVerify.ts` 挂入 `test:desktop:built`。`dist:windows-release` 完整门禁全绿 → 重新打包 → UAC 安装（`MSI_INSTALL_EXIT=0`、`--version` 0.4.4、安装与打包 app.asar 一致 `CFED407C...`）。产物 MSI `B661C896DCB2262F9E15A34C9AA486076E81954DF2A69F8320DF6F8D566929D2`、ZIP `A1D7B601D4761DB9DD7CC2CF28EE6F2A3929E46D00B925C85BBC72A514F83B99`。已 commit `6a869f3`。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.4 备用屏缓冲修复（TUI 光标追踪最终根因，2026-08-16）— source PASS
 
@@ -2204,11 +2201,11 @@ TUI 此前一直在主屏绘制，主屏保留滚动历史：鼠标滚轮能滚�
 1. **历史信息主动复用**：Build 任务台账（`buildConversationTaskLedger` 尾行）、`CORE_SYSTEM_PROMPT` 的 Build history disclosure、`build_history_query` 工具描述三处由「仅用户问细节时查询」改为「主动复用」语义：非首轮 build block 在任务延续/修复/验证/依赖历史工作时，**在重新调查（重跑命令/重读文件）之前**先调用 `build_history_query` 读取相关历史块的工具活动与结果并复用；保留「查询只读、不授权恢复工作」边界；三处静态文本不破坏 provider 前缀缓存（`contextCacheHitStressVerify` 29/29）。
 2. **TUI 模型长菜单光标跟随加固（含用户复报后的窗口约束根因修复）**：① 内容视图滚动改为**居中跟随**（焦点行保持在视口上 1/3，两行一组的模型选项主行+描述行同屏可见——实测高亮从 row 26 移到 row 17）；② `modelView` 焦点行号由硬编码（`14 + index*2`）改为动态计算（`tierStart`/`deploymentStart` 由 `rows.length` 推导）；③ **窗口尺寸不再 `Math.max(52/20)` 强制放大**——终端窗口小于最小布局时帧会画到窗口外（高亮行落在窗口外不可见），改为严格采用终端实际尺寸 + 输出阶段按可见宽度/高度裁剪（`boundedBody`/`boundedFooter`/覆盖层截断），帧绝不越界；④ 新增 `readWindowSize()` 每次渲染实时读取（`getWindowSize` 优先 → `columns/rows` → `COLUMNS/LINES`），resize 后自适应；⑤ 新增"无功能 TUI"打包前 pty 门禁：`--demo` + `NEWMARK_TUI_DEMO_MODELS` 注入长模型列表，`cursor-follow-pty.test.js` 三窗口组合（100x24/40x12/60x16）遍历 + 真实 resize（100x24→40x12→90x28→52x15）自适应断言，挂入 `test:tui:built`；demo.test.js 补小窗口严格约束 + 实时尺寸单测；清理 TUI/test 历史遗留 tmp 调试文件。
 
-验证：`npm run typecheck`/`build` EXIT=0；`node dist/tests/verify.js` **1574/1574 PASS**（新增 4 条 dev-0.4.4 断言）；`normalChatRegressionVerify`、`goalConversationToolVerify` PASS；`contextCacheHitStressVerify` 29/29；TUI demo 61/61 + stress 7/7 + pty 2/2 + launcher 28/28；`npm run lint` 0 errors（70 既有 warnings）。版本号升至 `0.4.4`，已 commit（`5367bb3` 及后续）并打 tag `dev-0.4.4`；未打包、未 UAC 安装、未远程发布。证据：archive/20260816-dev-0.4.4-history-reuse-prompt-and-tui-model-cursor.md。
+验证：`npm run typecheck`/`build` EXIT=0；`node dist/tests/verify.js` **1574/1574 PASS**（新增 4 条 dev-0.4.4 断言）；`normalChatRegressionVerify`、`goalConversationToolVerify` PASS；`contextCacheHitStressVerify` 29/29；TUI demo 61/61 + stress 7/7 + pty 2/2 + launcher 28/28；`npm run lint` 0 errors（70 既有 warnings）。版本号升至 `0.4.4`，已 commit（`5367bb3` 及后续）并打 tag `dev-0.4.4`；未打包、未 UAC 安装、未远程发布。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.3 打包 + UAC 安装 + win/linux release（2026-08-16）— released
 
-移动本地 tag `dev-0.4.3` 至 `dd08013` 并 push master 与 tag（远端此前无 dev-0.4.3）。Windows：`npm run dist:windows-release` 完整门禁（test:full-release + 打包）全绿后产出 MSI/ZIP，UAC 提权安装 `msiexec /i ... /qb /norestart` exit 0 → Program Files 0.4.3.0，安装目录与打包 `release/win-unpacked/resources/app.asar` SHA-256 一致（`8B241F04D761003ACE3C5C61F72C32F2A37A55406B7BB749CB3E5769C6AB4E1A`），`Newmark.exe --version` → 0.4.3 exit 0。Linux：WSL Ubuntu-24.04 隔离环境完整 `npm test` 全绿（含 thinkingTierMapCacheStressVerify 67/67、deletion-safety 156/156）后 electron-builder 产出 AppImage/deb/unpacked ZIP 并 rsync 回 `release/`。GitHub prerelease `dev-0.4.3` 5 资产全部上传（首次 create 因上传超时留下 draft/untagged 状态，删除后以 `--verify-tag` 重建并逐资产上传修正）。证据：archive/20260816-dev-0.4.3-win-linux-release.md。
+移动本地 tag `dev-0.4.3` 至 `dd08013` 并 push master 与 tag（远端此前无 dev-0.4.3）。Windows：`npm run dist:windows-release` 完整门禁（test:full-release + 打包）全绿后产出 MSI/ZIP，UAC 提权安装 `msiexec /i ... /qb /norestart` exit 0 → Program Files 0.4.3.0，安装目录与打包 `release/win-unpacked/resources/app.asar` SHA-256 一致（`8B241F04D761003ACE3C5C61F72C32F2A37A55406B7BB749CB3E5769C6AB4E1A`），`Newmark.exe --version` → 0.4.3 exit 0。Linux：WSL Ubuntu-24.04 隔离环境完整 `npm test` 全绿（含 thinkingTierMapCacheStressVerify 67/67、deletion-safety 156/156）后 electron-builder 产出 AppImage/deb/unpacked ZIP 并 rsync 回 `release/`。GitHub prerelease `dev-0.4.3` 5 资产全部上传（首次 create 因上传超时留下 draft/untagged 状态，删除后以 `--verify-tag` 重建并逐资产上传修正）。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.3 模型思考强度档位映射（2026-08-16）— released
 
@@ -2219,7 +2216,7 @@ TUI 此前一直在主屏绘制，主屏保留滚动历史：鼠标滚轮能滚�
 3. GUI：新增/编辑模型弹窗新增「思考强度档位映射」文本域（每行 `原生档位=Newmark档位`，留空即默认不变动映射），模型列表 chip 显示映射条目数；i18n en/zh 新增 `model.thinkingTierMap` / `model.thinkingTierMapHelp`；解析/序列化助手 `parseThinkingTierMap` / `serializeThinkingTierMap`。
 4. 配置示例：`config.example.json` 模型条目新增 `thinking_tier_map` 示例（minimal/balanced/deep → low/medium/high）。
 
-验证：`npm run typecheck` / `npm run build` EXIT=0；`node dist/tests/intelligenceTierVerify.js` 610 次请求捕获、8 个映射用例 PASS（精确/降级/ultra 归一/最低档/未配置透传/非思考模型不发/v2 chat 携带映射后档位）；`node dist/tests/verify.js` **1570/1570 PASS**（新增 5 条 source-contract 断言，含缓存压测挂载契约）；`npm run lint` 0 errors（70 既有 warnings）；`npm run test:desktop:built` 全绿（含新缓存压测 `thinkingTierMapCacheStressVerify` 67/67、deletion-safety 156/156）。缓存压测覆盖：真实 provider 序列化路径 30 轮同档位请求映射确定性 + system 前缀字节级稳定（映射档位绝不进缓存前缀）；6 档位 × 10 轮切换稳定；Agent 全链路 5 Build × 8 tool 子轮（默认 medium → balanced、ultra → deep）缓存命中率 ≥0.9 且统计不漂移。版本号保持 `0.4.3`。证据：archive/20260816-dev-0.4.3-thinking-tier-map.md、archive/20260816-dev-0.4.3-thinking-tier-map-cache-stress.md。
+验证：`npm run typecheck` / `npm run build` EXIT=0；`node dist/tests/intelligenceTierVerify.js` 610 次请求捕获、8 个映射用例 PASS（精确/降级/ultra 归一/最低档/未配置透传/非思考模型不发/v2 chat 携带映射后档位）；`node dist/tests/verify.js` **1570/1570 PASS**（新增 5 条 source-contract 断言，含缓存压测挂载契约）；`npm run lint` 0 errors（70 既有 warnings）；`npm run test:desktop:built` 全绿（含新缓存压测 `thinkingTierMapCacheStressVerify` 67/67、deletion-safety 156/156）。缓存压测覆盖：真实 provider 序列化路径 30 轮同档位请求映射确定性 + system 前缀字节级稳定（映射档位绝不进缓存前缀）；6 档位 × 10 轮切换稳定；Agent 全链路 5 Build × 8 tool 子轮（默认 medium → balanced、ultra → deep）缓存命中率 ≥0.9 且统计不漂移。版本号保持 `0.4.3`。证据：本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库）。
 
 ## dev-0.4.3 任务清单同步 + TUI 光标跟随 + 上下文窗口统计 + Guide 注入优化（2026-08-15）— source PASS
 
@@ -2238,11 +2235,11 @@ TUI 此前一直在主屏绘制，主屏保留滚动历史：鼠标滚轮能滚�
 
 ## dev-0.4.2 git push + win/linux release（2026-08-15）— released
 
-提交 `6b32a2b`、打 tag `dev-0.4.2`、push master 与 tag；WSL Ubuntu-24.04 完整 Linux `npm test` 全绿（含 deletion-safety 156/156）后构建 Linux 产物；创建 GitHub prerelease [dev-0.4.2](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.4.2) 并上传 5 资产：Windows MSI `226,056,271` bytes / `FB7056A9A7BCC953071465317A52042CA21F66BB596A64BB452CA3D7980DAFFF`，Windows ZIP `291,914,694` bytes / `41CF0C9B37E568AB1D9C0407AB1E0B77F6F440E55FA98F4296C7EDC9A8ADB761`，Linux AppImage `176,036,624` bytes / `F5FB100DC357BB468A16CF85C3A48E90CE4A914EC75E50C8F35B927C8DDDE8B8`，Linux deb `135,641,332` bytes / `68A45610711C3D8B5C03C8FB501AE36BD15573691646623D13D793ADE08CCB82`，Linux unpacked ZIP `172,144,415` bytes / `FBB699170E43DC1DEDA32F5C4F6DE77CFFFE6921EC5D50B89C66F151E94DC832`。证据：archive/20260815-dev-0.4.2-git-push-and-release.md。
+提交 `6b32a2b`、打 tag `dev-0.4.2`、push master 与 tag；WSL Ubuntu-24.04 完整 Linux `npm test` 全绿（含 deletion-safety 156/156）后构建 Linux 产物；创建 GitHub prerelease [dev-0.4.2](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.4.2) 并上传 5 资产：Windows MSI `226,056,271` bytes / `FB7056A9A7BCC953071465317A52042CA21F66BB596A64BB452CA3D7980DAFFF`，Windows ZIP `291,914,694` bytes / `41CF0C9B37E568AB1D9C0407AB1E0B77F6F440E55FA98F4296C7EDC9A8ADB761`，Linux AppImage `176,036,624` bytes / `F5FB100DC357BB468A16CF85C3A48E90CE4A914EC75E50C8F35B927C8DDDE8B8`，Linux deb `135,641,332` bytes / `68A45610711C3D8B5C03C8FB501AE36BD15573691646623D13D793ADE08CCB82`，Linux unpacked ZIP `172,144,415` bytes / `FBB699170E43DC1DEDA32F5C4F6DE77CFFFE6921EC5D50B89C66F151E94DC832`。证据：本地归档（未纳入公开仓库）。
 
 ## dev-0.4.2 模型校验进度窗口修复（2026-08-15）— source PASS；rebuilt + UAC reinstalled + released
 
-修复两个关联 GUI 问题：模型校验进度轮询每 150ms 整体重建 `sub-win-body` 导致 `marquee-border` 跑马灯动画重置（抽搐），且轮询无条件覆盖当前子窗口导致其他弹出窗口被强制变为模型校验、无法回退。修复后：首次渲染进度容器（`id="model-validation-progress"`），轮询经 `updateModelValidationProgress` 原地更新 `mv-*` 文本/进度条、找不到容器时 no-op；进度窗口打开时重复点击不重建不压栈；完成/失败时若进度窗口仍在则原地替换（关闭可回退上级），否则用聊天消息摘要不抢占窗口。验证：`npm run build` EXIT=0；`node dist/tests/verify.js` **1550/1550 PASS**（新增 1 条防回归断言）。修复后已重新打包并 UAC 重装 0.4.2.0。证据：archive/20260815-dev-0.4.2-model-validation-marquee-and-subwindow-fix.md、archive/20260815-dev-0.4.2-repackage-after-ui-fix.md。
+修复两个关联 GUI 问题：模型校验进度轮询每 150ms 整体重建 `sub-win-body` 导致 `marquee-border` 跑马灯动画重置（抽搐），且轮询无条件覆盖当前子窗口导致其他弹出窗口被强制变为模型校验、无法回退。修复后：首次渲染进度容器（`id="model-validation-progress"`），轮询经 `updateModelValidationProgress` 原地更新 `mv-*` 文本/进度条、找不到容器时 no-op；进度窗口打开时重复点击不重建不压栈；完成/失败时若进度窗口仍在则原地替换（关闭可回退上级），否则用聊天消息摘要不抢占窗口。验证：`npm run build` EXIT=0；`node dist/tests/verify.js` **1550/1550 PASS**（新增 1 条防回归断言）。修复后已重新打包并 UAC 重装 0.4.2.0。证据：本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库）。
 
 ## dev-0.4.2 工具删除安全硬性审查 + 软性 prompt 要求（2026-08-15）— source PASS；package pending
 
@@ -2253,7 +2250,7 @@ TUI 此前一直在主屏绘制，主屏保留滚动历史：鼠标滚轮能滚�
 3. 软性要求：`DESKTOP/src/core/agent.ts` 的 `CORE_SYSTEM_PROMPT` 注入静态 `Deletion safety` 规则与 `delete_file` 工具说明；所有 prompt 改动均为静态文本、不改 `systemPromptCache` 的 identity 结构，故不破坏 provider 前缀缓存命中。
 4. 测试：`DESKTOP/src/tests/verify.ts` 新增 15 条断言（delete_file 4、deletion guard 9、buildSystemPrompt 删除安全契约 + 缓存命中 2）。
 
-验证：`npm run build` EXIT=0（0.4.2）；`node dist/tests/verify.js` 1549/1549 PASS；`npm run lint` 0 errors（70 既有 warnings，新增代码 0 warning）。删除安全压力测试 `DESKTOP/scripts/deletion-safety-stress.cjs` 修正 Windows/bash 虚拟路径语义后 **156/156 PASS**，并挂为 `test:deletion-safety` npm script、纳入 `test:desktop:built` 常驻门禁。Windows MSI/便携 ZIP 已重建并 UAC 提权安装（0.4.1.0 → 0.4.2.0；UI 修复后同版本重装）：MSI `226,056,271` bytes / SHA-256 `FB7056A9A7BCC953071465317A52042CA21F66BB596A64BB452CA3D7980DAFFF`，ZIP `291,914,694` bytes / `41CF0C9B37E568AB1D9C0407AB1E0B77F6F440E55FA98F4296C7EDC9A8ADB761`；安装目录与打包目录 `app.asar` SHA-256 一致（`40081F5B23046E5D05DBBD9C2BE64A3FF63E28A7E544CA016832582221071F1B`）。已 commit（`6b32a2b`）、打 tag `dev-0.4.2`、push 并发布 GitHub prerelease（Windows MSI/ZIP + Linux AppImage/deb/unpacked ZIP）。证据：archive/20260815-dev-0.4.2-tool-deletion-safety-hard-soft.md、archive/20260815-dev-0.4.2-deletion-safety-stress.md、archive/20260815-dev-0.4.2-windows-package-and-uac-install.md、archive/20260815-dev-0.4.2-repackage-after-ui-fix.md、archive/20260815-dev-0.4.2-git-push-and-release.md。
+验证：`npm run build` EXIT=0（0.4.2）；`node dist/tests/verify.js` 1549/1549 PASS；`npm run lint` 0 errors（70 既有 warnings，新增代码 0 warning）。删除安全压力测试 `DESKTOP/scripts/deletion-safety-stress.cjs` 修正 Windows/bash 虚拟路径语义后 **156/156 PASS**，并挂为 `test:deletion-safety` npm script、纳入 `test:desktop:built` 常驻门禁。Windows MSI/便携 ZIP 已重建并 UAC 提权安装（0.4.1.0 → 0.4.2.0；UI 修复后同版本重装）：MSI `226,056,271` bytes / SHA-256 `FB7056A9A7BCC953071465317A52042CA21F66BB596A64BB452CA3D7980DAFFF`，ZIP `291,914,694` bytes / `41CF0C9B37E568AB1D9C0407AB1E0B77F6F440E55FA98F4296C7EDC9A8ADB761`；安装目录与打包目录 `app.asar` SHA-256 一致（`40081F5B23046E5D05DBBD9C2BE64A3FF63E28A7E544CA016832582221071F1B`）。已 commit（`6b32a2b`）、打 tag `dev-0.4.2`、push 并发布 GitHub prerelease（Windows MSI/ZIP + Linux AppImage/deb/unpacked ZIP）。证据：本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库）。
 
 ## dev-0.4.1 GUI/TUI 打磨 + 刷新配置锁定（2026-08-15）— source PASS；Windows 已打包 + UAC 安装
 
@@ -2263,7 +2260,7 @@ TUI 此前一直在主屏绘制，主屏保留滚动历史：鼠标滚轮能滚�
 2. GUI「刷新配置」改为锁定式重载：点刷新先复用启动封面锁定界面，后端重载 + 前端重新水合完成后直接显示新配置，消除「先闪现初始默认状态」的中间帧（sessionStorage flag + .config-reloading 封面 + 水合后揭盖）。
 3. TUI：确认 Ultra 推理档位已存在并补测（无源码改动）；新增 MemoryLab O 键总览弹窗；内容区（模型选择 / MemoryLab tag 选择等几乎所有列表视图）光标跟随滚动；新增 TUI/src/i18n.js 使切换语言后界面骨架跟随（导航/侧栏/视图标题/设置等）；对话区 Build block 次级菜单支持 → 进入、↑/↓ 选中、Enter 逐条展开/收起「工具调用 / 思考」事件，并补渲染 thought/thought_result 事件。
 
-验证：TUI 59/59 PASS；npm run typecheck / build EXIT=0（TUI 已复制到 dist/tui）。Windows MSI/便携 ZIP 已重建并 UAC 提权安装到 C:\Program Files\Newmark Agent（0.4.0.0 → 0.4.1.0）。产物：MSI 226,080,847 bytes / SHA-256 46751C0019D75AEC5A642E72BE2A29292776907FB53CA81B1DA9898C03A39DA7；ZIP 291,905,246 bytes / SHA-256 FF73E1894F64954C36B5EF3BC5910414FBC610DF29AC177D7406FDF437309F51。未打 git tag、未远程发布。证据：archive/20260815-dev-0.4.1-gui-tui-polish.md、archive/20260815-dev-0.4.1-windows-package-and-uac-install.md。
+验证：TUI 59/59 PASS；npm run typecheck / build EXIT=0（TUI 已复制到 dist/tui）。Windows MSI/便携 ZIP 已重建并 UAC 提权安装到 C:\Program Files\Newmark Agent（0.4.0.0 → 0.4.1.0）。产物：MSI 226,080,847 bytes / SHA-256 46751C0019D75AEC5A642E72BE2A29292776907FB53CA81B1DA9898C03A39DA7；ZIP 291,905,246 bytes / SHA-256 FF73E1894F64954C36B5EF3BC5910414FBC610DF29AC177D7406FDF437309F51。未打 git tag、未远程发布。证据：本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库）。
 
 ## dev-0.4.0 分支交流 + 思考活动 + 历史卸载延迟（2026-08-14）— source PASS；package pending
 
@@ -2273,7 +2270,7 @@ TUI 此前一直在主屏绘制，主屏保留滚动历史：鼠标滚轮能滚�
 2. context_history_manage 的 remove 改为「只卸载长期 log + 声明后当前 Build Block 结束后才对后续 Block 生效」：pendingHistoryRemovals 队列 + fingerprint 兜底，status 暴露 pendingRemovals，保证 block 内 provider 前缀缓存稳定。
 3. 新增「允许分支交流」对话类型（创建时勾选，GUI 复选框 / CLI --branch-communication / 对话列表特殊标记）：移除运行分支唯一性（ConversationTreeState.runningNodeIds），每活跃分支独立维护完整缓存；新增 branch_list / branch_send / branch_read / branch_create 工具；SubAgent 缓存命中优化（delegatedPrompt 移除易变 flowPc、mailbox body 截断）。
 
-验证：npm run typecheck / build EXIT=0；node dist/tests/verify.js 1530/1530 PASS；branch/SubAgent/gui-tui-cli 相关测试全绿。未重新打包、未 UAC 安装、未打 Git tag、未远程发布。证据：archive/20260814-dev-0.4.0-branch-communication-and-reasoning.md；release-notes：DESKTOP/scripts/release-notes-dev-0.4.0.md。
+验证：npm run typecheck / build EXIT=0；node dist/tests/verify.js 1530/1530 PASS；branch/SubAgent/gui-tui-cli 相关测试全绿。未重新打包、未 UAC 安装、未打 Git tag、未远程发布。证据：本地归档（未纳入公开仓库）；release-notes：DESKTOP/scripts/release-notes-dev-0.4.0.md。
 
 ## dev-0.3.14 goal/conversation tools + cordis-core migration + real-provider stress (2026-08-14) — release-usable
 
@@ -2281,13 +2278,13 @@ Added goal_manage (Agent self-enters/updates/completes/exits Goal state) and con
 
 Repackaged dev-0.3.14 (MSI 226,040,216 bytes / SHA-256 1CAB2A1D558AC0C8DBF85D7DE60E539401EB828E361005F2F9320AEBAF4ABD7A; ZIP 291,866,935 bytes / 6E7298D42641B2393CC71665EB15E1E743A034D9D2D2589CDCC2653452CEBC3C). User-side real OpenRouter stress with deepseek/deepseek-v4-flash passed ALL 11 scenarios (cli-rounds, ui-rounds, ui-escape-stop, goal-continuation, goal-manage-tool, conversation-rename-tool, multi-mode-switch, queue-drain, conversation-isolation, long-context, release-process-cleanup) — Final Verdict release-usable.
 
-Key re-test adjudication: goal-continuation previously failed on meta-llama/llama-3.3-70b (729s timeout); re-run on deepseek-v4-flash passes cleanly (assistantCalls=4), confirming the earlier failure was model exact-marker noncompliance, not an app regression. Evidence: archive/20260814-goal-conversation-tool-cordis-and-real-provider-stress.md; machine reports archive/2026-08-14-real-provider-stress-dev-0.3.14-deepseek-v4-flash*.md.
+Key re-test adjudication: goal-continuation previously failed on meta-llama/llama-3.3-70b (729s timeout); re-run on deepseek-v4-flash passes cleanly (assistantCalls=4), confirming the earlier failure was model exact-marker noncompliance, not an app regression. Evidence: 本地归档（未纳入公开仓库）; machine reports 本地归档（未纳入公开仓库）*.md.
 
 ## dev-0.3.14 package build + real OpenRouter provider stress (2026-08-14) — Windows MSI/ZIP rebuilt; 7/8 real-provider scenarios pass
 
 Windows MSI and win-unpacked ZIP artifacts for 0.3.14 were rebuilt locally after all feature slices landed (editor Copilot prediction cache, tool backgrounding background_tool/read_tool_result, toolcall compression compress_tool_result, SubAgent communication cache/context regression, DSH dynamic compression + prefix-cache reuse, three-tier UI font hierarchy, keyboard full-coverage cross-stress). Artifact fingerprints: app.asar 157,465,514 bytes / SHA-256 05215A26B17E7CE874248FC49A1F69C0AB9EECF45BA8B89E776D5F57E4B30F22; MSI 226,040,216 bytes / BE9DEC38DEDF66519E2E10065DF27AF8ECF966F5FEAC51854F476CC8454D40B8; ZIP 291,852,625 bytes / B34E0E476823B570E9817EA4F47F6440DBBA2930871F3F7D4785B47B2E1D0FCD.
 
-The real OpenRouter provider stress (meta-llama/llama-3.3-70b-instruct) passed 7/8 scenarios: cli-rounds (6), ui-rounds (4), ui-escape-stop, queue-drain, conversation-isolation, long-context (17400-char payload), and release-process-cleanup. goal-continuation failed as app-timeout-or-provider-timeout, adjudicated as harness exact-marker noncompliance by the open-source model (no max-depth warning; app Goal state machine normal per historical same-scenario evidence) rather than an app regression. Remote publication and Linux packages remain pending. Evidence: archive/20260814-dev-0.3.14-package-build-and-real-provider-stress.md and machine report archive/2026-08-14-real-provider-stress-dev-0.3.14-openrouter.md.
+The real OpenRouter provider stress (meta-llama/llama-3.3-70b-instruct) passed 7/8 scenarios: cli-rounds (6), ui-rounds (4), ui-escape-stop, queue-drain, conversation-isolation, long-context (17400-char payload), and release-process-cleanup. goal-continuation failed as app-timeout-or-provider-timeout, adjudicated as harness exact-marker noncompliance by the open-source model (no max-depth warning; app Goal state machine normal per historical same-scenario evidence) rather than an app regression. Remote publication and Linux packages remain pending. Evidence: 本地归档（未纳入公开仓库） and machine report 本地归档（未纳入公开仓库）
 
 ## `dev-0.3.13` context compression, cache, and prompt policy (2026-08-13) — source PASS; package pending
 
@@ -2295,7 +2292,7 @@ The source candidate now separates context pressure by lifetime. The active Buil
 
 System-prompt assembly is now cache-oriented: history-ranked skill selection is removed from the stable prompt, the complete linked-plan Markdown/revision is no longer injected into ordinary requests, and the fixed Context V2 `linked_plan` slot is left empty for ordinary model calls. The base prompt discloses that linked-plan exists and remains available through the explicit tool/Plan policy. A mandatory bounded inline task checklist is required for multi-step work with `pending`, `in_progress`, `completed`, and `blocked` states. Request-scoped task/bootstrap metadata is sent on the first provider request of a Build and once after compression, not on repeated tool sub-turns.
 
-Source gates passed: `npm run build`; `node dist/tests/verify.js` `1501/1501`; performance/cache `17/17`; normal-chat regression; Context System V2; Context V2 stress `1461/1461`; compression pressure `34/34`; and `npm run lint` with `0` errors and 60 existing warnings. No `dev-0.3.13` package was rebuilt or published, no MSI/UAC installation was performed, and the last verified package remains `dev-0.3.12`. Detailed operation record: [`archive/20260813-dev-0.3.13-context-compression-cache-prompt.md`](archive/20260813-dev-0.3.13-context-compression-cache-prompt.md).
+Source gates passed: `npm run build`; `node dist/tests/verify.js` `1501/1501`; performance/cache `17/17`; normal-chat regression; Context System V2; Context V2 stress `1461/1461`; compression pressure `34/34`; and `npm run lint` with `0` errors and 60 existing warnings. No `dev-0.3.13` package was rebuilt or published, no MSI/UAC installation was performed, and the last verified package remains `dev-0.3.12`. Detailed operation record: 本地归档（未纳入公开仓库）.
 
 ## Built-in editor Copilot prediction optimization (2026-08-13) — packaged candidate PASS; no additional UAC
 
@@ -2303,7 +2300,7 @@ The native editor's frequent `No completion` and slow-response path was reproduc
 
 Source/build evidence: `npm run build` passed, `node dist/tests/verify.js` passed `1495/1495`, and `npm run lint` reported 0 errors with 60 pre-existing warnings. Packaged evidence: native editor smoke, packaged CLI smoke, context-compression CLI pressure, console-wrapper boundary stress, deterministic SSE editor prediction, and final real APInebula `gpt-5.4-mini` editor IPC all passed. Real provider returned 11 chars through delta with `firstDeltaMs=4285` and `totalMs=4287`; this latency is provider/network response time, not hidden. Final app.asar content check confirms main delta IPC, preload listener, UI delta/cache/bounds, and forced editor `chat_stream`.
 
-Final local candidate fingerprints: app.asar `157131813` bytes / `C197E6F992729C468B4CB4F6440CC0DBD1E1331F18F83EC067A49FA9A2F4B83F`; MSI `225896856` bytes / `27447481E6FFF8D20CC4CC629E55269FF1DBD1C7102474DD14C1B0535CD4AE38`; portable ZIP `299390078` bytes / `30079E9CECB1B77AAF70486D6C7FDAC042894669CB2F0DAD08371A429DF3AB74`. No additional global UAC install or Program Files mutation was performed in this slice. Full evidence: [`archive/20260813-dev-0.3.12-editor-copilot-prediction-optimization.md`](archive/20260813-dev-0.3.12-editor-copilot-prediction-optimization.md).
+Final local candidate fingerprints: app.asar `157131813` bytes / `C197E6F992729C468B4CB4F6440CC0DBD1E1331F18F83EC067A49FA9A2F4B83F`; MSI `225896856` bytes / `27447481E6FFF8D20CC4CC629E55269FF1DBD1C7102474DD14C1B0535CD4AE38`; portable ZIP `299390078` bytes / `30079E9CECB1B77AAF70486D6C7FDAC042894669CB2F0DAD08371A429DF3AB74`. No additional global UAC install or Program Files mutation was performed in this slice. Full evidence: 本地归档（未纳入公开仓库）.
 
 ## Flow continuation, archive interruption, and lifecycle gate (2026-08-13) — safe package PASS; no UAC
 
@@ -2311,13 +2308,13 @@ This slice closes the user-visible Flow lifecycle failures. A paused Flow resume
 
 The background/close path now records renderer unresponsive/responsive transitions and window-close/will-quit decisions in startup diagnostics. The real packaged lifecycle gate passed minimize-to-tray with a live hidden process, direct close with no packaged-process residue, and startup recovery with a responding window. No global `C:\Program Files\Newmark Agent` process was killed or UAC installation was initiated in this slice.
 
-Verification passed: source feature gate `1482/1482`, Flow pause/stop/draft pressure (`8` iterations, `200` concurrent drafts, `12` churn cycles, no leaks), archive concurrency (`19` assertions), `48` asynchronous archives, context-compression pressure (`34` assertions), performance (`12` assertions), TUI `56/56`, SSH PTY with four restarts, WSL PTY/Flow/light-theme, CLI contracts, GUI/TUI/CLI shared-backend stress, and the rebuilt packaged GUI Flow pause/resume/archive/switch smoke. The final packaged GUI measured running-Flow archive UI removal at `112 ms`, accepted three duplicate archive receipts, and confirmed the settling Flow returned `archived: true` without a suspension. Final safe-package fingerprints are app.asar `157099444` bytes / `5A4EC8CF1E4BC3F1E16749A822E62A4BFEC43B2588A8DA26405BDD064078C8D4`, MSI `225884568` bytes / `27CD340EBAA71CF088905007A171D4AE24A474F0617E1FF180F1A52FE0F02C45`, and portable ZIP `291752665` bytes / `D13376B03D541423C912049E82AD9FCF1FD9ADB3A4ED5641D0CA2928F0F9A688`. Detailed evidence: [`archive/20260813-dev-0.3.12-flow-lifecycle-repair-and-release-gates.md`](archive/20260813-dev-0.3.12-flow-lifecycle-repair-and-release-gates.md).
+Verification passed: source feature gate `1482/1482`, Flow pause/stop/draft pressure (`8` iterations, `200` concurrent drafts, `12` churn cycles, no leaks), archive concurrency (`19` assertions), `48` asynchronous archives, context-compression pressure (`34` assertions), performance (`12` assertions), TUI `56/56本地归档（未纳入公开仓库）112 ms`, accepted three duplicate archive receipts, and confirmed the settling Flow returned `archived: true` without a suspension. Final safe-package fingerprints are app.asar `157099444` bytes / `5A4EC8CF1E4BC3F1E16749A822E62A4BFEC43B2588A8DA26405BDD064078C8D4`, MSI `225884568` bytes / `27CD340EBAA71CF088905007A171D4AE24A474F0617E1FF180F1A52FE0F02C45`, and portable ZIP `291752665` bytes / `D13376B03D541423C912049E82AD9FCF1FD9ADB3A4ED5641D0CA2928F0F9A688`. Detailed evidence: 本地归档（未纳入公开仓库）.
 
 ## Installed workspace recovery repair (2026-08-13) — pass; release payload rebuilt
 
 The real `C:\Program Files\Newmark Agent` MSI installation reproduced a startup failure from the user screenshot: an older persisted external/current workspace pointed at the installation directory, and conversation prewarming attempted to create `C:\Program Files\Newmark Agent\conversations`, producing `EPERM` and preventing the main UI from opening. The workspace layer now treats package/install paths as protected, filters stale external entries, clears a stale current pointer before hydration, and lets normal configuration recover to a user-root internal workspace. A Windows regression test verifies that no protected `conversations` directory is created and that the cleaned registries are persisted.
 
-After rebuilding and repairing the MSI in place, the real no-`--root` GUI promoted its CDP UI in about `2.1 s`; the new log contained `conversation-state-ready` and `prewarmed-ui-shown` with no new EPERM or startup-attempt failure. `Work/State.json` and `Work/External.json` no longer contained the Program Files path, and no installed-directory process remained after cleanup. The installed GUI↔CLI/TUI gate, real APInebula model CLI/TUI roundtrip with Esc stop/recovery/restart, protected-root redirection, and ZIP unpacked smoke all passed. Detailed evidence: [`archive/20260813-dev-0.3.12-installed-workspace-recovery.md`](archive/20260813-dev-0.3.12-installed-workspace-recovery.md).
+After rebuilding and repairing the MSI in place, the real no-`--root` GUI promoted its CDP UI in about `2.1 s`; the new log contained `conversation-state-ready` and `prewarmed-ui-shown` with no new EPERM or startup-attempt failure. `Work/State.json` and `Work/External.json` no longer contained the Program Files path, and no installed-directory process remained after cleanup. The installed GUI↔CLI/TUI gate, real APInebula model CLI/TUI roundtrip with Esc stop/recovery/restart, protected-root redirection, and ZIP unpacked smoke all passed. Detailed evidence: 本地归档（未纳入公开仓库）.
 
 Rebuilt artifact fingerprints are MSI `4D42B3AD865765A3944C349FAB638A1835E97FCB76DC1315588A9088DF7B62FE`, portable ZIP `A56B37A7173BB69441BBCDCAEBF5DC7D77C7F6D0C45FA799E6BF82FCCA4BDF8E`, and packaged `app.asar` `84D65F79E82FE5CCB47BD01CAFADDDDA3B1EEE5E7173EEDECA5D0F005B7C0433`. The published `dev-0.3.12` prerelease assets now contain this repaired payload. The startup/memory benchmark gate was also corrected to accept the shipped target-bound Browser partition instead of its obsolete fixed literal.
 
@@ -2333,9 +2330,9 @@ After the three canaries, the MSI was installed locally through elevated Windows
 
 The user-pressure repair cycle now carries three targeted fixes: `DESKTOP/newmark.bat` preserves child exit codes through `endlocal`; fresh GUI roots default to deterministic `general.close_behavior=exit` while explicit existing `minimize` remains supported; and legacy AppData migration is restricted to the canonical `~/.Newmark` runtime root, so an explicit `--root` cannot inherit conversations, archives, providers, or external workspaces. The rebuilt portable package's real loopback SSH/PTY gate now repeats the explicit TUI `--root` check and passed with empty providers/conversations/external workspaces and an internal workspace path.
 
-Source and safe packaged gates pass: `test:full-release` (`1480/1480` feature checks, Context System V2 `1461/1461`, TUI `56/56`, launcher `27/27`, shared GUI/TUI/CLI `21` provider-request fixtures), serial packaged safe black-box `28` cases, archive/performance/compression/shared-backend gates, and lint with `0` errors. The third fresh no-context black-box run is still in progress under the only permitted delegated model, `gpt-5.6-luna` with `max` reasoning; `5.6-sol` and other subagent models are not used. MSI/UAC remains intentionally unrun, and the existing Program Files installation remains untouched/stale pending explicit authorization.
+Source and safe packaged gates pass: `test:full-release` (`1480/1480` feature checks, Context System V2 `1461/1461`, TUI `56/56`, launcher `27/27`, shared GUI/TUI/CLI `21` provider-request fixtures), serial packaged safe black-box `28本地归档（未纳入公开仓库）0` errors. The third fresh no-context black-box run is still in progress under the only permitted delegated model, `gpt-5.6-luna` with `max` reasoning; `5.6-sol` and other subagent models are not used. MSI/UAC remains intentionally unrun, and the existing Program Files installation remains untouched/stale pending explicit authorization.
 
-Evidence: [`archive/20260812-2135-dev-0.3.12-luna-blackbox-repair.md`](archive/20260812-2135-dev-0.3.12-luna-blackbox-repair.md).
+Evidence: 本地归档（未纳入公开仓库）.
 
 ## Current dev-0.3.12 status (2026-08-12) — safe product gates pass; release-flow gate FAIL; installed-directory gate HOLD
 
@@ -2343,17 +2340,17 @@ The release work repaired the independent D1–D6 user-level pressure findings, 
 
 ## Latest independent no-context release-flow audit (2026-08-12) — FAIL/HOLD
 
-The fresh black-box tester passed the main safe product probes but found one P1 release-boundary failure and two P2 release-gate risks. `release/win-unpacked` contains `292` files while the portable ZIP extraction contains `291`; the only extra path is `conversations/state.json`, written after the ZIP timestamp. This is classified as post-package runtime contamination/reproducibility failure, not proof that the builder put the file into the ZIP. The installed read-only validation script's `--help` did not short-circuit and launched the existing Program Files validation path after about `124 s`. GUI native exit codes were observable through the process handle but not `$LASTEXITCODE`, and invalid `validate-models` selection returned `[]` with exit `0`. Full evidence is [`archive/20260812-1630-dev-0.3.12-blackbox-release-flow-adjudication.md`](archive/20260812-1630-dev-0.3.12-blackbox-release-flow-adjudication.md) and the delegated raw report [`archive/20260812-1610-dev-0.3.12-blackbox-release-report.md`](archive/20260812-1610-dev-0.3.12-blackbox-release-report.md).
+The fresh black-box tester passed the main safe product probes but found one P1 release-boundary failure and two P2 release-gate risks. `release/win-unpacked` contains `292` files while the portable ZIP extraction contains `291`; the only extra path is `conversations/state.json`, written after the ZIP timestamp. This is classified as post-package runtime contamination/reproducibility failure, not proof that the builder put the file into the ZIP. The installed read-only validation script's `--help` did not short-circuit and launched the existing Program Files validation path after about `124 s`. GUI native exit codes were observable through the process handle but not `$LASTEXITCODE`, and invalid `validate-models` selection returned `[]` with exit `0`. Full evidence is 本地归档（未纳入公开仓库） and the delegated raw report 本地归档（未纳入公开仓库）.
 
 Current release decision: `SAFE_PRODUCT_GATES=PASS_WITH_BOUNDARIES`; `RELEASE_FLOW_GATE=FAIL`; `LATEST_REBUILD_UAC=NOT_RUN`; `PROGRAM_FILES_PACKAGE=STALE`; `INSTALLED_DIRECTORY_ACCEPTANCE=HOLD/NO-GO`; `TUI_BLACKBOX=BLOCKED_NO_PTY`.
 
-The latest targeted `BLACKBOX_GUI_NO_MODEL` gate is also closed: the rebuilt GUI, renderer runtime, WorkRun, and visible diagnostic all settle as terminal `error` with no `done/final_response`; evidence is [`archive/2026-08-12-blackbox-gui-no-model-repair.md`](archive/2026-08-12-blackbox-gui-no-model-repair.md). Full installed-directory evidence: [`archive/2026-08-12-no-context-installed-directory-blackbox-release-gate.md`](archive/2026-08-12-no-context-installed-directory-blackbox-release-gate.md).
+The latest targeted `BLACKBOX_GUI_NO_MODEL` gate is also closed: the rebuilt GUI, renderer runtime, WorkRun, and visible diagnostic all settle as terminal `error` with no `done/final_response`; evidence is 本地归档（未纳入公开仓库）. Full installed-directory evidence: 本地归档（未纳入公开仓库）.
 
 ## Current TUI light-theme repair (2026-08-12) — source and rebuilt safe package pass
 
 The TUI now resolves appearance as one shared theme-safe pair during snapshot hydration and again at render time. A persisted `light` theme with empty legacy `ui.font_color`/`ui.background_color` fields receives `#1F2937` on `#F0F2F8`; an explicit low-contrast pair such as `#B7E4FF` on `#F0F2F8` is replaced for painting by the readable light defaults. This prevents the previous contrast guard from returning an unpainted ANSI frame and exposing black host rows. The fallback is local to TUI appearance rendering and does not alter conversation history or provider state.
 
-Focused TUI coverage passes `55/55`, built GUI/TUI launcher verification passes `25/25`, loopback SSH/PTY interaction with resize/light theme and four restarts passes, and the complete source release gate passes. The rebuilt package then passes `SAFE_INSTALLED_SHAPE_STRESS` and `SAFE_BLACKBOX_GATES` (`28/28`); no UAC installation was performed. Detailed evidence: [`archive/2026-08-12-tui-light-theme-repair.md`](archive/2026-08-12-tui-light-theme-repair.md).
+Focused TUI coverage passes `55/55`, built GUI/TUI launcher verification passes `25/25`, loopback SSH/PTY interaction with resize/light theme and four restarts passes, and the complete source release gate passes. The rebuilt package then passes `SAFE_INSTALLED_SHAPE_STRESS` and `SAFE_BLACKBOX_GATES` (`28/28`); no UAC installation was performed. Detailed evidence: 本地归档（未纳入公开仓库）.
 
 Latest package fingerprints are `release/win-unpacked/resources/app.asar` `157,068,983` bytes / `1A7C444A4DF068E2BBE62D72B6CE17EED7ADBAB40F51697A3619CC303E32A324`, MSI `225,888,664` bytes / `426F7A010C76AAA04C043C8E03644010C5A1317F5B254FD6F7B3C53E7386E774`, and portable ZIP `291,743,396` bytes / `6AAD7C293761939CF0C739F82EBB7D651B438994124A413322BD1437C3B118BA`.
 
@@ -2361,7 +2358,7 @@ Latest package fingerprints are `release/win-unpacked/resources/app.asar` `157,0
 
 The packaged startup-recovery smoke found a stable `3.07–3.09 s` delay before the first deliberate Browser-tab click became usable. The cause was a five-second guest-creation floor intended for background/prewarm demand being applied to an explicit visible-tab activation. `DESKTOP/src/ui/index.html` now bypasses that floor only when `ensureBrowserPanel({ activate: true })` represents a user-visible activation; background requests retain the memory/startup floor. The Browser guest continues to use a target-bound `persist:newmark-browser-<workspace/conversation>` partition, so the startup gate now checks the required prefix and target suffix instead of a stale fixed partition literal. The focused regression records the split behavior.
 
-The latest rebuilt package passed safe black-box `28/28`, protected-install-shape and shared-root/restart GUI/TUI/CLI redirection, startup recovery (`startupMs=1046`, `browserOpenMs=45`), ZIP/MSI feature smokes, tray lifecycle, GUI↔CLI synchronization, context-compression/console-wrapper boundary stress, Flow/Subagent, Memory Lab, model settings, option feedback, Skills/MCP, queue, terminal, workspace/conversation, archive, and single-instance shared-backend checks. Source `test:full-release` completed through the GUI/TUI/CLI shared-backend lane (`21` provider requests); WSL was skipped only because local `Ubuntu-24.04` is unavailable. The current `_ref` APInebula probe was blocked by provider timeout/rate limiting and is not counted as a real-model pass. Full evidence: [`archive/2026-08-12-dev-0.3.12-subagent-findings-repair-and-expanded-release-gates.md`](archive/2026-08-12-dev-0.3.12-subagent-findings-repair-and-expanded-release-gates.md).
+The latest rebuilt package passed safe black-box `28/28`, protected-install-shape and shared-root/restart GUI/TUI/CLI redirection, startup recovery (`startupMs=1046`, `browserOpenMs=45`), ZIP/MSI feature smokes, tray lifecycle, GUI↔CLI synchronization, context-compression/console-wrapper boundary stress, Flow/Subagent, Memory Lab, model settings, option feedback, Skills/MCP, queue, terminal, workspace/conversation, archive, and single-instance shared-backend checks. Source `test:full-release` completed through the GUI/TUI/CLI shared-backend lane (`21` provider requests); WSL was skipped only because local `Ubuntu-24.04` is unavailable. The current `_ref` APInebula probe was blocked by provider timeout/rate limiting and is not counted as a real-model pass. Full evidence: 本地归档（未纳入公开仓库）.
 
 Current decision: `SAFE_TEMPORARY_SOURCE_GATE=PASS`; `REBUILT_WINDOWS_PACKAGE_GATE=PASS`; `SAFE_INSTALLED_SHAPE_GATE=PASS`; `EXPANDED_PACKAGED_GATE=PASS`; `LATEST_REBUILD_UAC=NOT_RUN`; `ACTUAL_PROGRAM_FILES_PACKAGE=STALE_AND_HOLD`.
 
@@ -2373,13 +2370,13 @@ Final source verification passed `1478/1478`, Context System V2 `1461/1461`, TUI
 
 ## Latest no-context installed-directory audit (2026-08-11) — NO-GO
 
-An independent tester used only the real installation directory, executable probes, and observed GUI/TUI/CLI behavior. It reproduced a P0 TUI crash: the machine-wide installation tried to create `C:\Program Files\Newmark Agent\conversations` and received `EACCES` on the first edit/send. It also found a P1 `validate-models` no-output/process-leak case, a P1 GUI close/process-cleanup delay, and a P2 invalid-model request that reached a real Provider instead of being rejected at the argument boundary. GUI chat, Plan/Goal/Flow, immediate archive, CLI discovery/exit contracts, and TUI startup passed; most TUI continuation and three-entry shared-backend pressure was blocked by the P0 or real-provider quota response. No UAC operation was performed. Full evidence: [`archive/2026-08-11-no-context-installed-directory-full-pressure-audit.md`](archive/2026-08-11-no-context-installed-directory-full-pressure-audit.md).
+An independent tester used only the real installation directory, executable probes, and observed GUI/TUI/CLI behavior. It reproduced a P0 TUI crash: the machine-wide installation tried to create `C:\Program Files\Newmark Agent\conversations` and received `EACCES` on the first edit/send. It also found a P1 `validate-models` no-output/process-leak case, a P1 GUI close/process-cleanup delay, and a P2 invalid-model request that reached a real Provider instead of being rejected at the argument boundary. GUI chat, Plan/Goal/Flow, immediate archive, CLI discovery/exit contracts, and TUI startup passed; most TUI continuation and three-entry shared-backend pressure was blocked by the P0 or real-provider quota response. No UAC operation was performed. Full evidence: 本地归档（未纳入公开仓库）.
 
 ## Latest user-pressure fail-closed and post-build gate (2026-08-11) — pass
 
 The no-provider and unavailable explicit-model paths now fail closed: the shared ConversationKernel rejects, persists an error work run, and emits no synthetic `done` or `final_response`; CLI converts the shared error to `[Error]` plus exit code `1`. The regression is covered in `DESKTOP/src/tests/normalChatRegressionVerify.ts`. Archive behavior remains immediate and destructive from the user's perspective: running targets can be archived, the row does not roll back, archive persistence is parallel/atomic, and the target runtime is force-stopped.
 
-The final source gate passed after this repair. Additional packaged pressure passed safe black-box `28/28`, ZIP and MSI administrative-image smoke, active compression, queue/plan/Flow, rapid conversation switching, real-model packaged GUI/TUI/CLI, and two read-only real-model validation rounds. WSL TUI remains an environment skip because local `Ubuntu-24.04` is unavailable. The optional multi-window smoke was not counted: the current single-instance product focuses the existing window while that stale probe expects two renderers; the probe was restored without a source change. Full evidence is [`archive/2026-08-11-dev-0.3.12-user-pressure-fail-closed-and-release-gates.md`](archive/2026-08-11-dev-0.3.12-user-pressure-fail-closed-and-release-gates.md).
+The final source gate passed after this repair. Additional packaged pressure passed safe black-box `28/28`, ZIP and MSI administrative-image smoke, active compression, queue/plan/Flow, rapid conversation switching, real-model packaged GUI/TUI/CLI, and two read-only real-model validation rounds. WSL TUI remains an environment skip because local `Ubuntu-24.04` is unavailable. The optional multi-window smoke was not counted: the current single-instance product focuses the existing window while that stale probe expects two renderers; the probe was restored without a source change. Full evidence is 本地归档（未纳入公开仓库）.
 
 The older package fingerprints in this historical section are superseded by the 2026-08-12 rebuild recorded above.
 
@@ -2387,7 +2384,7 @@ The older package fingerprints in this historical section are superseded by the 
 
 `FileModelValidationCache` now supports read-only loading, so default CLI validation reuses fresh redacted seven-day records without config writes; only `--persist` saves metadata. An explicit CLI `send --model` is rejected before history/work-run/provider transport when unavailable, and unambiguous `provider/model` names are normalized. The new `DESKTOP/scripts/release-safe-installed-shape-stress.cjs` drove the final package's CLI state, TUI startup/exit, and GUI startup/cleanup with `--root C:\Program Files\Newmark Agent`; all three redirected to `C:\Users\12252\.Newmark\Roots\...`, and watched Program Files mutable paths stayed unchanged.
 
-The final source/package gate passed. The package's own SSH TUI, CLI, context compression (`9` requests, `fallback:false`), wrapper boundary, safe black-box `28/28`, tray lifecycle, ZIP/MSI administrative-image smoke, and final real-model validation/cache-reuse gate passed. The final real APInebula `gpt-5.4-mini` validation took `73,893 ms` for the intentional persisted probe and `3,038 ms` for the subsequent read-only reuse, with unchanged config hash and zero process residue. A real-model TUI/CLI roundtrip was attempted but the provider returned HTTP `403 bad response 808`; all processes and temp roots were cleaned. Full evidence: [`archive/2026-08-11-dev-0.3.12-user-pressure-cache-root-repair-and-final-gates.md`](archive/2026-08-11-dev-0.3.12-user-pressure-cache-root-repair-and-final-gates.md).
+The final source/package gate passed. The package's own SSH TUI, CLI, context compression (`9` requests, `fallback:false`), wrapper boundary, safe black-box `28/28`, tray lifecycle, ZIP/MSI administrative-image smoke, and final real-model validation/cache-reuse gate passed. The final real APInebula `gpt-5.4-mini` validation took `73,893 ms` for the intentional persisted probe and `3,038 ms` for the subsequent read-only reuse, with unchanged config hash and zero process residue. A real-model TUI/CLI roundtrip was attempted but the provider returned HTTP `403 bad response 808`; all processes and temp roots were cleaned. Full evidence: 本地归档（未纳入公开仓库）.
 
 ## Current conversation-archive pressure repair (2026-08-11) — source and release gates pass
 
@@ -2413,7 +2410,7 @@ Release evidence:
 - Independent post-build pressure passed automatic and active compression `34/34`, Context System V2 `1461/1461`, automation/Bash/PTY pressure with `108` concurrent context-switch requests and zero dropped messages, the packaged CLI compression tool lane (`9` requests, `fallback:false`), wrapper boundary stress, and the expanded packaged safe black-box matrix `28/28`.
 - Current rebuilt artifacts: `release/win-unpacked/resources/app.asar` is `156,990,094` bytes, SHA-256 `20D38B17C54E083FA0E4EB0054CB52F418598698CF43AF66FD581E0D32DDCB79`; MSI is `225,876,376` bytes, SHA-256 `60D6A937B6479099847F9B7CD5888FABCF93536F80E3A7B7DFD82E38D3995BFD`; portable ZIP is `291,725,440` bytes, SHA-256 `AF5F0B3161F82DBE03636B8A2E1DC0D5FD4804E3A8E0127B2A07D69BFBC560A4`.
 - Final installed payload matches the rebuilt package: GUI `D21F0988...`, console runtime `55A26A0F...`, wrapper `D558A5C1...`, and installed `app.asar` `20D38B17...`. The installed surface gate passed GUI↔CLI conversation synchronization, SSH/TUI PTY with four restarts, active compression (`9` requests), and two real `APInebula/gpt-5.4-mini` validation rounds with unchanged config hash/bytes/mtime.
-- The real user config remains at SHA-256 `9A0B4A91A82CEFCAA3A8CFF90899F4296F4AB972FD5F1B9B4761A7F984E94C75`; no credentials or populated config contents were written to the evidence. The complete installation and installed gate record is [`archive/2026-08-11-dev-0.3.12-global-uac-install-and-installed-gate.md`](archive/2026-08-11-dev-0.3.12-global-uac-install-and-installed-gate.md).
+- The real user config remains at SHA-256 `9A0B4A91A82CEFCAA3A8CFF90899F4296F4AB972FD5F1B9B4761A7F984E94C75`; no credentials or populated config contents were written to the evidence. The complete installation and installed gate record is 本地归档（未纳入公开仓库）.
 
 Current verdict: `SAFE_TEMPORARY_PACKAGE_GATE=PASS`; `REBUILT_WINDOWS_PACKAGE_GATE=PASS`; `SAFE_INSTALLED_SHAPE_GATE=PASS`; `MSI_GLOBAL_UAC=PASS_PRIOR_GATE`; `LATEST_REBUILD_UAC=NOT_RUN`; `ACTUAL_PROGRAM_FILES_PACKAGE=STALE`; `INSTALLED_RELEASE_GATE=NO-GO_UNTIL_FINAL_MSI_RETEST`; `ARCHIVE_PRESSURE_GATE=PASS_IN_PORTABLE_AND_SOURCE`; `READONLY_VALIDATION_CACHE_GATE=PASS`; `REAL_MODEL_TUI_CLI_GATE=BLOCKED_BY_HTTP_403_BAD_RESPONSE_808`.
 
@@ -2430,7 +2427,7 @@ Newmark Agent/
 │  ├─ package.json          version, build/test/release scripts, Electron Builder metadata
 │  └─ newmark.bat            portable Windows GUI/TUI/CLI dispatch wrapper
 ├─ TUI/                     terminal renderer, state machine, adapters, demo tests, and TUI contract
-├─ archive/                 timestamped cold evidence, stress reports, screenshots, and operation records
+├─ 本机私有归档（已从公开仓库排除）                 timestamped cold evidence, stress reports, screenshots, and operation records
 ├─ docs/context-system/     context-compression/history design notes and acceptance evidence
 ├─ SCRIPTS/                 repository-level historical release/helper scripts
 ├─ dist-harmonyos/          generated headless HarmonyOS/server bundle
@@ -2441,7 +2438,7 @@ Newmark Agent/
 └─ THIRD_PARTY_NOTICES.md   third-party license notices shipped with packages
 ```
 
-The durable business state belongs under `~/.Newmark` (or an explicitly writable isolated `--root`); installation directories and generated `release/` artifacts are not mutable configuration stores. `archive/` is append-oriented evidence rather than runtime state. The GUI, TUI, and CLI enter the same target-bound conversation kernel and provider/tool adapters, while platform hosts (Electron utility, WSL, native Windows tools) remain explicit backend boundaries.
+The durable business state belongs under `~/.Newmark` (or an explicitly writable isolated `--root`); installation directories and generated `release/` artifacts are not mutable configuration stores. 本地归档（未纳入公开仓库） is append-oriented evidence rather than runtime state. The GUI, TUI, and CLI enter the same target-bound conversation kernel and provider/tool adapters, while platform hosts (Electron utility, WSL, native Windows tools) remain explicit backend boundaries.
 
 ## Original independent no-context release audit (2026-08-11) — historical blocking input
 
@@ -2454,7 +2451,7 @@ The release is blocked by two P1 findings:
 - A GUI started with `--root <temporary-root>` still launches Chromium children with `--user-data-dir=C:\Users\12252\AppData\Roaming\Newmark Agent`; `Preferences`, `DIPS`, `DIPS-wal`, `DevToolsActivePort`, `Session Storage`, and `blob_storage` received writes during the test window. The business/config root was temporary, but the Electron user-data root was not, so further GUI live pressure was stopped.
 - The installed `C:\Program Files\Newmark Agent\resources\app.asar` is `156,956,772` bytes with SHA-256 `A49B64F961091A8EA36F5C8E0F406C8851AB4D0253FE297160BB2A3CF2EF8F3E`, while the current portable package is `156,968,282` bytes with SHA-256 `14FE1894F602A10466E3C586DBAA16D0A9819A454AE34605BF32679524CBC18A`. Same version is not treated as byte-identical release evidence.
 
-Additional P2 findings are literal `-version` hanging in all four executables, an unknown top-level command not terminating within 45 seconds, GUI `Esc` not proven to interrupt a still-running request (the request naturally completed), and an invalid model deployment returning an error-like response with CLI exit `0`. GUI Plan/Flow and live simultaneous GUI/TUI/CLI pressure were skipped after the user-data isolation violation, not counted as passes. Full matrix, reproduction, severity, and repair acceptance conditions are in [`archive/2026-08-11-no-context-subagent-blackbox-final.md`](archive/2026-08-11-no-context-subagent-blackbox-final.md), with machine-readable evidence in [`archive/2026-08-11-no-context-subagent-blackbox-final.json`](archive/2026-08-11-no-context-subagent-blackbox-final.json).
+Additional P2 findings are literal `-version` hanging in all four executables, an unknown top-level command not terminating within 45 seconds, GUI `Esc` not proven to interrupt a still-running request (the request naturally completed), and an invalid model deployment returning an error-like response with CLI exit `0`. GUI Plan/Flow and live simultaneous GUI/TUI/CLI pressure were skipped after the user-data isolation violation, not counted as passes. Full matrix, reproduction, severity, and repair acceptance conditions are in 本地归档（未纳入公开仓库）, with machine-readable evidence in 本地归档（未纳入公开仓库）.
 
 Historical verdict at audit time: `BLOCK_MSI_UAC`.
 
@@ -2470,7 +2467,7 @@ Acceptance evidence:
 - The safe packaged black-box matrix passes `26/26` help probes. Empty-provider CLI `send` returns exit `1` with `No LLM configured`. The real user config hash remains `428F19B08ADE1B03DB61F6796D1012A62B02BE24E4926921663705F8FFC5DFC2`, and the final Newmark process count is zero.
 - The final package boundary is `release/win-unpacked/resources/app.asar` (`156,968,282` bytes, SHA-256 `14FE1894F602A10466E3C586DBAA16D0A9819A454AE34605BF32679524CBC18A`), `release/Newmark-Agent-0.3.12-x64.msi` (`225,843,509` bytes, SHA-256 `B309775E9FAE3CD753560100A74845BDF07170F0AC2F3C651D86CEA2DF3621D6`), and `release/Newmark-Agent-0.3.12-win-unpacked-x64.zip` (`291,710,303` bytes, SHA-256 `4453B33AA2B6584A952A227AFC69E84F63F31A14280E1FF7DAAD3A0B13B6DA06`).
 - Real DeepSeek pressure passes `6/6` CLI rounds, `4/4` GUI rounds, two Goal continuations, queue drain, conversation isolation, and long context. Targeted GUI `Esc` stop passes for DeepSeek (`3618 ms`) and APInebula `gpt-5.4-mini` (`7279 ms`). Portable TUI/CLI real-model roundtrip, stop/recovery, restart startup, and restart request pass. One combined GUI run naturally completed before its interrupt point and is recorded as a non-interrupt observation, not counted as stop evidence; the dedicated targeted runs are the stop acceptance.
-- The full 34-assertion compression pressure lane covers automatic threshold and active model-dispatched compression/history management, hot/cold archive/restore, paged reads, idempotency, and byte-identical visible history. The complete record is [`archive/2026-08-11-dev-0.3.12-safe-portable-release-gates.md`](archive/2026-08-11-dev-0.3.12-safe-portable-release-gates.md).
+- The full 34-assertion compression pressure lane covers automatic threshold and active model-dispatched compression/history management, hot/cold 本地归档（未纳入公开仓库）, paged reads, idempotency, and byte-identical visible history. The complete record is 本地归档（未纳入公开仓库）.
 
 Previous verdict: `SAFE_PORTABLE_RELEASE_GATE=PASS`; current installation verdict: `BLOCK_MSI_UAC`.
 
@@ -2478,7 +2475,7 @@ Previous verdict: `SAFE_PORTABLE_RELEASE_GATE=PASS`; current installation verdic
 
 The long-running independent subAgent used only README.md, real installed --help/-h/--version output, and visible GUI/TUI behavior. It independently passed help termination, non-model management, real-model CLI Build 20/20, basic GUI Build/Goal/queue/button-Stop/conversation scenarios, sensitive-output scanning, and process cleanup. It did not complete TUI functional pressure or the full GUI-TUI-CLI shared-backend concurrency closure.
 
-New blockers are recorded in [archive/2026-08-10-no-context-subagent-blackbox-final.md](archive/2026-08-10-no-context-subagent-blackbox-final.md): CLI send with an empty configuration returns a successful exit code despite No LLM configured; Plan/Goal fresh-root runs hit provider-timeout and sidecar-unavailable runtime failures; GUI Esc did not interrupt one long request while the Stop button did; Flow with no available workflow silently retained the prompt; and the isolated-root test used a hard link to the real config inode, after which the real config hash changed from the test-start record. The hard-link result is a test-isolation failure and is not by itself proof that ordinary copied-config roots mutate user state, but the missing original byte backup means the configuration boundary remains a release blocker. No source fix was made in this retest.
+New blockers are recorded in 本地归档（未纳入公开仓库）: CLI send with an empty configuration returns a successful exit code despite No LLM configured; Plan/Goal fresh-root runs hit provider-timeout and sidecar-unavailable runtime failures; GUI Esc did not interrupt one long request while the Stop button did; Flow with no available workflow silently retained the prompt; and the isolated-root test used a hard link to the real config inode, after which the real config hash changed from the test-start record. The hard-link result is a test-isolation failure and is not by itself proof that ordinary copied-config roots mutate user state, but the missing original byte backup means the configuration boundary remains a release blocker. No source fix was made in this retest.
 
 ## Historical dev-0.3.12 user-level pressure repair and installed gate (2026-08-10)
 
@@ -2498,17 +2495,17 @@ Final real-model evidence is separated by surface. The final installed GUI passe
 
 ## dev-0.3.12 full-feature black-box retest (2026-08-10)
 
-A fresh first-time-user pass used only `README.md` and the installed help family for discovery, then exercised the real `C:\Program Files\Newmark Agent` installation with APInebula `gpt-5.4-mini`. Help/version probes for all documented entrypoints and subcommands exited `0` without provider work. The complete scenario matrix is [`archive/2026-08-10-blackbox-dev-0.3.12-full-feature-pressure-plan.md`](archive/2026-08-10-blackbox-dev-0.3.12-full-feature-pressure-plan.md), and the result record is [`archive/2026-08-10-blackbox-dev-0.3.12-full-feature-pressure.md`](archive/2026-08-10-blackbox-dev-0.3.12-full-feature-pressure.md).
+A fresh first-time-user pass used only `README.md` and the installed help family for discovery, then exercised the real `C:\Program Files\Newmark Agent` installation with APInebula `gpt-5.4-mini`. Help/version probes for all documented entrypoints and subcommands exited `0` without provider work. The complete scenario matrix is 本地归档（未纳入公开仓库）, and the result record is 本地归档（未纳入公开仓库）.
 
 Targeted scenarios passed: GUI queue drain, conversation isolation, 8k automatic compression, and Goal continuation; TUI Esc stop/recovery/restart; CLI Plan/Goal/Flow modes; state, Memory Lab, skills, compatibility, fuzzy preview, update dry-run, help termination, secret hygiene, root isolation, and cleanup. The unqualified sustained-release claim is blocked by three live risks: GUI repeated UI prompts stalled on round 5 with backend `working` after `321.6 s`; a 20-round installed CLI lane timed out at `121.8 s`; and real `validate-models` timed out at `120.1 s`. These are classified as app/provider timeout or provider-latency risks rather than hidden or converted to passes. No installed process or temporary root remained and the real `~/.Newmark/config.json` hash was unchanged.
 
 ## Historical dev-0.3.11 installed black-box release pressure audit (2026-08-10)
 
-The real `C:\Program Files\Newmark Agent` installation was tested as a first-time user using only README/help discovery. The deterministic `npm.cmd test` gate, packaged hash boundary, top-level help/version, APInebula `gpt-5.4-mini` GUI/CLI matrix, independent console `Newmark.exe` 20-round control, and TUI 10-round/restart control passed. The release is **not accepted for full-feature pressure release** because a real TUI long-task Stop/Esc recovery sequence stalled after two stop requests, and subcommand help is inconsistent: `validate-models --help` did not terminate within 30 seconds while `state --help` and `skills-market --help` performed live operations. WSL TUI stress remained unavailable because local `Ubuntu-24.04`/`wsl.exe` timed out. Full scenario matrix, failure reproduction, evidence and repair acceptance conditions: [`archive/2026-08-10-blackbox-release-pressure-test-dev-0.3.11.md`](archive/2026-08-10-blackbox-release-pressure-test-dev-0.3.11.md).
+The real `C:\Program Files\Newmark Agent` installation was tested as a first-time user using only README/help discovery. The deterministic `npm.cmd test` gate, packaged hash boundary, top-level help/version, APInebula `gpt-5.4-mini` GUI/CLI matrix, independent console `Newmark.exe` 20-round control, and TUI 10-round/restart control passed. The release is **not accepted for full-feature pressure release** because a real TUI long-task Stop/Esc recovery sequence stalled after two stop requests, and subcommand help is inconsistent: `validate-models --help` did not terminate within 30 seconds while `state --help` and `skills-market --help` performed live operations. WSL TUI stress remained unavailable because local `Ubuntu-24.04`/`wsl.exe` timed out. Full scenario matrix, failure reproduction, evidence and repair acceptance conditions: 本地归档（未纳入公开仓库）.
 
 ## dev-0.3.11 real-model pressure fixes and release (2026-08-10)
 
-`DESKTOP/package.json` and `DESKTOP/package-lock.json` declare version `0.3.11`. This cycle repeated isolated temporary-root release testing against the packaged executable and repaired the tester-facing failures instead of treating them as provider noise. The full deterministic gate now passes `1465/1465` assertions. The final APInebula `gpt-5.4-mini` matrix passes 20 CLI rounds, 20 GUI rounds, three Goal continuations, queue drain, conversation isolation, and a 600-fragment long-context run; the packaged process cleanup result is `remaining=0`. Evidence: [`archive/2026-08-10-real-provider-stress-dev-0.3.11-real-provider-final.md`](archive/2026-08-10-real-provider-stress-dev-0.3.11-real-provider-final.md).
+`DESKTOP/package.json` and `DESKTOP/package-lock.json` declare version `0.3.11`. This cycle repeated isolated temporary-root release testing against the packaged executable and repaired the tester-facing failures instead of treating them as provider noise. The full deterministic gate now passes `1465/1465` assertions. The final APInebula `gpt-5.4-mini` matrix passes 20 CLI rounds, 20 GUI rounds, three Goal continuations, queue drain, conversation isolation, and a 600-fragment long-context run; the packaged process cleanup result is `remaining=0`. Evidence: 本地归档（未纳入公开仓库）.
 
 The release fixes have four groups:
 
@@ -2544,13 +2541,13 @@ Final artifacts:
 - `release/Newmark-Agent-0.3.10-amd64.deb`: 135,458,768 bytes, SHA-256 `BC596453869FE5A542B7328A9261A780BD1C5A6569CE0B3EDA0621FD53A5320E`.
 - `release/Newmark-Agent-0.3.10-linux-unpacked-x64.zip`: 171,911,069 bytes, SHA-256 `5A92E4BC8EB428CCE335FE50D81B4E51C7308842BA53BD6C63E232E73D2A6160`.
 
-The Linux 20-run latency benchmark passed with hot first-event p95 `13.548 ms`, hot first-token p95 `10 ms`, cold local-before-provider `52.681 ms`, two tool-provider requests, and zero hot persistence writes. Package-only warnings were limited to the existing jsdom optional `xhr-sync-worker.js` resolution warning and electron-builder's Linux `desktopName` metadata warning; no real provider API was called by the deterministic smokes. The post-publication `npm.cmd run release:github-assets-verify -- --repo positer/Newmark-Agent --tag dev-0.3.10` audit re-downloaded all five assets, matched every local size and SHA-256, and reran the Windows and WSL/Linux package smokes. Full evidence is in `archive/2026-08-09-dev-0.3.10-win-linux-release.md` and `archive/20260721-dev-0.3.10-linux-agent-latency.json`.
+The Linux 20-run latency benchmark passed with hot first-event p95 `13.548 ms`, hot first-token p95 `10 ms`, cold local-before-provider `52.681 ms`, two tool-provider requests, and zero hot persistence writes. Package-only warnings were limited to the existing jsdom optional `xhr-sync-worker.js` resolution warning and electron-builder's Linux `desktopName` metadata warning; no real provider API was called by the deterministic smokes. The post-publication `npm.cmd run release:github-assets-verify -- --repo positer/Newmark-Agent --tag dev-0.3.10` audit re-downloaded all five assets, matched every local size and SHA-256, and reran the Windows and WSL/Linux package smokes. Full evidence is in 本地归档（未纳入公开仓库） and 本地归档（未纳入公开仓库）.
 
 ## dev-0.3.10 black-box real-model release stress (2026-08-09)
 
 The packaged executable was tested as a new user would approach it: help was attempted first, then real-model pressure was applied through isolated packaged CLI/UI sessions. APInebula `gpt-5.4-mini` passed 20 cross-process CLI rounds, independent queue drain, conversation isolation, and a 600-fragment long-context run. The default model shown by CLI help, DeepSeek `deepseek-v4-flash`, passed six CLI and six UI rounds. All packaged process-cleanup checks returned zero remaining processes.
 
-The release is not ready for real-model acceptance. Goal activation failed on a fresh process before the first provider call with `Electron utility runtime stop could not confirm child exit`; the same failure recurred after normal UI pressure and quarantined later runtime restarts. A 20-round same-window UI run also hit an intermittent round-5 `Guide · Rejected` state and timed out after 240 seconds, although two six-round APInebula runs and one six-round DeepSeek run passed. Direct `--help` and `--TUI --help` entered a desktop process tree instead of returning usage, while `--cli --help` returned only an interactive banner. Goal/Flow pause/resume, crash recovery, and live-backend timeout boundaries were therefore not claimed as passed. Full matrix and redacted evidence are in [`archive/2026-08-09-blackbox-real-model-release-test.md`](archive/2026-08-09-blackbox-real-model-release-test.md) and the linked `archive/2026-08-09-real-provider-stress-blackbox-*.md` reports.
+The release is not ready for real-model acceptance. Goal activation failed on a fresh process before the first provider call with `Electron utility runtime stop could not confirm child exit`; the same failure recurred after normal UI pressure and quarantined later runtime restarts. A 20-round same-window UI run also hit an intermittent round-5 `Guide · Rejected` state and timed out after 240 seconds, although two six-round APInebula runs and one six-round DeepSeek run passed. Direct `--help` and `--TUI --help` entered a desktop process tree instead of returning usage, while `--cli --help` returned only an interactive banner. Goal/Flow pause/resume, crash recovery, and live-backend timeout boundaries were therefore not claimed as passed. Full matrix and redacted evidence are in 本地归档（未纳入公开仓库） and the linked 本地归档（未纳入公开仓库） reports.
 
 ## dev-0.3.9 local Windows package and installation (2026-08-09)
 
@@ -2561,7 +2558,7 @@ Final artifacts:
 - `release/Newmark-Agent-0.3.9-x64.msi`: 225,843,508 bytes, SHA-256 `65B1CCF339CF7E7087D55DAD71D6BE2E5E8B7624A1C15A150DBFF7572D5B5477`.
 - `release/Newmark-Agent-0.3.9-win-unpacked-x64.zip`: 291,678,671 bytes, SHA-256 `02F5B464569041393D713B54A8D114E93899CC7702447865F10AF02205CABAFB`.
 
-The elevated MSI installation completed with exit code 0 at `C:\Program Files\Newmark Agent`, product version `0.3.9.0`, product code `{3F8CD41B-5C7C-4E05-B1F6-A759012F8CE5}`. Installed `resources/app.asar` and packaged `app.asar` both hash to `B4192300457792D4439DBDFA7292C94299B3217C76C4801FF44F039AD1194A4C`. The real `~/.Newmark` root remained at 17,920 files and 283,767,519 bytes with unchanged `config.json` SHA-256 `22EBC1420C92AC656E9BF5F899C0188E9004EB17B6D79B1BED93F437EABF8247`; no installed Newmark process remained after smoke testing. The operation record is `archive/2026-08-09-dev039-local-package-install.md`.
+The elevated MSI installation completed with exit code 0 at `C:\Program Files\Newmark Agent`, product version `0.3.9.0`, product code `{3F8CD41B-5C7C-4E05-B1F6-A759012F8CE5}`. Installed `resources/app.asar` and packaged `app.asar` both hash to `B4192300457792D4439DBDFA7292C94299B3217C76C4801FF44F039AD1194A4C`. The real `~/.Newmark` root remained at 17,920 files and 283,767,519 bytes with unchanged `config.json` SHA-256 `22EBC1420C92AC656E9BF5F899C0188E9004EB17B6D79B1BED93F437EABF8247`; no installed Newmark process remained after smoke testing. The operation record is 本地归档（未纳入公开仓库）.
 
 ## dev-0.3.10 Goal/Build lifecycle hardening (2026-08-09)
 
@@ -2571,7 +2568,7 @@ The Build Block terminal path in `DESKTOP/src/core/agent.ts` now guarantees one 
 
 `DESKTOP/src/core/runtimeLifecycle.ts` writes owner-isolated role-scoped startup markers for `main`, `utility`, and `wsl` owners. The marker records PID liveness so a live backend is not confused with a previous crashed owner, and one Utility owner cannot clean or overwrite another owner. `DESKTOP/src/core/agent.ts` stores the owner identity on each active conversation and WorkRun: a cold load preserves a still-live backend run even when its frontend five-minute tracking timestamp is old, while a dead owner or an unexpected-exit marker converts orphaned runs to `interrupted`, pauses Goal/Flow on the first load, and writes the recovery overview. `DESKTOP/src/main.ts`, `DESKTOP/src/conversation-utility-host.ts`, and `DESKTOP/src/wsl-agent-host.ts` mark lifecycle state clean only when no unpaused Goal or active Flow remains, so forced/failed shutdowns are recoverable.
 
-`DESKTOP/src/tests/guideWorkRunVerify.ts` adds executable assertions for short-Build overview durability, one-time terminal overview writes, Stop→pause, ordinary-input pause preservation, immediate Goal-driven resume, stale frontend tracking with a live backend owner, and main-role crash recovery for Goal and Flow. Verification passed `npm.cmd run typecheck`, `npm.cmd run build`, the focused guide/work-run suite, runtime isolation/context/UI/pool regressions, and the full `verify.js` gate with 1461/1461 assertions. The dated operation record is `archive/2026-08-09-dev-0.3.10-goal-build-lifecycle.md`.
+`DESKTOP/src/tests/guideWorkRunVerify.ts` adds executable assertions for short-Build overview durability, one-time terminal overview writes, Stop→pause, ordinary-input pause preservation, immediate Goal-driven resume, stale frontend tracking with a live backend owner, and main-role crash recovery for Goal and Flow. Verification passed `npm.cmd run typecheck`, `npm.cmd run build`, the focused guide/work-run suite, runtime isolation/context/UI/pool regressions, and the full `verify.js` gate with 1461/1461 assertions. The dated operation record is 本地归档（未纳入公开仓库）.
 
 ## dev-0.3.9 Prime Agent-informed durable context folding (2026-08-08)
 
@@ -2579,7 +2576,7 @@ Newmark's active context management now separates a bounded hot cache from compl
 
 `context_history_manage search` now searches both hot and cold folded segments, `read` pages one selected segment under explicit entry and character bounds, `restore` can reinsert a cold segment only when its summary marker is still present, and `status` reports hot cache and cold archive separately. Restore writes an append-only tombstone instead of rewriting history. Archive write failure keeps the would-be-evicted entry in the hot cache, preferring a temporarily oversized cache over irreversible loss. IDs remain monotonic across restarts and restore tombstones. `compression_archive_enabled` is the rollback switch and defaults to true. User-visible `chatMessages` remain byte-identical throughout these operations.
 
-Verification: TypeScript typecheck passes; the built desktop verification gate passes 1461/1461 assertions. New coverage proves hot eviction remains searchable, bounded cold reads do not mutate active or displayed history, status distinguishes storage tiers, cold history survives restart, and cold restore appends a tombstone. The design reference is Prime Intellect's [Prime Agent: A self-improving RLM agent](https://www.primeintellect.ai/blog/prime-agent); the implementation record is `archive/2026-08-08-dev039-prime-agent-context-archive.md`.
+Verification: TypeScript typecheck passes; the built desktop verification gate passes 1461/1461 assertions. New coverage proves hot eviction remains searchable, bounded cold reads do not mutate active or displayed history, status distinguishes storage tiers, cold history survives restart, and cold restore appends a tombstone. The design reference is Prime Intellect's [Prime Agent: A self-improving RLM agent](https://www.primeintellect.ai/blog/prime-agent); the implementation record is 本地归档（未纳入公开仓库）.
 
 ## dev-0.3.9 local Windows package, installation, and stress audit (2026-08-08)
 
@@ -2587,7 +2584,7 @@ The Windows release pipeline rebuilt `Newmark-Agent-0.3.9-x64.msi` and `Newmark-
 
 Package stress found and fixed a target-local force-stop defect in both `DESKTOP/src/core/electronUtilityRuntimePool.ts` and `DESKTOP/src/core/wslAgentRuntimePool.ts`: after giving a worker a bounded chance to persist its `force_interrupted` settlement, the second Stop now always terminates the target process/process group and leaves it down until the next prompt. The prior branch skipped process termination when the kernel acknowledged `action=force`, leaving `running` and `stopRequested` stuck. `runtimeIsolationVerify` now covers that acknowledgement path. Two package harnesses were also aligned with established contracts: the dev-0.0.8 mock recognizes stable human-readable peer names without requiring a UUID suffix, and dev-0.0.9 accepts the intentional `restarted=false` force-stop receipt. The large-input performance fixture receives a 45-second CDP control budget while all performance acceptance thresholds remain unchanged.
 
-The final source release gate, package CLI/SSH smoke, ZIP smoke, MSI smoke, installed dev-0.0.8 and dev-0.1.0 feature smokes, installed startup recovery, and installed tray lifecycle pass. Installed startup reached interaction in 1,832 ms and opened Browser on demand in 1,102 ms. Two installed dev-0.0.9 repetitions passed force-stop/isolation but failed later Browser/UI work (one click-state miss and one CDP timeout), so that lane remains unstable. A formal 20-run performance set was stopped after a one-run diagnostic produced 584.53 MiB startup private memory against the 525 MiB absolute/522 MiB relative limit and 534.1 ms trusted input latency under 4× CPU throttling against the 150 ms limit. These failures are retained as release blockers rather than reported as a passing 20-run set. Full evidence and hashes are in `archive/2026-08-08-dev039-local-package-install-stress.md`.
+The final source release gate, package CLI/SSH smoke, ZIP smoke, MSI smoke, installed dev-0.0.8 and dev-0.1.0 feature smokes, installed startup recovery, and installed tray lifecycle pass. Installed startup reached interaction in 1,832 ms and opened Browser on demand in 1,102 ms. Two installed dev-0.0.9 repetitions passed force-stop/isolation but failed later Browser/UI work (one click-state miss and one CDP timeout), so that lane remains unstable. A formal 20-run performance set was stopped after a one-run diagnostic produced 584.53 MiB startup private memory against the 525 MiB absolute/522 MiB relative limit and 534.1 ms trusted input latency under 4× CPU throttling against the 150 ms limit. These failures are retained as release blockers rather than reported as a passing 20-run set. Full evidence and hashes are in 本地归档（未纳入公开仓库）.
 
 ## dev-0.2.6 pause-aware Flow Stop/Esc, force-stop, and per-conversation draft persistence (2026-08-03)
 
@@ -2637,7 +2634,7 @@ Flow component execution now publishes through the same public work-event bounda
 
 Flow provider errors belong to the failing Build. Nested provider JSON is reduced to its useful HTTP status and message, the renderer records that the Build error was already surfaced, and the Flow top-level catch only creates a notification when no Block error reached the UI. This removes the duplicate raw `[Flow error] [LLM Error: ...]` Agent bubble while retaining actionable failure detail. The display contract is intentionally public-event-only: hidden or encrypted model chain-of-thought is never exposed.
 
-Ownership and evidence: `DESKTOP/src/tests/verify.ts` covers live boundary publication, relay wiring, immediate runtime/button state, 402 error condensation, and no duplicate Agent bubble; `DESKTOP/scripts/dev018-mode-ui-smoke.cjs` now also exercises a running Flow Block in real Electron and accepts an explicit evidence screenshot path. The accepted screenshot is `archive/20260802-dev-0.2.2-flow-live-takeover-ui.png`, and the implementation/verification record is `archive/20260802-dev-0.2.2-flow-live-build-state.md`. The final unified `npm.cmd test` gate exits 0 across DESKTOP, the five-tier request gate, native TUI, real loopback SSH PTY, Ubuntu WSL PTY, CLI contracts, and the 18-conversation GUI/TUI/CLI shared-backend stress.
+Ownership and evidence: `DESKTOP/src/tests/verify.ts` covers live boundary publication, relay wiring, immediate runtime/button state, 402 error condensation, and no duplicate Agent bubble; `DESKTOP/scripts/dev018-mode-ui-smoke.cjs` now also exercises a running Flow Block in real Electron and accepts an explicit evidence screenshot path. The accepted screenshot is 本地归档（未纳入公开仓库）, and the implementation/verification record is 本地归档（未纳入公开仓库）. The final unified `npm.cmd test` gate exits 0 across DESKTOP, the five-tier request gate, native TUI, real loopback SSH PTY, Ubuntu WSL PTY, CLI contracts, and the 18-conversation GUI/TUI/CLI shared-backend stress.
 
 ## dev-0.2.1 shared intelligence tiers (2026-08-01)
 
@@ -2695,7 +2692,7 @@ The final Windows package carries separate GUI and console-subsystem executables
 
 Terminal layout now measures display columns rather than JavaScript character count. CJK/full-width/emoji characters reserve two columns, combining characters reserve zero, message paragraphs wrap explicitly within the Conversation detail pane, continuation rows retain the role-column indent, and blank sidebar rows are padded before the fixed separator. A long Chinese response therefore cannot trigger terminal-owned continuation at column zero.
 
-Acceptance now includes the current TUI 48/48 suite, launcher source/artifact checks, a compiled-launcher ConPTY run, a literal PowerShell `Newmark --TUI` ConPTY run from a new temporary project, shared-backend stress, and the complete DESKTOP suite with exit code 0. The current MSI installs `Newmark.exe` under `C:\Program Files\Newmark Agent` and exposes it through the user PATH; the temporary source npm link and obsolete per-user installation were removed. Detailed evidence is in `archive/20260729-tui-cjk-partition-global-launcher.md`, `archive/20260729-dev-0.2.0-tui-shared-backend.md`, and `archive/20260729-tui-operation-workflow-automation-scrolling.md`.
+Acceptance now includes the current TUI 48/48 suite, launcher source/artifact checks, a compiled-launcher ConPTY run, a literal PowerShell `Newmark --TUI` ConPTY run from a new temporary project, shared-backend stress, and the complete DESKTOP suite with exit code 0. The current MSI installs `Newmark.exe` under `C:\Program Files\Newmark Agent` and exposes it through the user PATH; the temporary source npm link and obsolete per-user installation were removed. Detailed evidence is in 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, and 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.12 One-shot Memory Lab Visualization and Release (2026-07-28)
 
@@ -2707,7 +2704,7 @@ The overview renderer now owns one dirty-frame scheduler guarded by `memoryLabOv
 
 The accepted disposable-root stress created and archived 120 conversations in a zero-interval packaged Electron burst with no missing IDs, receipts, or pending operations; P95 interaction latency was `11.8 ms` for creation and `13.5 ms` for archive. Its 300-component × 600-query lane returned the relevant memory first in all 600 cases, produced no budget violations, achieved P50 `7.184 ms`, P95 `10.857 ms`, and maximum `14.827 ms`, and loaded the complete visualization snapshot once in `426.6 ms`. A 40-contender stale-write race accepted exactly one update and rejected 39; restart recovery passed; the unique `%TEMP%` root was deleted.
 
-Windows MSI/portable and Linux AppImage/deb/portable packages passed version, CLI, GUI, terminal isolation, and exit-lifecycle smoke. The full Windows suite passed with 1365 core assertions plus all specialized gates; Memory Policy now has 22 focused assertions. Linux repeated the full source suite and reported hot first-event P95 `19.621 ms`. Production audit found zero vulnerabilities and lint found zero errors. Asset hashes and complete evidence are recorded in `archive/20260728-dev-0.1.12-memory-lab-snapshot-release.md`.
+Windows MSI/portable and Linux AppImage/deb/portable packages passed version, CLI, GUI, terminal isolation, and exit-lifecycle smoke. The full Windows suite passed with 1365 core assertions plus all specialized gates; Memory Policy now has 22 focused assertions. Linux repeated the full source suite and reported hot first-event P95 `19.621 ms`. Production audit found zero vulnerabilities and lint found zero errors. Asset hashes and complete evidence are recorded in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.11 Observable Memory Policy (2026-07-28)
 
@@ -2717,21 +2714,21 @@ Memory Lab now exposes a full Policy action surface instead of only read/update/
 
 `memory_lab_update` records explicit ADD or UPDATE decisions, advances per-component revisions, checks an optional `expectedUpdatedAt` read token, archives the previous core Markdown before replacement, and records content hashes without copying memory content into the Policy log. `memory_lab_delete` requires the model-facing contract to be backed by an explicit user forget/remove request, rejects stale deletion, archives the final revision, removes the active component, deterministically rebuilds the tag DAG, and returns a verified completion receipt. `Memory Lab/policy.jsonl` is append-only and records action, target, reason, source, revision, timestamps, and archive location for replay. `Memory Lab/archive` retains recovery material.
 
-`DESKTOP/src/tests/memoryPolicyVerify.ts` provides 18 focused assertions for ADD/UPDATE/DELETE ordering, revision history, stale update/delete rejection, bounded relevance ranking, unrelated-memory filtering, explanatory match fields, recovery archives, completion receipts, and Plan-mode policy enforcement. Detailed evidence is recorded in `archive/20260728-dev-0.1.11-memory-policy.md`.
+`DESKTOP/src/tests/memoryPolicyVerify.ts` provides 18 focused assertions for ADD/UPDATE/DELETE ordering, revision history, stale update/delete rejection, bounded relevance ranking, unrelated-memory filtering, explanatory match fields, recovery archives, completion receipts, and Plan-mode policy enforcement. Detailed evidence is recorded in 本地归档（未纳入公开仓库）.
 
-The packaged temporary-root stress gate then created and archived 120 conversations in one zero-interval burst with no lost IDs or IPC receipts; per-interaction P95 was `14.7 ms` for creation and `14.2 ms` for archive. The existing long-context stress completed 18 model-window switch cycles, 108 concurrent compression requests, 400 provider segments, and 57 injected failures with zero dropped messages. Memory Policy correctness passed with 300 components, bounded relevance remained correct, and a 40-contender stale-write race accepted exactly one update. Sustained retrieval remains a measured bottleneck: 600 consecutive queries over 300 components exceeded three minutes because each query synchronously rereads every component core file. Full measurements and cleanup evidence are in `archive/20260728-dev-0.1.11-temp-context-conversation-stress.md`.
+The packaged temporary-root stress gate then created and archived 120 conversations in one zero-interval burst with no lost IDs or IPC receipts; per-interaction P95 was `14.7 ms` for creation and `14.2 ms` for archive. The existing long-context stress completed 18 model-window switch cycles, 108 concurrent compression requests, 400 provider segments, and 57 injected failures with zero dropped messages. Memory Policy correctness passed with 300 components, bounded relevance remained correct, and a 40-contender stale-write race accepted exactly one update. Sustained retrieval remains a measured bottleneck: 600 consecutive queries over 300 components exceeded three minutes because each query synchronously rereads every component core file. Full measurements and cleanup evidence are in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.10 Low-Latency Parallel Conversation Lifecycle (2026-07-28)
 
 The current source is `dev-0.1.10`; the latest packaged prerelease remains `dev-0.1.9`. `DESKTOP/src/ui/index.html` assigns collision-resistant IDs to rapid new conversations, paints the activation snapshot directly, and avoids the redundant `getState` call that could start a cold runtime. Archive clicks synchronously remove the exact selected row and dispatch independent IPC requests; no quiet window or batch-settlement barrier delays the interaction. Successful completions only schedule a coalesced background archive-list refresh, while `{ ok: false }` receipts and exceptions restore only their own row.
 
-`DESKTOP/src/core/agent.ts` archives only the requested conversation ID; equal-content conversations remain independent. `electronUtilityRuntimePool.ts` and `wslAgentRuntimePool.ts` claim and mark an entry under the capacity lock, then perform the slow process shutdown outside that global lock, allowing unrelated conversations to stop concurrently. `conversationArchiveConcurrencyVerify.ts` reports 16 renderer assertions, including sub-30 ms local removal, one coalesced background replacement sync, and independent rollback; `runtimePoolCapacityVerify.ts` reports 20 assertions and directly proves two delayed shutdowns overlap. Detailed evidence is recorded in `archive/20260728-dev-0.1.10-parallel-conversation-archive.md`.
+`DESKTOP/src/core/agent.ts` archives only the requested conversation ID; equal-content conversations remain independent. `electronUtilityRuntimePool.ts` and `wslAgentRuntimePool.ts` claim and mark an entry under the capacity lock, then perform the slow process shutdown outside that global lock, allowing unrelated conversations to stop concurrently. `conversationArchiveConcurrencyVerify.ts` reports 16 renderer assertions, including sub-30 ms local removal, one coalesced background replacement sync, and independent rollback; `runtimePoolCapacityVerify.ts` reports 20 assertions and directly proves two delayed shutdowns overlap. Detailed evidence is recorded in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.9 Windows and Linux Packaged Prerelease (2026-07-27)
 
 The latest packaged prerelease is `dev-0.1.9`. Windows x64 MSI and portable ZIP, plus Linux x64 AppImage, deb, and portable ZIP, are built from the same validated source snapshot. Memory Lab uses a dedicated, viewport-bounded landscape `4:3` sub-window instead of inheriting the narrow generic dialog width; packaged UI validation measures this geometry directly. The full Windows suite passed with 1365 core assertions and all specialized gates; the isolated Ubuntu-24.04 build repeats the source suite and latency benchmark before packaging. Windows ZIP/MSI and Linux WSLg GUI, exit-lifecycle, AppImage, deb, and unpacked-ZIP smokes are release gates. Production dependency audit reports zero vulnerabilities, lint reports zero errors, and the final Linux hot first-event P95 is 15.547 ms.
 
-The MSI upgraded the machine-wide installation at `C:\Program Files\Newmark Agent` to `0.1.9.0`. The installed `resources/app.asar` SHA-256 matches the release payload, a responsive main window was observed, and no file under `~/.Newmark` was modified during the installation interval. All generated automation/Bash test roots and the upstream inspection clone were deleted after validation under the user's explicit cleanup authorization. Asset hashes and the complete local release audit are recorded in `archive/20260727-dev-0.1.9-release.md`.
+The MSI upgraded the machine-wide installation at `C:\Program Files\Newmark Agent` to `0.1.9.0`. The installed `resources/app.asar` SHA-256 matches the release payload, a responsive main window was observed, and no file under `~/.Newmark` was modified during the installation interval. All generated automation/Bash test roots and the upstream inspection clone were deleted after validation under the user's explicit cleanup authorization. Asset hashes and the complete local release audit are recorded in 本地归档（未纳入公开仓库）.
 
 When a conversation switches from a long-context model to a shorter target whose safe budget cannot hold the current history, model selection now immediately runs segmented compression before the conversation runtime is reset. Historical messages are split into target-sized consecutive segments, summarized serially by the selected short model, and the generated summaries are merged through repeated compression rounds until the prompt fits below 70% of the target window. The latest user turn remains verbatim. If pathological segment summaries still cannot converge, the runtime discards only the oldest retained turns/summaries until the target budget is safe instead of failing the next request.
 
@@ -2739,25 +2736,25 @@ When a conversation switches from a long-context model to a shorter target whose
 
 `DESKTOP/src/tests/automationBashStressVerify.ts` is a repeatable integration/stress gate that creates its entire runtime, workspaces, conversation state, Bash files, and report under a unique OS temporary directory. It drives `AutomationManager` through both simulated schedule advancement and its real `setInterval` timer, executes each trigger through `ConversationKernel.prompt()` and a real Agent work-run lifecycle, and audits workspace binding, `new`/`existing` conversation strategy, unique Build IDs, durable completed work runs, and non-reentrancy under overlapping ticks. Its context lane performs repeated long-to-short model switches across 64000, 8000, 4000, 2000, and 1200-token windows, injects summary failures, issues concurrent duplicate compression requests, and verifies bounded multi-round convergence, latest-turn retention, and persisted recovery. Its terminal lane concurrently exercises persistent `NativeBashSession` instances, parallel native one-shots, cancellation, Git host fallback, and Windows `node-pty`/ConPTY round trips.
 
-The accepted run produced 34 schedules, 56 triggers, 56 unique and durable completed Build runs, 32 new conversations, 24 existing-conversation triggers, eight wall-clock timer triggers, and one start under 40 overlapping tick attempts. Bash acceptance covered 16 persistent sessions, 320 session commands, 64 parallel one-shots, 12 cooperative cancellations, one host fallback, and four real PTY sessions in 13.851 seconds. The evidence was audited and then its temporary root was deleted under the user's explicit cleanup authorization; detailed interpretation is in `archive/20260727-dev-0.1.9-automation-bash-temp-stress.md`.
+The accepted run produced 34 schedules, 56 triggers, 56 unique and durable completed Build runs, 32 new conversations, 24 existing-conversation triggers, eight wall-clock timer triggers, and one start under 40 overlapping tick attempts. Bash acceptance covered 16 persistent sessions, 320 session commands, 64 parallel one-shots, 12 cooperative cancellations, one host fallback, and four real PTY sessions in 13.851 seconds. The evidence was audited and then its temporary root was deleted under the user's explicit cleanup authorization; detailed interpretation is in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.9 Native TypeScript Bash and Terminal Runtime (2026-07-27)
 
 `DESKTOP/src/core/nativeBash.ts` is the shared workspace shell boundary. It embeds `just-bash` 3.2.0 through `ReadWriteFs`, blocks symlink traversal outside the selected workspace, limits source/output/runtime budgets, supports cooperative cancellation, retains per-tab virtual `cwd`, and uses the upstream AST command collector to choose the native interpreter only when every invoked command is supported. Agent one-shot Bash calls may fall back to the existing platform host shell for external programs such as Git/npm; the bottom-bar Bash tab stays pure native and reports unsupported commands instead of partially executing and replaying a script.
 
-`DESKTOP/src/tools/index.ts`, `DESKTOP/src/main.ts`, and `DESKTOP/src/server.ts` route their Bash surfaces through that shared boundary. Non-Bash bottom tabs use the exported `spawnTakeoverPty` implementation from `DESKTOP/src/tools/terminalTakeover.ts`, replacing redirected `child_process` streams with real PTYs. `DESKTOP/src/ui/index.html` keeps the existing lightweight transcript but removes OSC/CSI control sequences and escapes ampersands before HTML insertion. `DESKTOP/src/tests/nativeBashVerify.ts` covers command planning, pipes, redirects, real workspace writes, persistent directory state, unsupported commands, and cancellation. The package is recorded in `THIRD_PARTY_NOTICES.md`; single-file WSL/Utility hosts load no just-bash bundle and retain host-shell fallback. Evidence is recorded in `archive/20260727-dev-0.1.9-native-typescript-bash.md`.
+`DESKTOP/src/tools/index.ts`, `DESKTOP/src/main.ts`, and `DESKTOP/src/server.ts` route their Bash surfaces through that shared boundary. Non-Bash bottom tabs use the exported `spawnTakeoverPty` implementation from `DESKTOP/src/tools/terminalTakeover.ts`, replacing redirected `child_process` streams with real PTYs. `DESKTOP/src/ui/index.html` keeps the existing lightweight transcript but removes OSC/CSI control sequences and escapes ampersands before HTML insertion. `DESKTOP/src/tests/nativeBashVerify.ts` covers command planning, pipes, redirects, real workspace writes, persistent directory state, unsupported commands, and cancellation. The package is recorded in `THIRD_PARTY_NOTICES.md`; single-file WSL/Utility hosts load no just-bash bundle and retain host-shell fallback. Evidence is recorded in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.9 Memory Lab Tag Motion Damping (2026-07-27)
 
-Source and packaged development is now `dev-0.1.9`. Memory Lab's overview force simulation now retains 72% of tag velocity per step instead of 86%, doubling the per-step damping from 14% to 28%. A structural graph signature reuses live node positions whenever index topology is unchanged, tag selection updates focus in place, and Reset updates the existing camera instead of rebuilding the panel. Wheel zoom uses a gentler pointer-anchored curve and renders an interaction-only frame immediately; pointer drag applies its compositor transform synchronously and no longer continues drifting at the viewport edge. Regression assertions cover damping, graph reuse, in-place selection, immediate interaction rendering, and removal of edge acceleration. Evidence is recorded in `archive/20260727-dev-0.1.9-memory-lab-tag-damping.md`.
+Source and packaged development is now `dev-0.1.9`. Memory Lab's overview force simulation now retains 72% of tag velocity per step instead of 86%, doubling the per-step damping from 14% to 28%. A structural graph signature reuses live node positions whenever index topology is unchanged, tag selection updates focus in place, and Reset updates the existing camera instead of rebuilding the panel. Wheel zoom uses a gentler pointer-anchored curve and renders an interaction-only frame immediately; pointer drag applies its compositor transform synchronously and no longer continues drifting at the viewport edge. Regression assertions cover damping, graph reuse, in-place selection, immediate interaction rendering, and removal of edge acceleration. Evidence is recorded in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.9 Workspace-bound Automation Builds (2026-07-27)
 
-Every automation now persists an explicit workspace and a conversation strategy. `new` creates a fresh conversation for every trigger; `existing` requires and reuses one selected conversation. Desktop scheduling resolves the stored workspace, waits for an already-running target conversation to settle, and invokes `ConversationKernel.prompt()` in Build mode so each trigger owns a new Build run instead of mutating whichever conversation happens to be active. The form exposes workspace and conversation selectors, list rows show the target, Agent tool schemas require the target fields, and the Server fallback preserves the same target semantics. Evidence is recorded in `archive/20260727-dev-0.1.9-workspace-automation-builds.md`.
+Every automation now persists an explicit workspace and a conversation strategy. `new` creates a fresh conversation for every trigger; `existing` requires and reuses one selected conversation. Desktop scheduling resolves the stored workspace, waits for an already-running target conversation to settle, and invokes `ConversationKernel.prompt()` in Build mode so each trigger owns a new Build run instead of mutating whichever conversation happens to be active. The form exposes workspace and conversation selectors, list rows show the target, Agent tool schemas require the target fields, and the Server fallback preserves the same target semantics. Evidence is recorded in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.8 Packaged Prerelease (2026-07-26)
 
-The current source and packaged prerelease is `dev-0.1.8`. Windows x64 MSI/unpacked ZIP and Linux x64 AppImage/deb/unpacked ZIP were produced from the validated source. Windows and isolated Ubuntu-24.04 full suites passed; packaged CLI, Windows ZIP/MSI, Flow/SubAgent UI, Linux WSLg GUI, Bash/sh isolation, clean exit/single-instance relaunch, AppImage, deb extraction, and Linux ZIP smokes passed. The directly used runtime `glob` dependency was upgraded from unsupported v7 to v13 with `brace-expansion` 5.0.8, leaving the production dependency audit at zero vulnerabilities. Asset hashes and the complete release audit are recorded in `archive/20260726-dev-0.1.8-release.md`.
+The current source and packaged prerelease is `dev-0.1.8`. Windows x64 MSI/unpacked ZIP and Linux x64 AppImage/deb/unpacked ZIP were produced from the validated source. Windows and isolated Ubuntu-24.04 full suites passed; packaged CLI, Windows ZIP/MSI, Flow/SubAgent UI, Linux WSLg GUI, Bash/sh isolation, clean exit/single-instance relaunch, AppImage, deb extraction, and Linux ZIP smokes passed. The directly used runtime `glob` dependency was upgraded from unsupported v7 to v13 with `brace-expansion` 5.0.8, leaving the production dependency audit at zero vulnerabilities. Asset hashes and the complete release audit are recorded in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.8 Mode Execution Contracts (2026-07-26)
 
@@ -2767,9 +2764,9 @@ Goal Guide and Next declarations both update the conversation Goal bar. Goal use
 
 Flow Next automatically acquires takeover and pauses the queue whether the queue was active, empty, or already paused; it records the original pause state, expands `{#prompt#}` through the selected workflow, and creates only the workflow-defined Build blocks. Idle Guide is treated as Next, including Flow Guide when no Build is active. The Next that launches Flow is not a queue item: its original text is held by a dedicated Flow-prompt bar in the Goal-bar layer for the lifetime of takeover. During takeover, later Next input remains in the paused queue; manually resuming the queue exits Flow and resumes normal Build queue processing. Normal Flow completion restores the exact pre-Flow pause state. A pointer-free Newmark glass takeover bubble is absolutely positioned above the input without changing input height, and the shared floating stack orders scroll-to-bottom above the bubble and persistent Todo/Queue/Flow-prompt/Goal bars with 8 px collision gaps. Flow exit hides the Flow-prompt bar and Flow configuration selector, then explicitly restores and enables Next. Local queue draining uses one per-target atomic claim: the head is removed before Build handoff, restored at its original position if the send is rejected, and cannot be consumed twice by overlapping completion/drain callbacks.
 
-SubAgent queue recovery no longer pre-appends unread persisted mailbox content before the scheduler consumes it, preventing duplicate directives after restart. Accepted work stays `queued` when an executor has not yet bound and is pumped exactly once when it becomes available; this removes the previous fake-`working` dead state. Root and agent-only runtimes both bind the conversation executor, headless children use the parent's explicit root boundary, inherited duplicate-name models retain an exact provider deployment, fallback releases a stale forced provider, closing an active peer aborts it, failed child output becomes an error, and timed-out settlement waiters clean up their timers and registrations. `dev018ModeSubagentStressVerify.ts` exercises 64 restored peers, 48 late-bound peers, Build/Plan/Goal/Flow state, concurrent execution and isolated failures, queued close cancellation, and 256 ordered root-inbox messages. The real Electron smoke runs 40 complete mode-transition cycles and verifies Next restoration plus measured floating-stack geometry. Detailed evidence is in `archive/20260726-dev-0.1.8-subagent-reliability-input-float-stack.md`.
+SubAgent queue recovery no longer pre-appends unread persisted mailbox content before the scheduler consumes it, preventing duplicate directives after restart. Accepted work stays `queued` when an executor has not yet bound and is pumped exactly once when it becomes available; this removes the previous fake-`working` dead state. Root and agent-only runtimes both bind the conversation executor, headless children use the parent's explicit root boundary, inherited duplicate-name models retain an exact provider deployment, fallback releases a stale forced provider, closing an active peer aborts it, failed child output becomes an error, and timed-out settlement waiters clean up their timers and registrations. `dev018ModeSubagentStressVerify.ts` exercises 64 restored peers, 48 late-bound peers, Build/Plan/Goal/Flow state, concurrent execution and isolated failures, queued close cancellation, and 256 ordered root-inbox messages. The real Electron smoke runs 40 complete mode-transition cycles and verifies Next restoration plus measured floating-stack geometry. Detailed evidence is in 本地归档（未纳入公开仓库）.
 
-Memory Lab overview selection no longer calls `memoryLabRead` or reconstructs the panel when a component node is clicked. It updates the existing graph focus and camera in place, preserving ambient motion and DOM identity; Detail mode performs a preserve-panel content read. The renderer no longer exposes the Instructions/说明 disclosure that printed local Memory Lab root, index, and component paths. Source and packaged Memory Lab smokes assert stable stage identity, no loading reload, no path/instruction text, and normal Detail Markdown retrieval. Evidence is in `archive/20260726-dev-0.1.8-memory-lab-overview-privacy.md`.
+Memory Lab overview selection no longer calls `memoryLabRead` or reconstructs the panel when a component node is clicked. It updates the existing graph focus and camera in place, preserving ambient motion and DOM identity; Detail mode performs a preserve-panel content read. The renderer no longer exposes the Instructions/说明 disclosure that printed local Memory Lab root, index, and component paths. Source and packaged Memory Lab smokes assert stable stage identity, no loading reload, no path/instruction text, and normal Detail Markdown retrieval. Evidence is in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.8 Academic Scanned-PDF Fallback (2026-07-26)
 
@@ -2779,29 +2776,29 @@ The offline implementation lazily loads Tesseract.js 6 with only the SIMD WebAss
 
 ## dev-0.1.7 Runtime Queue Local Installation (2026-07-25)
 
-The final Windows x64 MSI/portable ZIP and Linux AppImage/deb/unpacked ZIP include runtime-branch queue binding, Queue pause/resume, and automatic queue pause on explicit Stop/Force Stop. Full Windows and isolated WSL Linux source tests, latency benchmark, Windows package smokes, Linux WSLg GUI/package smokes, and packaged branch/UI smoke passed. The Windows MSI was installed with administrator elevation to `C:\Program Files\Newmark Agent`; executable version is `0.1.7.0`, and mutable state under `~/.Newmark` remains present. Detailed artifact hashes and installation evidence are in `archive/20260725-dev-0.1.7-runtime-queue-local-install.md`.
+The final Windows x64 MSI/portable ZIP and Linux AppImage/deb/unpacked ZIP include runtime-branch queue binding, Queue pause/resume, and automatic queue pause on explicit Stop/Force Stop. Full Windows and isolated WSL Linux source tests, latency benchmark, Windows package smokes, Linux WSLg GUI/package smokes, and packaged branch/UI smoke passed. The Windows MSI was installed with administrator elevation to `C:\Program Files\Newmark Agent`; executable version is `0.1.7.0`, and mutable state under `~/.Newmark` remains present. Detailed artifact hashes and installation evidence are in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.7 Branch Tree Stability Hardening (2026-07-25)
 
 Conversation persistence now treats branching as a validated version 2 tree rather than a linear transcript with page metadata. Stable message/Guide/Build/node IDs, complete viewed paths, per-page anchors, and a full node index directory drive edits, rendering, runtime event routing, cold reload, archive, and restore. Guide edits clone their owning Build prefix to a new `runId`; read-only branch inspection persists the viewed path without switching the runtime branch.
 
-The final gate includes a regression canary that fails against historical commit `b85b6d2`, a 76-node branch stress run with a 31-page sibling group and 45 nested levels, random inspection/reload/archive cycles, and cloned-Guide-Build completion persistence. Full source tests, packaged Electron branch UI smoke, Windows ZIP smoke, and MSI smoke pass. Final artifact hashes and detailed evidence are in `archive/20260725-dev-0.1.7-branch-tree-stability.md`.
+The final gate includes a regression canary that fails against historical commit `b85b6d2`, a 76-node branch stress run with a 31-page sibling group and 45 nested levels, random inspection/reload/archive cycles, and cloned-Guide-Build completion persistence. Full source tests, packaged Electron branch UI smoke, Windows ZIP smoke, and MSI smoke pass. Final artifact hashes and detailed evidence are in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.7 Consumer Stability Follow-up (2026-07-25)
 
 Windows launch failures were traced to a missing installed `resources/app.asar`, stale Start menu shortcuts that targeted removed temporary builds, and a config-refresh reload that retained the one-shot startup-prewarm query. The repaired desktop removes that query after promotion, bounds runtime cleanup during config reload, recovers a crashed renderer, and routes second-instance recovery through the existing window lifecycle. Running Build headers also expose a compact unique-file and line-change badge.
 
-The rebuilt machine-wide package is installed at `C:\Program Files\Newmark Agent`. Five packaged cold-start/config-refresh cycles and five installed desktop-shortcut launches passed, with installed shortcut visibility in 0.997-1.605 seconds. The installed `app.asar` matches the packaged SHA-256 `D36089BE1323632B6AEE3DF6C9813BE2A39FBBDC7411DBA9E379E7559A35B2BE`. Full evidence is in `archive/20260725-dev-0.1.7-desktop-stability.md`.
+The rebuilt machine-wide package is installed at `C:\Program Files\Newmark Agent`. Five packaged cold-start/config-refresh cycles and five installed desktop-shortcut launches passed, with installed shortcut visibility in 0.997-1.605 seconds. The installed `app.asar` matches the packaged SHA-256 `D36089BE1323632B6AEE3DF6C9813BE2A39FBBDC7411DBA9E379E7559A35B2BE`. Full evidence is in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.7 Branch Pagination and UI Fix (2026-07-24)
 
 Source version advanced to `dev-0.1.7`. Conversation branch navigation now uses compact inline arrow text with mouse and keyboard activation, and edited historical messages hide the original Build behind page navigation instead of appending it below the active branch. Submitting an edit stops only the targeted conversation/run, enters the new page, and runs the edited instruction. Guide rows expose Copy/Edit; Guide edits copy their owning Build only through the events before that Guide. Branch switching replaces cached WorkRuns, while persistence treats `branchReset` as replacement rather than merge. Guide/Next is a user-wide preference rather than a conversation-local value. Recently persisted running Builds are restored across conversation switches, queue and Goal rows are hidden while their content is edited in the main input, context-compression completion is represented inside the owning Build, and completed Builds plus inline file details use corrected disclosure defaults.
 
-The final local Windows package passed a real packaged Electron geometry/interaction smoke plus MSI and ZIP smokes. Edited-file and terminal activity rows now use the same icon and text columns and the same UI font; the first attempted CSS correction had been overridden by a later general file-summary rule. The final MSI is installed machine-wide at `C:\Program Files\Newmark Agent`, and the temporary current-user installation has been removed. Final artifact hashes, root causes, and state-preservation evidence are recorded in `archive/20260724-dev-0.1.7-local-install.md` and `archive/20260724-nested-start-guide-branch-pagination.md`.
+The final local Windows package passed a real packaged Electron geometry/interaction smoke plus MSI and ZIP smokes. Edited-file and terminal activity rows now use the same icon and text columns and the same UI font; the first attempted CSS correction had been overridden by a later general file-summary rule. The final MSI is installed machine-wide at `C:\Program Files\Newmark Agent`, and the temporary current-user installation has been removed. Final artifact hashes, root causes, and state-preservation evidence are recorded in 本地归档（未纳入公开仓库） and 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.6 Local Windows Installation (2026-07-24)
 
-The published Windows x64 MSI was installed machine-wide at `C:\Program Files\Newmark Agent` after administrator approval. Windows Installer returned status `0`, the registered and executable version is `0.1.6.0`, and the installed `resources/app.asar` SHA-256 exactly matches the validated unpacked release payload (`62E363A9C62673EE9C38474F53DF6F8E6278315820F04140BD8750C747C616DB`). The installed application starts with a responsive `Newmark Agent` main window while retaining the existing mutable state under `~/.Newmark`. Detailed installer output is stored in `archive/20260724-dev-0.1.6-local-install.log`.
+The published Windows x64 MSI was installed machine-wide at `C:\Program Files\Newmark Agent` after administrator approval. Windows Installer returned status `0`, the registered and executable version is `0.1.6.0`, and the installed `resources/app.asar` SHA-256 exactly matches the validated unpacked release payload (`62E363A9C62673EE9C38474F53DF6F8E6278315820F04140BD8750C747C616DB`). The installed application starts with a responsive `Newmark Agent` main window while retaining the existing mutable state under `~/.Newmark`. Detailed installer output is stored in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.6 Release Candidate (2026-07-24)
 
@@ -2823,7 +2820,7 @@ Settings tabs (Models, Tools, Archive, Updates) now render lazily: only the acti
 
 ## dev-0.1.5 Machine-wide Windows Upgrade (2026-07-23)
 
-The verified `0.1.5` MSI was accepted through UAC and upgraded the sole installation at `C:\Program Files\Newmark Agent`. The previously created current-user fallback directory remains absent, the installed `app.asar` matches the release payload, one responsive machine-install main window was launched, and mutable user state under `~/.Newmark` remains present. Exact verification evidence is recorded in `archive/20260723-dev-0.1.5-machine-upgrade.md`.
+The verified `0.1.5` MSI was accepted through UAC and upgraded the sole installation at `C:\Program Files\Newmark Agent`. The previously created current-user fallback directory remains absent, the installed `app.asar` matches the release payload, one responsive machine-install main window was launched, and mutable user state under `~/.Newmark` remains present. Exact verification evidence is recorded in 本地归档（未纳入公开仓库）.
 
 The public `dev-0.1.5` candidate also pins the patched transitive build dependency `fast-uri` `3.1.4`, clearing the high-severity advisory reported against `3.1.3`. The complete Windows source suite, MSI/ZIP packaged smokes, and WSL Linux AppImage/deb/unpacked-ZIP GUI smokes pass against the final lock file. The five platform assets are published together so the release tag, package metadata, and downloadable binaries remain aligned.
 
@@ -2831,41 +2828,41 @@ The public `dev-0.1.5` candidate also pins the patched transitive build dependen
 
 Build transcript content now shares one right-side safety lane: the top status/chevron, nested activity chevrons, and long wrapped responses all stop before the user-input timeline rail. Nested command/tool groups such as "Ran command" and "Ran multiple commands" start collapsed to keep long runs compact; if the user opens one, the existing activity-key restoration keeps it open through live refreshes.
 
-Guide/Next changes now carry the explicit workspace/conversation target through preload and main-process IPC. The target conversation is persisted immediately and any already-resident Utility or WSL isolated runtime receives the same mode, preventing its later checkpoint from restoring a stale value during shutdown. Unit and runtime-isolation checks cover target routing, and the real Electron layout smoke now closes and relaunches against the same data root before accepting the persisted mode. Evidence is recorded in `archive/20260723-dev-0.1.5-build-disclosure-input-mode.md`.
+Guide/Next changes now carry the explicit workspace/conversation target through preload and main-process IPC. The target conversation is persisted immediately and any already-resident Utility or WSL isolated runtime receives the same mode, preventing its later checkpoint from restoring a stale value during shutdown. Unit and runtime-isolation checks cover target routing, and the real Electron layout smoke now closes and relaunches against the same data root before accepting the persisted mode. Evidence is recorded in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.5 Select Popup Regression Repair (2026-07-23)
 
 The initial generic select surface incorrectly allowed hidden-menu measurement and focus scrolling to disturb the input toolbar. The repaired implementation uses the model selector's actual `tool-select`, `model-select-button`, `model-select-menu`, group, and option classes. Model and ordinary selects share one fixed top-layer Popover positioner: it compares space above and below, limits only popup height, and never changes document-flow geometry. Compact wrappers reserve a stable readable width from their widest option, so toolbar labels and Chinese Flow selectors remain complete; repeated trigger clicks close both wrapper state and the actual top-layer Popover.
 
-The terminal shell selector is explicitly enhanced through the same path and therefore uses the same rounded glass closed control and directional popup. Right-panel file-tree and Flow disclosure indicators consistently point right when collapsed and down when expanded. A real Electron regression records toolbar and trigger rectangles before and after opening, requires exact stability, checks fixed positioning/width/direction and repeated-click closure for generic, dynamic Chinese, and model menus, verifies terminal glass styling, and captures `archive/2026-07-23-select-popup-layout.png`. Detailed evidence is in `archive/20260723-dev-0.1.5-select-popup-regression.md`.
+The terminal shell selector is explicitly enhanced through the same path and therefore uses the same rounded glass closed control and directional popup. Right-panel file-tree and Flow disclosure indicators consistently point right when collapsed and down when expanded. A real Electron regression records toolbar and trigger rectangles before and after opening, requires exact stability, checks fixed positioning/width/direction and repeated-click closure for generic, dynamic Chinese, and model menus, verifies terminal glass styling, and captures 本地归档（未纳入公开仓库）. Detailed evidence is in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.5 Windows Package and Local Installation (2026-07-23)
 
-The verified Windows `0.1.5` MSI and portable ZIP were rebuilt from the current source, including the final readable-select, repeated-click Popover, and disclosure-indicator repair. Package resource/identity checks, CLI smoke, isolated ZIP smoke, and isolated MSI administrative-image smoke pass. Two earlier machine-wide UAC requests were cancelled and temporarily led to a current-user fallback installation; that fallback was later removed, and the accepted machine-wide upgrade now leaves the sole installation at `C:\Program Files\Newmark Agent`. Exact build and installation evidence is recorded under `archive/20260723-dev-0.1.5-*.md`.
+The verified Windows `0.1.5` MSI and portable ZIP were rebuilt from the current source, including the final readable-select, repeated-click Popover, and disclosure-indicator repair. Package resource/identity checks, CLI smoke, isolated ZIP smoke, and isolated MSI administrative-image smoke pass. Two earlier machine-wide UAC requests were cancelled and temporarily led to a current-user fallback installation; that fallback was later removed, and the accepted machine-wide upgrade now leaves the sole installation at `C:\Program Files\Newmark Agent`. Exact build and installation evidence is recorded under 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.5 Cold Loading and Select Surface Follow-up (2026-07-23)
 
 Workspace selection now restores the destination workspace's own persisted active conversation and returns its local snapshot in the selection response. The renderer paints that snapshot directly instead of waiting for a second activation/state waterfall. A cold conversation activation likewise returns persisted history without starting its isolated Utility or WSL runtime; runtime hydration continues through one deferred state refresh. Resident conversations still return one live snapshot and avoid a duplicate refresh.
 
-All ordinary single-choice selects now share a renderer-owned Newmark listbox layer derived from the model selector: rounded opaque popup, grouped and disabled options, selected-row highlight, bounded scrolling, fixed positioning above clipped settings/dialog surfaces, keyboard navigation, accessible labels, dynamic-dialog enhancement, and native `change` compatibility. The underlying selects remain the state authority, so existing settings, GitHub, workspace, mode, Flow, and intelligence handlers keep their original contracts. `newmarkSelectVerify.ts` owns executable static/dynamic enhancement and native-change regression coverage; `workspaceMenuVerify.ts` also proves the cold workspace snapshot is forwarded directly into the renderer. Evidence is recorded in `archive/20260723-dev-0.1.5-cold-load-select-surfaces.md`.
+All ordinary single-choice selects now share a renderer-owned Newmark listbox layer derived from the model selector: rounded opaque popup, grouped and disabled options, selected-row highlight, bounded scrolling, fixed positioning above clipped settings/dialog surfaces, keyboard navigation, accessible labels, dynamic-dialog enhancement, and native `change` compatibility. The underlying selects remain the state authority, so existing settings, GitHub, workspace, mode, Flow, and intelligence handlers keep their original contracts. `newmarkSelectVerify.ts` owns executable static/dynamic enhancement and native-change regression coverage; `workspaceMenuVerify.ts` also proves the cold workspace snapshot is forwarded directly into the renderer. Evidence is recorded in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.5 Build and Memory Lab Interaction Follow-up (2026-07-23)
 
 The source version is now `0.1.5`. Build headers reserve right-side inset space so the status label and expansion chevron do not collide with the conversation's user-side timeline rail.
 
-Memory Lab overview relationships are indexed once when the graph is built. Parent and child adjacency maps support cached focus projections without rescanning every edge on each ambient frame. While the user drags the overview, force simulation and normal node/link reconstruction are paused; the already-rendered SVG and node layer move together through one GPU-friendly `translate3d` transform at the display refresh rate. Pointer release commits the camera position through one full frame and resumes the normal throttled ambient layout. This keeps the graph visually attached to the pointer without changing node relationships during the open overview session. Verification evidence is recorded in `archive/20260723-dev-0.1.5-build-memory-drag.md`.
+Memory Lab overview relationships are indexed once when the graph is built. Parent and child adjacency maps support cached focus projections without rescanning every edge on each ambient frame. While the user drags the overview, force simulation and normal node/link reconstruction are paused; the already-rendered SVG and node layer move together through one GPU-friendly `translate3d` transform at the display refresh rate. Pointer release commits the camera position through one full frame and resumes the normal throttled ambient layout. This keeps the graph visually attached to the pointer without changing node relationships during the open overview session. Verification evidence is recorded in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.4 UI and Runtime Follow-up (2026-07-22)
 
 The latest maintenance follow-up makes title-bar minimize an ordinary operating-system taskbar minimize; only the configured close behavior may hide the application to the tray. Build tool groups now place each edited file directly at its chronological tool row, where the filename itself expands its red/green line diff, and exact Skill or MCP targets are named in the same Build activity stream. Subagent calls render as status-aware Build chips; clicking one refreshes the owning conversation snapshot and opens that peer's work history. Peer agents no longer inherit an independent hard-coded two-minute execution cutoff: they remain under the parent run's cooperative cancellation boundary.
 
-Renderer surfaces now use theme-aware notice tokens in both dark and light modes, while the bottom model selector uses an accessible rounded Newmark listbox rather than the square native Windows popup. Memory Lab overview selection is toggleable, pointer-captured drags accumulate relative movement and continuously auto-pan while held at a canvas edge, manual camera movement suspends selected-node auto-centering, and a time-driven layout remains visibly active at a throttled 30 FPS instead of stopping after a fixed frame budget or converging to a static equilibrium. Dragging still ends through ordinary pointer lifecycle events and does not use Pointer Lock. Wheel zoom has no user-facing limit, and sufficiently distant nodes collapse into colored dots whose tag or component name appears in an immediate Newmark tooltip on hover or keyboard focus. The desktop Memory Lab update IPC now also preserves `tagPaths` instead of flattening hierarchy metadata. Verification and release evidence is recorded in `archive/20260722-160639-dev-0.1.4-ui-runtime-followup.md`.
+Renderer surfaces now use theme-aware notice tokens in both dark and light modes, while the bottom model selector uses an accessible rounded Newmark listbox rather than the square native Windows popup. Memory Lab overview selection is toggleable, pointer-captured drags accumulate relative movement and continuously auto-pan while held at a canvas edge, manual camera movement suspends selected-node auto-centering, and a time-driven layout remains visibly active at a throttled 30 FPS instead of stopping after a fixed frame budget or converging to a static equilibrium. Dragging still ends through ordinary pointer lifecycle events and does not use Pointer Lock. Wheel zoom has no user-facing limit, and sufficiently distant nodes collapse into colored dots whose tag or component name appears in an immediate Newmark tooltip on hover or keyboard focus. The desktop Memory Lab update IPC now also preserves `tagPaths` instead of flattening hierarchy metadata. Verification and release evidence is recorded in 本地归档（未纳入公开仓库）.
 
 ## Current UI and Validation Maintenance (2026-07-22)
 
 The global `Agent.md` editor now uses Newmark's semantic glass/control, border, radius, typography, placeholder, hover, and focus-glow tokens instead of Chromium's unstyled white textarea. The model-validation progress note is registered in English and Chinese. Validation is a single shared Agent task: repeated UI clicks reopen the progress surface and await the existing promise rather than starting duplicate provider probes. Force-stopped Build blocks retain user-controlled collapse state across runtime and snapshot terminal updates.
 
-Model availability now treats persisted successful text evidence as authoritative over a transient `unavailable` aggregate, while authentication and explicit invalid-configuration failures remain blocking. Non-exact but non-empty nonce output is degraded compatibility evidence, not proof that the endpoint is unusable. This effective status is shared by fixed selection, default candidate selection, and Auto routing, repairing records such as DeepSeek v4 where `text_input/text_output=true` coexisted with an `unavailable` aggregate. Evidence is in `archive/20260722-agent-prompt-validation-lifecycle.md`.
+Model availability now treats persisted successful text evidence as authoritative over a transient `unavailable` aggregate, while authentication and explicit invalid-configuration failures remain blocking. Non-exact but non-empty nonce output is degraded compatibility evidence, not proof that the endpoint is unusable. This effective status is shared by fixed selection, default candidate selection, and Auto routing, repairing records such as DeepSeek v4 where `text_input/text_output=true` coexisted with an `unavailable` aggregate. Evidence is in 本地归档（未纳入公开仓库）.
 
 ## Current dev-0.1.4 Release (2026-07-21)
 
@@ -2873,11 +2870,11 @@ The `dev-0.1.4` maintenance slice adds user-facing global configuration and prom
 
 The same slice fixes model-validation false negatives. A successful base text path now establishes model availability; unsupported optional streaming, strict-JSON, tool, vision, or image-output probes retain their per-capability failure evidence but degrade the model instead of marking it globally unavailable. Fresh legacy cache records that previously combined usable health/text evidence with an `invalid_config` or `unavailable` aggregate are repaired to `degraded` without duplicate provider traffic. The settings UI renders `verified` and `degraded` as usable, with degraded labeled as partially capability-limited.
 
-Linux explicit exit is also hardened. Tray Exit and renderer-triggered exit share one shutdown path that first performs normal cleanup, then forces `app.exit(0)` after a bounded deadline if a worker, terminal, or Electron resource refuses to settle. A packaged WSLg lifecycle smoke verifies the first process exits, leaves no matching descendants, releases the single-instance lock, and allows an immediate same-root relaunch. The Linux build writes latency evidence to a version-specific archive path so a new release cannot overwrite historical benchmark records. Detailed evidence is in `archive/20260721-dev-0.1.4-settings-prompts-validation.md`.
+Linux explicit exit is also hardened. Tray Exit and renderer-triggered exit share one shutdown path that first performs normal cleanup, then forces `app.exit(0)` after a bounded deadline if a worker, terminal, or Electron resource refuses to settle. A packaged WSLg lifecycle smoke verifies the first process exits, leaves no matching descendants, releases the single-instance lock, and allows an immediate same-root relaunch. The Linux build writes latency evidence to a version-specific archive path so a new release cannot overwrite historical benchmark records. Detailed evidence is in 本地归档（未纳入公开仓库）.
 
 Final release acceptance passes the complete Windows and isolated Linux suites, Windows MSI/ZIP smokes, Linux unpacked/AppImage/deb/ZIP GUI smokes, model-settings packaged CRUD validation, zero-vulnerability npm audit, and current-user installation startup. The installed `app.asar` matches the packaged hash while `~/.Newmark/config.json` remains byte-identical. The administrator MSI transaction was cancelled, so the actual verified installation is the current-user payload and the old machine-wide `0.1.2` registration remains a display-only cleanup item.
 
-Local startup was recovered on 2026-07-21 after the machine-wide installation became internally inconsistent: `C:\Program Files\Newmark Agent\Newmark Agent.exe` remained registered as `0.1.2.0`, but its required `resources/app.asar` was missing after two Windows Installer transactions for `0.1.3.0`. UAC elevation for a machine-wide repair was cancelled, so the verified `release/win-unpacked` tree was installed at `%LOCALAPPDATA%\Programs\Newmark Agent` without changing `~/.Newmark`. The restored executable reports `0.1.3.0`, its `app.asar` matches the release hash, and a responsive main window was verified. Detailed evidence is in `archive/20260721-213821-startup-recovery.md`.
+Local startup was recovered on 2026-07-21 after the machine-wide installation became internally inconsistent: `C:\Program Files\Newmark Agent\Newmark Agent.exe` remained registered as `0.1.2.0`, but its required `resources/app.asar` was missing after two Windows Installer transactions for `0.1.3.0`. UAC elevation for a machine-wide repair was cancelled, so the verified `release/win-unpacked` tree was installed at `%LOCALAPPDATA%\Programs\Newmark Agent` without changing `~/.Newmark`. The restored executable reports `0.1.3.0`, its `app.asar` matches the release hash, and a responsive main window was verified. Detailed evidence is in 本地归档（未纳入公开仓库）.
 
 The current worktree contains an in-progress maintenance slice and is not a release candidate. The renderer's Next-queue handoff now carries active-send, scheduled-drain, and in-flight-drain locks across runtime-key alias promotion; duplicate sends are rejected at the target lock, completion clears both provisional and canonical locks, and scheduled microtasks delete only the schedule they still own. `queueAttachmentIsolationVerify.ts` adds regression coverage for lock migration. These queue changes have been inspected but have not yet been verified by a successful focused test or complete suite in this slice.
 
@@ -2885,7 +2882,7 @@ The same worktree contains a broader model-validation experiment. It adds an ear
 
 Small renderer fixes in the current diff remove the dark left-edge shadow from the open right sidebar in light mode and refresh sibling Plugins/MCP/Skills/GitHub tabs in place instead of adding redundant parent-window stack entries. Their static assertions are present in `verify.ts`, but no current successful build or packaged visual verification has been recorded.
 
-Detailed worktree inventory and verification boundaries are recorded in `archive/20260721-170300-uncommitted-worktree-record.md`.
+Detailed worktree inventory and verification boundaries are recorded in 本地归档（未纳入公开仓库）.
 
 ## dev-0.1.2 Kernel Study Status (2026-07-19)
 
@@ -2895,29 +2892,29 @@ Implementation follow-up completed on 2026-07-20. The source version is `0.1.2`,
 
 The new focused gate is `npm.cmd run test:dev012`. The complete source tree also includes the new diagnostics, compression-fidelity and response-trajectory tests in `npm.cmd test`. The final Windows verification also isolates advisory Computer Use UI/window probes from explicit action lanes, prevents timeout replay and stale-worker rejection races, and expands the latency gate to 20 desktop plus 20 application samples with P95, hard-maximum and event-loop-gap limits.
 
-The request-scoped task focus now includes an authoritative conversation Build ledger derived from persisted `ConversationWorkRun` records. It lists historical Build Blocks newest-to-oldest while exposing only `{ user input, final summary, completion status }`; a separate non-completed queue defines the only candidates for explicit continuation in newest-to-oldest order. Concrete public activities, Guide records, timestamps and run identity are withheld from the default prompt and loaded on demand through the read-only `build_history_query` tool. Status/history questions are read-only, unqualified previous/last-task references resolve historical Build number one, and old user prompts remain untrusted data rather than promoted instructions. This prevents an older unrelated interrupted task from replacing the most recent completed task when the user asks whether the previous task finished. Evidence is recorded in `archive/20260720-dev-0.1.2-authoritative-task-ledger.md`.
+The request-scoped task focus now includes an authoritative conversation Build ledger derived from persisted `ConversationWorkRun` records. It lists historical Build Blocks newest-to-oldest while exposing only `{ user input, final summary, completion status }`; a separate non-completed queue defines the only candidates for explicit continuation in newest-to-oldest order. Concrete public activities, Guide records, timestamps and run identity are withheld from the default prompt and loaded on demand through the read-only `build_history_query` tool. Status/history questions are read-only, unqualified previous/last-task references resolve historical Build number one, and old user prompts remain untrusted data rather than promoted instructions. This prevents an older unrelated interrupted task from replacing the most recent completed task when the user asks whether the previous task finished. Evidence is recorded in 本地归档（未纳入公开仓库）.
 
 The same request boundary now uses a mixed `Build Context Bootstrap`: it appears only on the first provider request of a new Build and the first provider request after compression. It supplies the current or compacted context boundary, the latest 10 Build summary triples, explicit unfinished state, every callable tool's brief capability, and the names of necessary full schemas already present in the provider-native tools field. Full schemas are not copied into system text, subsequent broker/tool turns retain only the lightweight request focus, the removed pre-compression transcript is never reintroduced, and bootstrap metadata is excluded from persisted history and later compression input.
 
 Local release acceptance completed on 2026-07-20. `release/Newmark-Agent-0.1.2-x64.msi` and `release/Newmark-Agent-0.1.2-win-unpacked-x64.zip` were rebuilt from the final kernel, passed packaged CLI/MSI/UI Agent/startup/Computer Use checks, and the MSI upgraded the per-machine installation after UAC elevation. The installed executable is `C:\Program Files\Newmark Agent\Newmark Agent.exe`, reports `0.1.2.0`, and exposes a responsive `Newmark Agent` window. The visual-tool transport now converts ephemeral captures into standard Kernel image content, projects OpenAI-compatible tool output as legal text plus an adjacent visual observation, deletes the temporary capture once, and never writes it into durable conversation history. Installation did not add or delete files under `~/.Newmark`; the observed byte delta is exactly the existing `startup.log` appended by packaged UI validation. Publication remains intentionally pending.
 
-The 2026-07-20 conversation-display follow-up fixes the user-visible case where persisted Build blocks remained but their user inputs and final answers disappeared after switching conversations. `renderChatMessages` no longer consumes work runs by assistant-message position: normalized runs retain `primaryPrompt`, every persisted user/final row binds by exact `runId`, and missing legacy rows recover from the Build snapshot. Background send completion and refresh callbacks merge conversation metadata while preserving the actual foreground conversation, and a stale `newConversation` completion cannot clear a newer selection. `guideUiReconcileVerify.ts` covers two consecutive completed Builds, Guide interleaving, unique final answers, and snapshot-only recovery. The packaged fast-switch smoke now uses stable workspace IDs, an isolated Electron profile, explicit multi-instance mode, current-workspace conversation indices, and DOM ownership assertions for user -> Build -> final ordering across out-of-order responses, rapid switching, and restart. Current final artifacts are MSI SHA-256 `28FA8EF4FD7C2DC58946C976CA8E3132A02997DA9493123FB85465CCDE76B3A0` and ZIP SHA-256 `CB922DE39E7FC560E0682587A3EC9BB5D7473BED520C4B5104A73D88FBD0162E`; detailed conversation evidence is in `archive/20260720-dev-0.1.2-conversation-display-reconstruction.md`.
+The 2026-07-20 conversation-display follow-up fixes the user-visible case where persisted Build blocks remained but their user inputs and final answers disappeared after switching conversations. `renderChatMessages` no longer consumes work runs by assistant-message position: normalized runs retain `primaryPrompt`, every persisted user/final row binds by exact `runId`, and missing legacy rows recover from the Build snapshot. Background send completion and refresh callbacks merge conversation metadata while preserving the actual foreground conversation, and a stale `newConversation` completion cannot clear a newer selection. `guideUiReconcileVerify.ts` covers two consecutive completed Builds, Guide interleaving, unique final answers, and snapshot-only recovery. The packaged fast-switch smoke now uses stable workspace IDs, an isolated Electron profile, explicit multi-instance mode, current-workspace conversation indices, and DOM ownership assertions for user -> Build -> final ordering across out-of-order responses, rapid switching, and restart. Current final artifacts are MSI SHA-256 `28FA8EF4FD7C2DC58946C976CA8E3132A02997DA9493123FB85465CCDE76B3A0` and ZIP SHA-256 `CB922DE39E7FC560E0682587A3EC9BB5D7473BED520C4B5104A73D88FBD0162E`; detailed conversation evidence is in 本地归档（未纳入公开仓库）.
 
-The same maintenance line now includes live MCP management and non-blocking GitHub repository status. `mcpManager.ts` owns atomic user-root persistence at `MCP.json`, validates stdio/HTTP registrations, and redacts environment/header values from all list responses while retaining their key names. The Plugins secondary window defaults to MCP Management, ordered before Skills Management, and also exposes read-only MCP metadata discovered from Codex, Claude Code, Newmark and OpenCode plugin manifests. GitHub overview replaces `spawnSync('gh')` with bounded asynchronous child processes: account and repository/current-context discovery run concurrently, followed by parallel repository detail, Issue and PR requests. The repository detail includes `viewerHasStarred`, `stargazerCount`, `forkCount`, `isFork`, `parent`, `viewerPermission` and `viewerSubscription`. Final real packaged acceptance observed 324 renderer timer ticks during an 8.143-second GitHub refresh, then verified the Star/Fork badges and MCP CRUD/secret-redaction paths. Evidence is in `archive/20260720-dev-0.1.2-github-mcp-management.md`.
+The same maintenance line now includes live MCP management and non-blocking GitHub repository status. `mcpManager.ts` owns atomic user-root persistence at `MCP.json`, validates stdio/HTTP registrations, and redacts environment/header values from all list responses while retaining their key names. The Plugins secondary window defaults to MCP Management, ordered before Skills Management, and also exposes read-only MCP metadata discovered from Codex, Claude Code, Newmark and OpenCode plugin manifests. GitHub overview replaces `spawnSync('gh')` with bounded asynchronous child processes: account and repository/current-context discovery run concurrently, followed by parallel repository detail, Issue and PR requests. The repository detail includes `viewerHasStarred`, `stargazerCount`, `forkCount`, `isFork`, `parent`, `viewerPermission` and `viewerSubscription`. Final real packaged acceptance observed 324 renderer timer ticks during an 8.143-second GitHub refresh, then verified the Star/Fork badges and MCP CRUD/secret-redaction paths. Evidence is in 本地归档（未纳入公开仓库）.
 
-The final GitHub/MCP candidate was installed locally on 2026-07-20. The elevated MSI completed with exit code `0`; installed `app.asar` matches the validated package hash `554EDEF834F6B0F169EB0454F8D983B74F5D3A4A0AA59ED7CF1301A14BA4058F`. The `~/.Newmark` baseline remained exactly 17,593 files and 261,930,502 bytes. The Program Files `0.1.2.0` window recovered from an observed startup initialization transient and finished `Responding=true`; detailed installation evidence is in `archive/20260720-dev-0.1.2-github-mcp-local-install.md`.
+The final GitHub/MCP candidate was installed locally on 2026-07-20. The elevated MSI completed with exit code `0`; installed `app.asar` matches the validated package hash `554EDEF834F6B0F169EB0454F8D983B74F5D3A4A0AA59ED7CF1301A14BA4058F`. The `~/.Newmark` baseline remained exactly 17,593 files and 261,930,502 bytes. The Program Files `0.1.2.0` window recovered from an observed startup initialization transient and finished `Responding=true`; detailed installation evidence is in 本地归档（未纳入公开仓库）.
 
-The completed-conversation durability follow-up closes a cross-runtime persistence race that could retain a completed Build while erasing its `chatMessages` and `history`. `agent.ts` now makes terminal writes supersede scheduled snapshots, resolves duplicate run records by sequence and terminal-state rank, and rejects an empty incoming transcript when a non-empty transcript is already durable. `conversationKernel.ts` binds cold target conversations with `setConversationFromStorage` and then explicitly ensures only the target entry, preventing transitional state from being saved over a sibling conversation. `guideWorkRunVerify.ts` covers both deferred same-runtime writes and a later cross-runtime empty write; `release-ui-fast-conversation-switch-smoke.cjs` verifies A and B directly in `state.json`, rapid/out-of-order switching, archive, and restart. The final MSI/ZIP hashes are `38E30C6EBD6232578E53051D1D5392300B2BD676A0316426C76DE6E37B0A73BA` and `DDCB80097C1C588751E8984B1C5DDAC45016A4A7F2728503096F405AE28052F3`. UAC was cancelled twice during the final same-version per-machine reinstall, so the validated build is currently running from `%LOCALAPPDATA%\Programs\Newmark Agent` with matching `app.asar` hash `DF68D82337C8D1A9B97C5382CF61AA106FABDCD95AC6319BED1248178309AF39`; the older Program Files copy remains installed. Detailed evidence is in `archive/20260720-dev-0.1.2-completed-conversation-durability.md`.
+The completed-conversation durability follow-up closes a cross-runtime persistence race that could retain a completed Build while erasing its `chatMessages` and `history`. `agent.ts` now makes terminal writes supersede scheduled snapshots, resolves duplicate run records by sequence and terminal-state rank, and rejects an empty incoming transcript when a non-empty transcript is already durable. `conversationKernel.ts` binds cold target conversations with `setConversationFromStorage` and then explicitly ensures only the target entry, preventing transitional state from being saved over a sibling conversation. `guideWorkRunVerify.ts` covers both deferred same-runtime writes and a later cross-runtime empty write; `release-ui-fast-conversation-switch-smoke.cjs` verifies A and B directly in `state.json`, rapid/out-of-order switching, archive, and restart. The final MSI/ZIP hashes are `38E30C6EBD6232578E53051D1D5392300B2BD676A0316426C76DE6E37B0A73BA` and `DDCB80097C1C588751E8984B1C5DDAC45016A4A7F2728503096F405AE28052F3`. UAC was cancelled twice during the final same-version per-machine reinstall, so the validated build is currently running from `%LOCALAPPDATA%\Programs\Newmark Agent` with matching `app.asar` hash `DF68D82337C8D1A9B97C5382CF61AA106FABDCD95AC6319BED1248178309AF39`; the older Program Files copy remains installed. Detailed evidence is in 本地归档（未纳入公开仓库）.
 
-The later new-conversation display investigation found a separate root cause: `ensureConversation` durably created the empty record but intentionally did not change the state file's top-level `activeConversationId`, while the renderer treated its local selection as complete. Restart therefore reopened the previous conversation. The final boundary adds target-scoped `agent:activateConversation`; `persistActiveConversationSelection` updates only the explicit foreground selection under the existing state lock, and `window.newConversation()` now returns and awaits that activation before loading/rendering. Read-only snapshots, background completions, and startup prewarm remain unable to change foreground selection. Source regression passed 1211 assertions, packaged fast-switch/restart passed, and the installed Program Files build passed a real external-workspace empty-conversation forced-restart check with cleanup and original-active restoration. Evidence is in `archive/20260720-dev-0.1.2-new-conversation-activation.md`.
+The later new-conversation display investigation found a separate root cause: `ensureConversation` durably created the empty record but intentionally did not change the state file's top-level `activeConversationId`, while the renderer treated its local selection as complete. Restart therefore reopened the previous conversation. The final boundary adds target-scoped `agent:activateConversation`; `persistActiveConversationSelection` updates only the explicit foreground selection under the existing state lock, and `window.newConversation()` now returns and awaits that activation before loading/rendering. Read-only snapshots, background completions, and startup prewarm remain unable to change foreground selection. Source regression passed 1211 assertions, packaged fast-switch/restart passed, and the installed Program Files build passed a real external-workspace empty-conversation forced-restart check with cleanup and original-active restoration. Evidence is in 本地归档（未纳入公开仓库）.
 
-The screenshot-driven immediate-send investigation found one final renderer race: while the explicit activation write was pending, an older backend list response could omit the just-created row, replace the local list, and make an immediate send target the previous conversation. The observed `回复我一个1` prompt and its 401 Build were therefore durable, but under `conv-1784347720191` instead of the visually new chat. `applyBackendConversations` now retains a held foreground row missing from a stale response; `newConversation` installs the new backend target and a 30-second activation hold synchronously, and reports activation failure without silently reverting. The packaged regression delays activation by 900 ms, sends immediately into a deterministic 401, verifies disk ownership, switches away and back, and restarts. Typecheck, build, lint (0 errors), 1212 source assertions, and the packaged smoke pass. Final package hashes are `C9B45F981DF762430FB0AC5E1D5EABEA6F12592A71406EB0D33640A67A66BE81` for `app.asar` and `74F8A7D6EA04B880F1E920F56060FE98747FD7FC12CE02F29BB532C8676967C6` for MSI. UAC cancellation left Program Files on the prior package; no publication action resumed. Evidence is in `archive/20260720-dev-0.1.2-new-conversation-immediate-send-401.md`.
+The screenshot-driven immediate-send investigation found one final renderer race: while the explicit activation write was pending, an older backend list response could omit the just-created row, replace the local list, and make an immediate send target the previous conversation. The observed `回复我一个1` prompt and its 401 Build were therefore durable, but under `conv-1784347720191` instead of the visually new chat. `applyBackendConversations` now retains a held foreground row missing from a stale response; `newConversation` installs the new backend target and a 30-second activation hold synchronously, and reports activation failure without silently reverting. The packaged regression delays activation by 900 ms, sends immediately into a deterministic 401, verifies disk ownership, switches away and back, and restarts. Typecheck, build, lint (0 errors), 1212 source assertions, and the packaged smoke pass. Final package hashes are `C9B45F981DF762430FB0AC5E1D5EABEA6F12592A71406EB0D33640A67A66BE81` for `app.asar` and `74F8A7D6EA04B880F1E920F56060FE98747FD7FC12CE02F29BB532C8676967C6` for MSI. UAC cancellation left Program Files on the prior package; no publication action resumed. Evidence is in 本地归档（未纳入公开仓库）.
 
-The 2026-07-21 compression screenshot exposed a presentation defect rather than new provider failures: two distinct failed runs from `2026-07-20 23:58:27` and `23:58:50` were restored with the renderer's current `00:30:48` clock, making them look newly replayed after compression. `addMsg` now accepts persisted timestamps, ordinary chat restoration forwards each message timestamp, and synthetic Build-boundary recovery uses `startedAt` or the final-event timestamp plus a historical-record marker. The installed Program Files DOM was inspected through CDP and shows the two original times exactly; the later `00:29` and `00:33` runs remain successful. Typecheck, build, focused reconciliation, and 1213 source assertions pass. Installed `app.asar` is `63BC458AF7CE9986795B342323E70D49DB2F1F6A57D9B014536BCD063D1FB1E4`. Evidence is in `archive/20260721-dev-0.1.2-historical-run-timestamps.md`.
+The 2026-07-21 compression screenshot exposed a presentation defect rather than new provider failures: two distinct failed runs from `2026-07-20 23:58:27` and `23:58:50` were restored with the renderer's current `00:30:48` clock, making them look newly replayed after compression. `addMsg` now accepts persisted timestamps, ordinary chat restoration forwards each message timestamp, and synthetic Build-boundary recovery uses `startedAt` or the final-event timestamp plus a historical-record marker. The installed Program Files DOM was inspected through CDP and shows the two original times exactly; the later `00:29` and `00:33` runs remain successful. Typecheck, build, focused reconciliation, and 1213 source assertions pass. Installed `app.asar` is `63BC458AF7CE9986795B342323E70D49DB2F1F6A57D9B014536BCD063D1FB1E4`. Evidence is in 本地归档（未纳入公开仓库）.
 
-The subsequent completed-reply disappearance report found that the final response remained durable and present in `api.getState`, but terminal redraw appended every orphaned historical Build after the entire chat transcript. Old 401 runs therefore became the visual bottom of the conversation, while the newest final response was left above them and appeared to vanish. `renderChatMessages` now indexes persisted run order and restores orphan runs immediately before the next run that owns a persisted message. Focused reconciliation and 1214 source assertions pass; the rebuilt unpacked UI was opened on the real conversation and its final DOM rows end with the newest user input, completed Build, and final response. The diagnostic run was removed afterward. The latest MSI is SHA-256 `FFE6C8528CC1198F989858D88750493C64AE6174835448EF3B2E20C1ACB3986C`, but UAC cancellation prevented Program Files replacement. Evidence is in `archive/20260721-dev-0.1.2-completed-final-order.md`.
+The subsequent completed-reply disappearance report found that the final response remained durable and present in `api.getState`, but terminal redraw appended every orphaned historical Build after the entire chat transcript. Old 401 runs therefore became the visual bottom of the conversation, while the newest final response was left above them and appeared to vanish. `renderChatMessages` now indexes persisted run order and restores orphan runs immediately before the next run that owns a persisted message. Focused reconciliation and 1214 source assertions pass; the rebuilt unpacked UI was opened on the real conversation and its final DOM rows end with the newest user input, completed Build, and final response. The diagnostic run was removed afterward. The latest MSI is SHA-256 `FFE6C8528CC1198F989858D88750493C64AE6174835448EF3B2E20C1ACB3986C`, but UAC cancellation prevented Program Files replacement. Evidence is in 本地归档（未纳入公开仓库）.
 
-Final release acceptance installed the same candidate into Program Files and confirmed installed/package `app.asar` SHA-256 `081882BBB302195C49CAC4BD5CA7ED86E7E7623D365863EBF7BECC59B93E63C4`. Windows MSI and unpacked-ZIP smokes pass; Linux AppImage, deb, and unpacked-ZIP GUI smokes pass inside Ubuntu 24.04; the Linux isolated build also reran the complete test suite and 20-run Agent latency benchmark. The five release assets and digests are recorded in `archive/20260721-dev-0.1.2-release.md`.
+Final release acceptance installed the same candidate into Program Files and confirmed installed/package `app.asar` SHA-256 `081882BBB302195C49CAC4BD5CA7ED86E7E7623D365863EBF7BECC59B93E63C4`. Windows MSI and unpacked-ZIP smokes pass; Linux AppImage, deb, and unpacked-ZIP GUI smokes pass inside Ubuntu 24.04; the Linux isolated build also reran the complete test suite and 20-run Agent latency benchmark. The five release assets and digests are recorded in 本地归档（未纳入公开仓库）.
 
 The first `dev-0.1.2` slice is complete as a source and experiment audit; it intentionally makes no Agent-kernel or public-interface change. The full `bojieli/ai-agent-book` repository is cloned as an independent ignored repository at `_ref/ai-agent-book`, detached at `fb2afa9f9473ecadf59522adb38def72c0124fe3`, with `git fsck` passing, tracked status empty, and `_ref/` confirmed against `.gitignore:6`. The Apache-2.0 source remains local reference material and is excluded from Newmark tracking and packaging.
 
@@ -2943,7 +2940,7 @@ The focused comparison covers Chapters 1, 2, 4, 5, 8 and 10. Newmark already has
 
 Offline upstream experiments were reproduced locally. Four simulated independent tools measured `4.53 s` serial versus `1.52 s` parallel (`2.98x`); interruption cancelled three partial tasks and the same runtime completed a replacement task; checkpoint restore retained three trajectory events and two task progress values. With 126 tools across eight scripted tasks, active discovery injected `7,796` total tokens and completed `8/8`, compared with `93,040` and `8/8` for full injection; one-shot prefiltering injected `8,236` but completed only `4/8`. These are mechanism results from an offline mock, not production-model quality claims. Windows execution requires `PYTHONUTF8=1` because the upstream demo prints characters unsupported by the default GBK console.
 
-The complete source map, gap matrix, commands, limitations and next-candidate acceptance gates are recorded in `archive/20260719-222856-dev-0.1.2-ai-agent-book-kernel-study.md`. No version bump, tag or release publication is part of this slice.
+The complete source map, gap matrix, commands, limitations and next-candidate acceptance gates are recorded in 本地归档（未纳入公开仓库）. No version bump, tag or release publication is part of this slice.
 
 Verification is complete: `typecheck` passed; lint passed with zero errors and 31 existing warnings; the focused normal-chat, 59/59 tool-provision, Guide/work-run and runtime-isolation baselines passed; `npm.cmd test` passed its main assertions and every chained suite; and `npm.cmd run test:dev010` passed. The only repeated build warning is the existing jsdom `xhr-sync-worker.js` externalization notice.
 
@@ -2986,7 +2983,7 @@ Final cross-platform release validation completed on 2026-07-20. Windows MSI/ZIP
 
 ## Current dev-0.1.0 Release Line
 
-The working release line is `dev-0.1.0`. The agent request path now emits opt-in segmented latency diagnostics, coalesces high-frequency conversation persistence behind an in-memory cache and single writer, and caches stable prompt/tool definitions with precise invalidation. Windows-to-WSL launches copy the host bundle by content hash into the Linux cache and reuse single-flight runtime startup promises; the UI becomes interactive before WSL detection, update checks, or prewarming finish. A 20-run local streaming benchmark is archived at `archive/2026-07-17-dev-0.1.0-linux-agent-latency.json` and currently passes the hot first-event, hot first-token, and cold local-overhead gates.
+The working release line is `dev-0.1.0`. The agent request path now emits opt-in segmented latency diagnostics, coalesces high-frequency conversation persistence behind an in-memory cache and single writer, and caches stable prompt/tool definitions with precise invalidation. Windows-to-WSL launches copy the host bundle by content hash into the Linux cache and reuse single-flight runtime startup promises; the UI becomes interactive before WSL detection, update checks, or prewarming finish. A 20-run local streaming benchmark is archived at 本地归档（未纳入公开仓库） and currently passes the hot first-event, hot first-token, and cold local-overhead gates.
 
 The current Agent harness adds a request-scoped focus contract on every provider and tool subturn. The latest real user-role message remains the authoritative current instruction without being copied into the system role; explicit active Goal and unfinished plan counts are continuity anchors only when the current instruction continues or depends on earlier work. Historical compression no longer pins the conversation's first user task forever. It summarizes the entire old prefix, keeps a complete recent user turn, and requires the compression model to separate active/unfinished work from completed, superseded, abandoned, or unrelated background. Immediately after replacement it adds exactly one generic continuation anchor that tells the next provider turn to continue the latest retained user-role task; the anchor does not duplicate or elevate user-authored text. The local fallback uses the same state headings. This design follows the public Codex boundary that reinjects canonical current context around compaction, OpenCode's structured Goal/Instructions/Discoveries/Accomplished compaction record plus explicit continuation marker, and Claude Code's documented separation of persistent project instructions from selectively loaded task context; Claude Code's private core harness is not treated as public source. The Windows-to-WSL Linux packaging path runs the complete source suite and 20-run latency benchmark inside the isolated Linux filesystem before electron-builder is allowed to create assets, and copies the benchmark evidence back to the repository archive.
 
@@ -3026,17 +3023,17 @@ Current dev-0.0.10 validation and CLI contract: the shared Validation Service pu
 
 Final dev-0.0.9 acceptance covers runtime target isolation, Guide/work-run persistence and UI reconciliation, cold completed-run folding after worker eviction, editor lifecycle, PDF capability security and real PDFium rendering, native Browser-Use with the actual prewarmed Electron Browser guest, actual utility/WSL processes, cooperative/forced stop, and error-storm deduplication. Cold Browser-Use has no hidden-window fallback and textarea/contenteditable content is excluded from observations and extraction. Windows force restart snapshots PID/parent/creation identity with Win32 Toolhelp, uses identity-matched handles for termination, rescans anchored late descendants until stable empty, and keeps uncertainty in a sticky target/generation quarantine. The complete source suite passes 1,084 assertions; focused gates pass 27 dev-0.0.9 contracts, 79 Browser-Use checks, 21 asynchronous-process checks, 59 real-Electron Browser-Use/utility checks, and 41 startup-prewarm checks. Windows MSI/unpacked ZIP, Windows Native/WSL packaged operation, and Linux AppImage/deb/unpacked GUI startup all pass. The five unsigned artifacts are published as the non-draft GitHub prerelease `dev-0.0.9`; clean remote downloads match the local hashes and pass their platform startup smokes.
 
-The acceptance paragraph above records the already-published dev-0.0.9 cross-platform package baseline, which remains the current Linux line. The later 2026-07-15 follow-up passes a fresh full suite with 1,101 core assertions, 27 dev-0.0.9 contracts, 79 Browser-Use checks, 21 asynchronous-process checks, 41 startup-prewarm checks, and 59 real-Electron Browser-Use/utility checks. Real Electron/CDP inspection verifies Focus-menu reopening, application icons, durable user-image rendering, and persisted background/font controls. A real source Electron + Ubuntu WSL Computer Use run reports `visionRequests=2`, `visionImages=1`, and `tempResidue=0`; the final host temporary-directory audit is also zero. These changes are included in the validated dev-0.0.10 Windows artifacts; exact evidence is recorded in `archive/2026-07-15-focus-images-computer-use-preferences.md`.
+The acceptance paragraph above records the already-published dev-0.0.9 cross-platform package baseline, which remains the current Linux line. The later 2026-07-15 follow-up passes a fresh full suite with 1,101 core assertions, 27 dev-0.0.9 contracts, 79 Browser-Use checks, 21 asynchronous-process checks, 41 startup-prewarm checks, and 59 real-Electron Browser-Use/utility checks. Real Electron/CDP inspection verifies Focus-menu reopening, application icons, durable user-image rendering, and persisted background/font controls. A real source Electron + Ubuntu WSL Computer Use run reports `visionRequests=2`, `visionImages=1`, and `tempResidue=0`; the final host temporary-directory audit is also zero. These changes are included in the validated dev-0.0.10 Windows artifacts; exact evidence is recorded in 本地归档（未纳入公开仓库）.
 
 Current dev-0.0.10 startup implementation: Electron creates one visible `BrowserWindow` and immediately loads the final `index.html?startupPrewarm=1`. A fixed cover inside that renderer remains visible until the same `webContents` completes and main accepts the `state/rendered` readiness handshake; startup does not create a hidden candidate or separate prewarm popup. If the attempt-one waiter is absent during the blank commit phase or matching `index.html`, main restores only the same-`webContents`, same-attempt waiter and never initiates a duplicate load. The critical barrier initializes configuration/Agent and core services, validates the local/persisted current-conversation snapshot, then performs one task yield and layout read rather than creating a Utility/WSL conversation runtime or waiting on animation frames. A required failure loads the static `startup.html` retry surface in that same window; retry navigates the same window back to `index.html`. File tree and right status load only when their tabs/sidebar are explicitly opened, Flow loads on entry to Flow-facing UI, and terminal starts on expand/focus/send demand. Main-process warning-only work is delayed after promotion: automation 0.5 seconds, WSL discovery 12 seconds, update discovery 15 seconds, conversation-runtime prewarm 30 seconds, and the non-interactive sidecar 60 seconds. Browser contributes no startup guest: the first tab/tool demand creates one target-bound `persist:newmark-browser-<workspace/conversation>` WebView after the five-second floor for background demand, while an explicit visible-tab activation bypasses that floor; repeated demand reuses it, and sixty seconds off-tab destroys it while retaining its URL; a pre-`dom-ready` navigation is retained and replayed exactly once. `release-ui-startup-recovery-smoke.cjs` requires one application page/CDP target, locks the minimal readiness contract, verifies no pre-demand guest and exactly one target-bound demand-created guest, and enforces the eight-second per-run interaction ceiling; the twenty-run benchmark owns the P50/P95 budgets.
 
-Current dev-0.0.10 local hotfix: the collapsed bottom terminal retains a 34 px header so its reopen control cannot disappear. Windows main is now the sole owner of `Work/Local.json`, `External.json`, and `State.json`; the WSL host and every conversation runner use a detached workspace registry and receive an explicit target instead of normalizing shared files. Host-aware migration repairs `/mnt/<drive>` aliases and previously repeated mixed Windows/WSL paths. Real source and installed-Program-Files validation under the Ubuntu-24.04 backend switched `Code -> Test`, measured terminal geometry at `34/200 px`, and proved the registry stayed Windows-native after WSL shutdown. Evidence and installed hashes are in `archive/2026-07-16-dev-0.0.10-terminal-workspace-hotfix.md`; the published GitHub dev-0.0.10 assets were not replaced.
+Current dev-0.0.10 local hotfix: the collapsed bottom terminal retains a 34 px header so its reopen control cannot disappear. Windows main is now the sole owner of `Work/Local.json`, `External.json`, and `State.json`; the WSL host and every conversation runner use a detached workspace registry and receive an explicit target instead of normalizing shared files. Host-aware migration repairs `/mnt/<drive>` aliases and previously repeated mixed Windows/WSL paths. Real source and installed-Program-Files validation under the Ubuntu-24.04 backend switched `Code -> Test`, measured terminal geometry at `34/200 px`, and proved the registry stayed Windows-native after WSL shutdown. Evidence and installed hashes are in 本地归档（未纳入公开仓库）; the published GitHub dev-0.0.10 assets were not replaced.
 
-Current native-select contrast hotfix: on 2026-07-16, every renderer `<select>` gained separate opaque dark/light popup palettes plus a matching native `color-scheme`, so Windows no longer combines a system-light popup with dark-theme pale text. Ordinary options, provider `optgroup` labels, selected options, and disabled options use semantic select tokens instead of translucent glass colors. `visualPreferencesVerify.ts` parses both palettes and enforces WCAG AA contrast, while `release-ui-model-auto-context-smoke.cjs` measures the real packaged model selector and provider groups under both themes. Packaged results were dark `16.02/10.07/5.71` and light `15.28/6.77/6.57` for ordinary/group/selected contrast respectively. The rebuilt MSI and unpacked ZIP passed packaging and release UI smoke; the Program Files overlay was not applied because its UAC request was cancelled, so the verified `release/win-unpacked` build remains the current local test artifact. Evidence and hashes are in `archive/2026-07-16-dev-0.0.10-native-select-contrast-hotfix.md`; published dev-0.0.10 release assets were not replaced.
+Current native-select contrast hotfix: on 2026-07-16, every renderer `<select>` gained separate opaque dark/light popup palettes plus a matching native `color-scheme`, so Windows no longer combines a system-light popup with dark-theme pale text. Ordinary options, provider `optgroup` labels, selected options, and disabled options use semantic select tokens instead of translucent glass colors. `visualPreferencesVerify.ts` parses both palettes and enforces WCAG AA contrast, while `release-ui-model-auto-context-smoke.cjs` measures the real packaged model selector and provider groups under both themes. Packaged results were dark `16.02/10.07/5.71` and light `15.28/6.77/6.57` for ordinary/group/selected contrast respectively. The rebuilt MSI and unpacked ZIP passed packaging and release UI smoke; the Program Files overlay was not applied because its UAC request was cancelled, so the verified `release/win-unpacked` build remains the current local test artifact. Evidence and hashes are in 本地归档（未纳入公开仓库）; published dev-0.0.10 release assets were not replaced.
 
 Current focused dev-0.0.10 source gates pass Auto Router 35/35, Agent Auto integration 24, explicit route rating 14, provider identity 10/10, Validation Service 63 plus Agent integration 13, max-two runtime-pool capacity 16, startup/prewarm 73, CLI tool contract 32, offline OpenAI-Hub Anthropic contract 30 with `real_api_called:false`, and ComputerUse 10/10 with 100% schema validity, zero false triggers, and 100% observe-before-act. The complete `npm test` and `test:dev010` gates pass, and the real Electron BrowserUse/utility-process gate passes all 61 checks.
 
-Current formal dev-0.0.10 performance acceptance: the required 20-run benchmark completed with `acceptancePassed=true`. Interaction P50/P95/max was `2360/3820/4066 ms`, first Browser open was `256/450/818 ms`, and four-times-CPU input latency was `77.5/111.3/115.1 ms`. Startup-before-Browser private bytes were `423.59/498.74/545.31 MiB`; Browser-on-demand totals were `488.21/554.75/587.88 MiB`; same-run deltas were `86.23/150.60/158.79 MiB`. All 20 first-five-second lifecycle monitors saw zero Browser guests, and demand produced exactly one guest. The authoritative samples, process classifications, and gate headroom are in `archive/2026-07-15-dev-0.0.10-performance.json`. Windows package acceptance is also complete: ZIP SHA256 `A7A2A31861AB7D49BDDE70881DB568702689B603C46381576EDB92C4010BEF35` and MSI SHA256 `BC16757E1AA9E70E40B2AA21A800426FBFA24735C84532E4062D7F3409A5BD01`; the prerelease is published and its MSI is installed locally with state-preservation and same-window startup verification. The dev-0.0.10 prerelease has no Linux assets; Linux remains on dev-0.0.9.
+Current formal dev-0.0.10 performance acceptance: the required 20-run benchmark completed with `acceptancePassed=true`. Interaction P50/P95/max was `2360/3820/4066 ms`, first Browser open was `256/450/818 ms`, and four-times-CPU input latency was `77.5/111.3/115.1 ms`. Startup-before-Browser private bytes were `423.59/498.74/545.31 MiB`; Browser-on-demand totals were `488.21/554.75/587.88 MiB`; same-run deltas were `86.23/150.60/158.79 MiB`. All 20 first-five-second lifecycle monitors saw zero Browser guests, and demand produced exactly one guest. The authoritative samples, process classifications, and gate headroom are in 本地归档（未纳入公开仓库）. Windows package acceptance is also complete: ZIP SHA256 `A7A2A31861AB7D49BDDE70881DB568702689B603C46381576EDB92C4010BEF35` and MSI SHA256 `BC16757E1AA9E70E40B2AA21A800426FBFA24735C84532E4062D7F3409A5BD01`; the prerelease is published and its MSI is installed locally with state-preservation and same-window startup verification. The dev-0.0.10 prerelease has no Linux assets; Linux remains on dev-0.0.9.
 
 Current safe file-open routing: file-tree rows, work-review rows, conversation file buttons, and Markdown local-file links converge on `openWorkspaceFile` instead of reading every target directly into the renderer. `DESKTOP/src/core/workspaceFileRouter.ts` validates lexical and real paths against the active workspace, reads at most a 64 KiB header before classification, distinguishes UTF-8/UTF-16 text, PDF/HTML, executables/installers/shortcuts, scripts, and other binary data, and admits at most 5 MiB into the editor. Small text scripts such as `.bat`, `.cmd`, `.ps1`, and `.sh` are editable but never executed; oversized/non-text scripts and executable-like files are reveal-only, while other binary or oversized ordinary text files use the operating-system default application. HTML retains the tokenized `newmark-preview://` sandbox. PDF now returns a transport-neutral capability that `PdfPreviewServer` exposes only through an owner-bound, expiring `127.0.0.1:<ephemeral>` URL with strict Host/method/path/token/TTL checks and single-range responses, avoiding Chromium PDFium's external-protocol handling. Editor replacement and close go through one serialized Save/Discard/Cancel transition; stale asynchronous open generations and revoked edit tokens cannot replace the current surface.
 
@@ -3050,7 +3047,7 @@ Current local installation acceptance: the rebuilt unpacked package was elevated
 
 Current post-release conflict diagnosis: the inert/black window regression was introduced after the working `dev-0.0.6` baseline by calling `webContents.stop()` immediately before `loadFile(index.html)` during the startup-shell transition. That abort created a renderer/navigation race; the BrowserWindow could retain a frame after its renderer exited. The navigation and compositor code has been returned to the proven `a61da6f` behavior while keeping the independent `~/.Newmark` install-root normalization and requested previous-version icon assets.
 
-Current work-review and bottom-bar acceptance: completed Agent turns now retain their file diffs in conversation-scoped renderer state and render one review card after the final transcript refresh. The card aggregates changed-line additions/deletions by path, shows three rows by default, expands remaining files, and opens a file-detail review window. Transcript rerenders preserve the owning conversation's pending review instead of erasing it, and background conversation completion cannot inject a card into the active conversation. Task, Queue, and Goal are compact 30/30/31 px control bands with the existing click, drag, edit, pause, and resume behavior intact. `npm.cmd test` passes 982 assertions; `release:ui-work-review-bars-smoke` verifies five visible expanded rows, a working review subwindow, non-overlapping geometry, and records `archive/2026-07-12-work-review-bars-smoke.png`.
+Current work-review and bottom-bar acceptance: completed Agent turns now retain their file diffs in conversation-scoped renderer state and render one review card after the final transcript refresh. The card aggregates changed-line additions/deletions by path, shows three rows by default, expands remaining files, and opens a file-detail review window. Transcript rerenders preserve the owning conversation's pending review instead of erasing it, and background conversation completion cannot inject a card into the active conversation. Task, Queue, and Goal are compact 30/30/31 px control bands with the existing click, drag, edit, pause, and resume behavior intact. `npm.cmd test` passes 982 assertions; `release:ui-work-review-bars-smoke` verifies five visible expanded rows, a working review subwindow, non-overlapping geometry, and records 本地归档（未纳入公开仓库）.
 
 Current titlebar theme-icon acceptance: the renderer resolves the custom titlebar icon from `state.theme`. Explicit dark mode uses the supplied black finished icon `app-icon-dark.png`, explicit light mode uses the supplied white finished icon `app-icon-light.png`, and only `system` mode consults and subscribes to `prefers-color-scheme`. The icon image supplies its own rounded black/white surface; CSS only retains the independently configured animated marquee border and does not draw a replacement icon background. `release:ui-runtime-layout-smoke` exercises all four effective states, final source validation passes 991 assertions, and `release:ui-icon-smoke` verifies both PNG SHA-256 values inside the packaged `app.asar`. The `Program Files` installation was force-overlaid from the verified `win-unpacked` package after same-version MSI repair completed without replacing the unversioned `app.asar`; installed dark/light CDP checks decoded the expected 1024 x 1024 images and screenshot inspection confirmed the black/white finished surfaces. Native BrowserWindow, taskbar, and tray icons continue to follow Electron `nativeTheme` independently.
 
@@ -3108,7 +3105,7 @@ Current native editor integration: on 2026-07-11, the right sidebar editor was r
 
 Current self-contained model dual-validation fix: on 2026-07-11, model capability validation stopped treating name inference as proof. Newmark's own `validateModels` now reads structured provider `/models` or GitHub catalog metadata, runs the built-in DuckDuckGo/Bing `web_search` against the provider's official domain for capability candidates, and then submits real text, 64x64 red-square visual recognition, and dedicated image-generation tasks. Only task success persists `vision_input` or `image_output`; search/catalog/name evidence only triggers probes. Newly imported models remain capability-unvalidated, and the toolbar model selector includes only `available` or `unvalidated` statuses. Verification passed `npm.cmd test` with 924 assertions. Real Newmark CLI validation confirmed APInebula `gpt-5.5` as text+vision available and image-output unclaimed, while GitHub Models `microsoft/phi-4` passed text but correctly failed vision with the provider's image-model error. The installed Program Files UI contained 28 selectable models, zero validated-unavailable/error entries, zero missing available/unvalidated entries, and retained `gpt-5.5`.
 
-Current archive/duplicate-registration and narrow-input fix: on 2026-07-11, the conversation archive action was found to create a Markdown file without deleting the source conversation, after which the renderer refreshed it back into the active list. `Agent.archiveConversation` now archives a requested id without switching the shared host, removes that id from disk and memory, removes exact non-empty duplicate transcript registrations, and preserves different conversations that merely share the same title. The renderer also rejects duplicate ids and adds a short id suffix for same-title distinct conversations. Input-toolbar flex and responsive rules now retain at least 72px of model information, keep the send action inside the input area, and temporarily hide sidebars below 720px without mutating saved sidebar state. Verification passed `npm.cmd test` with 920 assertions and packaged `release:ui-fast-conversation-switch-smoke`; real geometry measured a 209px model field at 560px and 100px at 430px with the send button inside the input boundary, while archived conversation removal persisted across a packaged app restart.
+Current 本地归档（未纳入公开仓库） and narrow-input fix: on 2026-07-11, the conversation archive action was found to create a Markdown file without deleting the source conversation, after which the renderer refreshed it back into the active list. `Agent.archiveConversation` now archives a requested id without switching the shared host, removes that id from disk and memory, removes exact non-empty duplicate transcript registrations, and preserves different conversations that merely share the same title. The renderer also rejects duplicate ids and adds a short id suffix for same-title distinct conversations. Input-toolbar flex and responsive rules now retain at least 72px of model information, keep the send action inside the input area, and temporarily hide sidebars below 720px without mutating saved sidebar state. Verification passed `npm.cmd test` with 920 assertions and packaged `release:ui-fast-conversation-switch-smoke`; real geometry measured a 209px model field at 560px and 100px at 430px with the send button inside the input boundary, while archived conversation removal persisted across a packaged app restart.
 
 Current same-workspace conversation isolation fix: on 2026-07-11, packaged UI testing reproduced a severe mapping failure where `agent:getState(B)` returned conversation id B but then overwrote B's scoped snapshot with the shared host's `agent.chatMessages` from A. The fix removes that global overwrite, makes persisted target state authoritative for scoped snapshots, keeps snapshot/ensure reads free of implicit saves, merges runner completion directly into the target key, synchronizes host memory only when that target is actually active, and rejects delayed `ensureConversation`/`getState` chains after a workspace or conversation switch. Verification passed `npm.cmd test` with 912 assertions, packaged `release:ui-fast-conversation-switch-smoke` including an intentionally delayed A response and 20 rapid A/B switches, `release:ui-multi-window-shared-backend-smoke`, and `release:ui-workspace-conversation-isolation-smoke`.
 
@@ -3118,7 +3115,7 @@ Current GitHub Models catalog fix: on 2026-07-10, a real Program Files test foun
 
 Current dev-0.0.4 Linux publication: the WSL-native build passed 893 Linux assertions and packaged WSLg GUI smoke, then produced `Newmark-Agent-0.0.4-x86_64.AppImage`, `Newmark-Agent-0.0.4-amd64.deb`, and `Newmark-Agent-0.0.4-linux-unpacked-x64.zip`. The Linux unpacked zip is generated from the same `linux-unpacked` directory as the AppImage/deb build and is intended for no-loss updates that preserve mutable `~/.Newmark` state.
 
-The desktop Electron UI is the primary acceptance surface. CLI and tests are useful regression gates, but a feature is not considered complete when the packaged desktop UI fails visually or behaviorally. Recent validation work has focused on package/runtime differences, especially UI text, keyboard behavior, right sidebar panels, skills UI, Guide/Next, open-source SVG icons, message media, and conversation state isolation. The current conversation surface renders as a workflow timeline rather than chat bubbles. Packaged UI validation confirmed backend conversation switching restores only the active workspace/conversation messages, each send is bound to the initiating conversation ID, queued input drains into the next Build turn, Markdown images render inline, conversation file links open the right-side Editor directly, and restart continuation restores the same workspace/conversation through `Work/State.json` plus workspace-local `conversations/state.json`; this has now been verified both with a deterministic mock provider and with the real APInebula `gpt-5.4-mini` model over two packaged desktop launches. The packaged UI now also validates current-conversation Plan management in the right sidebar: add/edit/status-cycle controls persist under the active workspace and conversation, new conversations start with an empty plan, switching back restores the previous plan, and restart recovery preserves the active conversation plan without cross-conversation leakage. The packaged UI also validates language switching through `general.language`: fresh roots start in `auto`, Settings can switch to `zh` or `en`, the renderer updates `document.lang`, prompt placeholders, and right-sidebar Plan labels, `config.json` persists the selection, and a restart restores the selected language. Secondary language coverage now includes active rendered titles and status text for fuzzy injection, plugins, Flow, new conversation, workspace-required gates, archives, file tree, terminal, editor, subagents, conversation isolation, and model settings; packaged CDP validation now verifies `auto -> en -> zh -> en` switching for primary sidebar labels, workspace secondary controls, right close/editor close controls, sub-window close controls, Chinese secondary-window titles, dynamic context compression and Next queue labels, model Auto labels, model validation status chips, provider/model edit labels, file-tree empty states, terminal connection status, and persisted config. Source regression also parses `NEWMARK_I18N` and requires English / Chinese dictionaries to have identical non-empty key sets. The Agent prompt now also localizes the visible reply contract itself: `en` selects `What changed / Verification / Files / Issues/Next`, `zh` selects `做了什么 / 验证 / 文件 / 问题/下一步`, and `auto` follows the user's dominant input language while preserving code, commands, paths, JSON keys, model/provider/tool names, quoted source text, and user-provided literals. The non-interactive CLI now exposes `language` in `state` and accepts `send --language auto|en|zh`; packaged CLI smoke verifies `state --language zh` and that `send --language en` injects `general.language=en` into the outgoing Agent prompt. Provider state returned to the renderer and HTTP state API is now sanitized (`api_key: ""`, `has_api_key: true/false`), while provider saves merge existing secrets so UI edits do not clear keys. The packaged Models settings UI now has deterministic release CDP coverage for provider/model add, edit, and delete, including key redaction in renderer state and key-preserving provider rename/edit persisted to config. Closed subagents remain available as retained read-only history after their active occupancy is released, the current packaged Agent can actively execute `write -> bash(timeout_ms=10000) -> edit -> read` through the real renderer input path with Agent-selected bash timeout while the terminal timeout cap remains `0`; this is now covered by repeatable `release:ui-agent-smoke` CDP validation that records exact tool order, file effects, hidden hover mode/model metadata, and screenshot evidence. The packaged Agent can drive embedded Browser tools through `browser_open -> browser_snapshot -> browser_type -> browser_click -> browser_eval`, can call `gh_auth_status`, and can create/list persisted automations through `automation_create` and `automation_list` in one real renderer `window.sendMessage()` turn; this is covered by `release:ui-integration-smoke` with screenshot evidence. The packaged UI now also validates external workspace creation through the New Workspace UI path, runtime PC host binding persistence in `Work/External.json`, external workspace archive isolation, and hiding/filtering after a saved host-binding mismatch; this is covered by `release:ui-external-workspace-smoke` with screenshot evidence. The packaged UI now validates option-feedback behavior across `default`, `ask_more`, `ask_less`, and `fully_autonomous`, structured option rendering in the workflow timeline and right Status panel, and visible `outside_readonly` + `ask_user` permission blocking through `release:ui-option-feedback-smoke`. The packaged desktop automation timer has also been validated end to end: a one-shot automation created through the real preload API executed through `Agent.process`, persisted `runCount: 1`, stored `lastResult`, and completed without leaving Newmark processes or scheduled-task residue. The packaged `--automation-wake` entrypoint now runs due automations once in headless mode, persists the result, resyncs wake scheduling, and exits before sidecar/window setup. The current packaged release has also passed low-cost real-provider smoke tests against APInebula `gpt-5.4-mini` through both release CLI `send` and the real desktop renderer input path, selected real model validation for `APInebula/gpt-5.4-mini` through both release CLI `validate-models` and the real desktop Models UI, deterministic unavailable-model fallback through both release CLI `send` and the real desktop Models UI, Anthropic-compatible fuzzy injection through both packaged CLI and real packaged Models UI using mock `/models` and `/messages` endpoints, Claude/Anthropic env-file fuzzy injection through packaged CLI plus real packaged Models UI with a space-containing env-file path, and a one-shot real `Claude code.txt` import that persisted `DeepSeekAnthropic` while reporting unavailable DeepSeek models without leaking keys. Fuzzy-inject failure warnings now include imported candidate validation statuses plus discovery context. Agent-initiated Flow design/trigger and subagent retained history are now covered by `release:ui-flow-subagent-smoke`, which drives `flow_save`/`flow_list`/`flow_run` and `task`/`subagent_send`/`subagent_result`/`subagent_close` through the real packaged renderer/Agent path. `archive/2026-06-27-requirement-evidence-audit.md` is the current requirement-to-evidence checkpoint for the active goal; after the Flow/subagent smoke, the remaining high-value gap is targeted opt-in real-provider reruns when spending is acceptable.
+The desktop Electron UI is the primary acceptance surface. CLI and tests are useful regression gates, but a feature is not considered complete when the packaged desktop UI fails visually or behaviorally. Recent validation work has focused on package/runtime differences, especially UI text, keyboard behavior, right sidebar panels, skills UI, Guide/Next, open-source SVG icons, message media, and conversation state isolation. The current conversation surface renders as a workflow timeline rather than chat bubbles. Packaged UI validation confirmed backend conversation switching restores only the active workspace/conversation messages, each send is bound to the initiating conversation ID, queued input drains into the next Build turn, Markdown images render inline, conversation file links open the right-side Editor directly, and restart continuation restores the same workspace/conversation through `Work/State.json` plus workspace-local `conversations/state.json`; this has now been verified both with a deterministic mock provider and with the real APInebula `gpt-5.4-mini` model over two packaged desktop launches. The packaged UI now also validates current-conversation Plan management in the right sidebar: add/edit/status-cycle controls persist under the active workspace and conversation, new conversations start with an empty plan, switching back restores the previous plan, and restart recovery preserves the active conversation plan without cross-conversation leakage. The packaged UI also validates language switching through `general.language`: fresh roots start in `auto`, Settings can switch to `zh` or `en`, the renderer updates `document.lang`, prompt placeholders, and right-sidebar Plan labels, `config.json` persists the selection, and a restart restores the selected language. Secondary language coverage now includes active rendered titles and status text for fuzzy injection, plugins, Flow, new conversation, workspace-required gates, archives, file tree, terminal, editor, subagents, conversation isolation, and model settings; packaged CDP validation now verifies `auto -> en -> zh -> en` switching for primary sidebar labels, workspace secondary controls, right close/editor close controls, sub-window close controls, Chinese secondary-window titles, dynamic context compression and Next queue labels, model Auto labels, model validation status chips, provider/model edit labels, file-tree empty states, terminal connection status, and persisted config. Source regression also parses `NEWMARK_I18N` and requires English / Chinese dictionaries to have identical non-empty key sets. The Agent prompt now also localizes the visible reply contract itself: `en` selects `What changed / Verification / Files / Issues/Next`, `zh` selects `做了什么 / 验证 / 文件 / 问题/下一步`, and `auto` follows the user's dominant input language while preserving code, commands, paths, JSON keys, model/provider/tool names, quoted source text, and user-provided literals. The non-interactive CLI now exposes `language` in `state` and accepts `send --language auto|en|zh`; packaged CLI smoke verifies `state --language zh` and that `send --language en` injects `general.language=en` into the outgoing Agent prompt. Provider state returned to the renderer and HTTP state API is now sanitized (`api_key: ""`, `has_api_key: true/false`), while provider saves merge existing secrets so UI edits do not clear keys. The packaged Models settings UI now has deterministic release CDP coverage for provider/model add, edit, and delete, including key redaction in renderer state and key-preserving provider rename/edit persisted to config. Closed subagents remain available as retained read-only history after their active occupancy is released, the current packaged Agent can actively execute `write -> bash(timeout_ms=10000) -> edit -> read` through the real renderer input path with Agent-selected bash timeout while the terminal timeout cap remains `0`; this is now covered by repeatable `release:ui-agent-smoke` CDP validation that records exact tool order, file effects, hidden hover mode/model metadata, and screenshot evidence. The packaged Agent can drive embedded Browser tools through `browser_open -> browser_snapshot -> browser_type -> browser_click -> browser_eval`, can call `gh_auth_status`, and can create/list persisted automations through `automation_create` and `automation_list` in one real renderer `window.sendMessage()` turn; this is covered by `release:ui-integration-smoke` with screenshot evidence. The packaged UI now also validates external workspace creation through the New Workspace UI path, runtime PC host binding persistence in `Work/External.json`, external workspace archive isolation, and hiding/filtering after a saved host-binding mismatch; this is covered by `release:ui-external-workspace-smoke` with screenshot evidence. The packaged UI now validates option-feedback behavior across `default`, `ask_more`, `ask_less`, and `fully_autonomous`, structured option rendering in the workflow timeline and right Status panel, and visible `outside_readonly` + `ask_user` permission blocking through `release:ui-option-feedback-smoke`. The packaged desktop automation timer has also been validated end to end: a one-shot automation created through the real preload API executed through `Agent.process`, persisted `runCount: 1`, stored `lastResult`, and completed without leaving Newmark processes or scheduled-task residue. The packaged `--automation-wake` entrypoint now runs due automations once in headless mode, persists the result, resyncs wake scheduling, and exits before sidecar/window setup. The current packaged release has also passed low-cost real-provider smoke tests against APInebula `gpt-5.4-mini` through both release CLI `send` and the real desktop renderer input path, selected real model validation for `APInebula/gpt-5.4-mini` through both release CLI `validate-models` and the real desktop Models UI, deterministic unavailable-model fallback through both release CLI `send` and the real desktop Models UI, Anthropic-compatible fuzzy injection through both packaged CLI and real packaged Models UI using mock `/models` and `/messages` endpoints, Claude/Anthropic env-file fuzzy injection through packaged CLI plus real packaged Models UI with a space-containing env-file path, and a one-shot real `Claude code.txt` import that persisted `DeepSeekAnthropic` while reporting unavailable DeepSeek models without leaking keys. Fuzzy-inject failure warnings now include imported candidate validation statuses plus discovery context. Agent-initiated Flow design/trigger and subagent retained history are now covered by `release:ui-flow-subagent-smoke`, which drives `flow_save`/`flow_list`/`flow_run` and `task`/`subagent_send`/`subagent_result`/`subagent_close` through the real packaged renderer/Agent path. 本地归档（未纳入公开仓库） is the current requirement-to-evidence checkpoint for the active goal; after the Flow/subagent smoke, the remaining high-value gap is targeted opt-in real-provider reruns when spending is acceptable.
 
 Current real-provider update: on 2026-06-28, `release:real-provider-smoke` reran the APInebula `gpt-5.4-mini` baseline through packaged CLI `state`/`send` and the real release UI renderer prompt path. Broad model validation remains targeted opt-in to conserve balance. `release:real-claude-env-preview-smoke` now covers the real `Claude code.txt` path in no-spend preview mode, proving env-file parsing, protocol inference, candidate model extraction, and secret redaction without validating DeepSeek models.
 
@@ -3126,67 +3123,67 @@ Current UTF-8 real-provider update: on 2026-06-28, `release:real-provider-smoke`
 
 Current real-provider stress update: on 2026-06-28, `release:real-provider-stress` was added and run against the available Anthropic-compatible provider configuration through the real packaged release executable. It verified 8 packaged CLI sends, 6 packaged desktop UI sends through Electron CDP, 3 Goal continuation rounds, queued prompt drain, separate-conversation marker isolation, long-context send, secret redaction, archive reporting, and final release process cleanup with verdict `release-usable`.
 
-Current real-provider follow-up: on 2026-07-02, the refreshed packaged v1.1.0 build passed APInebula `release:real-provider-smoke` with real model validation and UTF-8 enabled, covering packaged CLI send, packaged CLI UTF-8 send, real `validate-models`, packaged UI send, packaged UI UTF-8 send, screenshot evidence, and key-leak guards. The refreshed build also passed `release:real-apinebula-memory-switch-smoke`, covering real model validation, real-model Memory Lab read/update tool use, component readback, tag graph repair, and unavailable-model fallback to `gpt-5.4-mini`. A separate `release:real-provider-stress` run against the currently available `ANTHROPIC_*` configuration did not pass because the provider returned `402 Insufficient Balance` for CLI rounds and Goal continuation timed out after that provider failure; the same run still passed UI rounds, queue drain, conversation isolation, long-context send, and release process cleanup. The current stress report is `archive/2026-07-01-real-provider-stress-debug.md`.
+Current real-provider follow-up: on 2026-07-02, the refreshed packaged v1.1.0 build passed APInebula `release:real-provider-smoke` with real model validation and UTF-8 enabled, covering packaged CLI send, packaged CLI UTF-8 send, real `validate-models`, packaged UI send, packaged UI UTF-8 send, screenshot evidence, and key-leak guards. The refreshed build also passed `release:real-apinebula-memory-switch-smoke`, covering real model validation, real-model Memory Lab read/update tool use, component readback, tag graph repair, and unavailable-model fallback to `gpt-5.4-mini`. A separate `release:real-provider-stress` run against the currently available `ANTHROPIC_*` configuration did not pass because the provider returned `402 Insufficient Balance` for CLI rounds and Goal continuation timed out after that provider failure; the same run still passed UI rounds, queue drain, conversation isolation, long-context send, and release process cleanup. The current stress report is 本地归档（未纳入公开仓库）.
 
-Current multi-window shared-backend validation: on 2026-07-05, Codex Computer Control and packaged CDP validation reproduced and then closed the multi-window active-conversation spillover risk. The desktop app now uses one backend main process for repeated launches, creates additional renderer windows through the single-instance path, lets windows request read-only/scoped conversation snapshots with `ensureConversation`, and preserves each window's active conversation by id during workspace and conversation list refresh. Validation passed `npm.cmd test` with 874 assertions, `dist:portable`, `release:ui-multi-window-shared-backend-smoke`, and Computer Control visual switching where window B created `新对话 2` while window A stayed on its original default welcome view. Evidence is recorded in `archive/2026-07-05-computer-control-multi-window-shared-backend.md`; Computer Control screenshots were not archived.
+Current multi-window shared-backend validation: on 2026-07-05, Codex Computer Control and packaged CDP validation reproduced and then closed the multi-window active-conversation spillover risk. The desktop app now uses one backend main process for repeated launches, creates additional renderer windows through the single-instance path, lets windows request read-only/scoped conversation snapshots with `ensureConversation`, and preserves each window's active conversation by id during workspace and conversation list refresh. Validation passed `npm.cmd test` with 874 assertions, `dist:portable`, `release:ui-multi-window-shared-backend-smoke`, and Computer Control visual switching where window B created `新对话 2` while window A stayed on its original default welcome view. Evidence is recorded in 本地归档（未纳入公开仓库）; Computer Control screenshots were not archived.
 
 Current Responses/active-input follow-up: on 2026-07-09, direct OpenAI-compatible Responses API failures were normalized to controlled `[LLM Error]` text instead of thrown exceptions, matching the tool-streaming Responses path and preventing repeated error surfacing when a remote Push-Lite root enables Responses mode against an incompatible endpoint/model. `LLMProvider.validate()` now treats that controlled error text as unavailable rather than a successful non-empty response. The direct Responses input converter also now emits prior assistant `function_call` items before matching `function_call_output` tool results, fixing APInebula/OpenAI-compatible second tool rounds that rejected tool outputs with `No tool call found for function call output`. The desktop input action now reflects the current window's active conversation state: running plus empty prompt shows a Newmark marquee-bordered Stop button bound to `Esc` and `agent:abortConversation`, running plus non-empty prompt shows a marquee-bordered Send button for steering/queueing, and idle state restores the normal Send button. Verification passed `npm.cmd test` with 891 assertions, a live Electron CDP smoke that checked Stop/Send/idle button class, title, and icon transitions, and a real APInebula `gpt-5.4-mini` Responses tool-result probe that returned `REAL_RESPONSES_TOOL_RESULT_OK`.
 
-Current Lite responsiveness follow-up: on 2026-07-09, the native Agent bridge removed redundant per-round work while preserving behavior. `agentKernelRunner.ts` now builds Newmark tool definitions once per Agent turn and reuses them for provider streaming and kernel tool execution, so multi-tool turns do not rebuild the full schema on each model/tool round. Context transform returns immediately when `context.auto_compress` is disabled, avoiding unnecessary conversion and JSON comparison. High-frequency tool workflow rows are still emitted live and appended to the transcript, but they defer full `conversations/state.json` persistence until existing message-end/final-turn save points, reducing synchronous disk churn on Lite or remote-backed roots. A local probe measured raw tool-schema construction at about `0.7 ms` per build, and `npm.cmd test` passed with 895 assertions. Evidence is recorded in `archive/2026-07-09-lite-response-core-redundancy.md`.
+Current Lite responsiveness follow-up: on 2026-07-09, the native Agent bridge removed redundant per-round work while preserving behavior. `agentKernelRunner.ts` now builds Newmark tool definitions once per Agent turn and reuses them for provider streaming and kernel tool execution, so multi-tool turns do not rebuild the full schema on each model/tool round. Context transform returns immediately when `context.auto_compress` is disabled, avoiding unnecessary conversion and JSON comparison. High-frequency tool workflow rows are still emitted live and appended to the transcript, but they defer full `conversations/state.json` persistence until existing message-end/final-turn save points, reducing synchronous disk churn on Lite or remote-backed roots. A local probe measured raw tool-schema construction at about `0.7 ms` per build, and `npm.cmd test` passed with 895 assertions. Evidence is recorded in 本地归档（未纳入公开仓库）.
 
 Current real-provider release validation update: on 2026-07-02, the packaged v1.1.0 build was retested with the local APInebula key file. `release:real-provider-smoke` passed real packaged CLI send, CLI UTF-8 send, real model validation, packaged UI send, packaged UI UTF-8 send, screenshot evidence, and secret redaction. `release:real-apinebula-memory-switch-smoke` passed real model validation, real-model Memory Lab read/create tool use, tag graph repair, component readback, and unavailable-model fallback. `release:real-provider-stress` was forced to explicit `NEWMARK_REAL_STRESS_*` APInebula OpenAI-compatible settings, avoiding stale `ANTHROPIC_*` machine configuration, and now passes CLI rounds, UI rounds, Goal continuation, real renderer input queue drain, conversation isolation, long-context send, and release process cleanup. The queue stress harness now uses the actual UI input queue instead of treating concurrent preload `sendMessage` calls as separate final-turn promises. A visible packaged UI user-test window is open against `_local/real-ui-user-test`, with backend state confirming APInebula `gpt-5.4-mini`, `chat_stream`, key presence, and workspace `2026-07-02_0957`.
 
-Current real-provider audit follow-up: later on 2026-07-02, the APInebula key file path was reused without printing the key, `release:real-provider-smoke`, `release:real-apinebula-memory-switch-smoke`, and explicit APInebula `release:real-provider-stress` all passed again, and the full source regression suite passed with 755 assertions. `_local/` is now ignored by Git so the real-model user-test root stays local-only. Requirement-level closure evidence is recorded in `archive/2026-07-02-real-model-release-completion-audit.md`.
+Current real-provider audit follow-up: later on 2026-07-02, the APInebula key file path was reused without printing the key, `release:real-provider-smoke`, `release:real-apinebula-memory-switch-smoke`, and explicit APInebula `release:real-provider-stress` all passed again, and the full source regression suite passed with 755 assertions. `_local/` is now ignored by Git so the real-model user-test root stays local-only. Requirement-level closure evidence is recorded in 本地归档（未纳入公开仓库）.
 
 Current conversation-control update: on 2026-07-02, same-conversation input and background tracking were tightened. Guide now steers the active kernel turn directly and no longer enters the visible queue; Next remains the editable future queue. Running conversation archive actions call the native abort path and then archive immediately, but ordinary foreground/background switching never aborts background work. When a background conversation is foregrounded, the renderer immediately reloads backend messages and work-event snapshots, holds that foreground selection against backend snapback for a short interval, and keeps a five-minute event-tracking window after switching away before falling back to backend snapshot reload on the next activation. Visible work-event text now uses natural status phrasing, and the collapsed queue pill is vertically centered. Verification passed `npm.cmd test` with 758 assertions.
 
 Current real-provider validation follow-up: after the conversation-control update, the packaged APInebula gates were rerun. `release:real-provider-smoke` passed packaged CLI send, CLI UTF-8 send, packaged UI send, UI UTF-8 send, screenshot evidence, and secret redaction. `release:real-apinebula-memory-switch-smoke` passed real model validation, Memory Lab read/create tool use, component readback, tag graph repair, and unavailable-model fallback. Full `release:real-provider-stress` passed CLI rounds, UI rounds, Goal continuation, real UI queue drain, conversation isolation, long-context send, secret guards, and release process cleanup using APInebula `gpt-5.4-mini`; the harness now normalizes the observed unstable `api.apinebula.com/v1` alias to the release-validated `apinebula.com/v1` endpoint.
 
-Current v1.1.1 real-release visual validation: on 2026-07-03, `release:real-provider-smoke` was rerun against the real packaged v1.1.1 release with APInebula `gpt-5.4-mini`, `NEWMARK_REAL_VALIDATE_MODELS=1`, and `NEWMARK_REAL_UTF8=1`. It passed real packaged CLI send, CLI UTF-8 send, real `validate-models`, real packaged UI send, UI UTF-8 send, screenshot capture, and key redaction. Follow-up validation then passed `release:real-ui-copilot-computeruse-smoke` against `_local/real-ui-user-test`, proving the real UI loads APInebula `gpt-5.4-mini`, GitHub Copilot login imports a `github_models` provider at `https://models.github.ai`, and no GitHub token leaks to renderer results. Packaged `computer_use takeover_start` also returned a single `single-click-through-virtual-screen-overlay` using shared gradient colors, speed, and width. The refreshed visual audit inspected `archive/2026-06-27-release-ui-real-provider-smoke.png`, `archive/2026-06-28-release-ui-media-md-smoke.png`, `archive/2026-07-03-release-111-ui-smoke.png`, `archive/2026-07-03-real-ui-copilot-computeruse-followup.png`, and `archive/2026-06-27-release-ui-smoke-language.png` to confirm visible UI state for real-provider replies, Markdown tables/formulas, GitHub Models exact-login UI, bottom-terminal Agent takeover marquee border, real Copilot import, and packaged language/workspace UI. Evidence is recorded in `archive/2026-07-03-real-release-ui-cli-visual-validation.md` and `archive/2026-07-03-real-ui-copilot-computeruse-followup.md`.
+Current v1.1.1 real-release visual validation: on 2026-07-03, `release:real-provider-smoke` was rerun against the real packaged v1.1.1 release with APInebula `gpt-5.4-mini`, `NEWMARK_REAL_VALIDATE_MODELS=1`, and `NEWMARK_REAL_UTF8=1`. It passed real packaged CLI send, CLI UTF-8 send, real `validate-models`, real packaged UI send, UI UTF-8 send, screenshot capture, and key redaction. Follow-up validation then passed `release:real-ui-copilot-computeruse-smoke` against `_local/real-ui-user-test`, proving the real UI loads APInebula `gpt-5.4-mini`, GitHub Copilot login imports a `github_models` provider at `https://models.github.ai`, and no GitHub token leaks to renderer results. Packaged `computer_use takeover_start` also returned a single `single-click-through-virtual-screen-overlay` using shared gradient colors, speed, and width. The refreshed visual audit inspected 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, and 本地归档（未纳入公开仓库） to confirm visible UI state for real-provider replies, Markdown tables/formulas, GitHub Models exact-login UI, bottom-terminal Agent takeover marquee border, real Copilot import, and packaged language/workspace UI. Evidence is recorded in 本地归档（未纳入公开仓库） and 本地归档（未纳入公开仓库）.
 
-Current config recovery update: on 2026-07-03, `DESKTOP/config.example.json` was added as a safe template containing no real API key, and package verification now requires it inside `app.asar`. `ConfigManager` backs up invalid JSON or invalid provider/model shapes as `config.broken-*.json` and recovers damaged configs from `config.example.json` when available, falling back to compiled defaults if the template is unavailable. Missing config on normal first run still uses provider-empty defaults. Desktop and CLI first-run paths now call the shared recovery path, and CLI stdout/stderr writes are EPIPE-tolerant at both write and stream-error levels so closed pipes do not produce Electron main-process error dialogs. Follow-up release validation also hardened `--root` parsing for paths with spaces by choosing the longest existing Windows argv fragment join, then confirmed the packaged app loads the real APInebula `gpt-5.4-mini` UI test root. Verification passed `npm.cmd test` with 843 assertions, `npm.cmd run dist:portable`, packaged invalid-config recovery, a closed-stdout pipeline check, packaged real-root state validation, and the real UI Copilot/ComputerUse follow-up smoke; evidence is stored in `archive/2026-07-03-config-example-recovery.md`, `archive/2026-07-03-copilot-login-root-ui-followup.md`, and `archive/2026-07-03-real-ui-copilot-computeruse-followup.md`.
+Current config recovery update: on 2026-07-03, `DESKTOP/config.example.json` was added as a safe template containing no real API key, and package verification now requires it inside `app.asar`. `ConfigManager` backs up invalid JSON or invalid provider/model shapes as `config.broken-*.json` and recovers damaged configs from `config.example.json` when available, falling back to compiled defaults if the template is unavailable. Missing config on normal first run still uses provider-empty defaults. Desktop and CLI first-run paths now call the shared recovery path, and CLI stdout/stderr writes are EPIPE-tolerant at both write and stream-error levels so closed pipes do not produce Electron main-process error dialogs. Follow-up release validation also hardened `--root` parsing for paths with spaces by choosing the longest existing Windows argv fragment join, then confirmed the packaged app loads the real APInebula `gpt-5.4-mini` UI test root. Verification passed `npm.cmd test` with 843 assertions, `npm.cmd run dist:portable`, packaged invalid-config recovery, a closed-stdout pipeline check, packaged real-root state validation, and the real UI Copilot/ComputerUse follow-up smoke; evidence is stored in 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, and 本地归档（未纳入公开仓库）.
 
 Current duplicate-reply release fix: on 2026-07-03, the real-model UI double final reply path was traced to the renderer receiving streamed assistant text through `agent:workEvent` and then receiving the same final token text from `window.sendMessage()` after the native kernel completed. `DESKTOP/src/ui/index.html` now records the completed streamed assistant node and reuses it when returned tokens match the same conversation, so the final response is updated in place instead of duplicated. `release-real-provider-smoke.cjs` now checks exact single marker counts for CLI and UI paths and captures assistant DOM/backend message summaries when a marker wait fails. The preload bridge also exposes `filePathForFile`, and the renderer prompt paste/drop handlers insert copied or dropped local file paths into the input box for file-to-dialog workflows. Verification passed `npm.cmd test` with 762 assertions, `dist:portable`, APInebula `release:real-provider-smoke` with UTF-8/model validation, `release:real-apinebula-memory-switch-smoke`, and explicit APInebula `release:real-provider-stress`. Current v1.1.0 artifact SHA256 values are `EE3131753A09BC6F37BFFD41BA94545AF389C834112BE3ED2E0424A93C41FE07` for `Newmark-Agent-1.1.0-portable-x64.exe` and `767E5B6E733A64400F6F7671A46DB308AC8A226C034657E103CBCFC68BCDBD55` for `Newmark-Agent-1.1.0-win-unpacked-x64.zip`.
 
-Current file/GitHub audit update: on 2026-07-03, `file_audit` was added as a native read-only tool for local and GitHub-backed file change auditing. It reports local filesystem timestamps/hash data, local Git tracking/status/last-commit/base-diff data, and, when a GitHub remote is detected and remote audit is enabled, repository, branch, contents, and commits-by-path metadata through `gh api` using GitHub REST-shaped endpoints. `git_branch` covers local branch current/list/create/switch operations, `gh_fork` covers fork status and explicit fork creation, and `gh_pr_create` covers explicit PR creation. New git/GitHub flows use argument-array `spawnSync` rather than shell string concatenation, and CLI JSON argument files strip UTF-8 BOMs for Windows PowerShell compatibility. Verification passed `npm.cmd test` with 769 assertions and live read-only checks for `file_audit`, `gh_repo_view`, `git_branch current`, and `gh_fork status` against public `positer/Newmark-Agent`. Evidence is stored in `archive/2026-07-03-file-github-audit.md`.
+Current file/GitHub audit update: on 2026-07-03, `file_audit` was added as a native read-only tool for local and GitHub-backed file change auditing. It reports local filesystem timestamps/hash data, local Git tracking/status/last-commit/base-diff data, and, when a GitHub remote is detected and remote audit is enabled, repository, branch, contents, and commits-by-path metadata through `gh api` using GitHub REST-shaped endpoints. `git_branch` covers local branch current/list/create/switch operations, `gh_fork` covers fork status and explicit fork creation, and `gh_pr_create` covers explicit PR creation. New git/GitHub flows use argument-array `spawnSync` rather than shell string concatenation, and CLI JSON argument files strip UTF-8 BOMs for Windows PowerShell compatibility. Verification passed `npm.cmd test` with 769 assertions and live read-only checks for `file_audit`, `gh_repo_view`, `git_branch current`, and `gh_fork status` against public `positer/Newmark-Agent`. Evidence is stored in 本地归档（未纳入公开仓库）.
 
 Current remote repository security review update: on 2026-07-03, `repo_security_audit` was added as a read-only Build/Plan tool for remote-backed workspaces. It reports local Git/GitHub remote detection, public/private repository metadata when available, working-tree status, base diff names, likely secret-like tracked or changed lines, ignored release-excluded local files, and concrete recommendations for avoiding privacy exposure. The Agent prompt now proactively requires repository safety review for remote-backed paths before push, PR, release packaging, public reporting, or cloud-side audit, and `git_push` / `gh_pr_create` prepend a compact security preflight summary when a remote exists.
 
-Current terminal takeover and GitHub Models update: on 2026-07-03, `terminal_takeover` was added as an Agent tool independent from the one-shot `bash` tool. It maintains named persistent shell sessions across `start`, `write`, `read`, `stop`, and `list`, so both desktop and CLI Agent turns can keep cwd/env/process context inside the same terminal environment. Desktop Electron subscribes to takeover events, mirrors active sessions into the bottom terminal tab strip, lets manual bottom-terminal input write into the same takeover session, and applies the existing Newmark dynamic gradient marquee border to active takeover tabs/panes using the `ui.gradient_colors`, `ui.gradient_speed`, and `ui.gradient_width` settings. The model layer also gained a `github_models` provider protocol for GitHub Copilot/Models-style setup: GitHub/Copilot provider names infer `https://models.github.ai`, model discovery uses GitHub Models catalog, chat uses GitHub Models inference chat completions, and requests carry GitHub token plus API-version headers. GitHub/Copilot is exact-login only: the desktop Models settings bridge uses GitHub CLI login/refresh with `models:read`; already-authenticated sessions use `gh auth refresh --scopes models:read` because current GitHub CLI rejects `refresh --web`, unauthenticated sessions use `gh auth login --web --scopes models:read`, and Electron opens `https://github.com/login` if CLI token acquisition still fails. Agent, server, and CLI fuzzy injection reject GitHub/Copilot candidates and remain limited to OpenAI-compatible or Anthropic-compatible imports. Verification passed `npm.cmd test` with 842 assertions and `npm.cmd run dist:portable`; exact-login hardening is tracked in `archive/2026-07-03-terminal-takeover-github-models.md` and `archive/2026-07-03-copilot-login-root-ui-followup.md`.
+Current terminal takeover and GitHub Models update: on 2026-07-03, `terminal_takeover` was added as an Agent tool independent from the one-shot `bash` tool. It maintains named persistent shell sessions across `start`, `write`, `read`, `stop`, and `list`, so both desktop and CLI Agent turns can keep cwd/env/process context inside the same terminal environment. Desktop Electron subscribes to takeover events, mirrors active sessions into the bottom terminal tab strip, lets manual bottom-terminal input write into the same takeover session, and applies the existing Newmark dynamic gradient marquee border to active takeover tabs/panes using the `ui.gradient_colors`, `ui.gradient_speed`, and `ui.gradient_width` settings. The model layer also gained a `github_models` provider protocol for GitHub Copilot/Models-style setup: GitHub/Copilot provider names infer `https://models.github.ai`, model discovery uses GitHub Models catalog, chat uses GitHub Models inference chat completions, and requests carry GitHub token plus API-version headers. GitHub/Copilot is exact-login only: the desktop Models settings bridge uses GitHub CLI login/refresh with `models:read`; already-authenticated sessions use `gh auth refresh --scopes models:read` because current GitHub CLI rejects `refresh --web`, unauthenticated sessions use `gh auth login --web --scopes models:read`, and Electron opens `https://github.com/login` if CLI token acquisition still fails. Agent, server, and CLI fuzzy injection reject GitHub/Copilot candidates and remain limited to OpenAI-compatible or Anthropic-compatible imports. Verification passed `npm.cmd test` with 842 assertions and `npm.cmd run dist:portable`; exact-login hardening is tracked in 本地归档（未纳入公开仓库） and 本地归档（未纳入公开仓库）.
 
-Current Computer Use and release 1.1.1 validation update: on 2026-07-03, native `computer_use` was added for Windows observe/move/click/scroll/type/key/wait actions and then extended with visible desktop takeover and application-scoped workflows. It builds UI Automation semantic objects with stable `target_id`, `stable_key`, normalized bounding boxes, allowed actions, risk hints, object priorities, and high-priority scene summaries, and lets `move`/`click`/`scroll` target the latest observed semantic object instead of brittle raw coordinates. `takeover_start` and mutating actions show a virtual-desktop dynamic gradient edge indicator; `takeover_stop` clears it. `app_list`, `app_observe`, `app_activate`, `app_click`, `app_scroll`, `app_type`, and `app_key` scope screenshots and operations to visible taskbar application windows by title, process name, PID, or native handle. Computer Use screenshots are ephemeral only and must never be stored under `archive/` or the workspace: when the active model has `vision: true`, the native Agent kernel sends the screenshot image data URL and the UI Automation JSON text together in the same tool-result context, then deletes the temporary PNG immediately after preparing the provider request; when the model lacks vision or `computer_use observe`/`app_observe` is called directly, the screenshot is deleted before the tool result returns and no real path is exposed. Enikk and `JucieOvo/ezcomputerctrl-mcp` were used only as public architecture references for capture/parse/decide/act, semantic-object control, stable object IDs, and concise public object summaries; no detector/OCR/source code was copied into Newmark. Settings now has a dedicated Tools page backed by `DESKTOP/src/tools/nativeTools.ts` and persisted `tools.enabled`; disabled native tools are hidden from model-visible definitions and blocked if an older turn calls them directly. Release 1.1.1 was rebuilt and validated with `npm.cmd test` at 834 assertions, packaged `release:cli-smoke`, packaged `release:111-cli-smoke`, and packaged `release:computer-use-vision-smoke`. The Computer Use release gate verifies vision models receive UI Automation text plus a screenshot data URL, text-only models receive UI Automation text without image input, model-visible requests do not leak `vision_image_path` or `%TEMP%\newmark-computer-use\*.png`, no `observe-*.png` residue remains, and takeover-stop plus application-scoped controls are present in the packaged release. The latest v1.1.1 artifact hashes are tracked in the maintenance workflow section; evidence is stored in `archive/2026-07-03-release-1.1.1.md`, `archive/2026-07-03-native-tool-settings.md`, `archive/2026-07-03-computer-use-ephemeral-vision.md`, `archive/2026-07-03-computer-use-takeover-app-scope.md`, and `archive/2026-07-03-release-computer-use-vision-smoke.json`.
+Current Computer Use and release 1.1.1 validation update: on 2026-07-03, native `computer_use` was added for Windows observe/move/click/scroll/type/key/wait actions and then extended with visible desktop takeover and application-scoped workflows. It builds UI Automation semantic objects with stable `target_id`, `stable_key`, normalized bounding boxes, allowed actions, risk hints, object priorities, and high-priority scene summaries, and lets `move`/`click`/`scroll` target the latest observed semantic object instead of brittle raw coordinates. `takeover_start` and mutating actions show a virtual-desktop dynamic gradient edge indicator; `takeover_stop` clears it. `app_list`, `app_observe`, `app_activate`, `app_click`, `app_scroll`, `app_type`, and `app_key` scope screenshots and operations to visible taskbar application windows by title, process name, PID, or native handle. Computer Use screenshots are ephemeral only and must never be stored under 本地归档（未纳入公开仓库） or the workspace: when the active model has `vision: true`, the native Agent kernel sends the screenshot image data URL and the UI Automation JSON text together in the same tool-result context, then deletes the temporary PNG immediately after preparing the provider request; when the model lacks vision or `computer_use observe`/`app_observe` is called directly, the screenshot is deleted before the tool result returns and no real path is exposed. Enikk and `JucieOvo/ezcomputerctrl-mcp` were used only as public architecture references for capture/parse/decide/act, semantic-object control, stable object IDs, and concise public object summaries; no detector/OCR/source code was copied into Newmark. Settings now has a dedicated Tools page backed by `DESKTOP/src/tools/nativeTools.ts` and persisted `tools.enabled`; disabled native tools are hidden from model-visible definitions and blocked if an older turn calls them directly. Release 1.1.1 was rebuilt and validated with `npm.cmd test` at 834 assertions, packaged `release:cli-smoke`, packaged `release:111-cli-smoke`, and packaged `release:computer-use-vision-smoke`. The Computer Use release gate verifies vision models receive UI Automation text plus a screenshot data URL, text-only models receive UI Automation text without image input, model-visible requests do not leak `vision_image_path` or `%TEMP%\newmark-computer-use\*.png`, no `observe-*.png` residue remains, and takeover-stop plus application-scoped controls are present in the packaged release. The latest v1.1.1 artifact hashes are tracked in the maintenance workflow section; evidence is stored in 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, and 本地归档（未纳入公开仓库）.
 
 Current OpenSSH workspace update: on 2026-07-03, native OpenSSH connection management was added for desktop and CLI/Agent paths. `Work/SSH.json` stores redacted connection metadata only, while `ssh_workspace` and the New Workspace dialog can create/edit connections, validate links through system `ssh` with argument-array invocation, create remote workspace directories, read/create remote `PC_Hash.config`, and link remote workspaces as SSH external workspace records with local shadow directories under `Work/.ssh/` for conversation state. Existing local external workspace host-binding filtering remains unchanged; SSH workspaces are preserved by `remotePcHash` and are relinked when a validated connection reports the same remote PC hash. Real VM validation is available in the packaged `release:111-cli-smoke` through `NEWMARK_RELEASE_SSH_HOST`, `NEWMARK_RELEASE_SSH_USER`, optional `NEWMARK_RELEASE_SSH_PORT`, `NEWMARK_RELEASE_SSH_KEY`, and `NEWMARK_RELEASE_SSH_ROOT`.
 
 Current Computer Use collaboration-boundary update: on 2026-07-03, Computer Use desktop takeover now has a visible whole-desktop dynamic gradient edge indicator. `computer_use takeover_start` creates topmost border strips around the virtual desktop and `takeover_stop` clears them; mutating desktop actions also pulse the indicator so human collaborators can see when the Agent is actively controlling the desktop. Computer Use also now supports taskbar/visible-application scoped workflows: `app_list` enumerates visible application windows, `app_observe` captures a one-time cropped application screenshot plus in-window UI Automation objects, and `app_activate/app_click/app_scroll/app_type/app_key` scope actions to a window by title, process name, PID, or native window handle. Application screenshots obey the same ephemeral-only policy as full desktop screenshots.
 
-Current Computer Use concurrency update: on 2026-07-04, `DESKTOP/src/tools/index.ts` added a process-wide Computer Use ownership lock keyed by Agent conversation ID. The native Agent kernel now passes `activeConversationId` into tool execution, so parallel desktop conversations cannot both drive Computer Use at the same time; the owner conversation can continue observe/action sequences until it calls `takeover_stop`, a different conversation receives a structured occupied response with `lock_owner` and `requested_owner`, and direct CLI/tool calls use a stable workspace-derived owner with a stale-lock TTL. Verification passed `npm.cmd test` with 849 assertions, including direct two-conversation lock acquisition/block/release tests; refreshed packaged `release:cli-smoke` and `release:111-cli-smoke` also passed after rebuilding the v1.1.1 artifacts. Evidence is stored in `archive/2026-07-04-computer-use-single-conversation-lock.md`.
+Current Computer Use concurrency update: on 2026-07-04, `DESKTOP/src/tools/index.ts` added a process-wide Computer Use ownership lock keyed by Agent conversation ID. The native Agent kernel now passes `activeConversationId` into tool execution, so parallel desktop conversations cannot both drive Computer Use at the same time; the owner conversation can continue observe/action sequences until it calls `takeover_stop`, a different conversation receives a structured occupied response with `lock_owner` and `requested_owner`, and direct CLI/tool calls use a stable workspace-derived owner with a stale-lock TTL. Verification passed `npm.cmd test` with 849 assertions, including direct two-conversation lock acquisition/block/release tests; refreshed packaged `release:cli-smoke` and `release:111-cli-smoke` also passed after rebuilding the v1.1.1 artifacts. Evidence is stored in 本地归档（未纳入公开仓库）.
 
-Current conversation live-feedback update: on 2026-07-04, the renderer live workflow state was scoped by conversation ID so streamed assistant text, folded tool batches, and completed-stream dedupe no longer share a global singleton across parallel conversations. `DESKTOP/src/ui/index.html` now uses `agentWorkUiByConversation`, `conversationWorkUiState(conversationId)`, and conversation-bound event replay; it also defines `currentLang()` for packaged folded tool summaries. `DESKTOP/src/core/agentKernelRunner.ts` now persists native-kernel tool results as folded workflow messages in addition to live work events, so switching back after completion shows the tool result instead of a permanently running tool row. `release-ui-conversation-queue-plan-smoke.cjs` now validates live text while A and B run concurrently, B foreground not showing A text/results, A replaying its own live text when reopened, persisted folded tool results, queue drain, and post-drain isolation. Verification passed `npm.cmd test` with 851 assertions, `npm.cmd run dist:portable`, and packaged `release:ui-conversation-queue-plan-smoke` after rebuilding; current v1.1.1 hashes are `D587DBBF4D19DB01BF3F6036E7FD629B6D064717924D042D8FCD9253CAD70EAB` for the portable exe and `9F4818E2502131A5696874EA0A22435512BBB9BD457FF05EFC217B0AB15458E7` for the win-unpacked zip. Evidence is stored in `archive/2026-07-04-conversation-live-feedback-binding.md`.
+Current conversation live-feedback update: on 2026-07-04, the renderer live workflow state was scoped by conversation ID so streamed assistant text, folded tool batches, and completed-stream dedupe no longer share a global singleton across parallel conversations. `DESKTOP/src/ui/index.html` now uses `agentWorkUiByConversation`, `conversationWorkUiState(conversationId)`, and conversation-bound event replay; it also defines `currentLang()` for packaged folded tool summaries. `DESKTOP/src/core/agentKernelRunner.ts` now persists native-kernel tool results as folded workflow messages in addition to live work events, so switching back after completion shows the tool result instead of a permanently running tool row. `release-ui-conversation-queue-plan-smoke.cjs` now validates live text while A and B run concurrently, B foreground not showing A text/results, A replaying its own live text when reopened, persisted folded tool results, queue drain, and post-drain isolation. Verification passed `npm.cmd test` with 851 assertions, `npm.cmd run dist:portable`, and packaged `release:ui-conversation-queue-plan-smoke` after rebuilding; current v1.1.1 hashes are `D587DBBF4D19DB01BF3F6036E7FD629B6D064717924D042D8FCD9253CAD70EAB` for the portable exe and `9F4818E2502131A5696874EA0A22435512BBB9BD457FF05EFC217B0AB15458E7` for the win-unpacked zip. Evidence is stored in 本地归档（未纳入公开仓库）.
 
-Current fast conversation switch visual validation: on 2026-07-04, `release-ui-fast-conversation-switch-smoke.cjs` was added to exercise packaged Electron conversation switching at visual speed. It creates A/B conversations with unique prompt/reply markers, switches between them twenty times by persisted conversation ID, checks the backend active conversation, scopes leakage checks to the current visible `#chat-area`, verifies exactly one left conversation item is active, and captures final A/B screenshots. Verification passed `npm.cmd test` with 855 assertions and packaged `release:ui-fast-conversation-switch-smoke`; evidence is stored in `archive/2026-07-04-fast-conversation-switch-visual-isolation.md`, `archive/2026-07-04-release-ui-fast-conversation-switch-a.png`, and `archive/2026-07-04-release-ui-fast-conversation-switch-b.png`.
+Current fast conversation switch visual validation: on 2026-07-04, `release-ui-fast-conversation-switch-smoke.cjs` was added to exercise packaged Electron conversation switching at visual speed. It creates A/B conversations with unique prompt/reply markers, switches between them twenty times by persisted conversation ID, checks the backend active conversation, scopes leakage checks to the current visible `#chat-area`, verifies exactly one left conversation item is active, and captures final A/B screenshots. Verification passed `npm.cmd test` with 855 assertions and packaged `release:ui-fast-conversation-switch-smoke`; evidence is stored in 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, and 本地归档（未纳入公开仓库）.
 
-Current OpenCode-style shared backend and queue UI follow-up: on 2026-07-05, conversation/window state was tightened around a shared-backend model inspired by OpenCode V2. The Electron main process now owns one conversation-kernel event subscription and broadcasts `agent:workEvent` to every desktop window, while `agent:getState`, conversation Plan IPC, and renderer refreshes can request explicit conversation IDs. Workspace switching now clears stale chat, Plan, and queue state before reloading the workspace-bound backend conversation. The queue UI regression was traced to the Next branch still writing legacy `[Next queued]` and `[Queue]` rows into `#chat-area`; Next now only expands the bottom editable queue and renders the queued prompt in `#queue-list .queue-edit`. Verification passed `npm.cmd test` with 869 assertions, `npm.cmd run dist:portable`, packaged `release:ui-conversation-queue-plan-smoke`, packaged `release:ui-fast-conversation-switch-smoke`, and packaged `release:ui-workspace-conversation-isolation-smoke`. Evidence is stored in `archive/2026-07-05-opencode-shared-backend-dialog-management.md`, `archive/2026-07-05-release-ui-workspace-conversation-isolation-alpha.png`, and `archive/2026-07-05-release-ui-workspace-conversation-isolation-beta.png`.
+Current OpenCode-style shared backend and queue UI follow-up: on 2026-07-05, conversation/window state was tightened around a shared-backend model inspired by OpenCode V2. The Electron main process now owns one conversation-kernel event subscription and broadcasts `agent:workEvent` to every desktop window, while `agent:getState`, conversation Plan IPC, and renderer refreshes can request explicit conversation IDs. Workspace switching now clears stale chat, Plan, and queue state before reloading the workspace-bound backend conversation. The queue UI regression was traced to the Next branch still writing legacy `[Next queued]` and `[Queue]` rows into `#chat-area`; Next now only expands the bottom editable queue and renders the queued prompt in `#queue-list .queue-edit`. Verification passed `npm.cmd test` with 869 assertions, `npm.cmd run dist:portable`, packaged `release:ui-conversation-queue-plan-smoke`, packaged `release:ui-fast-conversation-switch-smoke`, and packaged `release:ui-workspace-conversation-isolation-smoke`. Evidence is stored in 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, and 本地归档（未纳入公开仓库）.
 
-Current real-model ComputerUse desktop validation: on 2026-07-04, the rebuilt v1.1.1 packaged release was rechecked against APInebula `gpt-5.4-mini` and Codex desktop Computer Use. `release:cli-smoke` passed the base packaged CLI surface, `release:111-cli-smoke` passed file/GitHub audit, remote security audit, ComputerUse dry-run/scroll/target guard, OpenSSH availability, and CLI Agent terminal takeover, and `release:111-ui-smoke` passed GitHub Models exact-login UI, fuzzy exclusion, and bottom-terminal takeover mirror with marquee border. `release:real-provider-smoke` passed real packaged CLI send, CLI UTF-8 send, real `validate-models`, real packaged UI UTF-8 send, real packaged UI send, screenshot capture, and key redaction. `release:real-ui-copilot-computeruse-smoke` passed against `_local/real-ui-user-test`, confirming the real UI root loads APInebula `gpt-5.4-mini` and imports GitHub Copilot as a `github_models` provider without token leakage. `release:computer-use-vision-smoke` passed packaged vision/non-vision ComputerUse behavior with UI Automation text, screenshot image only for the vision model, no temp path leaks, and no retained screenshots. `release:ui-icon-smoke` passed titlebar/runtime icon and adjustable animated border validation, and `release:ui-conversation-queue-plan-smoke` passed conversation-bound live streaming text, persisted folded tool results, queue drain, and isolation. A direct real-model packaged send then instructed `gpt-5.4-mini` to call `computer_use observe` exactly once; it exited `0`, produced marker `REAL_COMPUTER_USE_OBSERVE_OK_20260704`, recorded `computer_use`/`observe` in conversation state, reported UI text plus screenshot context, and left `%TEMP%\newmark-computer-use` without `observe-*.png` residue. Codex desktop Computer Use inspected the visible packaged Newmark window and confirmed the UI showed `APInebula / gpt-5.4-mini`, Build mode, Guide input mode, bottom PowerShell terminal, titlebar/icon, and sidebar controls. Evidence is stored in `archive/2026-07-04-real-model-computeruse-desktop-validation.md`.
+Current real-model ComputerUse desktop validation: on 2026-07-04, the rebuilt v1.1.1 packaged release was rechecked against APInebula `gpt-5.4-mini` and Codex desktop Computer Use. `release:cli-smoke` passed the base packaged CLI surface, `release:111-cli-smoke` passed file/GitHub audit, remote security audit, ComputerUse dry-run/scroll/target guard, OpenSSH availability, and CLI Agent terminal takeover, and `release:111-ui-smoke` passed GitHub Models exact-login UI, fuzzy exclusion, and bottom-terminal takeover mirror with marquee border. `release:real-provider-smoke` passed real packaged CLI send, CLI UTF-8 send, real `validate-models`, real packaged UI UTF-8 send, real packaged UI send, screenshot capture, and key redaction. `release:real-ui-copilot-computeruse-smoke` passed against `_local/real-ui-user-test`, confirming the real UI root loads APInebula `gpt-5.4-mini` and imports GitHub Copilot as a `github_models` provider without token leakage. `release:computer-use-vision-smoke` passed packaged vision/non-vision ComputerUse behavior with UI Automation text, screenshot image only for the vision model, no temp path leaks, and no retained screenshots. `release:ui-icon-smoke` passed titlebar/runtime icon and adjustable animated border validation, and `release:ui-conversation-queue-plan-smoke` passed conversation-bound live streaming text, persisted folded tool results, queue drain, and isolation. A direct real-model packaged send then instructed `gpt-5.4-mini` to call `computer_use observe` exactly once; it exited `0`, produced marker `REAL_COMPUTER_USE_OBSERVE_OK_20260704`, recorded `computer_use`/`observe` in conversation state, reported UI text plus screenshot context, and left `%TEMP%\newmark-computer-use` without `observe-*.png` residue. Codex desktop Computer Use inspected the visible packaged Newmark window and confirmed the UI showed `APInebula / gpt-5.4-mini`, Build mode, Guide input mode, bottom PowerShell terminal, titlebar/icon, and sidebar controls. Evidence is stored in 本地归档（未纳入公开仓库）.
 
-Current Linux/WSL GUI and real-model compatibility update: on 2026-07-06, the desktop stack was made Linux-buildable and validated inside `Ubuntu-24.04` on WSL2 with WSLg. The built-in bottom terminal and Agent `terminal_takeover` no longer assume PowerShell: runtime state exposes platform, available shells, configured default shell, and runtime default shell; Windows defaults to PowerShell while Linux defaults to bash; one-shot shell execution uses platform-specific command arguments; and PTY startup no longer injects Windows carriage returns into POSIX shells. `terminal.default_shell` defaults by platform, the Agent prompt/tool description states the active platform syntax, `clean` is cross-platform, Linux packaging has PNG icon plus deb metadata, and non-interactive CLI `state` now exposes platform-aware terminal shell fields. Validation passed Windows `npm.cmd test` with 878 assertions, WSL Linux `npm test` with 866 assertions, WSL `npm run dist:linux` producing AppImage/deb/linux-unpacked artifacts, WSLg packaged GUI smoke via `release:linux-gui-smoke`, and WSLg packaged real-model smoke via `release:linux-real-provider-smoke` against local APInebula `gpt-5.4-mini`. The real-model gate confirmed Linux packaged CLI marker `LINUX_REAL_CLI_OK_20260706`, Linux packaged GUI marker `LINUX_REAL_UI_OK_20260706`, renderer `platform=linux`, selected shell `bash`, visible `Terminal connected (bash)`, no API-key leakage, and screenshot evidence at `archive/2026-07-06-linux-real-provider-smoke.png`. Computer Use native desktop control remains Windows-only and returns explicit unsupported results on Linux rather than crashing.
+Current Linux/WSL GUI and real-model compatibility update: on 2026-07-06, the desktop stack was made Linux-buildable and validated inside `Ubuntu-24.04` on WSL2 with WSLg. The built-in bottom terminal and Agent `terminal_takeover` no longer assume PowerShell: runtime state exposes platform, available shells, configured default shell, and runtime default shell; Windows defaults to PowerShell while Linux defaults to bash; one-shot shell execution uses platform-specific command arguments; and PTY startup no longer injects Windows carriage returns into POSIX shells. `terminal.default_shell` defaults by platform, the Agent prompt/tool description states the active platform syntax, `clean` is cross-platform, Linux packaging has PNG icon plus deb metadata, and non-interactive CLI `state` now exposes platform-aware terminal shell fields. Validation passed Windows `npm.cmd test` with 878 assertions, WSL Linux `npm test` with 866 assertions, WSL `npm run dist:linux` producing AppImage/deb/linux-unpacked artifacts, WSLg packaged GUI smoke via `release:linux-gui-smoke`, and WSLg packaged real-model smoke via `release:linux-real-provider-smoke` against local APInebula `gpt-5.4-mini`. The real-model gate confirmed Linux packaged CLI marker `LINUX_REAL_CLI_OK_20260706`, Linux packaged GUI marker `LINUX_REAL_UI_OK_20260706`, renderer `platform=linux`, selected shell `bash`, visible `Terminal connected (bash)`, no API-key leakage, and screenshot evidence at 本地归档（未纳入公开仓库）. Computer Use native desktop control remains Windows-only and returns explicit unsupported results on Linux rather than crashing.
 
-Current Computer Use takeover border regression fix: on 2026-07-05, the disappearing fullscreen ComputerUse border was traced to the generated PowerShell overlay script compiling inline WinForms C# without explicit `System.Windows.Forms`/`System.Drawing` references. The overlay now passes `Add-Type -ReferencedAssemblies`, checks that the created overlay process survives startup, uses duration-bound lifecycle for timed CLI invocations, keeps desktop Agent overlays owner-process-bound, and sets the region `GraphicsPath` fill mode to `Winding` so the four corner overlaps are not cut out. Verification passed `npm.cmd test` with 874 assertions, `npm.cmd run dist:portable`, packaged asar inspection, and packaged CLI `computer_use takeover_start`/`takeover_stop` with live PID survival. Evidence is stored in `archive/2026-07-05-computer-use-takeover-border-regression.md`; Computer Use screenshots were not archived.
+Current Computer Use takeover border regression fix: on 2026-07-05, the disappearing fullscreen ComputerUse border was traced to the generated PowerShell overlay script compiling inline WinForms C# without explicit `System.Windows.Forms`/`System.Drawing` references. The overlay now passes `Add-Type -ReferencedAssemblies`, checks that the created overlay process survives startup, uses duration-bound lifecycle for timed CLI invocations, keeps desktop Agent overlays owner-process-bound, and sets the region `GraphicsPath` fill mode to `Winding` so the four corner overlaps are not cut out. Verification passed `npm.cmd test` with 874 assertions, `npm.cmd run dist:portable`, packaged asar inspection, and packaged CLI `computer_use takeover_start`/`takeover_stop` with live PID survival. Evidence is stored in 本地归档（未纳入公开仓库）; Computer Use screenshots were not archived.
 
 Current dev-0.0.1 release update: on 2026-07-05, public release metadata was advanced from dev-0.0.0 to dev-0.0.1 after the Computer Use takeover overlay regression fix. `DESKTOP/package.json` and `DESKTOP/package-lock.json` now carry version `0.0.1`; README download/update examples point to `Newmark-Agent-0.0.1-*` assets and describe the filled-corner, startup-checked takeover overlay. The release target is GitHub tag `dev-0.0.1`, with portable asset `Newmark-Agent-0.0.1-portable-x64.exe` SHA256 `43F0ADC95A9BB66B900C0E793D15C0D0B6C0AA6A2FB9BB594DE42791CA99596A` and zip asset `Newmark-Agent-0.0.1-win-unpacked-x64.zip` SHA256 `DF0BCA913D9C0382401F069853237BFBC465AD31EF580154F5302AF9FC8133B9`.
 
-Current dev-0.0.2 release target: on 2026-07-07, public release metadata is being advanced from dev-0.0.1 to dev-0.0.2 so the GitHub release includes Linux assets in addition to the Windows portable and unpacked zip. `DESKTOP/package.json` and `DESKTOP/package-lock.json` now carry version `0.0.2`; README download/update examples point to `Newmark-Agent-0.0.2-*` assets. The intended release target is GitHub tag `dev-0.0.2`, with Windows portable/zip plus Linux AppImage/deb assets. Validation passed Windows `npm.cmd test` with 878 assertions, Windows `dist:portable` with embedded release CLI smoke, WSL Linux `npm test` with 866 assertions, WSL Linux `dist:linux`, WSLg GUI smoke, and WSLg real-provider smoke against the local APInebula `gpt-5.4-mini` config without printing API keys. Artifact SHA256 values are `8E9D0BD8091F048009EEE69953A0D5510564FAFC413279AB55C7E8939CA0AF7D` for `Newmark-Agent-0.0.2-portable-x64.exe`, `599AD4BA3BD981B152375FD83461C1D02755717A8A61B94D34E1C13AF391E93B` for `Newmark-Agent-0.0.2-win-unpacked-x64.zip`, `6D54E1436812EAEFEFF30AA3BF3A02CF7A20C177E5490A94BB24C63EF2FB584B` for `Newmark-Agent-0.0.2-x86_64.AppImage`, and `062A721098120D32E1958238B32B8ECF7CEA0B98C9319B0AE2C6CFF563F3A679` for `Newmark-Agent-0.0.2-amd64.deb`. The final GitHub release URL is recorded in `archive/2026-07-07-dev-0.0.2-linux-release.md`.
+Current dev-0.0.2 release target: on 2026-07-07, public release metadata is being advanced from dev-0.0.1 to dev-0.0.2 so the GitHub release includes Linux assets in addition to the Windows portable and unpacked zip. `DESKTOP/package.json` and `DESKTOP/package-lock.json` now carry version `0.0.2`; README download/update examples point to `Newmark-Agent-0.0.2-*` assets. The intended release target is GitHub tag `dev-0.0.2`, with Windows portable/zip plus Linux AppImage/deb assets. Validation passed Windows `npm.cmd test` with 878 assertions, Windows `dist:portable` with embedded release CLI smoke, WSL Linux `npm test` with 866 assertions, WSL Linux `dist:linux`, WSLg GUI smoke, and WSLg real-provider smoke against the local APInebula `gpt-5.4-mini` config without printing API keys. Artifact SHA256 values are `8E9D0BD8091F048009EEE69953A0D5510564FAFC413279AB55C7E8939CA0AF7D` for `Newmark-Agent-0.0.2-portable-x64.exe`, `599AD4BA3BD981B152375FD83461C1D02755717A8A61B94D34E1C13AF391E93B` for `Newmark-Agent-0.0.2-win-unpacked-x64.zip`, `6D54E1436812EAEFEFF30AA3BF3A02CF7A20C177E5490A94BB24C63EF2FB584B` for `Newmark-Agent-0.0.2-x86_64.AppImage`, and `062A721098120D32E1958238B32B8ECF7CEA0B98C9319B0AE2C6CFF563F3A679` for `Newmark-Agent-0.0.2-amd64.deb`. The final GitHub release URL is recorded in 本地归档（未纳入公开仓库）.
 
-Current model validation multimodal fix: on 2026-07-03, model validation was corrected so imported or stale metadata for frontier model identities such as `gpt-5.5` and compact `gpt5.5` no longer leaves them marked as non-vision. `DESKTOP/src/core/config.ts` now exposes shared model vision inference and initializes known multimodal families with `vision: true`; desktop `Agent.validateModels()` and CLI `validate-models` both report inferred `vision_input`, persist it back to model config, and refresh generated `multimodal=` descriptions instead of preserving stale `text-only` metadata. Verification passed `npm.cmd test` with 824 assertions, `npm.cmd run dist:portable`, embedded packaged `release:cli-smoke` with `ReleaseCliMock/gpt-5.5` persistence checks, and packaged `release:111-cli-smoke` on the rebuilt v1.1.1 artifacts. Later release slices added Computer Use takeover/app-scope and conversation Markdown rendering; the latest v1.1.1 artifact hashes are tracked in the maintenance workflow section. Evidence is stored in `archive/2026-07-03-model-validation-multimodal-fix.md`, `archive/2026-07-03-computer-use-takeover-app-scope.md`, `archive/2026-07-03-conversation-markdown-rendering.md`, and `archive/2026-07-03-release-computer-use-vision-smoke.json`.
+Current model validation multimodal fix: on 2026-07-03, model validation was corrected so imported or stale metadata for frontier model identities such as `gpt-5.5` and compact `gpt5.5` no longer leaves them marked as non-vision. `DESKTOP/src/core/config.ts` now exposes shared model vision inference and initializes known multimodal families with `vision: true`; desktop `Agent.validateModels()` and CLI `validate-models` both report inferred `vision_input`, persist it back to model config, and refresh generated `multimodal=` descriptions instead of preserving stale `text-only` metadata. Verification passed `npm.cmd test` with 824 assertions, `npm.cmd run dist:portable`, embedded packaged `release:cli-smoke` with `ReleaseCliMock/gpt-5.5` persistence checks, and packaged `release:111-cli-smoke` on the rebuilt v1.1.1 artifacts. Later release slices added Computer Use takeover/app-scope and conversation Markdown rendering; the latest v1.1.1 artifact hashes are tracked in the maintenance workflow section. Evidence is stored in 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, and 本地归档（未纳入公开仓库）.
 
-Current layout/pinning/archive scope update: on 2026-07-03, the desktop renderer gained last-open layout memory for sidebar expanded/collapsed state only. It persists left, left-secondary, right, and bottom panel booleans through `ui.left_panel_collapsed`, `ui.secondary_panel_collapsed`, `ui.right_panel_collapsed`, and `ui.bottom_panel_collapsed`, without restoring concrete page, tab, file, browser, or archive content. Workspaces now carry optional `pinned`/`pinnedAt` fields in `Work/Local.json` and `Work/External.json`, and conversations carry matching metadata in each workspace's `conversations/state.json`; both lists sort pinned entries first and expose compact pin buttons in the UI. Archive management is scoped: the right sidebar requests only active-workspace archives, while Settings > Archive requests all known root/workspace archives using stable internal archive IDs. Verification passed `npm.cmd test` with 815 assertions; evidence is stored in `archive/2026-07-03-layout-pin-archive-scope.md`.
+Current layout/pinning/archive scope update: on 2026-07-03, the desktop renderer gained last-open layout memory for sidebar expanded/collapsed state only. It persists left, left-secondary, right, and bottom panel booleans through `ui.left_panel_collapsed`, `ui.secondary_panel_collapsed`, `ui.right_panel_collapsed`, and `ui.bottom_panel_collapsed`, without restoring concrete page, tab, file, browser, or archive content. Workspaces now carry optional `pinned`/`pinnedAt` fields in `Work/Local.json` and `Work/External.json`, and conversations carry matching metadata in each workspace's `conversations/state.json`; both lists sort pinned entries first and expose compact pin buttons in the UI. Archive management is scoped: the right sidebar requests only active-workspace archives, while Settings > Archive requests all known root/workspace archives using stable internal archive IDs. Verification passed `npm.cmd test` with 815 assertions; evidence is stored in 本地归档（未纳入公开仓库）.
 
 Current full-function release update: on 2026-06-28, release validation found and fixed an internal workspace lifecycle root cause. Internal workspace deletion now updates `Work/Local.json` and `Work/State.json` only after the `Work/<workspace>/` directory is actually removed, with contained-path checks, retry handling, and read-only bit clearing. The workspace manager UI now refreshes backend workspace state before rendering, CDP helpers clear successful response timers so completed release smoke/stress runs exit cleanly, `release:ui-smoke` now has an OS screenshot fallback for CDP capture timeouts, and real-provider stress now checks same-workspace conversation histories for cross-conversation marker leakage while omitting provider host/private URL from the report. Verification passed `npm.cmd test` with 586 tests, `dist:portable`, `release:ui-workspace-lifecycle-smoke`, `release:ui-smoke`, and `release:real-provider-stress`; the archive verdict is `release-usable`.
 
 Current icon release update: on 2026-07-02, the `win-unpacked` Windows executable icon path was hardened after `release/win-unpacked/Newmark Agent.exe` still showed the default Electron association. `DESKTOP/scripts/patch-win-exe-icon.cjs` now patches the unpacked executable resource table directly through Win32 `BeginUpdateResource` / `UpdateResource` / `EndUpdateResource`, generating uncompressed DIB icon resources from `DESKTOP/assets/app-icon-dark.png` so Windows associated-icon extraction is stable. `dist:portable` patches and verifies `release/win-unpacked/Newmark Agent.exe` before zip creation, and `release:ui-icon-smoke` now validates the unpacked executable association in addition to `app.asar` icon assets, packaged renderer DOM presence, decoded image dimensions, `app-icon-border-spin` animation, native runtime window icon capture, screenshot evidence, and final release process cleanup. Current v1.1.0 artifact SHA256 values are `EFCC774B0D38C73CD1C9C948FA092B91F597C26E7D4DBDDC2C74409F27687B2F` for `Newmark-Agent-1.1.0-portable-x64.exe` and `8C1A72C054D16C37BC2FE4CB100A7F74F82255D026A5D762940280570E3901DF` for `Newmark-Agent-1.1.0-win-unpacked-x64.zip`.
 
-Current repository branding update: on 2026-06-28, `SCRIPTS/assets/newmark-agent-social-preview.png` was added as the 1280x640 GitHub Social preview source image derived from the final app icon. GitHub does not expose a public REST field for directly setting the repository Social preview, so the asset is committed for manual upload through repository Settings. On 2026-07-05, the Social preview was regenerated without release/version text because it is a long-lived repository branding image; release numbers belong in README badges and GitHub Releases, not in the bitmap. Evidence is stored in `archive/2026-07-05-social-preview-no-version.md`.
+Current repository branding update: on 2026-06-28, `SCRIPTS/assets/newmark-agent-social-preview.png` was added as the 1280x640 GitHub Social preview source image derived from the final app icon. GitHub does not expose a public REST field for directly setting the repository Social preview, so the asset is committed for manual upload through repository Settings. On 2026-07-05, the Social preview was regenerated without release/version text because it is a long-lived repository branding image; release numbers belong in README badges and GitHub Releases, not in the bitmap. Evidence is stored in 本地归档（未纳入公开仓库）.
 
 Current fuzzy-injection update: on 2026-06-29, fuzzy provider injection gained a no-guide-model fallback. `DESKTOP/src/core/fuzzy.ts` now tokenizes raw text or env-file content into provider endpoint/API key fields, derives provider names from endpoint core domains, normalizes terminal API paths, and probes model-list plus OpenAI/Anthropic-compatible chat suffixes before falling back to heuristic model candidates. Both desktop `Agent.fuzzyInject` and CLI `fuzzy-inject` use the shared tokenizer/prober. A live local mock injection found and fixed local-address naming so `127.0.0.1` maps to `LocalProvider` and `localhost` maps to `Localhost`. Verification passed `npm.cmd test` with 598 assertions.
 
@@ -3208,7 +3205,7 @@ Current Agent work timeline update: on 2026-07-02, the renderer stopped showing 
 
 Current Build activity expansion fix: running Build blocks retain the user's nested tool-detail expansion across live event reconciliation, while the one-second duration tick updates only the title text instead of rebuilding the event DOM. Stable activity keys restore an open detail after a genuine event refresh; completed blocks remain manually expandable. The release UI smoke covers both a tool-result refresh and a subsequent timer tick.
 
-Current CLI mode update: on 2026-07-01, packaged CLI behavior now distinguishes workspace conversation mode from explicit pure Agent mode. Normal CLI sends still use the selected workspace and persist conversation transcripts that the desktop UI can read and continue. `--agent-only` runs the Agent without auto-creating or requiring a workspace, does not write workspace conversation state, and is the intended no-workspace base for one-shot Agent calls, model validation, fuzzy injection, and subagent-style execution. `install-update` provides a CLI-agentable portable update path with version checks, dry-run output, GitHub Release check/download support for compiled zip packs, and default preservation for local state such as `config.json`, `Work/`, `skills/`, `Memory Lab/`, and `archive/`. The desktop Settings window exposes an Updates tab that calls the same GitHub/local dry-run update APIs. `release:cli-ui-conversation-sync-smoke` proves CLI/UI conversation sync, and `release:cli-smoke` covers packaged install-update behavior.
+Current CLI mode update: on 2026-07-01, packaged CLI behavior now distinguishes workspace conversation mode from explicit pure Agent mode. Normal CLI sends still use the selected workspace and persist conversation transcripts that the desktop UI can read and continue. `--agent-only` runs the Agent without auto-creating or requiring a workspace, does not write workspace conversation state, and is the intended no-workspace base for one-shot Agent calls, model validation, fuzzy injection, and subagent-style execution. `install-update` provides a CLI-agentable portable update path with version checks, dry-run output, GitHub Release check/download support for compiled zip packs, and default preservation for local state such as `config.json`, `Work/`, `skills/`, `Memory Lab/`, and 本地归档（未纳入公开仓库）. The desktop Settings window exposes an Updates tab that calls the same GitHub/local dry-run update APIs. `release:cli-ui-conversation-sync-smoke` proves CLI/UI conversation sync, and `release:cli-smoke` covers packaged install-update behavior.
 
 Current local-model update: on 2026-06-29, the built-in Gemma download entry was removed from the desktop Models settings UI, preload bridge, and Electron main IPC. Newmark no longer shells out to `ollama pull` or auto-creates an Ollama/Gemma provider. Users can still install Gemma or other local models themselves through Ollama or another runtime and add them as normal OpenAI-compatible providers/models, including through fuzzy injection against a local endpoint. Verification passed `npm.cmd test` with 598 assertions.
 
@@ -3228,7 +3225,7 @@ Current skills update: on 2026-07-01, the unit/CLI/UI-source regression layer co
 
 Current conversation continuation update: on 2026-06-28, the renderer default conversation ID was aligned with the Agent backend `default` conversation ID. `release:ui-conversation-queue-plan-smoke` now provides real packaged UI evidence for right-sidebar Plan isolation across conversations, active-turn conversation switch locking, queued input while a turn is running, automatic queued prompt drain into the next Build turn, and chat isolation after the queued continuation.
 
-Current startup recovery update: on 2026-06-28, `release:ui-startup-recovery-smoke` added fresh destructive packaged UI evidence for startup companion recovery. It launches the real release exe with a temporary root after deleting `skills/`, `Work/`, `Flow/`, `archive/`, `config.json`, `agent.md`, and `PC_Hash.config`, then verifies `Flow/Flow.md`, `Work/Local.json`, `Work/External.json`, `Work/State.json`, default timestamp internal workspace creation, renderer workspace state, screenshot capture, and process cleanup.
+Current startup recovery update: on 2026-06-28, `release:ui-startup-recovery-smoke` added fresh destructive packaged UI evidence for startup companion recovery. It launches the real release exe with a temporary root after deleting `skills/`, `Work/`, `Flow/`, 本地归档（未纳入公开仓库）, `config.json`, `agent.md`, and `PC_Hash.config`, then verifies `Flow/Flow.md`, `Work/Local.json`, `Work/External.json`, `Work/State.json`, default timestamp internal workspace creation, renderer workspace state, screenshot capture, and process cleanup.
 
 Current Goal update: on 2026-06-28, `release:ui-goal-continuation-smoke` added real packaged UI evidence for autonomous Goal continuation without a max-depth stop. It drives the real renderer/preload/Agent path with a local mock provider, observes three Goal model calls before `[Goal Complete]`, verifies no max-depth warning in result or renderer state, captures screenshot evidence, and cleans up release processes.
 
@@ -3246,7 +3243,7 @@ Newmark Agent/
   PC_Hash.config            Local host binding/fingerprint data.
   SETUP.ps1 / setup.sh      Setup entrypoints for Windows and shell environments.
   run_flow.js               Root helper for Flow execution experiments.
-  archive/                  Dated validation reports and screenshot evidence.
+  本机私有归档（已从公开仓库排除）                  Dated validation reports and screenshot evidence.
   conversation-media/       Runtime-created, content-addressed user conversation attachments; never Computer Use frames.
   Work/                     Root internal/external workspace registries and internal workspace data.
   Flow/                     Root Flow workflow definitions and Flow.md schema guidance.
@@ -3276,9 +3273,9 @@ Newmark Agent/
 
 `SCRIPTS/` stores release notes and public release/branding helper assets. `release-notes-dev-0.0.10.md` is the publication-ready Windows prerelease body and records changes, migration, gates, sizes, checksums, the unsigned boundary, and the explicit dev-0.0.9 Linux fallback. `SCRIPTS/assets/newmark-agent-social-preview.png` is the repository Social preview source image intended for GitHub Settings upload. It must stay version-free and release-agnostic; do not embed package filenames, release numbers, or temporary release status inside this bitmap.
 
-## `archive/`
+## 本地归档（未纳入公开仓库）
 
-`archive/` stores dated maintenance records and visual evidence. Each substantial work slice should add one Markdown file named `YYYY-MM-DD-<slug>.md` with:
+本地归档（未纳入公开仓库） stores dated maintenance records and visual evidence. Each substantial work slice should add one Markdown file named `YYYY-MM-DD-<slug>.md` with:
 
 - request and scope
 - failure symptoms
@@ -3296,7 +3293,7 @@ The dev-0.0.10 records separate industrial-routing research, focused source impl
 
 ## `conversation-media/`
 
-`conversation-media/` is runtime-created local user data beneath the selected Newmark state root, normally `~/.Newmark`; it is not source or release content. `conversation-media/user-images/<sha-prefix>/<sha256>.png|jpg` stores validated user-submitted conversation images by decoded-byte SHA-256 so reload/restart and stable attachment IDs do not depend on a temporary clipboard data URL. The storage boundary accepts at most six PNG/JPEG images per submission, 10 MiB per image and 30 MiB in aggregate, verifies decoded MIME and canonical hash paths, and writes atomically. Conversation archives receive their own `archive/assets/user-images/` copies. Computer Use observation frames must never enter this folder: they remain temporary current-turn inputs and are deleted or discarded by the Computer Use bridge.
+`conversation-media/` is runtime-created local user data beneath the selected Newmark state root, normally `~/.Newmark`; it is not source or release content. `conversation-media/user-images/<sha-prefix>/<sha256>.png|jpg` stores validated user-submitted conversation images by decoded-byte SHA-256 so reload/restart and stable attachment IDs do not depend on a temporary clipboard data URL. The storage boundary accepts at most six PNG/JPEG images per submission, 10 MiB per image and 30 MiB in aggregate, verifies decoded MIME and canonical hash paths, and writes atomically. Conversation archives receive their own 本地归档（未纳入公开仓库） copies. Computer Use observation frames must never enter this folder: they remain temporary current-turn inputs and are deleted or discarded by the Computer Use bridge.
 
 ## `Work/`
 
@@ -3374,7 +3371,7 @@ DESKTOP/
 - `release-ui-external-workspace-smoke.cjs`: launches the real packaged desktop UI with a temporary root, creates an external workspace through the New Workspace UI path, verifies runtime host binding persistence in `Work/External.json`, verifies `Work/State.json` selection, creates a workspace-local archive under the external workspace, mutates the saved external host binding to simulate another PC, relaunches, and verifies the external workspace is hidden/filtered.
 - `release-ui-option-feedback-smoke.cjs`: launches the real packaged desktop UI with a temporary root and local streaming mock provider, validates all four option-feedback levels, verifies structured options render into the workflow timeline and right Status panel, verifies `fully_autonomous` disables the `question` path, verifies `outside_readonly` + `ask_user` reports `User approval required` without writing the outside file, and captures screenshot evidence.
 - `release-ui-model-settings-smoke.cjs`: launches the real packaged desktop UI with a temporary root, drives Settings > Models through Electron CDP, and verifies provider/model add/edit/delete, renderer API-key redaction, key-preserving provider rename/edit, annotated config schema reads, screenshot capture, temporary-root cleanup, and process cleanup.
-- `release-ui-gemma-removal-smoke.cjs`: launches the real packaged desktop UI with a temporary root, opens Settings > Models through Electron CDP, verifies the packaged preload no longer exposes `downloadGemma`, verifies Gemma/Ollama download wording is absent, verifies fuzzy injection and manual provider/model controls remain visible, persists a manual local OpenAI-compatible provider at `http://127.0.0.1:11434/v1`, persists a manual local model, captures `archive/2026-06-29-release-gemma-removal-visual.png`, and cleans up packaged release processes.
+- `release-ui-gemma-removal-smoke.cjs`: launches the real packaged desktop UI with a temporary root, opens Settings > Models through Electron CDP, verifies the packaged preload no longer exposes `downloadGemma`, verifies Gemma/Ollama download wording is absent, verifies fuzzy injection and manual provider/model controls remain visible, persists a manual local OpenAI-compatible provider at `http://127.0.0.1:11434/v1`, persists a manual local model, captures 本地归档（未纳入公开仓库）, and cleans up packaged release processes.
 - `release-ui-flow-subagent-smoke.cjs`: launches the real packaged desktop UI with a temporary root and local streaming mock provider, drives real renderer `window.sendMessage()`, verifies Agent-initiated `flow_save`/`flow_list`/`flow_run`, confirms the saved Flow preserves `{#prompt#}`, verifies `task`/`subagent_send`/`subagent_result`/`subagent_close`, and opens the right Subagents panel to prove closed subagents remain as retained read-only history.
 - `release-ui-media-md-smoke.cjs`: launches the real packaged desktop UI with a temporary root, creates a workspace through the preload API, writes text and Markdown files, injects a conversation message containing a heading, data image, local file link, Markdown table, inline formula, and block formula, verifies the rendered `.md-table` and `.md-math-*` nodes, clicks the file link to open the right Editor, switches a Markdown file to the integrated preview view, verifies the file tree lists both files, captures screenshot evidence, and cleans up release processes.
 - `release-ui-native-editor-smoke.cjs`: validates the packaged native editor through CDP, including TypeScript token highlighting, line numbers, Vim delete/undo, opt-in debounced prediction display, completion acceptance, file save, and Markdown-preview visibility rules.
@@ -3383,8 +3380,8 @@ DESKTOP/
 - `release-ui-conversation-queue-plan-smoke.cjs`: launches the real packaged desktop UI with a temporary root and local mock provider, verifies current-conversation Plan isolation in the right sidebar, parallel conversation execution, conversation-bound live streaming text, foreground/background work-event replay, persisted folded tool results, same-conversation queue drain, the bottom editable queue UI instead of legacy chat queue rows, post-drain chat isolation, screenshot evidence, and release process cleanup.
 - `release-ui-fast-conversation-switch-smoke.cjs`: launches the real packaged desktop UI with a temporary root and local mock provider, creates A/B conversations with unique markers, rapidly switches by conversation ID, verifies visible `#chat-area` isolation and a single active conversation list item, captures final A/B screenshots, and cleans release process residue.
 - `release-ui-workspace-conversation-isolation-smoke.cjs`: launches the real packaged desktop UI with a temporary root and local mock provider, creates workspace alpha/beta conversations with unique markers, rapidly switches workspaces and conversations, verifies `#chat-area` and scoped backend snapshots only show the active workspace's markers, captures final alpha/beta screenshots, and cleans release process residue.
-- `release-linux-gui-smoke.cjs`: Linux-only packaged GUI smoke. It launches `release/linux-unpacked/newmark-agent` under WSLg or another Linux display server with Electron CDP, verifies renderer platform/default terminal shell state, checks the visible bottom terminal is connected to bash, captures `archive/2026-07-06-linux-wsl-gui-smoke.png`, and kills the Electron process group after validation.
-- `release-linux-real-provider-smoke.cjs`: Linux-only packaged real-provider smoke. It copies a local real-provider config into a temporary Linux root, runs packaged CLI `state` and real `send`, launches the packaged WSLg GUI through CDP, sends a real model prompt, verifies CLI/UI markers exactly once, checks platform/default shell state and secret redaction, captures `archive/2026-07-06-linux-real-provider-smoke.png`, and removes the temporary root.
+- `release-linux-gui-smoke.cjs`: Linux-only packaged GUI smoke. It launches `release/linux-unpacked/newmark-agent` under WSLg or another Linux display server with Electron CDP, verifies renderer platform/default terminal shell state, checks the visible bottom terminal is connected to bash, captures 本地归档（未纳入公开仓库）, and kills the Electron process group after validation.
+- `release-linux-real-provider-smoke.cjs`: Linux-only packaged real-provider smoke. It copies a local real-provider config into a temporary Linux root, runs packaged CLI `state` and real `send`, launches the packaged WSLg GUI through CDP, sends a real model prompt, verifies CLI/UI markers exactly once, checks platform/default shell state and secret redaction, captures 本地归档（未纳入公开仓库）, and removes the temporary root.
 - `release-ui-startup-recovery-smoke.cjs`: launches the `NEWMARK_TEST_EXE` packaged desktop with a destructive isolated root, requires one application page/CDP target for the in-page startup cover and final desktop, waits for minimal `state/rendered` promotion, measures startup immediately at that boundary, enforces an eight-second single-run ceiling, proves no Browser guest exists before demand, then requires exactly one target-bound `persist:newmark-browser-<workspace/conversation>` guest after opening Browser. It also validates companion-file/default-workspace recovery and process cleanup without attaching a second startup inspector that could perturb same-target navigation timing.
 - `release-ui-work-review-bars-smoke.cjs`: uses an OS-assigned CDP port plus bounded HTTP/WebSocket discovery to validate the packaged work/review bar geometry without fixed-port collisions or unbounded discovery hangs.
 - `release-ui-image-display-stress.cjs`: drives 120 sequential `image_display` call/result pairs through a real Electron renderer, checks exact expanded/collapsed ordering and uniqueness, writes a JSON performance report, and captures expanded, collapsed, and zoomed-overview evidence.
@@ -3398,7 +3395,7 @@ DESKTOP/
 - `release-real-apinebula-memory-switch-smoke.cjs`: opt-in real APInebula release gate for Memory Lab and model switching. It validates the selected APInebula model, asks the real model to call Memory Lab read/update tools, verifies the created component and tag graph through packaged CLI, checks unavailable-model fallback to the available APInebula model, and redacts API keys from failures.
 - `release-temp-context-conversation-stress.cjs`: disposable-root packaged stress gate for zero-interval conversation creation/archive, long-context switching, sustained 300-component Memory Lab queries, one-shot visualization preload, optimistic-concurrency races, restart recovery, latency budgets, and cleanup.
 - `release-ui-memory-lab-smoke.cjs`: packaged Electron/CDP gate for the Memory Lab one-shot lifecycle. It proves visualization load counts advance only on open, Reset, and successful reindex while component click, Detail, tag navigation, drag, and zoom stay on the retained in-memory graph and content snapshot.
-- `release-real-provider-stress.cjs`: opt-in real-provider stress gate for the packaged release. It reads `NEWMARK_REAL_STRESS_BASE_URL`, `NEWMARK_REAL_STRESS_KEY`, `NEWMARK_REAL_STRESS_MODEL`, and `NEWMARK_REAL_STRESS_PROTOCOL=openai|anthropic`, falling back to existing `ANTHROPIC_*` or APInebula variables when available. It runs repeated packaged CLI sends, repeated desktop UI sends through Electron CDP, Goal continuation, queued prompt drain, same-workspace conversation isolation, long-context send, secret-leak guards, final release process cleanup, and writes a dated `archive/*-real-provider-stress-debug.md` verdict report.
+- `release-real-provider-stress.cjs`: opt-in real-provider stress gate for the packaged release. It reads `NEWMARK_REAL_STRESS_BASE_URL`, `NEWMARK_REAL_STRESS_KEY`, `NEWMARK_REAL_STRESS_MODEL`, and `NEWMARK_REAL_STRESS_PROTOCOL=openai|anthropic`, falling back to existing `ANTHROPIC_*` or APInebula variables when available. It runs repeated packaged CLI sends, repeated desktop UI sends through Electron CDP, Goal continuation, queued prompt drain, same-workspace conversation isolation, long-context send, secret-leak guards, final release process cleanup, and writes a dated 本地归档（未纳入公开仓库） verdict report.
 - `release-safe-shared-root-restart-stress.cjs`: runs the rebuilt Windows GUI/TUI/CLI entrypoints from a protected-install-shaped working directory with a spaced temporary root, restarts the shared GUI state, verifies root redirection and no Program Files mutation, and cleans the owned process tree.
 - `release-installed-readonly-validation-stress.cjs`: runs the actual selected installation in read-only validation mode and checks config hash/size/mtime invariance across repeated model-validation rounds.
 - `compression-pressure-stress.cjs`: deterministic release pressure gate for automatic threshold compression, incremental idempotency, model-dispatched `context_compress`, broker-provisioned `context_history_manage`, protected-tail policy, bounded hot cache, append-only cold archive, paged non-injecting reads, and hot/cold restoration. It runs against built `dist/core` and uses only isolated fixture roots and providers.
@@ -3425,13 +3422,13 @@ DESKTOP/
 
 ### `DESKTOP/src/core/`
 
-- `agent.ts`: mode handling, prompt/output policy, Goal continuation, archive/context/subagents, current-conversation Plan/work events, durable submitted images, and the integration boundary for Auto plus Standard validation. Auto leaves `agent.model` as the user's selection intent, resolves one deployment per turn, persists redacted decisions/feedback/health under the selected Newmark root, re-resolves the provider on every retry/fallback, and never crosses provider scope. `validateModels()` adapts real provider operations to the shared Validation Service and persists structured level/status/capability/error summaries; legacy evaluation metadata alone cannot grant Auto eligibility.
+- `agent.ts本地归档（未纳入公开仓库）agent.model` as the user's selection intent, resolves one deployment per turn, persists redacted decisions/feedback/health under the selected Newmark root, re-resolves the provider on every retry/fallback, and never crosses provider scope. `validateModels()` adapts real provider operations to the shared Validation Service and persists structured level/status/capability/error summaries; legacy evaluation metadata alone cannot grant Auto eligibility.
 - `compressionHistoryArchive.ts`: conversation-isolated append-only JSONL cold storage for folded context evicted from the bounded hot cache. It replays fold/restore events, tolerates malformed individual lines, preserves monotonic cache IDs across restarts, and never injects archived content into prompts.
 - `autoRouter.ts`: provider/model-stable Auto types and deterministic router. It owns policy normalization/migration, hard candidate filters, local task classification, Beta quality/reliability estimates, quality-loss bands, cost/latency/throughput/tool-validity/cache/preference components, five-minute affinity, 15% switch threshold, thirty-day preference decay, endpoint circuits, retry classification/budgets, scope-safe fallback planning, and content-redacted `RouteDecision` records.
 - `modelValidation.ts`: provider-neutral four-level validation state machine, six statuses, seven-day TTL, two-of-three sampling, concurrency-two scheduler, health/capability separation, Standard text/stream/strict-JSON/tool/tool-result/declared-vision probes, Extended image-output validation, tool-error taxonomy, and audit redaction.
 - `modelValidationStore.ts`: root-scoped JSON persistence adapter for validation records. It returns cloned records and uses the selected test/user root rather than the installation directory.
 - `toolArgumentValidator.ts`: recursively closed JSON Schema registration/validation used by model-authored and direct CLI tool calls before policy or execution.
-- Conversation persistence in `agent.ts` stores workspace-local `conversations/state.json`, saves conversation Plan items and user-image attachment metadata with each conversation, hydrates the content-addressed assets on reload, sanitizes visible assistant output, persists the first-user-message title-gate identity and formal-response-started state, exposes read-only snapshots by explicit conversation ID, and supports visible switching while another conversation continues through its own runner. Conversation archiving writes attachment copies under `archive/assets/user-images/` and links them from the archived Markdown.
+- Conversation persistence in `agent.ts` stores workspace-local `conversations/state.json`, saves conversation Plan items and user-image attachment metadata with each conversation, hydrates the content-addressed assets on reload, sanitizes visible assistant output, persists the first-user-message title-gate identity and formal-response-started state, exposes read-only snapshots by explicit conversation ID, and supports visible switching while another conversation continues through its own runner. Conversation archiving writes attachment copies under 本地归档（未纳入公开仓库） and links them from the archived Markdown.
 - Conversation-title boundary: PC and Android local conversations replace direct first-message clipping and completed-Build-derived naming with one separately persisted, tool-free provider probe that must succeed and apply its title before the first formal Agent request starts. Android remote conversations remain PC-owned. Failure or timeout starts zero formal provider requests; a later ordinary send retries the gate from the same first persisted user message rather than the newer text. Workspace/conversation/first-message identity and default-title state protect against stale results and preserve manual renames. The probe also verifies the frozen provider/model selected for the formal turn, while its messages, errors and output never enter Agent history or the main request prefix.
 
 Mobile local-provider recovery now gates usable connectivity on both `NET_CAPABILITY_INTERNET` and `NET_CAPABILITY_VALIDATED`. A transport abort before provider activity safely retries the original request. An abort after public thought/text preserves bounded progress and sends a continuation request after validated recovery, capped at three continuation attempts and explicitly forbidden from repeating visible text. The combined response remains the durable assistant result. Repeated failure is normalized to a controlled progress-preserved message instead of surfacing the raw socket exception. Foreground-service ownership, CPU/Wi-Fi locks, remote SSE leases and old-connection eviction remain unchanged.
@@ -3571,7 +3568,7 @@ Conversation persistence uses a version 4 tree model. `tree.nodes` owns page-loc
 
 - `DESKTOP/dist/`: generated TypeScript/UI output, bundled `tui/`, and four runtime artifacts rebuilt by the normal build: `windows-process-tree-helper.dll`, `typebox-compile.bundle.cjs`, `wsl-agent-host.bundle.cjs`, and `conversation-utility-host.bundle.cjs`. `scripts/build-tui.cjs` copies the reviewed TUI source into `dist/tui`; packaging carries it through the existing `dist/**/*` rule. Packaging carries the DLL and TypeBox bundle through `asarUnpack`, includes the two worker bundles, and verifies all four before accepting `win-unpacked`; do not hand-edit generated files.
 - `release/`: default packaged output. The dev-0.0.10 publication set contains only the validated Windows MSI and unpacked ZIP, alongside the extracted `win-unpacked/` smoke target. The published dev-0.0.9 set remains the Linux package source for AppImage, deb, unpacked ZIP, and `linux-unpacked/`; no dev-0.0.9 Linux file may be relabeled as dev-0.0.10. Other generated directory contents remain local build evidence. The directory may be locked while a packaged app is running.
-- dev-0.0.10 is published as an unsigned Windows prerelease. `Newmark-Agent-0.0.10-win-unpacked-x64.zip` is 141729309 bytes / 135.16 MiB with SHA256 `A7A2A31861AB7D49BDDE70881DB568702689B603C46381576EDB92C4010BEF35`; `Newmark-Agent-0.0.10-x64.msi` is 110623345 bytes / 105.50 MiB with SHA256 `BC16757E1AA9E70E40B2AA21A800426FBFA24735C84532E4062D7F3409A5BD01`. GitHub reports matching server-side digests for both assets. The local MSI upgrade to 0.0.10 preserved every `~/.Newmark` file and started with one same-window prewarm page; detailed evidence is in `archive/2026-07-16-dev-0.0.10-release-install.md`.
+- dev-0.0.10 is published as an unsigned Windows prerelease. `Newmark-Agent-0.0.10-win-unpacked-x64.zip` is 141729309 bytes / 135.16 MiB with SHA256 `A7A2A31861AB7D49BDDE70881DB568702689B603C46381576EDB92C4010BEF35`; `Newmark-Agent-0.0.10-x64.msi` is 110623345 bytes / 105.50 MiB with SHA256 `BC16757E1AA9E70E40B2AA21A800426FBFA24735C84532E4062D7F3409A5BD01`. GitHub reports matching server-side digests for both assets. The local MSI upgrade to 0.0.10 preserved every `~/.Newmark` file and started with one same-window prewarm page; detailed evidence is in 本地归档（未纳入公开仓库）.
 - `release-icon-verify*/`: temporary verification outputs used for packaged UI validation.
 - `release.locked-*`: historical locked release backup/output directories.
 
@@ -3583,7 +3580,7 @@ Before each implementation slice:
 
 1. Read `README.md`.
 2. Read `OVERVIEW.md` when present.
-3. Read the latest relevant `archive/*.md` records.
+3. Read the latest relevant 本地归档（未纳入公开仓库） records.
 4. Identify whether the requested behavior must be validated in the packaged desktop UI.
 
 After each implementation slice:
@@ -3592,29 +3589,29 @@ After each implementation slice:
 2. Run `cd DESKTOP && npm.cmd test`.
 3. Build or package enough to exercise the real Electron UI.
 4. Use desktop control for visual validation when the change is user-facing.
-5. Save ordinary UI verification screenshots under `archive/`; never save Computer Use desktop screenshots, which are one-time inputs only.
+5. Save ordinary UI verification screenshots under 本地归档（未纳入公开仓库）; never save Computer Use desktop screenshots, which are one-time inputs only.
 6. Add a dated archive report.
 7. Update the `README.md` Maintenance Log.
 8. Update this `OVERVIEW.md` when structure, build flow, or ownership changes.
 
 ## Current Known Operational Notes
 
-- The machine-wide dev-0.3.9 installation has now passed opt-in real-model stress through APInebula `gpt-5.4-mini`: installed CLI/UI routing, two-call Goal continuation, queued input drain, conversation isolation, model-backed long-context compression, and exact executable cleanup were exercised against an isolated temporary root. `DESKTOP/scripts/release-real-provider-stress.cjs` accepts `NEWMARK_TEST_EXE` for installed-build targeting, `NEWMARK_REAL_STRESS_SCENARIOS` for bounded targeted retests, and tagged independent reports. The test waits for asynchronously persisted Goal completion and derives compression load from the model window rather than assuming a character count crossed the token trigger. Evidence and interpretation are in `archive/2026-08-08-dev039-real-model-stress.md`.
-- The verified Windows `dev-0.2.2` package is installed machine-wide at `C:\Program Files\Newmark Agent` as MSI product `0.2.2.0` / `{F952A163-41BE-4AB2-B26E-7A950512F732}`. The installed executable and `app.asar` exactly match the locally built package, the installed release CLI smoke passes, and no current-user application copy remains. Audited mutable state under `~/.Newmark` was unchanged; artifact hashes and installation evidence are recorded in `archive/20260802-dev-0.2.2-local-package-install.md`.
+- The machine-wide dev-0.3.9 installation has now passed opt-in real-model stress through APInebula `gpt-5.4-mini`: installed CLI/UI routing, two-call Goal continuation, queued input drain, conversation isolation, model-backed long-context compression, and exact executable cleanup were exercised against an isolated temporary root. `DESKTOP/scripts/release-real-provider-stress.cjs` accepts `NEWMARK_TEST_EXE` for installed-build targeting, `NEWMARK_REAL_STRESS_SCENARIOS` for bounded targeted retests, and tagged independent reports. The test waits for asynchronously persisted Goal completion and derives compression load from the model window rather than assuming a character count crossed the token trigger. Evidence and interpretation are in 本地归档（未纳入公开仓库）.
+- The verified Windows `dev-0.2.2` package is installed machine-wide at `C:\Program Files\Newmark Agent` as MSI product `0.2.2.0` / `{F952A163-41BE-4AB2-B26E-7A950512F732}`. The installed executable and `app.asar` exactly match the locally built package, the installed release CLI smoke passes, and no current-user application copy remains. Audited mutable state under `~/.Newmark` was unchanged; artifact hashes and installation evidence are recorded in 本地归档（未纳入公开仓库）.
 - dev-0.2.1 adds an explicit npm/global GUI route in `DESKTOP/src/launcher.ts`: `Newmark --GUI` first resolves a configured or installed native desktop executable, then falls back to the npm Electron runtime. `Newmark --TUI` remains the shared terminal route. The npm publication surface is restricted by the top-level `DESKTOP/package.json#files` allowlist to compiled `dist`, UI assets, Flow templates, and the example config; tests, source maps, build caches, logs, and temporary output must never enter the tarball.
 - The standalone viewer in `DESKTOP/src/main.ts` is a deliberately separate Electron mode. Image windows use their content-derived image title for BrowserWindow, document, and visible header titles. Memory Lab Overview windows use a graph-only document. Neither viewer hydrates `dist/ui/index.html`; `startupPrewarmVerify.ts` therefore audits main-UI CDP scripts separately from the explicit `--newmark-viewer` isolation stress.
 - `DESKTOP/scripts/dist-linux.cjs` copies both `DESKTOP/` and sibling `TUI/` into its isolated WSL/Linux repository. Windows OpenSSH loopback stress runs only on Windows; the Windows release gate separately runs the real Ubuntu WSL PTY stress before Linux packaging.
 
-- The dev-0.1.7 renderer now preserves branch pager metadata across Build completion and partial state refreshes. Complete responses hydrate the latest page-local anchor IDs before destructive transcript redraw, while partial responses merge only branch fields they actually contain. Packaged regression evidence is recorded in `archive/20260725-dev-0.1.7-branch-pager-completion-fix.md`.
+- The dev-0.1.7 renderer now preserves branch pager metadata across Build completion and partial state refreshes. Complete responses hydrate the latest page-local anchor IDs before destructive transcript redraw, while partial responses merge only branch fields they actually contain. Packaged regression evidence is recorded in 本地归档（未纳入公开仓库）.
 
-- Conversation persistence uses the v4 node tree and exposes all branch groups along the selected ancestry. Nested edits such as Build-start followed by Guide editing therefore retain independent pagers and earlier path data instead of replacing a single flat branch list. Final dev-0.1.7 nested-pagination evidence and artifact hashes are recorded in `archive/20260724-nested-start-guide-branch-pagination.md`.
+- Conversation persistence uses the v4 node tree and exposes all branch groups along the selected ancestry. Nested edits such as Build-start followed by Guide editing therefore retain independent pagers and earlier path data instead of replacing a single flat branch list. Final dev-0.1.7 nested-pagination evidence and artifact hashes are recorded in 本地归档（未纳入公开仓库）.
 
 - On Windows PowerShell, `npm.ps1` can be blocked by execution policy. Use `npm.cmd` for repeatable commands.
 - Running packaged Electron windows lock `release/` and `app.asar`. Close or stop only the matching Newmark packaged processes before rebuilding.
 - `DESKTOP/scripts/dist-portable.cjs` is the compatibility entrypoint for the Windows release build. It now runs electron-builder `dir`, patches `release/win-unpacked/Newmark Agent.exe` with the Newmark Windows version resources and resource icon, verifies `win-unpacked`, `app.asar`, all four generated runtime artifacts (`windows-process-tree-helper.dll`, `typebox-compile.bundle.cjs`, `wsl-agent-host.bundle.cjs`, and `conversation-utility-host.bundle.cjs`), the unpacked executable associated icon, embedded Lucide UI assets, `ProductName`, `FileDescription`, and `OriginalFilename`, builds `Newmark-Agent-<version>-x64.msi` from the patched prepackaged directory, creates and verifies `Newmark-Agent-<version>-win-unpacked-x64.zip`, and then runs packaged release CLI smoke. `DESKTOP/package.json` intentionally keeps Windows `signAndEditExecutable: false` because electron-builder's resource-editing path can require extracting `winCodeSign` symlinks on Windows; the local `resedit` post-package patch avoids that clean-machine permission dependency. Use a long timeout and close matching release processes before rebuilding.
-- Clean Windows startup hotfix on 2026-07-08 deferred automation wake scheduling until after the first desktop window is shown and bounded `schtasks.exe` calls to 5 seconds. Follow-up Program Files startup hardening first fell back to `app.getPath('userData')`; on 2026-07-10 the final policy moved mutable runtime state to `~/.Newmark` while leaving program files under protected install roots such as `C:\Program Files\Newmark Agent`; first-run initialization failures are logged to `startup.log`, retried once in user data when no explicit `--root` was provided, and then surfaced instead of leaving a silent no-window process. Startup initialization also avoids rewriting unchanged `config.json`, `PC_Hash.config`, valid Memory Lab indexes, and unchanged `External.json`. On 2026-07-09, packaged startup was hardened again with a lightweight startup shell that paints before Agent/workspace/skills initialization, then switches all open windows to the full UI after IPC and backend runtime readiness. The rebuilt dev-0.0.2 `win-unpacked` package was verified with CDP target creation, nonzero `MainWindowHandle`, process name `Newmark Agent`, no-root packaged startup in 1.422 seconds, startup-recovery full renderer readiness in 2.687 seconds, and an SSH-configured root in 1.405 seconds without startup SSH validation. Artifact hashes are `80E77602F299AC0650D0403D93866DB66B838B91DFF172DC566259B32BD6B461` for the portable executable and `9A7C2589B481BF06C8F76CEAEFEEAA1C6D29AFF0B5EA979E14936CD8CD513C92` for the win-unpacked zip. Evidence is in `archive/2026-07-08-win-unpacked-clean-startup-process-name.md`, `archive/2026-07-08-program-files-startup-root-fallback.md`, and `archive/2026-07-09-packaged-startup-shell-ssh-probe.md`.
+- Clean Windows startup hotfix on 2026-07-08 deferred automation wake scheduling until after the first desktop window is shown and bounded `schtasks.exe` calls to 5 seconds. Follow-up Program Files startup hardening first fell back to `app.getPath('userData')`; on 2026-07-10 the final policy moved mutable runtime state to `~/.Newmark` while leaving program files under protected install roots such as `C:\Program Files\Newmark Agent`; first-run initialization failures are logged to `startup.log`, retried once in user data when no explicit `--root` was provided, and then surfaced instead of leaving a silent no-window process. Startup initialization also avoids rewriting unchanged `config.json`, `PC_Hash.config`, valid Memory Lab indexes, and unchanged `External.json`. On 2026-07-09, packaged startup was hardened again with a lightweight startup shell that paints before Agent/workspace/skills initialization, then switches all open windows to the full UI after IPC and backend runtime readiness. The rebuilt dev-0.0.2 `win-unpacked` package was verified with CDP target creation, nonzero `MainWindowHandle`, process name `Newmark Agent`, no-root packaged startup in 1.422 seconds, startup-recovery full renderer readiness in 2.687 seconds, and an SSH-configured root in 1.405 seconds without startup SSH validation. Artifact hashes are `80E77602F299AC0650D0403D93866DB66B838B91DFF172DC566259B32BD6B461` for the portable executable and `9A7C2589B481BF06C8F76CEAEFEEAA1C6D29AFF0B5EA979E14936CD8CD513C92` for the win-unpacked zip. Evidence is in 本地归档（未纳入公开仓库）, 本地归档（未纳入公开仓库）, and 本地归档（未纳入公开仓库）.
 - dev-0.0.0 release reset on 2026-07-05 keeps the latest source behavior while resetting public package metadata and release presentation to a clean development baseline. The baseline includes duplicate-reply reconciliation, Markdown formula rendering, rootless pasted-image prompt attachments, shared-backend multi-window conversation isolation, the double-buffered closed-loop Computer Use takeover border, strict overlay cleanup, exact local/SSH workspace uniqueness, renderer workspace upsert behavior, and structured `gh_fork status` fallback when GitHub CLI returns non-JSON transport errors. Validation passed `npm.cmd test` with 874 assertions, `dist:portable`, packaged `release:ui-multi-window-shared-backend-smoke`, and Computer Control visual switching. The dev-0.0.0 artifact hashes are `C83A284CE8AA46178F05D663A24AAEC5CE4D35FEFFC3C3899950EB03C1FA76E0` for `release/Newmark-Agent-0.0.0-portable-x64.exe` and `1A414C099116601FBF4A83BC120DD094BBE6D5E5CBAE3D8541CD4240E16E004B` for `release/Newmark-Agent-0.0.0-win-unpacked-x64.zip`. Release publication should delete previous GitHub release entries only after local validation and push succeed, then republish GitHub release tag `dev-0.0.0`. Computer Use desktop screenshots remain one-time inputs only and must not be archived.
-- Latest v1.0.2 portable release was rebuilt on 2026-06-29 at `release/Newmark-Agent-0.0.2-portable-x64.exe` with SHA256 `C687C8DE21AE66DA3982B0E8EA82F07E8CEFEA61132A64259C3A0EA7A42026F5`. The Gemma-download removal was visually verified in the final packaged runtime with screenshot evidence at `archive/2026-06-29-release-gemma-removal-visual.png`.
+- Latest v1.0.2 portable release was rebuilt on 2026-06-29 at `release/Newmark-Agent-0.0.2-portable-x64.exe` with SHA256 `C687C8DE21AE66DA3982B0E8EA82F07E8CEFEA61132A64259C3A0EA7A42026F5`. The Gemma-download removal was visually verified in the final packaged runtime with screenshot evidence at 本地归档（未纳入公开仓库）.
 - External SVG sprite references can fail or render invisibly in the packaged Electron/asar context. The current build embeds Lucide symbols into `dist/ui/index.html` to keep icons reliable.
 - Public/package release work must keep `LICENSE` and `THIRD_PARTY_NOTICES.md` included and refresh the dependency license inventory when lock files, package references, `_vendor/`, `_ref/`, or `skills/` change.
 - Kernel-facing features still need real packaged-release verification when they affect runtime behavior. Prefer `release/win-unpacked/Newmark Agent.exe state|tool|send ...` for CLI/core checks and desktop control against the packaged window for UI/preload/Electron checks.
@@ -3622,19 +3619,19 @@ After each implementation slice:
 
 ## dev-0.2.3 input binding, Ultra orchestration, and provider-error hardening (2026-08-02)
 
-The current source advances to dev-0.2.3. `DESKTOP/src/ui/index.html` stores unsent prompt drafts by workspace/conversation runtime key, restores them after switching conversations, and preserves the chat scroll anchor during transcript rerenders. `DESKTOP/src/core/agent.ts`, `DESKTOP/src/core/config.ts`, and `DESKTOP/src/llm/provider.ts` expose Ultra as a persistent highest intelligence tier whose provider request uses max reasoning effort. `DESKTOP/src/core/agentKernelRunner.ts` withholds provider error tokens such as HTTP 402 from normal streaming text and retains the tool-provision broker when task-specific tools are initially empty. Regression assertions live in `DESKTOP/src/tests/verify.ts` and `DESKTOP/src/tests/intelligenceTierVerify.ts`; the dated audit is `archive/20260802-dev-0.2.3-update.md`.
+The current source advances to dev-0.2.3. `DESKTOP/src/ui/index.html` stores unsent prompt drafts by workspace/conversation runtime key, restores them after switching conversations, and preserves the chat scroll anchor during transcript rerenders. `DESKTOP/src/core/agent.ts`, `DESKTOP/src/core/config.ts`, and `DESKTOP/src/llm/provider.ts` expose Ultra as a persistent highest intelligence tier whose provider request uses max reasoning effort. `DESKTOP/src/core/agentKernelRunner.ts` withholds provider error tokens such as HTTP 402 from normal streaming text and retains the tool-provision broker when task-specific tools are initially empty. Regression assertions live in `DESKTOP/src/tests/verify.ts` and `DESKTOP/src/tests/intelligenceTierVerify.ts`; the dated audit is 本地归档（未纳入公开仓库）.
 
 ## dev-0.3.13 cross-scenario black-box gate (2026-08-13)
 
-The executable cross-scenario pressure plan is in `tasks/plan.md` and the execution checklist is in `tasks/todo.md`. Two fresh-context `gpt-5.6-luna/max` black-box runs used only real installed-directory probes and isolated Windows Temp roots. The observed Program Files package is still `0.3.12`, so it is not evidence for the `dev-0.3.13` source candidate. Raw GUI input/session screenshots, CLI help/state/failure outputs, and TUI PTY matrices were captured, but Flow, archive interruption, context compression/cache thresholds, GUI/TUI/CLI concurrent backend, Copilot, and sustained long-pressure cases were not completed. Both agents stalled during report aggregation and were shut down after product-process cleanup; the audited result is `INCOMPLETE/HOLD` in `archive/20260813-dev-0.3.13-blackbox-canary-incomplete.md`. No UAC or global installation was requested or performed.
+The executable cross-scenario pressure plan is in `tasks/plan.md` and the execution checklist is in `tasks/todo.md`. Two fresh-context `gpt-5.6-luna/max` black-box runs used only real installed-directory probes and isolated Windows Temp roots. The observed Program Files package is still `0.3.12`, so it is not evidence for the `dev-0.3.13` source candidate. Raw GUI input/session screenshots, CLI help/state/failure outputs, and TUI PTY matrices were captured, but Flow, archive interruption, context compression/cache thresholds, GUI/TUI/CLI concurrent backend, Copilot, and sustained long-pressure cases were not completed. Both agents stalled during report aggregation and were shut down after product-process cleanup; the audited result is `INCOMPLETE/HOLD` in 本地归档（未纳入公开仓库）. No UAC or global installation was requested or performed.
 
-The 2026-08-13 continuation rebuilt the real `0.3.13` Windows candidate and repaired stale `0.3.12` version assertions in both packaged release-gate scripts. The safe packaged black-box matrix passed 28 cases; packaged CLI/context-compression, shared-root restart, Flow pause/resume/running-archive, startup recovery, native editor, rapid conversation switching, queue/plan, multi-window shared backend, and 30-window TUI viewer stress also passed. The Flow archive probe removed the target in 133 ms and all three duplicate archive receipts succeeded. Three fresh-context GUI/TUI/context black-box batches reached their hard deadlines without structured final reports, and the real Copilot latency lane was blocked because no selectable GitHub Copilot model was available; these remain coverage gaps, so the verdict stays `INCOMPLETE/HOLD`. No UAC, MSI installation, Program Files mutation, or user-config write was performed. Full evidence and candidate hashes are in `archive/20260813-dev-0.3.13-cross-scenario-continuation.md`.
+The 2026-08-13 continuation rebuilt the real `0.3.13` Windows candidate and repaired stale `0.3.12` version assertions in both packaged release-gate scripts. The safe packaged black-box matrix passed 28 cases; packaged CLI/context-compression, shared-root restart, Flow pause/resume/running-archive, startup recovery, native editor, rapid conversation switching, queue/plan, multi-window shared backend, and 30-window TUI viewer stress also passed. The Flow archive probe removed the target in 133 ms and all three duplicate archive receipts succeeded. Three fresh-context GUI/TUI/context black-box batches reached their hard deadlines without structured final reports, and the real Copilot latency lane was blocked because no selectable GitHub Copilot model was available; these remain coverage gaps, so the verdict stays `INCOMPLETE/HOLD`. No UAC, MSI installation, Program Files mutation, or user-config write was performed. Full evidence and candidate hashes are in 本地归档（未纳入公开仓库）.
 
-The 2026-08-13 full cross-scenario design rebuilt the matrix as five interacting layers—entry transport, work state, context/model, persistence action, and lifecycle/resources—and selected X01–X12 instead of claiming a Cartesian-product run. The design was dispatched as four fresh-context `gpt-5.6-luna/max` black-box batches: GUI persistence, TUI/CLI/shared backend, context/cache/prompt/Copilot, and fixed-event endurance/replay. All four reached their hard deadlines without structured final reports and are recorded as `INCOMPLETE`; candidate processes were cleaned, but the Temp roots remain as raw evidence. The design and dispatch audit are `archive/20260813-dev-0.3.13-full-cross-scenario-design.md` and `archive/20260813-dev-0.3.13-full-cross-scenario-blackbox-dispatch.md`. Overall release status remains `INCOMPLETE/HOLD`; no UAC is authorized.
+The 2026-08-13 full cross-scenario design rebuilt the matrix as five interacting layers—entry transport, work state, context/model, persistence action, and lifecycle/resources—and selected X01–X12 instead of claiming a Cartesian-product run. The design was dispatched as four fresh-context `gpt-5.6-luna/max` black-box batches: GUI persistence, TUI/CLI/shared backend, context/cache/prompt/Copilot, and fixed-event endurance/replay. All four reached their hard deadlines without structured final reports and are recorded as `INCOMPLETE`; candidate processes were cleaned, but the Temp roots remain as raw evidence. The design and dispatch audit are 本地归档（未纳入公开仓库） and 本地归档（未纳入公开仓库）. Overall release status remains `INCOMPLETE/HOLD`; no UAC is authorized.
 
 ## dev-0.3.13 help/root boundary repair and natural black-box continuation (2026-08-13)
 
-The first completed long GUI black-box report found `D-HELP-001` (command help could enter GUI/runtime) and `D-ROOT-001` (some GUI/Wrapper probes observed Chromium state under the canonical user runtime when only `--root` was supplied). The repair is in `DESKTOP/src/launcher.ts`, `DESKTOP/src/main.ts`, and `DESKTOP/src/cli-commands.ts`: command help exits before initialization; explicit roots bind Electron `userData`, `sessionData`, and Chromium `--user-data-dir`; startup failure logging follows the resolved runtime root. Regression coverage includes both help argument orders, spaced roots, GUI direct launch, Console Wrapper forwarding, child command lines, profile files, and cleanup. Source verification is `1501/1501`; the rebuilt real Windows package passed Builder SSH/TUI/CLI/context compression/MSI/ZIP and the independent `28`-case safe black-box gate. Full evidence is `archive/20260813-dev-0.3.13-help-root-boundary-fix.md`.
+The first completed long GUI black-box report found `D-HELP-001` (command help could enter GUI/runtime) and `D-ROOT-001` (some GUI/Wrapper probes observed Chromium state under the canonical user runtime when only `--root` was supplied). The repair is in `DESKTOP/src/launcher.ts`, `DESKTOP/src/main.ts`, and `DESKTOP/src/cli-commands.ts`: command help exits before initialization; explicit roots bind Electron `userData`, `sessionData`, and Chromium `--user-data-dir`; startup failure logging follows the resolved runtime root. Regression coverage includes both help argument orders, spaced roots, GUI direct launch, Console Wrapper forwarding, child command lines, profile files, and cleanup. Source verification is `1501/1501`; the rebuilt real Windows package passed Builder SSH/TUI/CLI/context compression/MSI/ZIP and the independent `28`-case safe black-box gate. Full evidence is 本地归档（未纳入公开仓库）.
 
 The black-box execution rule was corrected after the historical incomplete dispatch: fresh-context `gpt-5.6-luna/max` testers must run naturally with no artificial hard deadline. They may end only on natural completion, an explicit failure, or safe cleanup of an actually uncontrolled process; a missing outer report is not a Clear result. The current Nash batch is still running against safe Temp roots. Release remains `INCOMPLETE/HOLD`; no UAC/global MSI installation is authorized.
 
@@ -3664,7 +3661,7 @@ Newmark Agent/
 │        └─ verify.ts
 ├─ README.md
 ├─ OVERVIEW.md
-└─ archive/
+└─ 本机私有归档（已从公开仓库排除）
    ├─ 20260813-dsh-plugin-mcp-discovery-compatibility.md
    ├─ 20260813-gui-keyboard-dsh-inspired-optimization.md
    ├─ 20260813-release-ui-keyboard-command-palette-smoke.png
@@ -3685,8 +3682,6 @@ Newmark Agent/
 - `DESKTOP/scripts/release-ui-skills-smoke.cjs` is the real packaged Electron/CDP path for exercising Plugins navigation, DSH/MCP rendering and refresh, candidate review, disabled-by-default persistence, secret-safe listing, MCP CRUD, command search, F1 help, focus, and IME safety. It passed against the rebuilt `win-unpacked` candidate.
 - `README.md` records the user-facing maintenance state and explicitly distinguishes the source candidate from verified release evidence.
 - `OVERVIEW.md` records the current architecture, file ownership, safety boundary, and verification status.
-- `archive/20260813-dsh-plugin-mcp-discovery-compatibility.md` is the dated design and verification ledger; it contains the official contract, security invariants, executed matrix, artifact hashes, and deliberate exclusions.
-- `archive/20260813-gui-keyboard-dsh-inspired-optimization.md` records the shortcut policy, DSH-derived engineering/visual decisions, accessibility boundary, and packaged evidence.
 - The four `20260813-release-ui-*-smoke.png` files are visual evidence from the final passing real packaged Electron run.
 
 The executed source sequence was `cd DESKTOP`, `npm.cmd run build`, the focused built verifiers, and `npm.cmd run test:desktop:built`. The candidate was then rebuilt with electron-builder `--win dir` and driven through `npm.cmd run release:ui-skills-smoke` against that exact artifact via Electron CDP. The tested `app.asar` SHA-256 is `0DCE6242BDA0639BD7F414616CFA47CD756A875FC81329C681F262305409D7D0`; full hashes and screenshots are in the dated archive record.
@@ -3699,7 +3694,7 @@ The interaction layer uses modal focus trapping, initial focus and focus return,
 
 The DSH-Harness study influenced structure rather than branding or runtime coupling. Newmark adopts explicit state/ownership layers, lazy searchable inventories, static configuration versus live runtime state, semantic tokens instead of component-local colors, and dense no-soft-wrap terminal/transcript surfaces. It does not embed Cordis, claim DSH fiber phases, deep-merge Cordis patches, evaluate `!!js`/import/plugin nodes, pin preview versions, or copy DeepSeek colors. The DSH developer-preview boundary stays dynamically discoverable and read-only, allowing upstream package/profile/bundle schema growth to remain visible without giving it execution authority.
 
-Verification includes the complete built desktop suite, the `1504/1504` source contract, and real packaged CDP checks for a 65-command conflict-free manifest, unique DSH search, Enter activation, F1/Escape, focus placement, IME Enter suppression, Plugins tab order, DSH/MCP/Skills behavior, and screenshot evidence. Details are in `archive/20260813-gui-keyboard-dsh-inspired-optimization.md`.
+Verification includes the complete built desktop suite, the `1504/1504` source contract, and real packaged CDP checks for a 65-command conflict-free manifest, unique DSH search, Enter activation, F1/Escape, focus placement, IME Enter suppression, Plugins tab order, DSH/MCP/Skills behavior, and screenshot evidence. Details are in 本地归档（未纳入公开仓库）.
 ## 移动模型菜单滚动与图片二维码配对（2026-08-17）
 
 `AnchorMenu` 统一限制弹窗最大高度为安全可用高度的 56%，并封顶 `320dp`。模型选择页显式启用 `rememberScrollState` 与自绘滚动条，长 provider/model 列表可上下滚动且不遮挡菜单项。设置页图片选择器通过 ZXing 解码二维码，成功后调用 `DesktopLinkViewModel.pairFromUrl` 完成桌面端配对；失败时通过 `reportPairingError` 告知用户原因。
@@ -3709,7 +3704,7 @@ Verification includes the complete built desktop suite, the `1504/1504` source c
 - `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` 将 `32.dp` 模糊仅施加到边栏后方的 `ChatScreen`。竖屏左栏由 `drawerState.isOpen` 驱动，右栏由连续的 `rightSidebarProgress` 驱动；平板/折叠屏的二级左栏和右栏采用相同规则。边栏在模糊层之后绘制，因此图标、文字和控件保持清晰；Popup/Dialog 不参与窗口级模糊。
 - `android/app/src/main/java/com/newmark/mobile/ui/components/AnchorMenu.kt` 对 `UpStart` 菜单只约束顶部安全区，不再用通用 `maxY` 把菜单反复钳回高位。输入复合菜单的实际底边因此稳定在输入框顶边上方约 `6dp`，同时保留限宽、限高和溢出滚动。
 - `android/app/src/main/java/com/newmark/mobile/data/MobileApiClient.kt` 与 `android/app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt` 为旧桌面安装增加同一配对目标内的 `/api/state.providers` 兼容读取。新桌面仍以 `/api/mobile/state.providers` 为主；兼容目录只接收脱敏 provider/model 元数据，并生成 provider 隔离的 deployment 标识。
-- 现场证据为 `archive/mobile-0440-left-sidebar-window-blur.png`、`archive/mobile-0440-right-sidebar-window-blur.png` 与 `archive/mobile-0440-model-secondary-final.png`。模拟器二级菜单实际显示 DeepSeek/APInebula 多模型并可滚动，版本为 `0.4.40` / `440`。
+- 现场证据为 本地归档（未纳入公开仓库）、本地归档（未纳入公开仓库） 与 本地归档（未纳入公开仓库）。模拟器二级菜单实际显示 DeepSeek/APInebula 多模型并可滚动，版本为 `0.4.40` / `440`。
 
 ### 0.4.41 模糊进度连续化
 
@@ -3720,34 +3715,26 @@ Verification includes the complete built desktop suite, the `1504/1504` source c
 - `android/app/src/main/java/com/newmark/mobile/ui/RightSidebar.kt` keeps an activated conversation browser mounted independently from right-sidebar visibility and keys WebView lifetime by session.
 - `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` binds local Agent browser calls to the active local conversation without mutating sidebar presentation state.
 - `android/app/src/test/java/com/newmark/mobile/ui/BrowserSessionRegistryTest.kt` guards same-conversation identity and cross-conversation isolation.
-- `archive/2026-08-19-mobile-0453-runtime-stress.md` records formal animation, remote resident-state, local all-tool, restart, and resource evidence.
 
 ## 2026-08-19 PC GUI/TUI remote service runtime gate
 
 - `DESKTOP/scripts/release-pc-gui-tui-remote-service-stress.cjs` owns the installed Windows black-box gate for hosted port `47890`: guarded existing-instance handling, isolated roots, GUI CDP state inspection, TUI PTY/CLI comparison, token/CORS/SSE checks, IPv4 reachability, concurrent core reads, alternating restart, port release, and user-GUI restoration.
 - `DESKTOP/package.json` exposes the gate as `release:pc-gui-tui-remote-service-stress`.
-- `archive/2026-08-19T04-27-34-307Z-pc-gui-tui-remote-service-stress.json` contains the redacted machine-readable observations for six service lifecycles and 1,200 pressure requests.
-- `archive/20260819-pc-gui-tui-remote-service-stress.md` records the test design, authority comparisons, latency table, network boundary, and verdict.
 - Result: three GUI↔TUI cycles passed with 100% pressure-read success, stable per-interface hashes, clean port release, GUI renderer/HTTP parity, TUI CLI/HTTP parity, and standalone GUI-only mutation 409 fail-closed. Detected IPv4 addresses were reachable; IPv6 `::1` was refused as expected under the current IPv4-only bind contract. `npm.cmd run build` and `mobileWorkspaceApiVerify` 43/43 also passed.
 ## 2026-08-19 mobile transcript floating-bar clearance
 
 - `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` keeps a final stable 190dp scroll item, equal to ten 19dp transcript body lines, so the latest message can be scrolled clear of Queue/Goal/Flow overlays without moving or resizing those overlays.
 - `android/app/src/test/java/com/newmark/mobile/ui/TranscriptLayoutContractTest.kt` locks the ten-line/190dp geometry contract.
-- `archive/20260819-mobile-transcript-bottom-reserve-release.png` is the formal Release emulator evidence after a data-preserving installation.
 # 2026-08-19 移动 Queue 拖动排序状态
 
 - `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt`：Queue 拖动改为源/目标索引驱动的占位动画；手势中不改写队列，结束后按稳定 id 一次提交，取消仅复位。
 - `android/app/src/test/java/com/newmark/mobile/ui/QueueDragAnimationContractTest.kt`：验证半行目标阈值、列表边界和双向相邻行位移。
-- `archive/20260819-mobile-queue-reorder-animation.md`：保存实机、构建、安装和性能边界记录。
-- `archive/mobile-stress-20260819-191251.json`：保存 800 事件远端 SSE/Build/Goal/Flow/Queue/stale-event 原始门禁；状态门禁全通过，但综合 UI 帧性能未通过。
-- `archive/20260819-mobile-queue-animation-and-remote-800-gate.md`：记录本轮 Release 构建、10 文件保数据安装、正式前台与性能结论边界。
 
 ## 2026-08-19 Build 收尾 Guide 重新激活
 
 - `DESKTOP/src/core/conversationKernel.ts`：conversation supervisor 在 `activePromise` 刚释放、但当前 `runId` 仍持有 finalization barrier 所有权时接受 Guide；Guide 以 deferred continuation 持久化并更新队列状态，再通过既有 continuation scheduler 恢复同一 WorkRun，执行完成后重新进入正常收尾。
 - `DESKTOP/src/main.ts`：移动/远端 `conversation_guide` 与 `goal_guide` 不再用可能滞后一拍的 `runtime.running=false` 提前否决；它保留目标 `runId` 并把最终的可恢复/过期判断交给 conversation kernel。
 - `DESKTOP/src/tests/guideWorkRunVerify.ts`：覆盖跨两层异步任务边界到达的单次 Guide，以及连续 12 次“completed → Guide → resume → completed”压力；锁定同一 Build/runId、Guide exactly-once、完整后续响应和最终安静收尾。
-- `archive/20260819-build-finalization-guide-reactivation.md`：保存根因、状态机契约、RED/GREEN 证据和完整桌面回归结果。
 
 ## 2026-08-20 移动端到 PC 工作区文件上传
 
@@ -3768,7 +3755,7 @@ Newmark Agent/
 │     └─ 只读工作区文件树，不包含重复上传入口
 ├─ android/app/src/test/java/com/newmark/mobile/ui/WorkspaceUploadContractTest.kt
 │  └─ endpoint、流式请求、无 Base64、当前目标和刷新契约
-└─ archive/20260820-mobile-to-pc-workspace-file-upload.md
+└─ 本地归档（未纳入公开仓库）
    └─ 威胁模型、RED/GREEN、压力门禁与已知 lint 边界
 ```
 
@@ -3787,7 +3774,7 @@ Newmark Agent/
 ├─ android/app/src/test/java/com/newmark/mobile/ui/
 │  └─ ResponsiveSidebarContractTest.kt
 │     └─ 固定尺寸、单一位移源、旧双层动画拒绝契约
-└─ archive/
+└─ 本机私有归档（已从公开仓库排除）
    └─ 20260820-mobile-sidebar-single-surface-motion.md
       └─ 根因、修复边界、验证命令与 Release APK 哈希
 ```
@@ -3799,7 +3786,7 @@ Newmark Agent/
 
 `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` 现在为左右侧栏各持有一个 `Animatable`。拖动进度负责实时呈现，最后一个拖动值作为 `settleStart` 传入普通 Compose 协程：先 `snapTo(settleStart)`，再 `animateTo(target)`。因此手势和结算共享连续位置，不再由停留在旧端点的独立动画重播。
 
-`android/app/src/test/java/com/newmark/mobile/ui/ResponsiveSidebarContractTest.kt` 锁定左右 `settleStart` 捕获、`snapTo -> animateTo` 顺序，并拒绝旧 `settled* by animateFloatAsState` 路径。归档为 `archive/20260820-mobile-sidebar-release-settle-no-replay.md`；Release APK SHA-256 为 `318BEA2B4FAF482DD3A66E7F843D106888580835974CBF646097291CD3CA4BE5`。
+`android/app/src/test/java/com/newmark/mobile/ui/ResponsiveSidebarContractTest.kt` 锁定左右 `settleStart` 捕获、`snapTo -> animateTo` 顺序，并拒绝旧 `settled* by animateFloatAsState` 路径。归档为 本地归档（未纳入公开仓库）；Release APK SHA-256 为 `318BEA2B4FAF482DD3A66E7F843D106888580835974CBF646097291CD3CA4BE5`。
 ## 2026-08-20 移动右栏浏览器常驻与输入可达性
 
 ```text
@@ -3861,7 +3848,7 @@ Newmark Agent/
 │     └─ local-stress-active-model.json
 ├─ DESKTOP/scripts/mobile-mock-server.cjs
 │  └─ 移动本地 17 工具与远端状态确定性 fixture
-└─ archive/
+└─ 本机私有归档（已从公开仓库排除）
    ├─ 20260820-mobile-three-form-agent-memorylab-pressure.md
    ├─ mobile-stress-20260820-205106.json
    └─ 20260820-three-form-*.{png,xml,json,md}
@@ -3885,7 +3872,7 @@ android/app/src/main/java/com/newmark/mobile/ui/
       └─ 锁定提交顺序、真实起始 progress、220ms settlement 与顶层语义
 ```
 
-此前设置内部页面提交返回后在 `finally` 强制归零，早于 `AnimatedContent` 的下一次组合，形成“先复位、再动画”。现在内部返回在提交目标页后，从手指松开值用与页面过渡一致的 220ms PC easing 连续归位；取消手势和其他独立页面默认语义不变。全量 Android 单测、Vital lint、R8、资源收缩和 Release 编译通过；正式包经 10 文件数据指纹守卫覆盖安装，模拟器“模型与供应商 → 设置”预测返回完成且无包级 FATAL/ANR。归档与录像见 `archive/20260820-mobile-settings-secondary-predictive-back-handoff.md`。
+此前设置内部页面提交返回后在 `finally` 强制归零，早于 `AnimatedContent` 的下一次组合，形成“先复位、再动画”。现在内部返回在提交目标页后，从手指松开值用与页面过渡一致的 220ms PC easing 连续归位；取消手势和其他独立页面默认语义不变。全量 Android 单测、Vital lint、R8、资源收缩和 Release 编译通过；正式包经 10 文件数据指纹守卫覆盖安装，模拟器“模型与供应商 → 设置”预测返回完成且无包级 FATAL/ANR。归档与录像见 本地归档（未纳入公开仓库）。
 
 ## 2026-08-20 dev-0.5.0 三端绑定发布边界
 
@@ -3905,7 +3892,7 @@ Newmark Agent/
 
 `VERSION=0.5.0` 绑定桌面 package/package-lock 与 Android `versionName/versionCode`，`dev-X.Y.Z` 标签也必须等于绑定版本。默认 `npm run release` 先跑完整桌面门禁和 Android 单测/Vital lint，再构建 Windows MSI/便携 ZIP、WSL Linux AppImage/deb/ZIP 和 Android APK；本地 electron-builder 显式 `--publish never`，仅 GitHub Release 步骤上传。工作流按三平台独立构建，聚合且只接受六个资产。
 
-本轮完整桌面门禁连续两次通过；Android 单测、Vital lint、R8、资源收缩和 Release APK 通过。新 MSI 以托管流程卸载旧产品并安装成功（exit 0），`C:\Program Files\Newmark Agent\Newmark.exe --version` 为 `0.5.0`，注册表为 `0.5.0.0`，安装与打包 `app.asar` SHA-256 均为 `6C95B2C91C4AFFD7696E4FAC831E2DE360F8C62B9F84897D73BAC7BB1D441696`。六资产哈希与远端下载复核记录见 `archive/20260820-dev-0.5.0-three-platform-release.md`。
+本轮完整桌面门禁连续两次通过；Android 单测、Vital lint、R8、资源收缩和 Release APK 通过。新 MSI 以托管流程卸载旧产品并安装成功（exit 0），`C:\Program Files\Newmark Agent\Newmark.exe --version` 为 `0.5.0`，注册表为 `0.5.0.0`，安装与打包 `app.asar` SHA-256 均为 `6C95B2C91C4AFFD7696E4FAC831E2DE360F8C62B9F84897D73BAC7BB1D441696`。六资产哈希与远端下载复核记录见 本地归档（未纳入公开仓库）。
 
 `dev-0.5.0` prerelease 已发布六资产，GitHub 服务器端对每个资产计算的 size 与 SHA-256 digest 全部匹配本地。当前代理对 1 GiB 并发回下载在 30 分钟硬超时内保持 0 字节，直连被重置；1 MiB Range 下载可用但完整串行吞吐不可接受，因此没有把“完整回下载”误报为通过。标签触发的首轮 CI 中 Android/Linux 成功，Windows 因 hosted runner 缺少 OpenSSH server 资产失败；`master` 随后增加仅 CI 可显式启用的 packaged-SSH skip（本地默认 release 仍强制运行），手动 `release-platforms` run `32384431037` 的 Windows、Linux、Android 三个构建 Job 全部成功，publish Job 按非标签预期跳过。
 
@@ -3960,7 +3947,7 @@ Android is an `ACTION_SEND`/`ACTION_SEND_MULTIPLE` target. A process cold start 
 
 Browser address input completes host-like values with HTTP(S), uses HTTP only for explicit loopback/localhost input, and treats other ordinary text as a Google search. Navigation callbacks never use search fallback: they strictly validate parsed scheme, host, credentials, whitespace and port. WebView additionally rejects mixed content, file/content access, popup windows, geolocation and unsafe browsing hits.
 
-Version is bound at desktop `0.5.2` and Android `versionName 0.5.2` / `versionCode 502`. Implementation record and current verification evidence are in `archive/20260821-dev-0.5.2-android-agent-ingress.md`.
+Version is bound at desktop `0.5.2` and Android `versionName 0.5.2` / `versionCode 502`. Implementation record and current verification evidence are in 本地归档（未纳入公开仓库）.
 
 Final Android gate `testDebugUnitTest lintVitalRelease assembleRelease --no-daemon` passed: 69 JVM tests, zero failures/errors, Vital lint, R8, resource shrinking and Release APK packaging all succeeded. The 45,838,216-byte APK SHA-256 is `37DA310D285585354017116432956F9B3AF747D519B5D0773C4C240EA275DDE7`. No ADB device was attached for this task, so system share-sheet/calendar UI and live remote-upload routing are not represented as device-observed evidence.
 
@@ -3970,7 +3957,7 @@ The local Build Agent now exposes `terminal_exec(command)` and routes it directl
 
 Calendar access is now an Activity-owned runtime capability instead of an application-context-only launch. `NewmarkApp.kt` serializes Android permission requests, waits for the result inside the active tool call, and routes `calendar_create` through `WRITE_CALENDAR` or `calendar_read` through `READ_CALENDAR`. Creation still opens the documented default calendar insert UI. Reading queries the system `CalendarContract.Instances` provider over a bounded time range, result count and optional keyword filter, returning only permission-authorized event fields to the local Agent. The insert path no longer rejects valid handlers through a package-visibility-sensitive `resolveActivity` preflight.
 
-Files and responsibilities: `LocalToolCatalog.kt`/`LocalTools.kt` publish Build/Plan capability boundaries; `LocalToolExecutor.kt` bridges terminal execution; `CalendarTool.kt` owns insert/read provider operations; `ChatViewModel.kt` binds tool calls to the Activity capability; `NewmarkApp.kt` owns permission prompts; `AndroidManifest.xml` declares calendar permissions; `LocalToolContractTest.kt` locks the complete path. Evidence is recorded in `archive/20260821-dev-0.5.2-agent-terminal-calendar-bridge.md`.
+Files and responsibilities: `LocalToolCatalog.kt`/`LocalTools.kt` publish Build/Plan capability boundaries; `LocalToolExecutor.kt` bridges terminal execution; `CalendarTool.kt` owns insert/read provider operations; `ChatViewModel.kt` binds tool calls to the Activity capability; `NewmarkApp.kt` owns permission prompts; `AndroidManifest.xml` declares calendar permissions; `LocalToolContractTest.kt` locks the complete path. Evidence is recorded in 本地归档（未纳入公开仓库）.
 
 Final Android verification passed 71/71 JVM tests plus Vital lint, R8, resource shrinking and Release assembly. The installed APK SHA-256 is `9C79BF99E581B4605C659B4981E50DCBFD5FC48A8A2895357DEC95E47C6F1C88`. A preserve-data install to `emulator-5554` kept five private-state hashes unchanged, package manager confirmed both calendar permissions declared and ungranted, cold start completed with `MainActivity` top-resumed, and package FATAL/ANR matches were zero. No real provider call was spent solely to trigger the dialog, so actual Agent-driven permission UI and calendar data are not claimed as observed.
 
@@ -4017,11 +4004,11 @@ android/app/src/main/
 
 前台通知由远程与本地 ViewModel 向同一服务发布去重运行数，任一侧仍有 Agent 即保留服务，两侧均为 0 才停止。自定义通知固定显示“远程有 n 个Agent正在运行”和“本地有 m 个Agent正在运行”，并由可动画 drawable 播放黑白黑白渐变条。API 35 模拟器实际通知记录、RemoteViews 文本和截图均通过；临时恢复系统动画倍率后，两张相隔 140ms 的条带截图出现像素位移，随后恢复模拟器原设置。
 
-最终 Android 门禁为 136/136 JVM 单测、Vital lint、R8、资源收缩和 Release assembly 全通过；`app-release.apk` 为 45,938,144 bytes，SHA-256 `BEC316137289CE24B1DA8F94A19BE96DE190C2CD4D0C2BC4A9EE43617D133D5B`，已覆盖安装至 `emulator-5554`，包版本 0.5.6 且未发现 FATAL/ANR。100ms 快速纵向滑动模型二级弹窗后弹窗仍在，未误触选项。完整留痕见 `archive/20260824-230000-liquid-state-notification-and-reorder.md`。
+最终 Android 门禁为 136/136 JVM 单测、Vital lint、R8、资源收缩和 Release assembly 全通过；`app-release.apk` 为 45,938,144 bytes，SHA-256 `BEC316137289CE24B1DA8F94A19BE96DE190C2CD4D0C2BC4A9EE43617D133D5B`，已覆盖安装至 `emulator-5554`，包版本 0.5.6 且未发现 FATAL/ANR。100ms 快速纵向滑动模型二级弹窗后弹窗仍在，未误触选项。完整留痕见 本地归档（未纳入公开仓库）。
 
-2026-08-24 的排序可见性修正进一步统一了预览与提交：Android 本地/远程对话均从源组索引和连续指针位移计算同一目标槽，实际移动首帧取消空飞行玻璃并显示携带内容；提交前将各对话 ID 的几何缓存重映射到新槽，避免活动对话排序后下一次点击仍从旧位置起飞。PC 使用真实按住行的克隆作为原生拖影，列表空隙也能提交当前 DOM 避让顺序，并在排序开始/提交时销毁旧玻璃飞行缓存。详见 `archive/20260824-213202-conversation-drag-slot-and-origin.md`。
+2026-08-24 的排序可见性修正进一步统一了预览与提交：Android 本地/远程对话均从源组索引和连续指针位移计算同一目标槽，实际移动首帧取消空飞行玻璃并显示携带内容；提交前将各对话 ID 的几何缓存重映射到新槽，避免活动对话排序后下一次点击仍从旧位置起飞。PC 使用真实按住行的克隆作为原生拖影，列表空隙也能提交当前 DOM 避让顺序，并在排序开始/提交时销毁旧玻璃飞行缓存。详见 本地归档（未纳入公开仓库）。
 
-2026-08-24 22:12 将 PC 对话点击/排序彻底并入新版 Kyant 浮块管线：旧 `.conversation-selection-float` 阴影层和等比放大的原生拖影已删除；点击与拖动统一使用固定四边 9px 增厚的 `liquid-selection-float`、实时窗口底图和 RGB WebGL2 折射色散。排序时系统拖影为透明 1px 占位，唯一可见玻璃从活动对话飞向按住项，抵达后才克隆并包裹按住项内容，再随指针移动和驱动 DOM 避让。PC 完整桌面门禁、真实 Electron renderer 探针及 Android Release 门禁通过。产物与 UAC fresh-install 证据见 `archive/20260824-221232-pc-conversation-kyant-release.md`。
+2026-08-24 22:12 将 PC 对话点击/排序彻底并入新版 Kyant 浮块管线：旧 `.conversation-selection-float` 阴影层和等比放大的原生拖影已删除；点击与拖动统一使用固定四边 9px 增厚的 `liquid-selection-float`、实时窗口底图和 RGB WebGL2 折射色散。排序时系统拖影为透明 1px 占位，唯一可见玻璃从活动对话飞向按住项，抵达后才克隆并包裹按住项内容，再随指针移动和驱动 DOM 避让。PC 完整桌面门禁、真实 Electron renderer 探针及 Android Release 门禁通过。产物与 UAC fresh-install 证据见 本地归档（未纳入公开仓库）。
 
 ## dev-0.5.3 移动运行时、后台通知与固定光条（2026-08-21）
 
@@ -4031,7 +4018,7 @@ Android 本地 Agent 现在在 chat/responses 两条协议上兼容旧 SSE 响�
 
 Android 16 Live Updates 已改为真实 API 36 构建链：`compileSdk 36`、AGP 8.10.1 与 AndroidX Core 1.17.0。Manifest 声明 `POST_PROMOTED_NOTIFICATIONS`；API 36+ 只构建无进度条的 Standard Style Live Update，使用模型/智能选择 small icon、promoted ongoing 请求、“运行中”状态 chip、“本地Agent运行状态”标题及“有n个本地Agent正在运行”动态正文；API 35 及以下构建的普通 ongoing foreground notification也不显示进度条。旧反射实现把平台 `setShortCriticalText(String)` 错查为 `CharSequence`，会静默失败并回退普通通知，现已彻底移除。运行时同时检查结构资格 `hasPromotableCharacteristics()` 和系统/用户授权 `canPostPromotedNotifications()`，但不会在 Android 16 静默改回旧样式。
 
-桌面编译及 1667/1667 综合断言通过；Android 单测、Vital lint、R8、资源收缩和 Release 构建通过。Android `targetSdk` 已提升到 36，满足系统对 Fluid Cloud/Live Update 的资格判定。最终 45,954,544-byte APK 位于 `android/app/build/outputs/apk/release/app-release.apk`，SHA-256 为 `C209F32F46D03EC2A1E52164AE580D17F9434263B0FFBB93ED33A72B07F1A2EE`。本轮同时扩展移动端 Markdown/LaTeX：支持无空格标题、删除线、分隔线、`~~~` 围栏、单行/多行 `$$...$$` 与 `\\[...\\]`、equation/align 等环境、更多常见 LaTeX 命令和符号；本地与远端继续共用同一渲染链。本轮同时将模型/智能选择图标显式设置为 Android 15 及以下 ongoing 通知和 Android 16+ Live Update 的 small/large icon，避免系统回退显示 Newmark launcher icon；新增 `ACCESS_NETWORK_STATE`、电池优化豁免声明和任务移除后继续运行的 data-sync 前台服务策略，启动时通过 Android 系统页面请求用户确认“不受电池优化限制”。APK 合并 Manifest 包含 promoted permission、网络状态和后台策略权限，Release DEX 包含 `android.requestPromotedOngoing=true`、`Notification.ProgressStyle` 三段进度和 short-critical-text extras。`emulator-5554` 仍为 API 35，因此 API 36 promoted chip、OPPO Fluid Cloud、物理设备息屏/OEM 保活及真实供应商长连接未声称已在设备上验证。完整记录见 `archive/20260821-dev-0.5.3-mobile-runtime-final.md`。
+桌面编译及 1667/1667 综合断言通过；Android 单测、Vital lint、R8、资源收缩和 Release 构建通过。Android `targetSdk` 已提升到 36，满足系统对 Fluid Cloud/Live Update 的资格判定。最终 45,954,544-byte APK 位于 `android/app/build/outputs/apk/release/app-release.apk`，SHA-256 为 `C209F32F46D03EC2A1E52164AE580D17F9434263B0FFBB93ED33A72B07F1A2EE`。本轮同时扩展移动端 Markdown/LaTeX：支持无空格标题、删除线、分隔线、`~~~` 围栏、单行/多行 `$$...$$` 与 `\\[...\\]`、equation/align 等环境、更多常见 LaTeX 命令和符号；本地与远端继续共用同一渲染链。本轮同时将模型/智能选择图标显式设置为 Android 15 及以下 ongoing 通知和 Android 16+ Live Update 的 small/large icon，避免系统回退显示 Newmark launcher icon；新增 `ACCESS_NETWORK_STATE`、电池优化豁免声明和任务移除后继续运行的 data-sync 前台服务策略，启动时通过 Android 系统页面请求用户确认“不受电池优化限制”。APK 合并 Manifest 包含 promoted permission、网络状态和后台策略权限，Release DEX 包含 `android.requestPromotedOngoing=true`、`Notification.ProgressStyle` 三段进度和 short-critical-text extras。`emulator-5554` 仍为 API 35，因此 API 36 promoted chip、OPPO Fluid Cloud、物理设备息屏/OEM 保活及真实供应商长连接未声称已在设备上验证。完整记录见 本地归档（未纳入公开仓库）。
 
 ## 2026-08-25 dev-0.5.7 流体云与移动对话玻璃最终校正
 
@@ -4050,26 +4037,26 @@ Release APK 为 45,954,544 bytes，SHA-256
 新旧底色竞争。对话胶囊、折叠/展开左栏三按钮及 `RightSidebar.kt` 分页按钮的静态选中边框
 全部移除，运行中远程对话的胶囊 MarqueeBorder 也被取消，选择只通过 active surface 色块底
 表达。Android 完整单测、Vital lint、R8 和 Release assembly 通过；留痕见
-`archive/20260825-mobile-selection-fill-only-landing.md`。
+本地归档（未纳入公开仓库）。
 
 同日追加统一移动选择玻璃生命周期：`ChatScreen.kt` 输入复合菜单、`Sidebar.kt` 对话与左栏
 工具选择器、`RightSidebar.kt` 页签及 `MemoryLabScreen.kt` 分页均采用
 `fill -> lift(100ms) -> move/drag -> land(240ms) -> fill`。moving/landing 为真时静态选中色块
 一律不渲染；只有浮块退出后才恢复目标色块。对话的长按排序仍使用专用避让/跟手轨迹，但其
 材质、起落比例和互斥规则与其他浮动玻璃一致。记录见
-`archive/20260825-mobile-glass-lifecycle-unification.md`。
+本地归档（未纳入公开仓库）。
 
 移动端 selection overlay 进一步由 `components/LiquidGlass.kt` 的 `liquidSelectionMorph` 统一
 承担色块与玻璃之间的可逆材质插值。所有选择器在松手后先归轨到目标几何，再以 240ms 同步
 收回固定外扩、降低折射/模糊/高光并显出选中色块；终点动画层与静态色块完全同形同色后才
 交接。对话胶囊使用运行时测得的目标矩形计算横纵缩放，完整留痕见
-`archive/20260825-mobile-fill-glass-fill-closed-loop.md`。
+本地归档（未纳入公开仓库）。
 
 PC `index.html` 为 `.conv-action-menu/.model-select-menu/.newmark-select-menu` 增加 List carrier
 专用覆盖，停止旧版静态 `box-shadow` 泛光背景，同时保留 `.liquid-glass-carrier` 的实时磨砂。
 PC 原生对话拖影按同一 pinned 分组计算首尾行矩形，固定 X 并夹取 Y；Android `Sidebar.kt`
 新增 `clampConversationDragDelta`，本地/远程对话的可见浮块和目标槽共享相同轨道边界。记录见
-`archive/20260825-pc-list-shadow-and-conversation-drag-track.md`。
+本地归档（未纳入公开仓库）。
 
 List carrier 的实机复核继续移除通用 `.liquid-glass::before` 整面固定折射渐变和 `::after` 固定
 内阴影。三类 List 弹窗不再出现底部灰黑阴影带，carrier 的实时 backdrop 模糊与轮廓边线保留。
@@ -4077,27 +4064,27 @@ List carrier 的实机复核继续移除通用 `.liquid-glass::before` 整面固
 对话拖动浮块现将光学外壳与内容层的落地变换分离。PC `.conversation-drag-content` 在父浮块
 收缩到 `.86` 时使用 `1/.86` 反向补偿，且 `landLiquidSelectionFloat` 在添加 landing class 前
 清除速度形变；Android 两套对话行把 `liquidMotionDeformation` 限定为 `dragging` 期间，落地
-内容保持原始比例。记录见 `archive/20260825-conversation-shell-content-landing-separation.md`。
+内容保持原始比例。记录见 本地归档（未纳入公开仓库）。
 
 后续实机校正补齐完整拖动端槽：PC 浮块固定在对话列 X 轴，同 pinned 分组的纵向轨道包含
 首项前与末项后各一个完整插入槽，越过端点时 DOM 避让预览同步插到组首/组尾。Android 的
 夹取范围同步包含这两个端槽，形变速度来自夹取后的实际位移，并移除内容行上的第二次液态
 形变。Android 落地不再缩放整个 backdrop 采样节点，而是动态收回固定外扩宽高及对应左上角
 偏移，使光学壳在目标中心落成色块，底层标题与图标保持 1:1 且无横向漂移。完整记录见
-`archive/20260825-conversation-drag-end-slots-and-mobile-shell-landing.md`。
+本地归档（未纳入公开仓库）。
 
 Android 左栏折叠/展开三按钮与右栏子分页随后采用相同的 shell-only landing。三处删除
 `graphicsLayer scaleX/scaleY` 落地缩放，分别以 40→36dp、整行→四周内收 4dp、
 44×40→32×28dp 的动态几何变化完成色块交接；位置同步补偿半边尺寸差，中心保持锁定，
 backdrop 中的图标与文字不再随外壳收缩。记录见
-`archive/20260825-mobile-sidebar-selector-shell-only-landing.md`。
+本地归档（未纳入公开仓库）。
 
 Windows 0.5.7 Release 随后由 `dist:win` 重新构建。win-unpacked 身份/图标、SSH TUI、CLI、
 上下文压缩、控制台边界、ZIP 与 MSI 管理映像 smoke 全部通过；UAC per-machine 安装返回 0，
 注册表及 EXE 版本为 `0.5.7.0`，桌面/开始菜单快捷方式存在，Program Files 内 `app.asar`
 与 release 产物 SHA-256 一致。MSI SHA-256 为
 `F90E44A6BA82A30FD56EC5A97403E4FF6337F341164C4F52BA090F96FC3FD777`。记录见
-`archive/20260825-dev-0.5.7-msi-uac-install.md`。
+本地归档（未纳入公开仓库）。
 
 ## 2026-08-25 审查增量唯一性与对话主题本底
 
@@ -4106,7 +4093,7 @@ DESKTOP/
 ├─ src/ui/index.html                         # 审查状态/DOM upsert 与 #center 主题本底
 ├─ src/tests/workReviewDedupVerify.ts        # 同 run 快照更新及 provisional→canonical 门禁
 └─ scripts/release-ui-work-review-bars-smoke.cjs # 真实 Electron 唯一卡片、本底与交互验证
-archive/
+本机私有归档（已从公开仓库排除）
 └─ 20260825-work-review-incremental-upsert-chat-canvas.md
 ```
 
@@ -4122,19 +4109,19 @@ DOM；正式 runId 会通过 provisional alias 接管既有记录和卡片，同
 输入最大延迟 30.6ms。新 MSI 的结构/安全 smoke 为 22+12 项全通过，并已通过 UAC 安装，
 安装版 `app.asar` 与 release 候选 SHA-256 同为
 `EEB2AC9AD01473F651BE7978676A567A3D0599D2DB9E1A80A2217B9AE7DF17AD`。记录见
-`archive/20260825-review-upsert-performance-msi-install.md`。
+本地归档（未纳入公开仓库）。
 
 Build 展开路径的第二层重复根因随后修复：`workRunChangeBadge()` 输出
 `.conversation-work-change-badge`，但 `updateConversationWorkRunElement()` 曾查询多出 `-run-`
 的错误类名，导致每次交互更新都插入新徽标。现在查询与生成契约一致，真实 Electron 连续
 8 次展开/收起后 badge 数量为 1。`.conversation-work-run-head` 同时加入通用按钮伪玻璃和
 按压缩放排除清单，Build、block、tool、review 展开均为静态交互。记录见
-`archive/20260825-build-toggle-review-badge-dedup.md`。
+本地归档（未纳入公开仓库）。
 
 该修复的 Windows MSI 随后重新生成并通过 win-unpacked、SSH TUI 四轮重启、CLI、上下文压缩、
 console 参数边界及 MSI 22+12 项管理映像 smoke。UAC 安装返回 0，注册表/EXE 为 `0.5.7.0`，
 安装版 GUI 启动并产生 5 个主/GPU/renderer 进程，安装目录 `app.asar` 与候选哈希一致。记录见
-`archive/20260825-build-toggle-msi-uac-install.md`。
+本地归档（未纳入公开仓库）。
 
 ## 2026-08-25 移动选择器坐标与落地分层校正
 
@@ -4146,7 +4133,7 @@ android/app/src/main/java/com/newmark/mobile/ui/
 android/app/src/test/java/com/newmark/mobile/ui/
 ├─ ResponsiveSidebarContractTest.kt
 └─ components/LiquidGlassContractTest.kt
-archive/
+本机私有归档（已从公开仓库排除）
 └─ 20260825-mobile-selector-coordinate-and-shell-landing.md
 ```
 
@@ -4165,7 +4152,7 @@ APK 位于 `android/app/build/outputs/apk/release/app-release.apk`，SHA-256 为
 Memory Lab 详细页返回总览使用 `settleProgressOnCommit`，避免同页切换留下手势变换。
 `Sidebar.kt` 的本地/远程对话玻璃只在玻璃材质浮起期间应用 2dp 右向中心校正，进度 0 的
 色块几何保持原样。完整 Android 单测通过，记录见
-`archive/20260825-mobile-predictive-back-and-conversation-travel-alignment.md`。
+本地归档（未纳入公开仓库）。
 
 该修复已完成 Android Release `assembleRelease --no-daemon`，R8、Vital lint、资源优化与签名
 均成功。最新 APK 位于 `android/app/build/outputs/apk/release/app-release.apk`，大小
@@ -4177,7 +4164,7 @@ Memory Lab 详细页返回总览使用 `settleProgressOnCommit`，避免同页�
 `NewmarkApp.kt` 根据右栏展开 progress 记录并模糊，因此保留 PC 同款磨砂层次，但半拖时不会
 把对话区折射成竖向倒影。亮色 carrier 固定使用 0.98 alpha，形状同步 PC 为左上/左下 18dp
 圆角、右侧直角贴边，边线仅绘制在左侧。Android 完整单测通过，记录见
-`archive/20260825-mobile-right-sidebar-pc-carrier-parity.md`。
+本地归档（未纳入公开仓库）。
 
 最新 Release APK 已完成 R8、Vital lint、资源优化与签名，大小 45,954,544 bytes，SHA-256
 `E1051DE9D6C02DB624626891874206D9A1E386F84EA9C7F2B4F7728738D224D5`。
@@ -4192,7 +4179,7 @@ Memory Lab 详细页返回总览使用 `settleProgressOnCommit`，避免同页�
 “后台联网”开关，调起 `ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS` 并在返回时
 刷新状态，不支持时回退 `ACTION_APPLICATION_DETAILS_SETTINGS`。Manifest 既有 `INTERNET` 和
 `ACCESS_NETWORK_STATE` 保持。完整 Android 单测通过，记录见
-`archive/20260825-mobile-background-network-setting.md`。
+本地归档（未纳入公开仓库）。
 
 该状态已重新构建 Release APK，R8、Vital lint、资源优化与签名均成功；产物大小
 45,970,928 bytes，SHA-256 `79A5577EEF1B0A92F2489B0BDCAA2933422DFA6474EBED03900CDED91ECDEB1D`。
@@ -4216,7 +4203,7 @@ android/app/src/test/java/com/newmark/mobile/ui/
 ├─ LiquidMotionConcurrencyContractTest.kt
 ├─ ResponsiveSidebarContractTest.kt
 └─ components/LiquidGlassContractTest.kt
-archive/
+本机私有归档（已从公开仓库排除）
 ├─ 20260825-liquid-motion-full-audit.txt
 ├─ 20260825-liquid-motion-post-change-audit.txt
 └─ 20260826-liquid-motion-concurrent-flight.md
@@ -4237,7 +4224,7 @@ archive/
 SHA-256 为 `298E11F7A27000A7770956AB99AAEF1C3046E2BC5E3F1BA0DEDD44A0CABB8532`。
 桌面端重新执行 `npm run build` 后，从工作区 `DESKTOP/node_modules/electron` 启动 Electron dev，
 使用 `%TEMP%/newmark-electron-dev-057` 作为独立用户数据目录；主进程、GPU、network、renderer
-与 Node utility 进程均确认存活。留痕见 `archive/20260826-liquid-motion-apk-electron-dev.md`。
+与 Node utility 进程均确认存活。留痕见 本地归档（未纳入公开仓库）。
 
 Windows 正式安装包随后由 `dist-portable.cjs` 从当前工作区重新生成。`win-unpacked` 通过图标、
 SSH TUI/PTY、四轮重启、CLI、上下文压缩和 console 参数边界检查；MSI 管理映像通过 22+12 项
@@ -4246,7 +4233,7 @@ SSH TUI/PTY、四轮重启、CLI、上下文压缩和 console 参数边界检查
 
 本机 UAC 同版本升级返回 3010，表示成功但建议重启。注册表及 EXE 版本均为 `0.5.7.0`；安装
 目录 `app.asar` 与候选哈希一致，安装版主/GPU/network/renderer 四个进程启动成功。完整记录
-见 `archive/20260826-liquid-motion-msi-uac-install.md`。
+见 本地归档（未纳入公开仓库）。
 
 ## 2026-08-26 dev-0.5.8 对话菜单/归档退出动画
 
@@ -4468,7 +4455,7 @@ Agent 上下文循环原本会正确追加 assistant tool call 与匹配 call id
 - `android/app/src/main/java/com/newmark/mobile/ui/MemoryLabScreen.kt`：返回键、顶部新增/重建与图谱关系/清除/重置胶囊均进入共享透明光学画布；不再直接在按钮等大节点上调用 `glassButtonSurface`。
 - `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt`：`SubmitButtonMode` 显式建模 `IdleSend`、`RunningStop`、`RunningSend`。运行中且有输入采用 PC `running-action + send` 第三态；停止态和第三态的 marquee 内容均强制中心对齐。
 - `android/app/src/main/java/com/newmark/mobile/ui/components/Marquee.kt`：支持调用方声明内容对齐，默认行为保持不变。
-- 回归契约位于 `InputComposerAndModelMenuContractTest` 与 `GlassButtonCanvasOutsetContractTest`；详细执行证据见 `archive/20260829-dev-0.5.11-mobile-memorylab-submit-states.md`。
+- 回归契约位于 `InputComposerAndModelMenuContractTest` 与 `GlassButtonCanvasOutsetContractTest`；详细执行证据见 本地归档（未纳入公开仓库）。
 
 ## 2026-08-29 dev-0.5.11 模型供应商输入排除与点击飞行
 
@@ -4528,7 +4515,6 @@ release-0.5.11-mobile-images-glass/
 
 - `ui/ChatScreen.kt`：用户图片右对齐、Agent 展示图左对齐；输入上方浮层高度实时进入对话底部避让。
 - `ui/RightSidebar.kt`：Markdown/LaTeX 阅读预览复用对话文字安全边界，窄屏保持可读区不出格。
-- `archive/20260830-dev-0.5.11-mobile-layout-release.md`：本轮修复、门禁与发布边界记录。
 
 ## 2026-08-30 内核中断排查增量
 
@@ -4612,8 +4598,6 @@ Release 编译、Lint 与 R8 通过；assembleRelease 最终 packageRelease 因�
 - `release/Newmark-Agent-0.5.13-x64.msi`：Windows x64 安装候选，243,902,901 bytes，SHA-256 `36E433210B226D058C1A34CA882FF0F2223D2E088D6834788955D62FDE80C10F`。
 - `release/Newmark-Agent-0.5.13-win-unpacked-x64.zip`：Windows x64 解包候选，317,508,798 bytes，SHA-256 `92FF8788A386F39EC74EF807E3AB4F8990E5C85F8A2C690204D109AE202E6E9B`。
 - `release/win-unpacked/resources/app.asar`：打包应用边界，196,521,066 bytes，SHA-256 `B20D31F19B1C709C2AA95A191EDF9AE79C9EBC4015CBC960E585606DF79D5761`。
-- `archive/20260831-212202-dev-0.5.13-msi-install.log`：Windows Installer 详细日志，明确记录安装完成。
-- `archive/20260831-213000-dev-0.5.13-pc-msi-build-install.md`：本轮构建、安装、哈希和响应性审计摘要。
 
 本机安装注册表 DisplayVersion 为 `0.5.13.0`、ProductCode 为 `{14CE66AF-8E1D-4E30-BB3D-EF46E296F3BC}`；Program Files 内三种 CLI 均返回 `0.5.13`，安装版 `app.asar` 与候选包一致。安装器未改动用户 `.Newmark` 状态，启动后的主窗口和全部已采样子进程均响应。MSI 当前没有 Authenticode 签名。
 
@@ -4655,7 +4639,7 @@ Release 编译、Lint 与 R8 通过；assembleRelease 最终 packageRelease 因�
 
 建议修复必须按可重放阶段设计，而不是无条件重发：provider turn 尚无增量时可安全重试；已有 thought/text 但尚无工具调用/副作用时，恢复后以持久的 partial assistant checkpoint 发起 continuation，并做重叠前缀去重；工具调用已形成或工具执行开始后，只能从持久化的 tool-call/tool-result 边界续接，不能重放原请求。网络门槛应要求 validated capability，并记录每轮 request id、网络 transport、首增量、断流点、恢复尝试和终态原因。进程死亡恢复需要单独的持久运行状态机。
 
-当前没有 ADB 设备，无法验证真机安装的确切 APK 哈希、通知/电池优化授权、OEM 后台策略、网络 transport 变化和原始异常 cause chain。完整证据与分级结论见 `archive/20260901-mobile-background-connection-abort-investigation.md`。
+当前没有 ADB 设备，无法验证真机安装的确切 APK 哈希、通知/电池优化授权、OEM 后台策略、网络 transport 变化和原始异常 cause chain。完整证据与分级结论见 本地归档（未纳入公开仓库）。
 
 ## 2026-08-31 PC 中断回复边界
 
@@ -4685,7 +4669,6 @@ Release 编译、Lint 与 R8 通过；assembleRelease 最终 packageRelease 因�
 - `DESKTOP/src/tests/verify.ts`：标题请求和正式流的 provider/model/intelligence/reasoning effort 一致性及 fallback 回归。
 - `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt`：标题 helper 显式接收 `turnIntelligence`，并与正式 loop 复用冻结配置。
 - `android/app/src/test/java/com/newmark/mobile/vm/FirstInputTitleAndNetworkRecoveryContractTest.kt`：禁止标题作用域硬编码 `low`，约束冻结值透传。
-- `archive/20260901-211500-dev-0.5.13-dual-platform-r2-apk.md`：r2 历史构建、签名、对齐、隐私扫描和模拟器冒烟记录。
 
 该轮发布门禁为 Desktop typecheck/build/1696 assertions、Android 263 tests、`lintVitalRelease`、隔离 clean Release/R8/资源收缩、v2 签名、4-byte 与 16 KiB native 对齐、二进制 Manifest/版本和 APK 内容隐私扫描。r2 历史交付 `APK/Newmark-Agent-0.5.13-dual-platform-final-r2-release.apk` 为 52,794,422 bytes，SHA-256 `6A3B048E987F4BBE94C1F22EFCFD3E2B85DF96B58BEF813FE01C72A581243183`；API 35 模拟器覆盖安装后 `MainActivity` 前台运行且无 FATAL/ANR。旧 `8BDCF457...` 候选不再代表 r2 标题契约；r2 后续又因 Responses SSE 缺失内嵌状态仍被接受而由 r3 替代。Debug 签名与模拟器冒烟不替代生产签名或故障真机长时后台验收。
 
@@ -4697,7 +4680,6 @@ Android `ApiClient.kt` 的流式 Responses 终态现在只接受 `response.compl
 
 - `android/app/src/main/java/com/newmark/mobile/data/ApiClient.kt`：流式 Responses 显式完成态校验。
 - `android/app/src/test/java/com/newmark/mobile/data/ApiClientStreamTest.kt`：30/30 Responses 聚焦协议回归，包含缺失状态负例和显式完成成功例。
-- `archive/20260901-220426-dev-0.5.13-dual-platform-r3-apk.md`：r3 构建、逐 entry 隐私扫描、签名、对齐和模拟器冒烟记录。
 
 r3 门禁为 Android 68 suites / 264 tests / 0 failures/errors/skips，`lintVitalRelease` 3 分 50 秒成功，隔离 clean `assembleRelease` 50 tasks（48 executed、2 up-to-date）5 分 05 秒成功。历史交付 `APK/Newmark-Agent-0.5.13-dual-platform-final-r3-release.apk` 为 52,794,422 bytes，SHA-256 `B702EB35EC4E9DB42FD8598865D46EF75F7B707CE6C3C611307CBD573A5B8847`。r3 后由修正根级 Responses 状态绕过的 r4 替代；r4 又因终审发现 PDF 整体超时、Android 标题 native reasoning 和移动图片视觉三项缺口而由 r5 替代。
 
@@ -4743,36 +4725,28 @@ pm run test:liquid-renderer-electron 全部通过。渲染器测量保持单 Web
 
 定位确认亮边来自 `CompactMainLayout` 的 `ModalDrawerSheet`：全高矩形抽屉把默认 Kyant 外沿高光绘制在整块左栏边界，暗色背景下形成异常亮框。`liquidGlassModifier` 新增 `edgeHighlight` 开关，竖屏抽屉传入 `false`，关闭整面 carrier 的外沿高光，同时保留磨砂、折射以及内部按钮/浮块的独立玻璃边缘和点击泛光。Android `:app:testDebugUnitTest` 全量通过。
 
-## archive/20260915-dev065-release-runtime
 Release APK/MSI hashes, install preparation, emulator screenshot, and the canceled MSI installation record for the dev-0.6.5 runtime gate.
 
 
-## archive/20260916-dev065-release-packaging
 Cross-platform release manifest with artifact sizes and SHA-256 hashes for MSI, portable ZIP, and Android APK.
 
-## archive/20260916-compression-stress
 Single-conversation long-run gate: 30/120/300 turns through the real kernel compaction path. Bounded context (`history` 7-8 entries, provider request 66-83 KiB) with intact visible transcript at 300 turns, 199 automatic compressions, cold-archive rollover, restore, and disk reload all passing. Also measured an unfixed quadratic cost: the workspace `conversations/state.json` document is rewritten in full ~5.33 times per turn (9.07 GB written over 300 turns) because the document grows with the conversation. New: `DESKTOP/src/tests/singleConversationCompressionStressVerify.ts`, `DESKTOP/scripts/dev-0.6.6-conversation-state-write-audit.cjs`, npm scripts `test:conversation-compression-stress[:built]` and `dev:conversation-state-write-audit` (wired into `test:full-release`).
 
-## archive/20260917-storage-policies-SMplusL
 Executed all four storage policies in order with monitoring, targeting run-time memory and I/O frequency rather than cumulative bytes. **S** coalesces mid-turn saves (terminal flush stays synchronous) and folds a cancelled snapshot's other-conversation changes into the synchronous write; **M** short-circuits byte-identical index/shard writes; **M+** bounds the live Build ledger to the persisted 120-run window; **L** splits `conversations/state.json` into a small index plus per-conversation shard files that hydrate lazily, keeps `providerUsage` in the index, and guards the durable queue with a queue revision so stale snapshots can neither drop nor resurrect queued work. Measured on the 300-turn single-conversation gate: index writes 1600 -> 701, index bytes 9 073 MiB -> 1.83 MiB, total bytes per turn 30.24 -> ~5.5 MiB, index file 10.0 MiB -> 2.7 KiB, in-memory Build records 307 -> 121, mean turn 766 -> 429 ms, peak heap 141.9 -> 136.7 MiB. Same cycle fixed three real defects surfaced by monitoring: archive JSON round-trip losing transcript/branch tree, stale conversation-state lock blocking saves after a killed runtime, and an unbounded busy loop in the kernel run loop (reproduced with HEAD sources, i.e. pre-existing; now bounded). `npm run test:desktop:built` is green (verify.js 1717/1717). New source-only tools: `core/conversationStateDocument.ts`, `scripts/dev-0.6.6-sharded-state-repro.cjs`. Layout note: conversations last written by 0.6.6 are index+shard; an older (<=0.6.5) build opening the same workspace will not see those transcripts until the shard is re-read by 0.6.6.
 
-## archive/20260917-long-run-ui-monitor
-User-level UI monitoring with real screenshots for the storage/runtime policies. `scripts/dev-0.6.6-long-run-ui-monitor.cjs` seeds real storage through the production Agent (800- and 1600-message conversations, queued items, a goal, a paused Flow with its workflow file, branch pages, an archived conversation), boots the source-mode Electron renderer, drives real DOM interactions and captures a screenshot per step. 13/13 checks pass at both scales: conversation list renders the long conversation from the index (`ui-longrun (1600)`), the transcript opens in a bounded newest window with exact paging (`Load 1400 earlier messages`), the queue panel lists every queued row in order with its pause state, the goal bar shows the persisted objective, the Flow takeover shows the paused Flow, branch pages stay selectable with a stable runtime leaf, the archive list still resolves, the queue pause toggle round-trips, and a live send on the 800-message history runs and renders a turn (with a fresh-conversation control). Screenshots in `archive/20260917-long-run-ui-monitor/`. Monitoring also documented two boundaries: a send issued immediately after the pause toggle is interpreted as resuming the queue (the monitor now waits for the backend to settle), and a suspended Flow whose workflow file is missing is cleared by design.
+User-level UI monitoring with real screenshots for the storage/runtime policies. `scripts/dev-0.6.6-long-run-ui-monitor.cjs` seeds real storage through the production Agent (800- and 1600-message conversations, queued items, a goal, a paused Flow with its workflow file, branch pages, an archived conversation), boots the source-mode Electron renderer, drives real DOM interactions and captures a screenshot per step. 13/13 checks pass at both scales: conversation list renders the long conversation from the index (`ui-longrun (1600)`), the transcript opens in a bounded newest window with exact paging (`Load 1400 earlier messages`), the queue panel lists every queued row in order with its pause state, the goal bar shows the persisted objective, the Flow takeover shows the paused Flow, branch pages stay selectable with a stable runtime leaf, the archive list still resolves, the queue pause toggle round-trips, and a live send on the 800-message history runs and renders a turn (with a fresh-conversation control). Screenshots in 本地归档（未纳入公开仓库）. Monitoring also documented two boundaries: a send issued immediately after the pause toggle is interpreted as resuming the queue (the monitor now waits for the backend to settle), and a suspended Flow whose workflow file is missing is cleared by design.
 
-## archive/20260917-unpack-ui-comparison
 Regenerated the unpacked Windows build (`npm run dist:win`: MSI `FAB1D24A…`, ZIP `3596EF88…`, `win-unpacked/resources/app.asar` `43015C16…`, all packaged-state gates green including the real SSH/TUI restart stress) and ran the user-level UI monitor against four combinations: new unpack + new store, installed 0.6.5 + legacy store, new unpack + legacy store (upgrade path), installed 0.6.5 + new store (downgrade path). The first three pass 13/13, so the storage/runtime changes did not alter the queue/goal/flow/long-history surfaces and the upgrade path migrates on write. The downgrade combination shows the conversation in the list but renders an empty transcript (screenshot `old-installed-newstore-02-...png`) while the index-resident goal and Flow banner still show; a store inspection afterwards proves it is display-only — shard pointers, `messageCount` (800/240/10) and all four shard files (465,802 bytes) survived the old build's session, so re-upgrading restores everything. Recommendation stands: do not run both versions against one workspace at the same time.
 
-## archive/20260917-unpack-ui-monitor-longrun
-Extended the user-level UI monitor to sixteen checks (adding Build/Work-block rendering from the shard, the context/token inspector, and a stability sweep that proves paging through an extremely long history leaves queue, goal and Flow surfaces byte-identical) and ran it against the packaged `release/win-unpacked` executable at two extreme scales: 800 turns (1600 messages) and 1500 turns (3000 messages plus 24 Build records). Both runs pass 16/16 with real screenshots per step (`unpack-1600msg-*`, `unpack-3000msg-*` in `archive/20260917-long-run-ui-monitor/`): the list shows `ui-longrun (3024)` from the index alone, the transcript still opens in a bounded newest window, paging returns exact ordered pages, the queue shows `Queue 3` with the three seeded ids and correct pause state, the goal bar and paused Flow banner render, branch pages stay selectable, the archive list resolves, the pause toggle round-trips, and a live send on the 3000-message history runs and renders a turn (fresh-conversation control passes too).
+Extended the user-level UI monitor to sixteen checks (adding Build/Work-block rendering from the shard, the context/token inspector, and a stability sweep that proves paging through an extremely long history leaves queue, goal and Flow surfaces byte-identical) and ran it against the packaged `release/win-unpacked` executable at two extreme scales: 800 turns (1600 messages) and 1500 turns (3000 messages plus 24 Build records). Both runs pass 16/16 with real screenshots per step (`unpack-1600msg-*`, `unpack-3000msg-*` in 本地归档（未纳入公开仓库）): the list shows `ui-longrun (3024)` from the index alone, the transcript still opens in a bounded newest window, paging returns exact ordered pages, the queue shows `Queue 3` with the three seeded ids and correct pause state, the goal bar and paused Flow banner render, branch pages stay selectable, the archive list resolves, the pause toggle round-trips, and a live send on the 3000-message history runs and renders a turn (fresh-conversation control passes too).
 
-## archive/20260917-mobile-archive-latency
 Mobile "archive stays in standby too long" investigation with a measuring harness (`scripts/dev-0.6.6-mobile-archive-latency.cjs`: long fixture, standalone mobile server on a spare port, per-step timings, plus in-process archive and kernel settle timings). Two root causes were measured, not guessed: (1) `server.ts` `mobileConversationRuntimeBusy()` treated *any* non-idle agent status as running, so archiving/分支 the conversation the user is actually looking at was refused with 423 whenever its goal was paused (`goal_paused`) or an `error` state lingered — with a paused goal the same fixture archived in 124 ms when no goal existed; (2) `conversationKernel.prepareForArchive()` awaited the in-flight run with no bound, so a run that never settles held the archive click for at least the whole observation window, contradicting the archive command's own background force-stop design. Fixes: only `status === 'working'` counts as busy, and the archive settle wait is bounded by `ARCHIVE_RUN_SETTLE_MS = 5000`. After the fix, a 3024-message conversation archives in ~0.6 s in all three states (paused goal / no goal / suspended Flow) and `prepareForArchive` returns after 5014 ms even against a never-settling run. Regressions: `mobileWorkspaceApiVerify` now covers an active conversation with a paused goal (55 assertions) and `conversationArchiveRuntimeVerify` asserts the bounded settle; `npm run test:desktop:built` stays green. Not changed: the mobile client's infinite read timeout (proposed as a separate UX decision), and no APK rebuild/device run this round.
 
 
 ## 2026-09-26 PC GUI 高压帧间隔与长历史 Soak
 
 - DESKTOP/scripts/test-user-soak-gui.cjs 增加可选 --frame-monitor：用 owned Electron 的原生 HWND 最大化窗口；按 165 Hz 基准记录 renderer RAF callback 间隔；为滚动、弹层和侧栏动画单独统计；采集 PerformanceObserver Long Task、GPU Engine 子进程计数器与进程树内存/响应状态。窗口/API、RAF 与 GPU 调用都限定在本次临时 root 启动的应用进程。
-- archive/20260926-pc-gui-frame-pressure/REPORT.md 汇总正式安装包 0.6.6.0 与 v6 unpack 候选的完整测试。两边分别使用 3000/240/80 条会话历史与 loopback provider，180 秒活动目标；119/119、130/130 功能和冷启动检查通过。
+- 本地归档（未纳入公开仓库） 汇总正式安装包 0.6.6.0 与 v6 unpack 候选的完整测试。两边分别使用 3000/240/80 条会话历史与 loopback provider，180 秒活动目标；119/119、130/130 功能和冷启动检查通过。
 - PC 主屏 2560×1600/165 Hz，Windows DPR 2；Electron 最大化工作区 1280×752 CSS 像素。正式包 renderer RAF callback cadence 56.00/s、p95 40.5 ms；v6 unpack 60.57/s、p95 40.4 ms。RAF 间隔 >9.091 ms 分别占 43.39% 与 31.23%，不是实际屏幕漏呈现帧率；两边仍出现数百次 ≥50 ms Long Task 与秒级最大 RAF 间隔，不能称为流畅达标。
 - GPU Engine 3D 样本均值约 12%，最高单实例约 26–28%；配合 Long Task 数据，倾向 renderer 任务或调度阻塞，但稀疏 GPU 采样不能排除瞬时合成/驱动问题，且未采集主线程 profile。Astra 建议用短 Chromium/Perfetto trace 标记历史分页、侧栏/滚动卡顿，检查 JS、style/layout、paint/raster、GC、IPC、compositor 与调度，并另测实际 present 时间线。要归因稀疏 CU，需在同一候选构建内实际触发 CU 并进行功能开/关交错多轮对照。
 - v6 候选仅从 win-unpacked 运行，未安装到 Program Files；不将其表现记作安装版结果，也不把单次候选差值归因于稀疏 CU。旧版 Electron page-CDP 不支持 Browser.getWindowForTarget，前两次校准在测量前安全退出；改用匹配 owned process tree 的 native HWND 后，30 秒 smoke 和两轮长测完成。
@@ -4784,15 +4758,13 @@ Mobile "archive stays in standby too long" investigation with a measuring harnes
 - `DESKTOP/scripts/build-driver.cjs`：按阶段运行 TypeScript、进程树 helper、TypeBox、图标、WSL/utility host 与 TUI 构建；阶段默认 180 秒超时，Ctrl+C/超时会终止整个子进程树。`--clean` 和 `--clean-only` 复用该监督器；`--package-only` 以独立 1200 秒默认上限监督 Windows 打包（本轮实测约 642 秒）。
 - `DESKTOP/scripts/test-build-driver-cancellation.cjs`：1 秒超时回归生成子进程及孙进程，并确认都已退出。`DESKTOP/package.json` 将 build/clean/build:clean 和 Windows release 打包接入驱动，也把取消回归放入 `test:full-release`。
 - `DESKTOP/src/ui/index.html`：长历史渲染期间跳过每条消息的自动滚动并缓存编辑按钮；`DESKTOP/src/tests/verify.ts` 更新对应 UI 与 Strict JSON 自动路由契约。
-- `archive/20260927-user-level-debugger-stress/REPORT.md`：存放构建 Ctrl+C、超时回归、完整主验证、unpack smoke、长对话压缩、PC 165Hz GUI A/B 和 DeepSeek/APInebula 实测记录。
 - 主 `verify.js` 1719/1719；Auto Strict JSON 32/32；JEV 路由不变性 20/20；稀疏 CU 8/8；CU-Lab 数据来源门 10/10；单对话 30 轮压缩、reload 检查通过。Windows unpack/MSI/ZIP 打包 smoke 完成，但未安装；真实 Provider 有 sparse/image transport 证据，没有语义闭环通过证据。
 - GUI A/B 在同一 2560×1600、165Hz、DPR 2 环境下改善 RAF callback cadence 和文本/滚动响应；历史分页 p95 从 776.7ms 退化到 842.9ms，最长 RAF 间隔从 946.8ms 退化到 1067.1ms。RAF 是回调间隔而非真实 present FPS，不能据此声称达到刷新率目标。
 
 ## 2026-09-27 PC GUI 历史消息绘制优化、unpack Soak 与本机安装
 
 - `DESKTOP/src/ui/index.html`：恢复/分页出的历史消息标为 `history-static`，禁用逐消息入场动画与 transform；`.chat-msg` 不再强制 `translateZ(0)` 持久合成层。新消息仍使用原有 250 ms 二维 `translateY` 动画。
-- `archive/20260927-pc-gui-fps-optimization/unpack-gui-soak-300s/` 保存 0.6.7.0 unpack 的 1200 条长历史、165 Hz 桌面、约 301.4 秒 GUI Soak、375 项断言、运行采样、动作日志及三张复核截图。结果 `passed=true`，renderer/provider/runtime 错误均为 0；长历史、活动完成与冷启动画面未见明显布局/裁切异常。
 - 对比同负载 0.6.6.0 unpack 一次基线：renderer RAF callback cadence 65.31→75.58 次/秒，RAF p95 间隔 46.3→42.4 ms；Long Task p95 168→150 ms；历史分页 p50/p95 580.1/791.9→406.6/663.4 ms；可信输入至绘制 p50/p95 20.5/151.8→9.9/51.8 ms。单次跨版本对照未隔离本次 CSS 的因果贡献。
 - unpack 测试版、安装版 EXE SHA-256 均为 `18B375DB2FD0071147D3E4010BC06914CA8ABF7908BC621FBE80E713DD91955E`，`resources/app.asar` 均为 `2EBB3B34D4C064847B202AB7E55DF1CEA1E94C532EB751E85F72712B8021E727`。0.6.7.0 已写入 Program Files；安装版正常用户启动后主窗口可响应。
-- 报告：[GUI 优化、unpack 证据、MSI/ZIP、安装结果与测试边界](archive/20260927-pc-gui-fps-optimization/REPORT.md)。RAF callback cadence 不是 compositor present；平均 75.58 次/秒仍低于 165 Hz，76.73% 间隔高于 6.061 ms 帧预算，仍有明显长任务。`npm run test:tui:built` 的最终旧式源码结构断言未通过（期待普通 build 脚本直接复制 TUI，而当前流程经 `build-driver.cjs`）；不能据此声称聚合 release 测试全绿。
+- 报告：本地归档（未纳入公开仓库）。RAF callback cadence 不是 compositor present；平均 75.58 次/秒仍低于 165 Hz，76.73% 间隔高于 6.061 ms 帧预算，仍有明显长任务。`npm run test:tui:built` 的最终旧式源码结构断言未通过（期待普通 build 脚本直接复制 TUI，而当前流程经 `build-driver.cjs`）；不能据此声称聚合 release 测试全绿。
 

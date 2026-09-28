@@ -308,7 +308,7 @@ function classifyCliToolOutput(tool: string, output: string): { envelope: CliToo
   if (/^\[(?:context_compress|context_history_manage)]/i.test(firstLine)) {
     return { envelope: { ok: false, tool, error: firstLine, route: 'direct' }, exitCode: 4 };
   }
-  if (/^\[(?:tool disabled|permission|Subagent sandbox)]/i.test(firstLine)) {
+  if (/^\[(?:tool disabled|permission|write gate blocked|Subagent sandbox)]/i.test(firstLine)) {
     return { envelope: { ok: false, tool, error: firstLine, route: 'direct' }, exitCode: 3 };
   }
   if (/abort(?:ed|ing)?/i.test(firstLine)) {

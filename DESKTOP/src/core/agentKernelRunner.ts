@@ -2024,6 +2024,8 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
       conversationId: agent.activeConversationId || 'default',
       actorId: agent.runtimeActorId,
       workspaceId: terminalTakeoverWorkspaceId(wsDir),
+      runtimeKey: process.env.NEWMARK_RUNTIME_KEY || undefined,
+      runId: agent.currentWorkRunId() || undefined,
       backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
       signal,
     });
@@ -2065,6 +2067,8 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
     conversationId: agent.activeConversationId || 'default',
     actorId: agent.runtimeActorId,
     workspaceId: terminalTakeoverWorkspaceId(wsDir),
+    runtimeKey: process.env.NEWMARK_RUNTIME_KEY || undefined,
+    runId: agent.currentWorkRunId() || undefined,
     backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
     inspectBrowserImage: name === 'browser_use' ? (dataUrl, prompt) => agent.inspectBrowserImage(dataUrl, prompt, signal) : undefined,
     allowEphemeralVisionImage: (name === 'screen_capture' || name === 'computer_use' || name === 'browser_use' || name === 'pdf_read' || name === 'ocr_read')

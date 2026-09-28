@@ -196,7 +196,7 @@ async function verifyCatalogFiltering(root: string): Promise<void> {
 
   (tools as any).setHostProfile({ kind: 'cli', platform: 'win32', electronBrowser: false, windowsComputerUse: true });
   const planComputer = (tools.definitions('plan') as any[]).find(tool => tool.function?.name === 'computer_use');
-  assert.deepStrictEqual(planComputer?.function?.parameters?.properties?.action?.enum, ['observe', 'app_list', 'app_observe']);
+  assert.deepStrictEqual(planComputer?.function?.parameters?.properties?.action?.enum, ['observe', 'app_list', 'app_observe', 'wait_for']);
 
   const cliList = await captureCli(root, ['tool', '--list', '--mode', 'build', '--root', root]);
   const listEnvelope = parseEnvelope(cliList);

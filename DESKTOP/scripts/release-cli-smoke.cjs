@@ -256,11 +256,11 @@ function startMockServer() {
     const toolFile = path.join(root, 'cli-tool.txt');
     const toolArgsFile = path.join(root, 'tool-args.json');
     fs.writeFileSync(toolArgsFile, JSON.stringify({ path: toolFile, content: 'RELEASE_CLI_TOOL_OK' }), 'utf8');
-    const tool = await runPackagedCli(['tool', 'write', '--args-file', toolArgsFile, '--root', root], root);
+    const tool = await runPackagedCli(['tool', 'write', '--args-file', toolArgsFile, '--root', root], root, {}, 3);
     const toolResult = JSON.parse(tool.stdout);
-    if (toolResult.ok !== true || toolResult.tool !== 'write' || !Object.prototype.hasOwnProperty.call(toolResult, 'result')) fail(`tool write did not return the unified JSON envelope: ${tool.stdout}`);
-    if (fs.readFileSync(toolFile, 'utf8') !== 'RELEASE_CLI_TOOL_OK') fail('tool write did not create expected file');
-    log('tool ok');
+    if (toolResult.ok !== false || toolResult.tool !== 'write' || !String(toolResult.error || '').includes('[write gate blocked]')) fail(`unobserved tool write did not return a refusal envelope: ${tool.stdout}`);
+    if (fs.existsSync(toolFile)) fail('unobserved tool write caused a side effect');
+    log('write gate refusal ok');
 
     const promptFile = path.join(root, 'prompt.txt');
     fs.writeFileSync(promptFile, '请通过 release CLI 返回中文 UTF-8', 'utf8');

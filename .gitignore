@@ -58,6 +58,7 @@ release-*verify*/
 DESKTOP/test-tmp*/
 _local/
 .opencode/
+# Local-only reports and evidence; never publish archive contents.
 archive/
 skills/
 Memory Lab/

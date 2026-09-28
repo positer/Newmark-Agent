@@ -982,7 +982,13 @@ async function computerUseSparseGuiSmoke() {
     check('Both full observations include an image for the configured vision model', sparseRequests.length === 2 && sparseRequests.every(item => item.visionImageAttached === true) && allProviderRequestsUseConfiguredModel, { visionImagesAttached: report.computerUseSparseGui.visionImagesAttached, allProviderRequestsUseConfiguredModel });
   }
   check('CU Build completes and persists to its originating conversation', report.computerUseSparseGui.completed && run?.status === 'completed' && run?.target?.conversationId === target.conversationId, { settled: { ok: settled?.ok, conversationId: settled?.conversationId }, conversationId: state?.conversationId, run: report.computerUseSparseGui.run, completionInAssistantText, completionMarker });
-  check('No missing-tool or provider harness errors in packaged CU path', !report.computerUseSparseGui.errors.settledError && !report.providerErrors.some(error => String(error).includes('Computer Use')) && !/computer_use.*not found/i.test(transcript), report.computerUseSparseGui.errors);
+  const missingComputerUseToolResult = (run?.events || [])
+    .filter(event => event.type === 'tool_result')
+    .some(event => /computer_use.*not found/i.test(String(event.content || '')));
+  check('No missing-tool or provider harness errors in packaged CU path', !report.computerUseSparseGui.errors.settledError && !report.providerErrors.some(error => String(error).includes('Computer Use')) && !missingComputerUseToolResult, {
+    ...report.computerUseSparseGui.errors,
+    missingComputerUseToolResult,
+  });
   const disable = await ipc('setComputerUseEnabled', target, false);
   const afterDisable = await ipc('computerUseState', target);
   report.computerUseSession.disableOk = disable?.ok === true;

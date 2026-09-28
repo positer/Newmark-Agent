@@ -137,13 +137,39 @@ jobs:
           pattern: newmark-agent-*
           merge-multiple: true
           path: release-assets
-      - name: Publish six bound platform assets
+      - name: Verify platform assets and record SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#dev-}"
+          notes="DESKTOP/scripts/release-notes-${GITHUB_REF_NAME}.md"
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 6
+          test -f "$notes"
+          files=(
+            "release-assets/Newmark-Agent-${version}-x64.msi"
+            "release-assets/Newmark-Agent-${version}-win-unpacked-x64.zip"
+            "release-assets/Newmark-Agent-${version}-x86_64.AppImage"
+            "release-assets/Newmark-Agent-${version}-amd64.deb"
+            "release-assets/Newmark-Agent-${version}-linux-unpacked-x64.zip"
+            "release-assets/Newmark-Agent-${version}-android.apk"
+          )
+          for file in "${files[@]}"; do test -f "$file"; done
+          checksum="release-assets/Newmark-Agent-${version}-SHA256SUMS.txt"
+          sha256sum "${files[@]}" > "$checksum"
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 7
+          {
+            printf '\n## Platform asset SHA-256\n\n```text\n'
+            cat "$checksum"
+            printf '```\n'
+          } >> "$notes"
+      - name: Publish six platform assets and checksum manifest
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 6
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 7
+          test -f "release-assets/Newmark-Agent-${GITHUB_REF_NAME#dev-}-SHA256SUMS.txt"
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $GITHUB_REF_NAME already exists; preserving its verified assets."
           else

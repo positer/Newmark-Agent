@@ -1,12 +1,12 @@
 # Newmark Agent
 
-## dev-0.6.8 Computer Use：Windows-MCP 核心交互能力原生化（开发中）
+## dev-0.6.8 Computer Use：Windows-MCP 核心交互能力原生化（开发预发行版）
 
 本版本把 Windows-MCP 的快速截图、完整 UI Automation 观察和 `WaitFor` 等交互模式融入 Newmark ComputerUse。`observe` / `app_observe` 新增 `include_ui_tree=false` 快速截图路径；默认完整观察仍提供语义控件与 `target_id`。新增只读 `wait_for`，可在指定或最近观察的窗口内等待文本、语义目标或窗口出现，默认轮询 5 秒、上限 30 秒；首次启动 UIA helper 时，单次在途调用可能带来有界尾延迟。
 
 实现沿用 Newmark 持久化 PowerShell 与 Windows UI Automation 通道、现有一次性视觉输入和 ComputerUse 会话授权，不增加外部 Windows-MCP 服务或 Python 运行依赖。UIA 查询限定到前台或明确选择的窗口；缺少有效句柄或目标属于 Newmark 宿主进程时跳过树采集。截图专用观察会清空旧语义目标，防止后续动作使用过期 ID。
 
-0.6.8 的 ComputerUse 与文件写入安全门禁已合并到 `master`。源码构建、`test:full-release` 与隔离 Electron 的 CU 真模型场景均已通过；版本仍处于开发阶段，正式发行包和安装态尚未验收。
+0.6.8 的 ComputerUse 与文件写入安全门禁已发布为开发预发行版。Windows x64 MSI/便携 ZIP、Linux x64 AppImage/deb/便携 ZIP、Android APK 及 SHA-256 清单已通过 [GitHub Release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.6.8) 发布；CLI/TUI 包 `newmark-agent@0.6.8` 已单独发布到 npm。干净依赖安装后的 `test:full-release`、224 项写入观察压力断言、隔离 Electron 的 DeepSeek CU 真模型场景均通过，npm audit 为 0 项漏洞。本次没有执行 Program Files 安装/升级验收或 Android 实体设备验收；Windows 安装包未做 Authenticode 签名，Android APK 使用开发签名，不是 Google Play 发布包。
 
 ## 2026-09-28 文件变更前读取门禁（0.6.8 开发）
 

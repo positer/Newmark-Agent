@@ -2,7 +2,8 @@
 
 ## dev-0.6.8 Computer Use：Windows-MCP 原生化
 
-- 0.6.8 的 ComputerUse 与文件写入安全门禁已合并到 `master`；源码构建、全量发布门禁与隔离 Electron CU 真模型场景通过，正式发行包和安装态尚未验收。
+- `dev-0.6.8` 已于 2026-09-28 发布为开发预发行版，标签指向版本提交 `77ee63f697967edc5322759465b6c8323e7dbc57`。Windows x64 MSI/便携 ZIP、Linux x64 AppImage/deb/便携 ZIP、Android APK 与 SHA-256 校验清单均已在 [GitHub Release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.6.8) 发布；`newmark-agent@0.6.8` 已通过 npm Trusted Publishing/OIDC 发布并附 provenance。Windows/Linux/Android CI job 与总发布 job 均成功，六个 Release 资产 SHA-256 与正文清单逐项匹配。
+- 发布验证：干净安装后 `npm run test:full-release` 退出码 0；写入观察压力测试 224 项断言（32 个并发 ToolExecutor、32 个同路径异步门禁回调）；隔离 Electron + DeepSeek CU 真模型观察闭环通过；`npm audit` 为 0 项。npm 包预演为 320 个文件且不含 archive/report。此次未执行本机 Program Files 安装/升级验收，也未做 Android 实体设备验收；Windows 包未 Authenticode 签名，APK 使用开发签名，非 Google Play 包。macOS 不属于当前发布矩阵。
 - `DESKTOP/src/tools/computerUse.ts`：桌面截图支持显式跳过 UIA 树；完整观察继续生成语义对象。UIA 只从有效窗口句柄开始，不再回退到桌面根树，并跳过 Newmark 宿主进程。`wait_for` 在当前观察或指定窗口中以有界轮询匹配 UIA 文本、`target_id` 或可见窗口，并返回匹配、超时、取消或 UIA 不可用状态。观察缓存绑定窗口句柄；截图专用模式清除语义目标。
 - `DESKTOP/src/tools/index.ts`：公布 `include_ui_tree`、`timeout_ms` 与 `wait_for` 参数，映射工具输入，并将只读观察参数保留在 Plan 模式工具投影中。
 - `DESKTOP/src/core/toolPolicy.ts`、`DESKTOP/src/core/computerUseSession.ts`：把 `wait_for` 归入只读 ComputerUse 操作，允许 Plan 模式查询。

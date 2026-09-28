@@ -1,5 +1,13 @@
 # Newmark Agent
 
+## dev-0.6.8 Computer Use：Windows-MCP 核心交互能力原生化（开发中）
+
+本版本把 Windows-MCP 的快速截图、完整 UI Automation 观察和 `WaitFor` 等交互模式融入 Newmark ComputerUse。`observe` / `app_observe` 新增 `include_ui_tree=false` 快速截图路径；默认完整观察仍提供语义控件与 `target_id`。新增只读 `wait_for`，可在指定或最近观察的窗口内等待文本、语义目标或窗口出现，默认轮询 5 秒、上限 30 秒；首次启动 UIA helper 时，单次在途调用可能带来有界尾延迟。
+
+实现沿用 Newmark 持久化 PowerShell 与 Windows UI Automation 通道、现有一次性视觉输入和 ComputerUse 会话授权，不增加外部 Windows-MCP 服务或 Python 运行依赖。UIA 查询限定到前台或明确选择的窗口；缺少有效句柄或目标属于 Newmark 宿主进程时跳过树采集。截图专用观察会清空旧语义目标，防止后续动作使用过期 ID。
+
+0.6.8 的 Windows-MCP 风格增量已并入主分支 `master`，当前仍处于开发阶段，Windows GUI 验收与发布构建待完成。调研依据、实现清单与验证边界见[开发记录](archive/20260928-dev-0.6.8-windows-mcp/REPORT.md)。
+
 ## 2026-09-28 Auto 决策倾向与反馈历史退役
 
 Auto 模型切换倾向现为“保守 / 均衡 / 激进”三档定性引导；每次切换仍由当前符合条件的对话模型根据任务与候选事实作出判断。资格过滤、用户明确的部署选择与硬成本约束继续生效。旧 Auto 点赞/点踩、评分持久化与历史清理入口已移除；过去遗留的本地文件不再读写或自动删除。0.6.7.0 MSI 已安装并核对：292 个文件、Program Files EXE/ASAR 哈希、注册信息和 CLI 版本均匹配，既有 `.Newmark` 文件清单无变化。本次安装后未启动 GUI；构建、针对性验证、截图与安装边界见[本轮归档](archive/20260928-auto-tendency-cleanup/REPORT.md)。

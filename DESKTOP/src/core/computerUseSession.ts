@@ -43,7 +43,7 @@ export class ComputerUseSessionRegistry {
     }
     if (normalizedAction === 'takeover_stop') return null;
     const enabled = this.enabledByRuntime.get(runtimeKey) !== false;
-    const readOnly = normalizedAction === 'observe' || normalizedAction === 'app_list' || normalizedAction === 'app_observe' || normalizedAction === 'wait';
+    const readOnly = normalizedAction === 'observe' || normalizedAction === 'app_list' || normalizedAction === 'app_observe' || normalizedAction === 'wait' || normalizedAction === 'wait_for';
     if (!enabled && !readOnly && !dryRun && normalizedAction !== 'takeover_start') {
       return JSON.stringify({
         ok: false,

@@ -38,6 +38,8 @@ export interface ComputerUseOptions {
   captureMaxWidth?: number;
   captureMaxHeight?: number;
   sparseWaitMs?: number;
+  includeUiTree?: boolean;
+  timeoutMs?: number;
   signal?: AbortSignal;
   gradientColors?: string[];
   gradientSpeed?: number;
@@ -76,10 +78,18 @@ interface SemanticObject extends ObservedElement {
 interface ObservationCache {
   workspacePath: string;
   objects: SemanticObject[];
+  windowHandle?: string;
   width: number;
   height: number;
   at: string;
   sceneGeneration: string;
+}
+
+interface UiAutomationObservation {
+  elements: ObservedElement[];
+  visited: number;
+  error?: string;
+  elapsedMs: number;
 }
 
 const observations = new Map<string, ObservationCache>();
@@ -663,14 +673,18 @@ function sceneGeneration(apps: AppWindowInfo[], elements: ObservedElement[]): st
   return crypto.createHash('sha256').update(seed).digest('hex').slice(0, 16);
 }
 
-async function observeUiAutomation(maxChars: number, rootHandle?: string, timeoutMs = 30000, lane: 'uia' | 'uia_advisory' = 'uia'): Promise<{ elements: ObservedElement[]; visited: number; error?: string; elapsedMs: number }> {
+async function observeUiAutomation(maxChars: number, rootHandle: string, timeoutMs = 30000, lane: 'uia' | 'uia_advisory' = 'uia'): Promise<UiAutomationObservation> {
   const limit = Math.min(Math.max(Math.floor(maxChars || 30000), 1000), 200000);
   const handleHex = String(rootHandle || '').trim().replace(/^0x/i, '').replace(/[^0-9a-f]/gi, '');
+  if (!/[1-9a-f]/i.test(handleHex)) {
+    return { elements: [], visited: 0, error: 'Window-scoped UI Automation requires a non-zero native window handle.', elapsedMs: 0 };
+  }
+  const hostProcessId = Math.max(1, Math.floor(process.pid));
   const script = [
-    handleHex
-      ? `$nativeHandle = [System.IntPtr]::new([Convert]::ToInt64(${psQuote(handleHex)}, 16)); $root = [System.Windows.Automation.AutomationElement]::FromHandle($nativeHandle)`
-      : '$root = [System.Windows.Automation.AutomationElement]::RootElement',
+    `$nativeHandle = [System.IntPtr]::new([Convert]::ToInt64(${psQuote(handleHex)}, 16)); $root = [System.Windows.Automation.AutomationElement]::FromHandle($nativeHandle)`,
     'if ($null -eq $root) { throw "UI Automation root is unavailable." }',
+    '$rootProcessId = 0; try { $rootProcessId = [int]$root.Current.ProcessId } catch {}',
+    `if ($rootProcessId -eq ${hostProcessId}) { throw "UI Automation of the Newmark host window is skipped to avoid Electron self-accessibility hangs." }`,
     '$cache = New-Object System.Windows.Automation.CacheRequest',
     '$cache.TreeScope = [System.Windows.Automation.TreeScope]::Element',
     '$cache.TreeFilter = [System.Windows.Automation.Automation]::ControlViewCondition',
@@ -721,6 +735,10 @@ async function observeUiAutomation(maxChars: number, rootHandle?: string, timeou
   } catch {
     return { elements: parseJsonArray<ObservedElement>(result.output), visited: 0, error: 'UI Automation returned invalid JSON.', elapsedMs: result.elapsedMs };
   }
+}
+
+function skippedUiAutomation(error?: string): UiAutomationObservation {
+  return { elements: [], visited: 0, ...(error ? { error } : {}), elapsedMs: 0 };
 }
 
 async function observeAppWindows(maxChars: number, timeoutMs = 30000, lane: 'windows' | 'windows_advisory' = 'windows'): Promise<{ apps: AppWindowInfo[]; error?: string; elapsedMs: number }> {
@@ -820,6 +838,170 @@ async function selectAppWindow(target?: string, handle?: string): Promise<{ app?
   return { app, apps, elapsedMs: observed.elapsedMs };
 }
 
+const MAX_WAIT_FOR_TIMEOUT_MS = 30_000;
+const DEFAULT_WAIT_FOR_TIMEOUT_MS = 5_000;
+const WAIT_FOR_POLL_INTERVAL_MS = 250;
+
+function boundedWaitForTimeout(value: number | undefined): number {
+  const requested = Number(value);
+  if (!Number.isFinite(requested) || requested <= 0) return DEFAULT_WAIT_FOR_TIMEOUT_MS;
+  return Math.min(MAX_WAIT_FOR_TIMEOUT_MS, Math.max(WAIT_FOR_POLL_INTERVAL_MS, Math.floor(requested)));
+}
+
+async function waitForUi(options: ComputerUseOptions, ownerId: string): Promise<Record<string, unknown>> {
+  const startedAt = Date.now();
+  const timeoutMs = boundedWaitForTimeout(options.timeoutMs);
+  const deadline = startedAt + timeoutMs;
+  const workspacePath = options.workspacePath;
+  const cache = observations.get(observationKey(workspacePath, ownerId));
+  const requestedText = String(options.text || '').trim();
+  const normalizedQuery = normalizeText(requestedText);
+  const targetId = String(options.targetId || '').trim();
+  const appTarget = String(options.appTarget || '').trim();
+  const requestedHandle = String(options.windowHandle || '').trim();
+  const cachedTarget = targetId ? cache?.objects.find(object => object.target_id === targetId) : undefined;
+  let app: AppWindowInfo | undefined;
+  let lastWindowError: string | undefined;
+  let attempts = 0;
+  let nextWindowPollAt = 0;
+
+  if (!normalizedQuery && !targetId && !appTarget && !requestedHandle) {
+    return { ok: false, action: 'wait_for', error: 'Provide text, target_id, app_target, or window_handle to wait for.' };
+  }
+  if (targetId && !cachedTarget) {
+    return { ok: false, action: 'wait_for', error: `target_id not found in latest observation: ${targetId}. Call computer_use observe first.` };
+  }
+
+  const directHandle = requestedHandle || (!appTarget ? String(cache?.windowHandle || '') : '');
+  if (directHandle) {
+    const direct = await observeAppWindowByHandle(directHandle);
+    attempts += 1;
+    if (!direct.app) {
+      return { ok: false, action: 'wait_for', status: 'window_unavailable', error: direct.error || 'The selected window is no longer available.', elapsed_ms: Date.now() - startedAt, attempts };
+    }
+    app = direct.app;
+  }
+
+  if (!app && !appTarget) {
+    return { ok: false, action: 'wait_for', error: 'Call computer_use observe/app_observe first, or provide app_target/window_handle.' };
+  }
+
+  if (targetId && cache?.windowHandle && app && cache.windowHandle.toLowerCase() !== app.handle.toLowerCase()) {
+    return { ok: false, action: 'wait_for', error: `target_id=${targetId} belongs to a different window than ${app.handle}. Observe that window before waiting on the target.` };
+  }
+
+  while (Date.now() <= deadline) {
+    if (options.signal?.aborted) {
+      return { ok: false, action: 'wait_for', status: 'cancelled', error: 'wait_for was cancelled.', elapsed_ms: Date.now() - startedAt, attempts };
+    }
+
+    if (!app && appTarget) {
+      if (Date.now() >= nextWindowPollAt) {
+        const observed = await observeAppWindows(30000, 750, 'windows_advisory');
+        attempts += 1;
+        lastWindowError = observed.error;
+        app = observed.apps.find(candidate => appMatches(candidate, appTarget));
+        nextWindowPollAt = Date.now() + 1000;
+      }
+      if (!app) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        await new Promise(resolve => setTimeout(resolve, Math.min(Math.max(1, nextWindowPollAt - Date.now()), remaining)));
+        continue;
+      }
+    }
+
+    if (targetId && cache?.windowHandle && app && cache.windowHandle.toLowerCase() !== app.handle.toLowerCase()) {
+      return { ok: false, action: 'wait_for', error: `target_id=${targetId} belongs to a different window than ${app.handle}. Observe that window before waiting on the target.`, elapsed_ms: Date.now() - startedAt, attempts };
+    }
+
+    if (app && !normalizedQuery && !targetId) {
+      return {
+        ok: true,
+        action: 'wait_for',
+        status: 'matched',
+        found: true,
+        condition: { app_target: appTarget || undefined, window_handle: app.handle },
+        app,
+        elapsed_ms: Date.now() - startedAt,
+        attempts,
+      };
+    }
+
+    if (app) {
+      const ui = await observeUiAutomation(Number(options.maxChars || 30000), app.handle, 750, 'uia_advisory');
+      attempts += 1;
+      if (ui.error) {
+        return { ok: false, action: 'wait_for', status: 'uia_unavailable', error: ui.error, app, elapsed_ms: Date.now() - startedAt, attempts };
+      }
+      const objects = semanticObjects(ui.elements, app.bbox.width, app.bbox.height, workspacePath, ownerId);
+      const match = objects.find(object => {
+        if (targetId && object.target_id !== targetId) return false;
+        if (!normalizedQuery) return true;
+        return normalizeText(object.name).includes(normalizedQuery) || normalizeText(object.automation_id).includes(normalizedQuery);
+      });
+      if (match) {
+        const generation = sceneGeneration([app], ui.elements);
+        observations.set(observationKey(workspacePath, ownerId), {
+          workspacePath,
+          objects,
+          windowHandle: app.handle,
+          width: Math.max(1, app.bbox.width),
+          height: Math.max(1, app.bbox.height),
+          at: new Date().toISOString(),
+          sceneGeneration: generation,
+        });
+        return {
+          ok: true,
+          action: 'wait_for',
+          status: 'matched',
+          found: true,
+          condition: {
+            ...(requestedText ? { text: requestedText } : {}),
+            ...(targetId ? { target_id: targetId } : {}),
+            ...(appTarget ? { app_target: appTarget } : {}),
+          },
+          app,
+          scene_generation: generation,
+          element: {
+            target_id: match.target_id,
+            label: match.label,
+            role: match.role,
+            control_type: match.control_type,
+            automation_id: match.automation_id,
+            bbox: match.bbox,
+            center: match.center,
+          },
+          elapsed_ms: Date.now() - startedAt,
+          attempts,
+        };
+      }
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise(resolve => setTimeout(resolve, Math.min(WAIT_FOR_POLL_INTERVAL_MS, remaining)));
+  }
+
+  return {
+    ok: true,
+    action: 'wait_for',
+    status: 'timed_out',
+    found: false,
+    condition: {
+      ...(requestedText ? { text: requestedText } : {}),
+      ...(targetId ? { target_id: targetId } : {}),
+      ...(appTarget ? { app_target: appTarget } : {}),
+      ...(requestedHandle ? { window_handle: requestedHandle } : {}),
+    },
+    ...(app ? { app } : {}),
+    ...(lastWindowError ? { warning: lastWindowError } : {}),
+    timeout_ms: timeoutMs,
+    elapsed_ms: Date.now() - startedAt,
+    attempts,
+  };
+}
+
 async function cropScreenshot(
   workspacePath: string,
   ownerId: string,
@@ -828,6 +1010,7 @@ async function cropScreenshot(
   includeRawUi = false,
   captureMaxWidth?: number,
   captureMaxHeight?: number,
+  includeUiTree = true,
 ): Promise<Record<string, unknown>> {
   const totalStarted = Date.now();
   const outPath = ephemeralScreenshotPath('app');
@@ -839,7 +1022,9 @@ async function cropScreenshot(
     ], captureMaxWidth, captureMaxHeight);
     const [result, ui] = await Promise.all([
       runPowerShell(script, 30000),
-      observeUiAutomation(30000, app.handle, 750, 'uia_advisory'),
+      includeUiTree
+        ? observeUiAutomation(30000, app.handle, 750, 'uia_advisory')
+        : Promise.resolve(skippedUiAutomation()),
     ]);
     if (!result.ok) return captureFailure('app_observe', app);
     let parsed: Record<string, unknown> = {};
@@ -856,7 +1041,7 @@ async function cropScreenshot(
     }
     const cacheKey = observationKey(workspacePath, ownerId);
     const generation = sceneGeneration([app], elements);
-    observations.set(cacheKey, { workspacePath, objects, width: Number(parsed.width || b.width || 1), height: Number(parsed.height || b.height || 1), at: new Date().toISOString(), sceneGeneration: generation });
+    observations.set(cacheKey, { workspacePath, objects, windowHandle: app.handle, width: Number(parsed.width || b.width || 1), height: Number(parsed.height || b.height || 1), at: new Date().toISOString(), sceneGeneration: generation });
     const payload: Record<string, unknown> = {
       ok: true,
       action: 'app_observe',
@@ -865,8 +1050,10 @@ async function cropScreenshot(
       screenshot_retention: allowEphemeralVisionImage ? 'ephemeral-delete-after-vision-input' : 'ephemeral-deleted-before-tool-return',
       coordinate_system: 'virtual-screen-pixels',
       perception: {
-        mode: 'native-application-screenshot-plus-windows-ui-automation',
+        mode: includeUiTree ? 'native-application-screenshot-plus-windows-ui-automation' : 'native-application-screenshot-only',
         application_scope: 'single-visible-window',
+        ui_tree_status: includeUiTree ? (ui.error ? 'unavailable' : 'captured') : 'skipped',
+        ui_tree_skipped: !includeUiTree,
         element_count: elements.length,
         visited_count: ui.visited,
         scene_generation: generation,
@@ -877,6 +1064,7 @@ async function cropScreenshot(
       telemetry: {
         capture_ms: result.elapsedMs,
         uia_ms: ui.elapsedMs,
+        ui_tree_skipped: !includeUiTree,
         total_ms: Date.now() - totalStarted,
         element_count: elements.length,
         visited_count: ui.visited,
@@ -1119,6 +1307,7 @@ async function screenshot(
   captureMaxHeight?: number,
   sparseWaitMs?: number,
   signal?: AbortSignal,
+  includeUiTree = true,
 ): Promise<Record<string, unknown>> {
   const totalStarted = Date.now();
   const sparseDurationMs = boundedSparseWait(sparseWaitMs);
@@ -1150,8 +1339,14 @@ async function screenshot(
     const foreground = await foregroundWindowHandle();
     const [result, ui, apps] = await Promise.all([
       runPowerShell(script, 30000),
-      observeUiAutomation(30000, foreground.handle, 750, 'uia_advisory'),
-      observeAppWindows(30000, 750, 'windows_advisory'),
+      includeUiTree && foreground.handle
+        ? observeUiAutomation(30000, foreground.handle, 750, 'uia_advisory')
+        : Promise.resolve(skippedUiAutomation(
+          includeUiTree ? 'Foreground window handle is unavailable; UI Automation tree capture was skipped.' : undefined,
+        )),
+      includeUiTree
+        ? observeAppWindows(30000, 750, 'windows_advisory')
+        : Promise.resolve({ apps: [] as AppWindowInfo[], error: undefined as string | undefined, elapsedMs: 0 }),
     ]);
     if (signal?.aborted) throw sparseAbortError(signal);
     if (!result.ok) return { ...captureFailure('observe'), ...(sparseDetails ? { sparse_measurement: sparseDetails } : {}) };
@@ -1161,7 +1356,7 @@ async function screenshot(
     const screenHeight = Number(parsed.height || 1);
     const objects = semanticObjects(ui.elements, screenWidth, screenHeight, workspacePath, ownerId);
     const generation = sceneGeneration(apps.apps, ui.elements);
-    observations.set(observationKey(workspacePath, ownerId), { workspacePath, objects, width: screenWidth, height: screenHeight, at: new Date().toISOString(), sceneGeneration: generation });
+    observations.set(observationKey(workspacePath, ownerId), { workspacePath, objects, windowHandle: foreground.handle || undefined, width: screenWidth, height: screenHeight, at: new Date().toISOString(), sceneGeneration: generation });
     const payload: Record<string, unknown> = {
       ok: true,
       action: 'observe',
@@ -1169,10 +1364,16 @@ async function screenshot(
       screenshot_retention: allowEphemeralVisionImage ? 'ephemeral-delete-after-vision-input' : 'ephemeral-deleted-before-tool-return',
       coordinate_system: 'virtual-screen-pixels',
       perception: {
-        mode: 'native-screenshot-plus-windows-ui-automation',
+        mode: includeUiTree ? 'native-screenshot-plus-windows-ui-automation' : 'native-screenshot-only',
+        ui_tree_status: includeUiTree ? (ui.error ? 'unavailable' : 'captured') : 'skipped',
+        ui_tree_skipped: !includeUiTree,
         vision_assist: {
-          when_model_supports_vision: 'The Agent sends this screenshot as image input together with the UI Automation element tree, so visual recognition and control bounding boxes can be used in the same decision step.',
-          fallback_without_vision: 'Use the UI Automation element tree, bbox, center coordinates, and semantic target IDs only; no screenshot file path is retained or exposed.',
+          when_model_supports_vision: includeUiTree
+            ? 'The Agent sends this screenshot as image input together with the UI Automation element tree, so visual recognition and control bounding boxes can be used in the same decision step.'
+            : 'The Agent receives this screenshot as image input without UI Automation traversal or semantic target IDs.',
+          fallback_without_vision: includeUiTree
+            ? 'Use the UI Automation element tree, bbox, center coordinates, and semantic target IDs only; no screenshot file path is retained or exposed.'
+            : 'This result has no semantic target IDs; request include_ui_tree=true for a UI Automation element tree.',
         },
         element_count: ui.elements.length,
         visited_count: ui.visited,
@@ -1180,13 +1381,18 @@ async function screenshot(
         scene_summary: buildSceneSummary(objects, screenWidth, screenHeight),
         objects: compactSemanticObjects(objects),
         ...(sparseDetails ? { sparse_measurement: sparseDetails } : {}),
-        object_usage: 'Prefer target_id from scene_summary.high_priority_objects or objects for click/move/scroll when available; it resolves to the latest observed center coordinate and keeps actions tied to a semantic UI object.',
+        object_usage: includeUiTree
+          ? 'Prefer target_id from scene_summary.high_priority_objects or objects for click/move/scroll when available; it resolves to the latest observed center coordinate and keeps actions tied to a semantic UI object.'
+          : 'This screenshot-only observation has no semantic target IDs. Use visual coordinates or request another observe with include_ui_tree=true before using target_id.',
         warning: foreground.error || ui.error || apps.error || undefined,
-        note: 'Inspired by capture-parse-decide-act and MCP-style Computer Control agents: screenshot capture plus native Windows UI Automation text/control bounding boxes, semantic target objects, stable target IDs, high-priority object summaries, normalized bboxes, allowed actions, and risk hints. It does not copy third-party code.',
+        note: includeUiTree
+          ? 'Native screenshot plus a bounded, foreground-window-scoped Windows UI Automation tree. No third-party server or code is loaded.'
+          : 'Fast native screenshot path; UI Automation traversal was intentionally skipped. No third-party server or code is loaded.',
       },
       telemetry: {
         capture_ms: result.elapsedMs,
         uia_ms: ui.elapsedMs,
+        ui_tree_skipped: !includeUiTree,
         app_list_ms: apps.elapsedMs,
         foreground_ms: foreground.elapsedMs,
         total_ms: Date.now() - totalStarted,
@@ -1304,7 +1510,9 @@ async function foregroundSceneGeneration(): Promise<{ generation: string; elapse
   const handle = handleResult.handle;
   const [apps, ui] = await Promise.all([
     observeAppWindows(30000),
-    observeUiAutomation(30000, handle),
+    handle
+      ? observeUiAutomation(30000, handle)
+      : Promise.resolve(skippedUiAutomation('Foreground window handle is unavailable; UI Automation tree capture was skipped.')),
   ]);
   return {
     generation: sceneGeneration(apps.apps, ui.elements),
@@ -1436,6 +1644,7 @@ export async function runComputerUse(options: ComputerUseOptions): Promise<strin
       options.captureMaxHeight,
       options.sparseWaitMs,
       options.signal,
+      options.includeUiTree !== false,
     );
   } else if (action === 'app_list') {
     const first = await observeAppWindows(Number(options.maxChars || 60000));
@@ -1459,6 +1668,7 @@ export async function runComputerUse(options: ComputerUseOptions): Promise<strin
         !!options.includeRawUi,
         options.captureMaxWidth,
         options.captureMaxHeight,
+        options.includeUiTree !== false,
       )
       : { ok: false, action, error: selected.error, applications: selected.apps.slice(0, 20) };
   } else if (action === 'app_activate') {
@@ -1466,6 +1676,8 @@ export async function runComputerUse(options: ComputerUseOptions): Promise<strin
     result = selected.app ? await activateApp(selected.app, !!options.dryRun) : { ok: false, action, error: selected.error, applications: selected.apps.slice(0, 20) };
   } else if (action === 'wait') {
     result = await wait(Number(options.durationMs || 1000));
+  } else if (action === 'wait_for') {
+    result = await waitForUi(options, ownerId);
   } else if (action === 'sequence') {
     result = await executeSequence(options, ownerId);
   } else if (action === 'move' || action === 'click') {

@@ -415,23 +415,25 @@ export class ToolExecutor {
         capture_max_height: { type: 'number', minimum: 240, maximum: 2048, description: 'Maximum ephemeral screenshot height; defaults to 960. Aspect ratio is preserved and the source is never enlarged.' },
         max_chars: { type: 'number', minimum: 1000, maximum: 100000, description: 'Maximum returned semantic UI text characters.' },
       }, []),
-      t('computer_use', 'Native Windows desktop control with persistent observation/action helpers. Use observe/app_observe before acting. For passive observe, sparse_wait_ms can wait up to 5 seconds on a coarse local pixel-change signal without a local perception model; after a signal or timeout it always captures a fresh full screenshot and UI Automation tree for the selected vision model. This low-resolution signal can miss small or brief changes and does not prove that no change occurred. sequence may perform up to three stable low-risk move/click/scroll/wait/app_activate steps and stops when focus, window, menu, dialog, scene, or risk changes. Vision screenshots remain one-time inputs and are deleted immediately.', {
-        action: { type: 'string', enum: ['observe', 'app_list', 'app_observe', 'sequence', 'takeover_start', 'takeover_stop', 'move', 'click', 'scroll', 'type', 'key', 'wait', 'app_activate', 'app_click', 'app_scroll', 'app_type', 'app_key'] },
+      t('computer_use', 'Native Windows desktop control with persistent observation/action helpers. Use observe/app_observe before acting. Set include_ui_tree=false for a fast screenshot-only observation; the default includes a bounded UI Automation tree for semantic targets. wait_for polls one visible app window for text, a target_id from the latest observation, or window availability. A match refreshes the semantic target cache; inspect the returned element before acting. For passive observe, sparse_wait_ms can wait up to 5 seconds on a coarse local pixel-change signal without a local perception model; after a signal or timeout it captures a fresh screenshot and the requested UI Automation data. This low-resolution signal can miss small or brief changes and does not prove that no change occurred. sequence may perform up to three stable low-risk move/click/scroll/wait/app_activate steps and stops when focus, window, menu, dialog, scene, or risk changes. Vision screenshots remain one-time inputs and are deleted immediately.', {
+        action: { type: 'string', enum: ['observe', 'app_list', 'app_observe', 'wait_for', 'sequence', 'takeover_start', 'takeover_stop', 'move', 'click', 'scroll', 'type', 'key', 'wait', 'app_activate', 'app_click', 'app_scroll', 'app_type', 'app_key'] },
         capture_max_width: { type: 'number', minimum: 320, maximum: 2048, description: 'For observe/app_observe only. Maximum ephemeral screenshot width; defaults to 1280. Aspect ratio is preserved and the source is never enlarged.' },
         capture_max_height: { type: 'number', minimum: 240, maximum: 2048, description: 'For observe/app_observe only. Maximum ephemeral screenshot height; defaults to 960. Aspect ratio is preserved and the source is never enlarged.' },
-        sparse_wait_ms: { type: 'integer', minimum: 0, maximum: 5000, description: 'Optional for action=observe only; defaults to 0 (immediate capture). Wait this many milliseconds for a coarse 32×18 grayscale change signal with no local neural model, then capture a fresh full screenshot and UI Automation tree whether signaled or timed out. Small/transient changes can be missed.' },
+        include_ui_tree: { type: 'boolean', description: 'For observe/app_observe only. Defaults to true. Set false to skip UI Automation traversal and return a screenshot-only observation; prior semantic target IDs are invalidated.' },
+        sparse_wait_ms: { type: 'integer', minimum: 0, maximum: 5000, description: 'Optional for action=observe only; defaults to 0 (immediate capture). Wait this many milliseconds for a coarse 32×18 grayscale change signal with no local neural model, then capture a fresh screenshot and the UI Automation tree when include_ui_tree=true, whether signaled or timed out. Small/transient changes can be missed.' },
         x: { type: 'number' },
         y: { type: 'number' },
-        target_id: { type: 'string', description: 'Stable id from the latest observe perception.objects entry. Preferred over raw coordinates when available.' },
+        target_id: { type: 'string', description: 'Stable id from the latest observe perception.objects entry. Preferred over raw coordinates when available; for wait_for it must come from the latest semantic observation.' },
         app_target: { type: 'string', description: 'Application title, process name, or process id for app-scoped observation and actions.' },
         window_handle: { type: 'string', description: 'Native window handle from app_list/app_observe for exact app-scoped actions.' },
         max_chars: { type: 'number', minimum: 1000, maximum: 100000, description: 'Maximum returned text characters for observation and application listings.' },
         scroll_x: { type: 'number', description: 'Horizontal scroll delta for action=scroll.' },
         scroll_y: { type: 'number', description: 'Vertical scroll delta for action=scroll. Positive scrolls down.' },
         button: { type: 'string', enum: ['left', 'right'] },
-        text: { type: 'string' },
+        text: { type: 'string', description: 'Text to type, or for wait_for a case-insensitive substring of a visible UI Automation Name or AutomationId.' },
         key: { type: 'string' },
         duration_ms: { type: 'number' },
+        timeout_ms: { type: 'integer', minimum: 250, maximum: 30000, description: 'For wait_for only. Polling budget in milliseconds; defaults to 5000 and is capped at 30000. A UI Automation call already in flight can add bounded completion latency.' },
         dry_run: { type: 'boolean' },
         include_raw_ui: { type: 'boolean', description: 'Debug only. Include the raw UI Automation element list; normal observation returns compact semantic objects.' },
         steps: {
@@ -660,14 +662,18 @@ export class ToolExecutor {
       }
       if (tool.function?.name !== 'computer_use') return tool;
       const copy = JSON.parse(JSON.stringify(tool));
-      copy.function.description = 'Plan read-only desktop: observe, app_list, app_observe only.';
+      copy.function.description = 'Plan read-only desktop: observe, app_list, app_observe, wait_for only.';
       copy.function.parameters.properties = {
         action: { type: 'string', enum: [...PLAN_COMPUTER_USE_ACTIONS] },
         app_target: copy.function.parameters.properties.app_target,
         window_handle: copy.function.parameters.properties.window_handle,
+        target_id: copy.function.parameters.properties.target_id,
+        text: copy.function.parameters.properties.text,
         max_chars: copy.function.parameters.properties.max_chars,
         capture_max_width: copy.function.parameters.properties.capture_max_width,
         capture_max_height: copy.function.parameters.properties.capture_max_height,
+        include_ui_tree: copy.function.parameters.properties.include_ui_tree,
+        timeout_ms: copy.function.parameters.properties.timeout_ms,
         include_raw_ui: copy.function.parameters.properties.include_raw_ui,
       };
       return copy;
@@ -1068,6 +1074,8 @@ export class ToolExecutor {
             captureMaxWidth: Number((args as Record<string, unknown>).capture_max_width),
             captureMaxHeight: Number((args as Record<string, unknown>).capture_max_height),
             sparseWaitMs: Number((args as Record<string, unknown>).sparse_wait_ms),
+            includeUiTree: (args as Record<string, unknown>).include_ui_tree !== false,
+            timeoutMs: Number((args as Record<string, unknown>).timeout_ms),
             signal: context.signal,
             gradientColors: Array.isArray((args as Record<string, unknown>).gradient_colors) ? (args as Record<string, unknown>).gradient_colors as string[] : undefined,
             gradientSpeed: (args as Record<string, unknown>).gradient_speed !== undefined ? Number((args as Record<string, unknown>).gradient_speed) : undefined,

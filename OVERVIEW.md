@@ -1,5 +1,15 @@
 # Newmark Agent Overview
 
+## dev-0.6.8 Computer Use：Windows-MCP 原生化
+
+- 0.6.8 的 ComputerUse 增量已并入主分支 `master`；当前仍待 Windows GUI 验收与发布构建。
+- `DESKTOP/src/tools/computerUse.ts`：桌面截图支持显式跳过 UIA 树；完整观察继续生成语义对象。UIA 只从有效窗口句柄开始，不再回退到桌面根树，并跳过 Newmark 宿主进程。`wait_for` 在当前观察或指定窗口中以有界轮询匹配 UIA 文本、`target_id` 或可见窗口，并返回匹配、超时、取消或 UIA 不可用状态。观察缓存绑定窗口句柄；截图专用模式清除语义目标。
+- `DESKTOP/src/tools/index.ts`：公布 `include_ui_tree`、`timeout_ms` 与 `wait_for` 参数，映射工具输入，并将只读观察参数保留在 Plan 模式工具投影中。
+- `DESKTOP/src/core/toolPolicy.ts`、`DESKTOP/src/core/computerUseSession.ts`：把 `wait_for` 归入只读 ComputerUse 操作，允许 Plan 模式查询。
+- `DESKTOP/src/tools/computerUsePowerShellHost.ts`：继续提供持久 PowerShell/UIA worker；ComputerUse 不启动独立 Windows-MCP 服务。
+- `VERSION`、Desktop package/lock 与 Android 版本标记进入 0.6.8；Android 业务代码未改，仅更新 `versionCode` / `versionName`。
+- `archive/20260928-dev-0.6.8-windows-mcp/REPORT.md`：Windows-MCP 一手资料摘要、集成取舍、隔离方式与验证状态。
+
 ## 2026-09-28 Auto 决策倾向与反馈历史退役
 
 - `DESKTOP/src/ui/index.html`、`DESKTOP/src/core/config.ts`、`DESKTOP/src/core/autoRouter.ts`：Auto 设置统一为保守/均衡/激进定性倾向；旧值读取时归一为均衡。

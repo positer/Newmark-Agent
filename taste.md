@@ -1,5 +1,12 @@
 # Newmark Agent Project Taste
 
+## 2026-09-28 ComputerUse 与 Windows-MCP 调研
+
+- 将快速视觉观察和语义 UIA 观察做成同一 ComputerUse 通道的显式模式：`include_ui_tree=false` 只交付新鲜截图并清空旧 `target_id`；默认模式继续返回有限大小的语义控件。
+- UIA 查询必须绑定前台或用户明确选择的窗口，并使用已有短超时 worker；不得在句柄缺失时退回 `AutomationElement.RootElement` 深遍历，也不得深遍历 Newmark 宿主进程。跨进程 UIA 可能卡住 Electron 宿主，窗口范围与预算是产品边界。
+- `wait_for` 是只读工具：按窗口、Name/AutomationId 子串或最新 `target_id` 有界等待，清楚返回命中、超时、取消和 UIA 错误；Plan 模式只开放这些读取操作。
+- ComputerUse 继续使用项目内 Windows API、持久 PowerShell worker、现有目标授权与一次性视觉输入通道；第三方 MCP 只作为设计研究来源，不把外部服务或模型依赖带进客户端。
+
 ## 2026-09-28 Auto 模型决策倾向
 
 - Auto 设置只提供保守、均衡、激进三种定性提示；实际部署由当前符合条件的模型结合任务与候选证据决定。文案不得把偏好表述成固定模型排序或阈值计算。

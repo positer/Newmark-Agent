@@ -85,7 +85,7 @@ const PLAN_READ_ONLY_TOOLS = new Set([
   'branch_read',
   'question',
 ]);
-export const PLAN_COMPUTER_USE_ACTIONS = ['observe', 'app_list', 'app_observe'] as const;
+export const PLAN_COMPUTER_USE_ACTIONS = ['observe', 'app_list', 'app_observe', 'wait_for'] as const;
 export const PLAN_BROWSER_USE_ACTIONS = ['observe', 'navigate', 'wait', 'extract'] as const;
 const PLAN_COMPUTER_USE_ACTION_SET = new Set<string>(PLAN_COMPUTER_USE_ACTIONS);
 const PLAN_BROWSER_USE_ACTION_SET = new Set<string>(PLAN_BROWSER_USE_ACTIONS);

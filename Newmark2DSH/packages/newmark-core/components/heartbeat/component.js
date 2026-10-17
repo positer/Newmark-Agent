@@ -58,7 +58,7 @@ export const DELIVERY_FAILURE_LIMIT = 3;
  * "this failed once and may still be delivered" from "this is over, and here is why". */
 const TERMINATED_STATUS = 'failed(final)';
 
-export function createHeartBeat({ root, core, agents, controller = createRestartController(root), probe = probeDesktop, pid = process.pid, version, logger, now = Date.now }) {
+export function createHeartBeat({ root, core, agents, goals = () => null, controller = createRestartController(root), probe = probeDesktop, pid = process.pid, version, logger, now = Date.now }) {
   const failures = createErrorLog({root,logger});
   const store = durableState(path.join(root, 'heartBeat', 'state.json'), { schema: 3, tasks: [], receipts: [], terminated: [], intent: null, intents: [] });
   // Retire the previous delivered marker into a permanent consumption receipt.
@@ -76,6 +76,16 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
   // continuation after the restart. Measured 2026-10-17: a broadcast over two live sessions
   // continued a conversation that had nothing in flight.
   const looksBusy = agent => agent?.status === 'running';
+  // A conversation the user PAUSED is a conversation the user stopped: a restart must not wake it.
+  // The goal service is the only holder of that decision — dsh-tool-goal reads `ctx.goals.get(agent)`
+  // — and it is keyed by the live AGENT object, returning { phase, ... }. An absent service, an
+  // absent goal and a throwing read all mean "no pause recorded": a restart is never refused
+  // because a goal could not be read.
+  const pausedByUser = agent => { try { return goals?.()?.get?.(agent)?.phase === 'paused'; } catch { return false; } };
+  // Who a restart may wake. The requester is always included (it is the one asking); everyone else
+  // must be CONFIRMED to be running AND not paused by the user.
+  const wokenByBarrier = (entry, requesterSessionId) => entry.view.sessionId === requesterSessionId || (entry.view.state === 'busy' && !pausedByUser(entry.agent));
+  const wokenByUpdate = entry => entry.view.state === 'busy' && !pausedByUser(entry.agent);
   const identity = agent => {
     const sessionId = typeof agent?.session?.id === 'string' ? agent.session.id : (typeof agent?.id === 'string' ? agent.id : null);
     if (!sessionId) return null;
@@ -200,7 +210,7 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
       // Same rule as beginBarrier: APPEARING is not the same as WORKING. A conversation that
       // appeared and is not in a turn cannot be interrupted by the restart, so it is not added —
       // waking it would be the over-broadcast this narrowing exists to remove.
-      if (entry.view.state !== 'busy' && entry.view.sessionId !== intent.requesterSessionId) continue;
+      if (!wokenByBarrier(entry, intent.requesterSessionId)) continue;
       store.change(s => { if (s.intent?.id !== intent.id) return; s.intent.participants.push({ ...entry.view, ack: 'pending', ackSource: null, ackAt: null, note: 'appeared-after-prepare' }); s.schema = 3; });
       if (intent.ackMode === 'auto') await cover(entry, intent);
     }
@@ -227,7 +237,7 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
     // Only conversations CONFIRMED to be running are protected and woken. An idle-but-loaded
     // conversation has no turn in flight: the restart cannot interrupt it, and a continuation
     // would only wake it for nothing. The requester is always a participant — it is the one asking.
-    const participants = live.filter(entry => entry.view.sessionId === requesterSessionId || entry.view.state === 'busy');
+    const participants = live.filter(entry => wokenByBarrier(entry, requesterSessionId));
     const intent = {
       id: randomUUID(), requesterSessionId, requesterPid: pid, createdAt: at, updatedAt: at,
       deadline: at + ackTimeoutMs, ackMode, onTimeout, force: options.force === true, reason,
@@ -423,7 +433,7 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
       const continued = [];
       if (update) {
         for (const entry of liveAgents() || []) {
-          if (entry.view.state !== 'busy') continue;
+          if (!wokenByUpdate(entry)) continue;
           try { enqueue(CONTINUATION_PROMPT, entry.view.sessionId, entry.agent); continued.push(entry.view.sessionId); }
           catch (error) { failures.record({ where: 'heartbeat/update', code: error.code || 'continuation_failed', message: String(error.message), fields: { sessionId: entry.view.sessionId } }); }
         }

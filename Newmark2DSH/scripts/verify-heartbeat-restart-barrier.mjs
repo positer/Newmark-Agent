@@ -153,10 +153,15 @@ function scenario(options = {}) {
   };
   const probe = options.probe ?? (async () => ({ path: 'fixture-host', created: 'fixture-created' }));
   const pid = options.pid ?? 1000;
+  // The goal service, keyed by the LIVE AGENT object exactly as dsh-tool-goal uses it
+  // (ctx.goals.get(agent) -> { phase }). A session absent from this map has no goal.
+  const goalPhases = new Map();
+  const goalsService = { get(agent) { const phase = goalPhases.get(agent); return phase ? { phase } : undefined; } };
   const create = (overrides = {}) => createHeartBeat({
     root,
     core: () => null,
     agents: () => service,
+    goals: () => goalsService,
     controller,
     probe: overrides.probe ?? probe,
     pid: overrides.pid ?? pid,
@@ -174,7 +179,7 @@ function scenario(options = {}) {
     pid,
     create,
     beat: create(),
-    add(id, opts) { const made = fakeAgent(id, opts); live.push(id); byId.set(id, made.agent); return made; },
+    add(id, opts) { const made = fakeAgent(id, opts); live.push(id); byId.set(id, made.agent); if (opts?.goal) goalPhases.set(made.agent, opts.goal); return made; },
     /** The session is gone from the host's live set; its agent is still reachable for delivery. */
     close(id) { const at = live.indexOf(id); if (at !== -1) live.splice(at, 1); },
     /** The session is live but cannot be reached (busy/unnotifiable). */
@@ -710,6 +715,36 @@ await section('case 15', async () => {
   await s2.beat.restart(prepared.ticket, true);
   const updateText = String(s2.state().tasks.find(t => t.destination === 'WORK2')?.prompt ?? '');
   check('15- the update-path continuation carries the same goal-restore instruction', updateText === text && updateText !== '', JSON.stringify(updateText));
+});
+
+/* ================================================================= case 16 =====
+ * A conversation the user PAUSED must not be woken by a restart, even while its agent is still
+ * "running" — a paused goal IS the user's decision to stop, and waking it runs a model turn the
+ * user did not ask for (measured 2026-10-17: a heartbeat restart woke exactly such a conversation,
+ * and it came back reporting its tools missing). The predicate is the host's own goal service,
+ * ctx.goals.get(agent) -> { phase }, the same read dsh-tool-goal performs. Both routes are checked,
+ * and a conversation with NO goal must never be treated as paused. */
+await section('case 16', async () => {
+  const s = scenario();
+  s.add('R', { title: 'requester 对话' });
+  s.add('PAUSED', { title: '被暂停的对话', running: true, goal: 'paused' });
+  s.add('WORK', { title: '工作中的对话', running: true, goal: 'active' });
+  const begun = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
+  const ids = begun.participants.map(p => p.sessionId).sort();
+  check('16- a paused conversation is not woken by a broadcast, even while its agent is running', !ids.includes('PAUSED'), JSON.stringify(begun.participants));
+  check('16- a running conversation whose goal is not paused still is', ids.includes('WORK') && ids.includes('R'), JSON.stringify(ids));
+  const waiting = s.state().tasks.filter(t => t.status === 'waiting').map(t => t.destination);
+  check('16- no continuation is queued for the paused conversation', !waiting.includes('PAUSED') && waiting.includes('WORK'), JSON.stringify(waiting));
+  const s2 = scenario();
+  s2.add('PAUSED', { title: '被暂停的对话', running: true, goal: 'paused' });
+  s2.add('WORK', { title: '工作中的对话', running: true, goal: 'active' });
+  const prepared = await s2.beat.prepare('0.3.17');
+  const helper = await s2.beat.restart(prepared.ticket, true);
+  check('16- the update path also skips the paused conversation', helper.continued.includes('WORK') && !helper.continued.includes('PAUSED'), JSON.stringify(helper.continued));
+  const s3 = scenario();
+  s3.add('NOGOAL', { title: '没有 goal 的对话', running: true });
+  const begun3 = await s3.beat.beginBarrier({ ackMode: 'auto' }, s3.exec('NOGOAL'));
+  check('16- an absent goal is never read as paused', begun3.participants.length === 1 && begun3.participants[0].sessionId === 'NOGOAL', JSON.stringify(begun3.participants));
 });
 
 /* ------------------------------------------------- backward compatibility --- */

@@ -136,10 +136,10 @@ const MUTATIONS = [
     anchor: "  const looksBusy = agent => agent?.status === 'running';",
     replacement: "  const looksBusy = agent => agent?.running === true || agent?.session?.running === true;" },
   { id: 'M30', file: 'component', protects: 'case 13: the participant set is narrowed to confirmed-running conversations',
-    anchor: "    const participants = live.filter(entry => entry.view.sessionId === requesterSessionId || entry.view.state === 'busy');",
+    anchor: "    const participants = live.filter(entry => wokenByBarrier(entry, requesterSessionId));",
     replacement: "    const participants = live;" },
   { id: 'M31', file: 'component', protects: 'case 14: the update restart continues ONLY conversations confirmed to be running',
-    anchor: "          if (entry.view.state !== 'busy') continue;",
+    anchor: "          if (!wokenByUpdate(entry)) continue;",
     replacement: "          if (false) continue;" },
   { id: 'M32', file: 'component', protects: 'case 14: the update restart really queues a continuation for an in-flight conversation',
     anchor: "          try { enqueue(CONTINUATION_PROMPT, entry.view.sessionId, entry.agent); continued.push(entry.view.sessionId); }",
@@ -147,6 +147,9 @@ const MUTATIONS = [
   { id: 'M33', file: 'component', protects: 'case 15: the continuation restores the goal state instead of assuming it',
     anchor: "先恢复这个对话的目标状态：读 get_goal；若 phase:\"active\" 且 activation:\"disarmed\"（会话恢复后宿主会把进行中的目标解除武装），调用 update_goal{action:\"resume\"} 重新武装；若 phase:\"paused\" 保持暂停，不要 resume；没有 goal 则跳过。",
     replacement: "" },
+  { id: 'M34', file: 'component', protects: 'case 16: a paused conversation is never woken by a restart',
+    anchor: "  const pausedByUser = agent => { try { return goals?.()?.get?.(agent)?.phase === 'paused'; } catch { return false; } };",
+    replacement: "  const pausedByUser = agent => false;" },
 ];
 
 /** One gate run. The gate's own verdict is its summary line and its not-ok lines, not the exit code alone. */

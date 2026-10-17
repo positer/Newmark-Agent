@@ -1,0 +1,50 @@
+{
+  "at": "2026-10-17T09:48:16.311Z",
+  "profileDir": "C:\\Users\\12252\\.dsh\\profiles\\desktop",
+  "specifier": "file:C:/Users/12252/.dsh/profiles/desktop/newmark2dsh-0.3.16-heartbeat-767fbdfb.tgz",
+  "backupDir": "C:\\Users\\12252\\.dsh\\profiles\\desktop\\.newmark-install-backups\\20261017-174810-833-newmark2dsh-0.3.14-before-0.3.16",
+  "verification": {
+    "installedDir": "C:\\Users\\12252\\.dsh\\profiles\\desktop\\node_modules\\newmark2dsh",
+    "installedDirIsLink": false,
+    "installedDirRealPath": "C:\\Users\\12252\\.dsh\\profiles\\desktop\\node_modules\\newmark2dsh",
+    "installedDirLinkAccepted": false,
+    "installedVersion": "0.3.16",
+    "expectedVersion": "0.3.16",
+    "missing": [],
+    "mismatched": [],
+    "linked": [],
+    "extra": [],
+    "linkTypes": {
+      "file": 0,
+      "hardLinkedFile": 92,
+      "reparsePoint": 0
+    },
+    "checked": 92,
+    "matched": 92,
+    "profileComponentLinks": [
+      {
+        "name": "newmark2dsh-memorylab",
+        "exists": true,
+        "isLink": true,
+        "linkTarget": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\Newmark2DSH\\packages\\newmark-core\\components\\memorylab"
+      },
+      {
+        "name": "newmark2dsh-computeruse",
+        "exists": true,
+        "isLink": true,
+        "linkTarget": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\Newmark2DSH\\packages\\newmark-core\\components\\computeruse"
+      }
+    ]
+  },
+  "tarball": {
+    "stagedPath": "C:\\Users\\12252\\AppData\\Local\\Temp\\newmark-pack-O81wD3\\newmark2dsh-0.3.16.tgz",
+    "filename": "newmark2dsh-0.3.16.tgz",
+    "sha256": "767fbdfb1344d4a686b8535ad5425e66170e5321d765f0ed032fedb08681d2e4",
+    "npmShasum": "b5a157c5dd3543b2a9e4214d163717dd907e09cb",
+    "npmIntegrity": "sha512-CJRgXcugAzmoFwNB3tXLetTGGdLLj9/9tHGtPaQ+7n1ZvB1pEFP3//b04pCV0PB7iSW3clZf04ewxDHeR38LSA==",
+    "bytes": 1163467,
+    "unpackedBytes": 3283672,
+    "members": 92,
+    "metaMembers": []
+  }
+}

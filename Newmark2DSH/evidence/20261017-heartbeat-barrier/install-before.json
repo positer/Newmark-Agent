@@ -1,6 +1,6 @@
 {
-  "at": "2026-10-17T09:12:02.088Z",
-  "mode": "dry-run",
+  "at": "2026-10-17T09:48:10.833Z",
+  "mode": "apply",
   "profileDir": "C:\\Users\\12252\\.dsh\\profiles\\desktop",
   "installedDir": "C:\\Users\\12252\\.dsh\\profiles\\desktop\\node_modules\\newmark2dsh",
   "installedExists": true,
@@ -758,6 +758,6 @@
     "cordis.patch.yml": "ec0e535344073e49350ce4214774426014df4997cf118b2fb7cf68a125a40663"
   },
   "profileDependencySpecifier": "file:C:/Users/12252/.dsh/profiles/desktop/newmark2dsh-0.3.14-official.tgz",
-  "backupDir": null,
-  "note": "measured by a dry run; the profile was not touched, so no backup was made"
+  "backupDir": "C:\\Users\\12252\\.dsh\\profiles\\desktop\\.newmark-install-backups\\20261017-174810-833-newmark2dsh-0.3.14-before-0.3.16",
+  "note": "measured immediately before the install; backupDir holds the copy this run made"
 }

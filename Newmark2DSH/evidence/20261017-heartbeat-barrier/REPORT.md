@@ -516,5 +516,169 @@ the status as empty. They are the two files a follow-up commit would carry.
 ### 9.5 Still not done
 
 The **install has not run**: it waits on the Lead confirming the full core gate SUMMARY and that
-barrier-gate has stopped writing.
+barrier-gate has stopped writing (superseded by section 10, which records that it did).
+
+---
+
+## 10. Append-only additions, 2026-10-17 — the fix-forward commit, and the install
+
+### 10.1 Second commit (no rewrite of fc78a168)
+
+    node Newmark2DSH/scripts/release-heartbeat-0.3.16.mjs push-pull --paths <the 3 paths> --message "…"
+
+| Proof | Value |
+|---|---|
+| paths given | **3**: `Newmark2DSH/scripts/release-heartbeat-0.3.16.mjs`, `…/REPORT.md`, `…/push-pull-20261017-172546-850.json` |
+| files staged | 3, 108 217 bytes; index delta 3 entries, `strayEntries: []` |
+| commit | `bdd2279f86fc4ae19d76f519baefc4f9f29262b1` |
+| commit's file list | exactly those 3 — read back before the push, `onlyTheNamedPaths: true` |
+| push + `git pull --ff-only` | both success, 17.0 s total |
+| HEAD = `origin/master` = `ls-remote` | `bdd2279f…` |
+| `git status --porcelain` on the named paths | empty (recorded in `push-pull-20261017-174730-461.json`) |
+| commits on top of 419428f | **2** (`git rev-list --count 419428f..HEAD`) — the original plus this fix-forward, as authorised |
+
+### 10.2 The install — `pack --apply`, 8.8 s, exit 0
+
+    node Newmark2DSH/scripts/release-heartbeat-0.3.16.mjs pack --apply
+
+13 steps, all `ok`: pack → 92/92 source-identical → backup (104 files) → tarball copied →
+manifest declares the new specifier → `pnpm install` (5 071 ms, exit 0) → **installed 92/92
+files match the tarball byte for byte** → `install-after` evidence written.
+
+| Quantity | Before | After |
+|---|---|---|
+| profile dependency specifier | `file:…/newmark2dsh-0.3.14-official.tgz` | `file:…/newmark2dsh-0.3.16-heartbeat-767fbdfb.tgz` |
+| installed version | 0.3.14 | **0.3.16** |
+| `.newmark-install-backups` directories | 1 | 2 |
+| `*.tgz` in the profile | 4 | 5 |
+
+Verification (from the receipt): `checked 92`, `matched 92`, `missing 0`,
+`mismatched 0`, `linked 0`, `installedDirIsLink false`,
+`linkTypes { file: 0, hardLinkedFile: 92, reparsePoint: 0 }`, tarball
+`767fbdfb1344d4a686b8535ad5425e66170e5321d765f0ed032fedb08681d2e4` (1 163 467 bytes,
+92 members).
+
+**The comparison that cannot pass vacuously** — the two heartbeat files, full sha256:
+
+| File | before (0.3.14, from the backup) | after (installed) | source (0.3.16) |
+|---|---|---|---|
+| `components/heartbeat/component.js` | 4 604 B `1b6278ddfc6c8676b5cc6d83b3cdd80ac74c0db48f2ff55b45447e55c1f38c0b` | 24 286 B `400e69a1a9f2e75873fa7aa8ca8866f0b72fcb0ec096efbca9acf7eaf95a2ce5` | identical to after |
+| `components/heartbeat/index.js` | 2 691 B `c5e4fd25d5476eb3a8e616fe86043439e7d9c0749b52a6bece3ca15721cea307` | 6 716 B `80926f83dfe41eff04d29a005336f34005b334f8d040a20ce14e865c88726a7b` | identical to after |
+
+The installed heartbeat now contains **4** `broadcast` occurrences where the running 0.3.14
+had **0**, so the install demonstrably replaced the loaded code rather than re-confirming stale bytes.
+
+Backup, measured after the fact: `.newmark-install-backups/20261017-174810-833-newmark2dsh-0.3.14-before-0.3.16/`
+holds `plugin/` with **104 files** and `profile/` with **5** (package.json,
+pnpm-lock.yaml, pnpm-workspace.yaml, cordis.yml, cordis.patch.yml). The backed-up heartbeat component is
+the **old** one (4 604 B, `1b6278dd…c0b`), which is what makes the backup a real before-state.
+
+`removedInstalledDir=removed-directory` — the installed entry is a real directory in this
+profile, so the junction-safe branch of `removeInstalledDir()` was not the one taken here;
+it was exercised in the throwaway-profile rehearsal (8.3).
+
+### 10.3 The gate summary, as the Lead measured it
+
+Recorded verbatim as the Lead's measurement, not re-run by this task:
+
+* `verify-heartbeat-restart-barrier.mjs` — **54/54 PASS**
+* `measure-heartbeat-restart-barrier-mutations.mjs` — **16/16 detected**, byte-exact restore
+* `verify-version-discipline.mjs` — **12/12 PASS**
+* `verify-newmark-core.mjs` — SUMMARY **202 passed / 3 failed**, and all three are named:
+  (a) `activation harness passes` is a **false negative** — the child prints its own
+  `SUMMARY passed=56 failed=0 total=56 / PASS` and then does not exit (reproducible
+  standalone), so the parent waits out its 15-minute timeout at
+  `verify-newmark-core.mjs:1385` and reports the tail as a failure at :1389; all 56
+  activation assertions pass, including the new 33-tool count.
+  (b) `tool output boundary passes` — premise absent, needs the installed DSH walker.
+  (c) `store gate passes` — `verify-memorylab-store.mjs`, about the MemoryLab
+  folder-kind component; that script and `verify-tool-output-boundary.mjs` contain zero
+  occurrences of `heartbeat`.
+
+### 10.4 What is left, and what is owed
+
+* **The restart and the live two-phase test are not this task's and have not run.** The installed
+  files are on disk; the running DSH process still holds the 0.3.14 code in memory. The plugin's
+  directory is removed and re-materialised during the install, so nothing should be relying on
+  reading those files mid-install.
+* The install wrote two more files into the evidence folder after the second commit —
+  `install-after-20261017-174816-311.json` and `push-pull-20261017-174730-461.json`,
+  plus the regenerated `install-before.json` — so those three are untracked. They are the
+  install's own evidence and belong in a later commit if the Lead wants the published tree to carry them.
+* The `OVERVIEW.md` governance conflict of 8.1 still stands unresolved and local-only.
+
+---
+
+## 11. Append-only additions, 2026-10-17 — the restart, the live two-phase test, and the finding that changes the procedure
+
+### 11.1 The restart and the live two-phase test, as the Lead measured them
+
+Recorded as measurements made by the Lead, not re-run by this task. The install of 10.2 was followed
+by **two real restarts**, and the harness URL moved with them: `65219 → 64119 → 63063`.
+
+| Step | Receipt |
+|---|---|
+| `heartbeat_restart { broadcast: true }` | `{ phase: 'preparing', intentId: 'bea0d05b-b42a-4c32-8c4c-8ade9f03c3fe', ackMode: 'auto', participants: 1, ack: 'registered', ackSource: 'auto', missing: [] }` |
+| `heartbeat_restart_commit` | `{ phase: 'committed', missing: [] }` |
+| the restart helper | `{ "state": "running", "detail": "DSH host ready; new main PID 19000" }` |
+| `state.json` after the restart | `activeIntent = null`; `intents[0].phase = 'committed'`; `delivery.tasks` names the auto-registered continuation |
+| the continuation | delivered into the session and consumed into a receipt — receipts **36 → 37** |
+| the session itself | did **not** come back as a shell: `catalog.count` **65 → 67**, with `heartbeat_restart_commit` and `heartbeat_restart_ack` present |
+
+The last row is the answer to the environment note in the handover (that a session can come back as a
+42-tool shell after a heartbeat restart): in this run it came back with two **more** tools than
+before, naming exactly the two new ones. What that does **not** establish: that the new code was
+loaded is shown by the tool catalogue and the committed phase, not by a byte comparison of the
+running process, and nothing here says what the restart did to any other session.
+
+### 11.2 The handover's step 4 is impossible as written — the most operationally important finding
+
+**Measured by the Lead:** calling `heartbeat_restart` *after* the install returns
+`安装版本未通过核验，不执行重启` ("the installed version did not pass verification; not
+restarting").
+
+**Cause, traced line by line in the source** (each line quoted, files under
+`packages/newmark-core`):
+
+1. `components/heartbeat/index.js:11` — `const version = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;`
+   and line 12 hands that value to `createHeartBeat({ …, version, … })`. It is a module-level
+   `const`, so it is read **once, when the module loads** — here 0.3.14.
+2. `components/heartbeat/component.js:38` takes that `version`, and line **330**
+   (`heartbeat_restart`'s own path) calls `controller.prepare(version)` — the **stale**
+   number.
+3. `lib/core-restart.js:61` stores it: `state.pending = { ticket, version, … }`.
+4. `lib/core-restart.js:49` — `const installed = dependencies.installed || (() => JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);`
+   — a thunk, so it reads **at call time**: now 0.3.16.
+5. `lib/core-restart.js:66` — `if (installed() !== state.pending.version) throw Error('安装版本未通过核验，不执行重启');`
+   — 0.3.16 !== 0.3.14, so it throws every time after an in-place upgrade.
+
+The same file shows why the update route is the working bootstrap: `component.js:311` exposes
+`prepare: targetVersion => controller.prepare(targetVersion)` — a **caller-supplied** target
+version, which is what the update route passes and what `heartbeat_restart` never does.
+
+**Consequence:** the handover's step 4 — *"install first, then use the OLD
+`heartbeat_restart` to restart and load the new code"* — cannot work. It is not a timing
+problem and not a bug in the version check as such; it is a bootstrap that is one step past its own
+precondition.
+
+**The bootstrap that does work**, and that the release procedure should name instead: the plugin's own
+update route, `POST /newmark-core/update`, which takes the **target version as a parameter**
+and calls the same `restart(ticket, true)` that arms the `waiting` tasks. The Lead used
+that route and recorded both receipts.
+
+**Attribution and limits:** the quoted error string is the **Lead's** runtime measurement. The five
+lines above are **mine** — read out of the installed/source tree and quoted, so the cause is verified
+as written rather than paraphrased. Neither of us can replace the other: I did not call
+`heartbeat_restart` or the update route at runtime, so the code trace explains the observed
+refusal but does not by itself prove the update route succeeds on every profile — the Lead's two
+receipts are that evidence. I also make no claim about how the route behaves when the installed
+version is *older* than the module's, which the same comparison would also refuse.
+
+### 11.3 The four files in the third commit
+
+`REPORT.md` (this section and 10), `install-before.json` (rewritten by the apply run
+as the real before-state, with the backup path), `install-after-20261017-174816-311.json` and
+`push-pull-20261017-174730-461.json`. Together they are the install's own evidence and the
+second commit's round-trip receipt, which could not be in the commits they describe because each is
+written after that commit's own status check.
 

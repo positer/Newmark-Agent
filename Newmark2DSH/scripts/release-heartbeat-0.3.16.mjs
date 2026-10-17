@@ -947,23 +947,47 @@ function pushPull(options) {
   // already match HEAD legitimately produces no delta, so it is recorded rather than failed.
   const stagedChanges = repoGit(['diff', '--cached', '--name-only', '-z']).stdout.split('\u0000').filter(Boolean).sort();
   const namedChanges = stagedChanges.filter((entry) => filesToStage.indexOf(entry) !== -1);
-  if (namedChanges.length === 0) {
-    step('the commit would change at least one path', false, 'every named path already matches HEAD, so the commit would be empty');
-    return finish(1);
-  }
-  const alreadyAtHead = filesToStage.filter((entry) => stagedChanges.indexOf(entry) === -1);
-  step('staged ' + namedChanges.length + ' changed named file(s)', true, alreadyAtHead.length > 0 ? { alreadyAtHead } : undefined);
+  let headAfter;
 
-  // The pathspec is what makes the commit safe here: "git commit -- <paths>" ignores everything
-  // else the index has staged, so the ~5000 unrelated entries stay staged and stay uncommitted.
-  const commitCall = repoGit(['commit', '--no-gpg-sign', '-m', message, '--', ...relativePaths]);
-  receipt.commands.push({ display: commitCall.display, cwd: repoRoot, exitCode: commitCall.exitCode });
-  if (commitCall.failed) {
-    step('git commit', false, (commitCall.stdout.trim() + ' ' + commitCall.stderr.trim()).trim());
-    return finish(1);
+  if (namedChanges.length === 0) {
+    /* No staged delta. That is either "there is nothing to do" or "a previous run already made
+     * exactly this commit and was interrupted before pushing it". The second case is accepted only
+     * when it is provable, because resuming onto the wrong commit would push something nobody
+     * asked for: HEAD must be exactly one commit ahead of the remote's tip, and every path HEAD
+     * changes must be one the caller named. */
+    const parent = repoGit(['rev-parse', 'HEAD^']).stdout.trim();
+    const remoteTip = repoGit(['rev-parse', 'origin/' + options.branch]).stdout.trim();
+    const existing = repoGit(['show', '--pretty=format:', '--name-only', '-z', 'HEAD']).stdout.split('\u0000').filter(Boolean).sort();
+    const resumable =
+      parent !== '' && parent === remoteTip && existing.length > 0 && existing.every((entry) => filesToStage.indexOf(entry) !== -1);
+    if (!resumable) {
+      step('the commit would change at least one path', false, {
+        reason: 'every named path already matches HEAD, so the commit would be empty',
+        parentOfHead: parent || null,
+        remoteTip,
+      });
+      return finish(1);
+    }
+    headAfter = repoGit(['rev-parse', 'HEAD']).stdout.trim();
+    receipt.resumed = true;
+    step('a previous run already created ' + headAfter.slice(0, 12) + ' on top of ' + remoteTip.slice(0, 12) + '; resuming at the push', true, {
+      commitFiles: existing.length,
+    });
+  } else {
+    const alreadyAtHead = filesToStage.filter((entry) => stagedChanges.indexOf(entry) === -1);
+    step('staged ' + namedChanges.length + ' changed named file(s)', true, alreadyAtHead.length > 0 ? { alreadyAtHead } : undefined);
+
+    // The pathspec is what makes the commit safe here: "git commit -- <paths>" ignores everything
+    // else the index has staged, so the ~5000 unrelated entries stay staged and stay uncommitted.
+    const commitCall = repoGit(['commit', '--no-gpg-sign', '-m', message, '--', ...relativePaths]);
+    receipt.commands.push({ display: commitCall.display, cwd: repoRoot, exitCode: commitCall.exitCode });
+    if (commitCall.failed) {
+      step('git commit', false, (commitCall.stdout.trim() + ' ' + commitCall.stderr.trim()).trim());
+      return finish(1);
+    }
+    headAfter = repoGit(['rev-parse', 'HEAD']).stdout.trim();
+    step('commit ' + headAfter.slice(0, 12) + ' created', true, commitCall.stdout.split(/\r?\n/)[0]);
   }
-  const headAfter = repoGit(['rev-parse', 'HEAD']).stdout.trim();
-  step('commit ' + headAfter.slice(0, 12) + ' created', true, commitCall.stdout.split(/\r?\n/)[0]);
 
   // Verified BEFORE the push: a commit that named anything else would otherwise be published
   // before anyone could inspect it.

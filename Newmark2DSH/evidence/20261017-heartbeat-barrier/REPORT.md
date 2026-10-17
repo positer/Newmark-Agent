@@ -445,3 +445,76 @@ was packed from — a hash comparison that passes while nothing was installed.
 Neither the push nor the install has run against the real profile or the real remote. Both wait on
 the Lead's explicit go.
 
+---
+
+## 9. Append-only additions, 2026-10-17 — the push, and an interruption that has to be recorded
+
+### 9.1 The push landed, and the round trip is proven
+
+The script's own receipt is `push-pull-20261017-172546-850.json` (in this folder), one of
+the 57 files the commit carries. Its ten steps are all `ok`, and the measured values are:
+
+| Proof | Value |
+|---|---|
+| named paths given | **22** |
+| files behind them | **57**, 2 176 164 bytes |
+| index entries changed by the staging | **56** (one named file was already staged identically) |
+| unrelated index entries touched | **0** (`strayEntries: []`, the index holds 4 770 entries) |
+| commit | `fc78a16825e62a00d2fe74d6be8baa1e075fd618` |
+| commit's parent | `419428f329ec294a2ef128255b1090817f8ee061` — one commit on top, as required |
+| commit's changed paths | 57, and **0 of them outside the named set** |
+| `git push` | success |
+| `git pull --ff-only` | success |
+| `git rev-parse HEAD` | `fc78a168` |
+| `git rev-parse origin/master` | `fc78a168` |
+| `git ls-remote origin refs/heads/master` | `fc78a168` |
+| `git status --porcelain` on the named paths, at the moment of the receipt | **empty** |
+
+### 9.2 The interruption, my wrong inference, and the recovery — recorded in full
+
+1. I issued the push through one `run_code` call whose own deadline was 120 s. The network
+   phase (push + pull, ~2.1 MB) takes **~2.5 minutes** on this host: the receipt was constructed at
+   `09:23:04Z` and written at `09:25:46Z`.
+2. The harness deadline expired, but the nested shell call was **not** killed — the node process kept
+   running and completed the push and the pull.
+3. Within seconds of the deadline I read `origin/master` and `ls-remote`, both then
+   still `419428f`, concluded the push had not happened, and ran
+   `git reset --soft HEAD^` to rewind the locally-created commit so it could be recreated
+   from the then-newer script. **That inference was wrong**, and the rewind was unnecessary.
+4. A re-measurement showed `origin/master` = `ls-remote` = `fc78a168`:
+   the push had landed about two minutes after my first read.
+5. Recovery: `git pull --ff-only origin master` fast-forwarded `419428f3..fc78a168`
+   (57 files, 13 150 insertions, 8 deletions) and put `HEAD` back on the remote's commit.
+   **Net effect on the repository: none** — the branch reference ends exactly where the remote is, and
+   no file was rewritten. The reflog holds both moves
+   (`fc78a168 HEAD@{1}: commit …` then `419428f3 HEAD@{0}: reset`, then the pull).
+
+An interruption is not a defect by itself, but a push that cannot be resumed after one is, so the
+script gained one: if there is no staged delta it now checks whether a previous run already created
+**exactly this commit** — `HEAD` is one commit ahead of the remote's tip and *every* path
+`HEAD` changes is one the caller named — and if so resumes at the push, recording
+`resumed: true` in the receipt. Anything that does not satisfy those two conditions still
+refuses. That change is the difference between the script on disk and the published one (9.3).
+
+### 9.3 What the commit published vs what is on disk
+
+| Artifact | sha256 | Notes |
+|---|---|---|
+| `release-heartbeat-0.3.16.mjs` **as published** in `fc78a168` | `b3f1e07cf5002f69eb55dd373dca87f2eb82376ce4f87dd70205393ae3b0b20f` | 51 532 bytes — the script that produced the receipt above |
+| the same file **on disk** | `93fc4cc10038e6fe07cea2830cb792e6b805b42da8c7cea6aec2e92696119a75` | 1 073 lines — adds the interruption-recovery branch of 9.2 |
+
+### 9.4 The two entries `git status --porcelain` reports on the named paths **now**
+
+    M  Newmark2DSH/scripts/release-heartbeat-0.3.16.mjs          (the 9.3 edit, made after the commit)
+    ?? Newmark2DSH/evidence/20261017-heartbeat-barrier/push-pull-20261017-172546-850.json
+
+Both are consequences of the run completing: the receipt is written *after* the script's own
+clean-status check (so it could not have been in the commit it describes), and the script edit came
+after the commit. Neither is unrelated dirt, and neither existed at the moment the receipt measured
+the status as empty. They are the two files a follow-up commit would carry.
+
+### 9.5 Still not done
+
+The **install has not run**: it waits on the Lead confirming the full core gate SUMMARY and that
+barrier-gate has stopped writing.
+

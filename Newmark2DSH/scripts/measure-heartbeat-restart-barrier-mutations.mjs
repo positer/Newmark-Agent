@@ -138,6 +138,12 @@ const MUTATIONS = [
   { id: 'M30', file: 'component', protects: 'case 13: the participant set is narrowed to confirmed-running conversations',
     anchor: "    const participants = live.filter(entry => entry.view.sessionId === requesterSessionId || entry.view.state === 'busy');",
     replacement: "    const participants = live;" },
+  { id: 'M31', file: 'component', protects: 'case 14: the update restart continues ONLY conversations confirmed to be running',
+    anchor: "          if (entry.view.state !== 'busy') continue;",
+    replacement: "          if (false) continue;" },
+  { id: 'M32', file: 'component', protects: 'case 14: the update restart really queues a continuation for an in-flight conversation',
+    anchor: "          try { enqueue(CONTINUATION_PROMPT, entry.view.sessionId, entry.agent); continued.push(entry.view.sessionId); }",
+    replacement: "          try { continued.push(entry.view.sessionId); }" },
 ];
 
 /** One gate run. The gate's own verdict is its summary line and its not-ok lines, not the exit code alone. */

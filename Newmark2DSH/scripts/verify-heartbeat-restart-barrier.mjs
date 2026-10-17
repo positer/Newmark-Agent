@@ -664,6 +664,33 @@ await section('case 13', async () => {
   check('13- after the restart the idle conversation was never woken', s.delivered('WORK').length === 1 && s.delivered('R').length === 1 && s.delivered('IDLE').length === 0, JSON.stringify({ R: s.delivered('R').length, WORK: s.delivered('WORK').length, IDLE: s.delivered('IDLE').length }));
 });
 
+/* ================================================================= case 14 =====
+ * An UPDATE restart continues the conversations that are IN FLIGHT. It is issued by the panel or the
+ * update route, so there is no requesting conversation; before this change nothing got a continuation
+ * at all and in-flight work was silently killed (measured 2026-10-17). The predicate is the same one
+ * the broadcast uses, so an idle-but-loaded conversation is still not woken. */
+await section('case 14', async () => {
+  const s = scenario();
+  s.add('IDLE', { title: '闲着的对话' });
+  s.add('WORK', { title: '工作中的对话', running: true });
+  const prepared = await s.beat.prepare('0.3.17');
+  const helper = await s.beat.restart(prepared.ticket, true);
+  const queued = s.state().tasks.filter(t => t.status === 'waiting');
+  const destinations = queued.map(t => t.destination);
+  check('14- the update restart queues a continuation for the running conversation', destinations.includes('WORK'), JSON.stringify(destinations));
+  check('14- the update restart does not wake the idle conversation', !destinations.includes('IDLE'), JSON.stringify(destinations));
+  check('14- the companion update notice is still queued', destinations.includes('newmate'), JSON.stringify(destinations));
+  check('14- it reports exactly which conversations it continued', Array.isArray(helper.continued) && helper.continued.includes('WORK') && !helper.continued.includes('IDLE'), JSON.stringify(helper.continued));
+  helper.commit();
+  const folder = helper.folder;
+  fs.writeFileSync(path.join(folder, 'job.json'), JSON.stringify({ owner: { path: 'fixture-host', created: 'old' } }));
+  fs.writeFileSync(path.join(folder, 'status.json'), JSON.stringify({ state: 'running' }));
+  const rebooted = s.create({ pid: 2000, probe: async () => ({ path: 'fixture-host', created: 'new' }) });
+  await rebooted.tick();
+  await rebooted.tick();
+  check('14- after the restart the in-flight conversation really was continued', s.delivered('WORK').length === 1 && s.delivered('IDLE').length === 0, JSON.stringify({ WORK: s.delivered('WORK').length, IDLE: s.delivered('IDLE').length }));
+});
+
 /* ------------------------------------------------- backward compatibility --- */
 await section('backward compatibility', async () => {
   const root = fs.mkdtempSync(path.join(ROOT_BASE, 'schema2-'));

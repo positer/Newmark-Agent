@@ -409,9 +409,25 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
     async restart(ticket, update = false) {
       const helper = await controller.restart(ticket);
       const updateId = update ? schedule('Newmark2DSH 更新后 DSH 已重启。请确认组件状态，报告未完成的持久任务；不要自动重复失败动作。', 'newmate').id : null;
+      // An UPDATE restart is issued by the panel or the update route, so there is no requesting
+      // conversation to hand a continuation to — and until now NOTHING got one, which silently killed
+      // work that was in flight: measured 2026-10-17, an update restart took the host down while this
+      // conversation was mid-turn and it was never continued ("没有继续却中断重启了"). Register a
+      // continuation for every conversation CONFIRMED to be running, using the same predicate the
+      // broadcast uses (agent.status === 'running'), so an idle-but-loaded conversation is still not
+      // woken. commit() arms them exactly as it arms a barrier's, and the new host delivers them.
+      const continued = [];
+      if (update) {
+        for (const entry of liveAgents() || []) {
+          if (entry.view.state !== 'busy') continue;
+          try { enqueue(CONTINUATION_PROMPT, entry.view.sessionId, entry.agent); continued.push(entry.view.sessionId); }
+          catch (error) { failures.record({ where: 'heartbeat/update', code: error.code || 'continuation_failed', message: String(error.message), fields: { sessionId: entry.view.sessionId } }); }
+        }
+      }
       let finished = false;
       return {
         folder: helper.folder,
+        continued,
         commit() {
           if (finished) return;
           store.change(s => { for (const t of s.tasks) if (t.status === 'waiting') Object.assign(t, { status: 'armed', restartPid:pid, folder: helper.folder }); });

@@ -1114,6 +1114,16 @@ check(
   `rows only in Dev: ${JSON.stringify(missingInRdev)}; rows only in rDev: ${JSON.stringify(extraInRdev)}`,
 );
 check('rDev adds no row of its own', extraInRdev.length === 0, JSON.stringify(extraInRdev));
+/* Named on purpose: the two checks above catch a dropped row only as a DIFF (missingInRdev would
+ * read ['tool-cordis','tool-fs']), which is correct but says nothing about the capability. rDev is
+ * "Dev minus the creator mode" — file editing is NOT part of what it gives up, and a report that it
+ * had lost file editing must be answerable from this gate rather than from prose. Whole-row
+ * equality, like every other rDev comparison here. */
+check(
+  'rDev keeps file editing: tool-fs and tool-fs-search are whole-row identical to Dev',
+  ['tool-fs', 'tool-fs-search'].every((id) => rdevRows.has(id) && devRows.has(id) && devRows.get(id) === rdevRows.get(id)),
+  JSON.stringify({ toolFsInRdev: rdevRows.has('tool-fs'), toolFsSearchInRdev: rdevRows.has('tool-fs-search'), rdevToolFs: rdevRows.get('tool-fs') }),
+);
 check(
   'exactly three rows differ: tool-cordis is gone, skill-filesystem loses customSkillDirs, plugin-manager loses the gate',
   JSON.stringify(differing) === JSON.stringify(['skill-filesystem', 'tool-plugin-manager']),

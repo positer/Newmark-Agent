@@ -691,6 +691,27 @@ await section('case 14', async () => {
   check('14- after the restart the in-flight conversation really was continued', s.delivered('WORK').length === 1 && s.delivered('IDLE').length === 0, JSON.stringify({ WORK: s.delivered('WORK').length, IDLE: s.delivered('IDLE').length }));
 });
 
+/* ================================================================= case 15 =====
+ * A continuation restores the GOAL state, it does not assume it. A resumed session has its active
+ * goal DISARMED by the host, so an agent that simply carries on stops being continued by its own
+ * goal; a paused goal must stay paused. Both routes that enqueue a conversation continuation are
+ * asserted against the same text, so neither can drift away from the other. */
+await section('case 15', async () => {
+  const s = scenario();
+  s.add('R', { title: 'requester 对话' });
+  s.add('WORK', { title: '工作中的对话', running: true });
+  await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
+  const text = String(s.state().tasks.find(t => t.destination === 'WORK')?.prompt ?? '');
+  check('15- the broadcast continuation tells the resumed conversation to restore its goal', text.includes('get_goal') && text.includes('update_goal') && text.includes('resume') && text.includes('paused') && text.includes('disarmed'), JSON.stringify(text));
+  check('15- it re-arms an active goal and leaves a paused one paused', text.includes('phase:"active"') && text.includes('phase:"paused"') && text.includes('不要 resume'), JSON.stringify(text));
+  const s2 = scenario();
+  s2.add('WORK2', { title: '工作中的对话', running: true });
+  const prepared = await s2.beat.prepare('0.3.17');
+  await s2.beat.restart(prepared.ticket, true);
+  const updateText = String(s2.state().tasks.find(t => t.destination === 'WORK2')?.prompt ?? '');
+  check('15- the update-path continuation carries the same goal-restore instruction', updateText === text && updateText !== '', JSON.stringify(updateText));
+});
+
 /* ------------------------------------------------- backward compatibility --- */
 await section('backward compatibility', async () => {
   const root = fs.mkdtempSync(path.join(ROOT_BASE, 'schema2-'));

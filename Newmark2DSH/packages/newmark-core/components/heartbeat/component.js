@@ -9,7 +9,11 @@ import { createErrorLog } from '../../lib/errors.js';
 /* The continuation an auto-covered conversation receives. It is deliberately the same text for
  * every session: the barrier promises "nobody is dropped", not "somebody guessed your next step",
  * so the wording must not pretend to know what that conversation was doing. */
-const CONTINUATION_PROMPT = 'Newmark2DSH 已重启。请从上一句用户消息继续；不要重复已经完成的动作，未完成的工作先说明状态。';
+// The restart itself does not touch a conversation's goal, but a RESUMED session has its goal
+// DISARMED by the host: an active goal stops being continued automatically until it is re-armed.
+// So the continuation has to restore the goal's own state rather than assume it — read it, then
+// re-arm exactly the ones that were active, and leave a paused goal paused.
+const CONTINUATION_PROMPT = 'Newmark2DSH 已重启。先恢复这个对话的目标状态：读 get_goal；若 phase:"active" 且 activation:"disarmed"（会话恢复后宿主会把进行中的目标解除武装），调用 update_goal{action:"resume"} 重新武装；若 phase:"paused" 保持暂停，不要 resume；没有 goal 则跳过。然后从上一句用户消息继续；不要重复已经完成的动作，未完成的工作先说明状态。';
 /* Agent-mode broadcast. It names the two tools by their exact parameters because the session's own
  * agent is the only party that can give a receipt for that session, and it must be able to do it
  * without guessing which call shape counts. */

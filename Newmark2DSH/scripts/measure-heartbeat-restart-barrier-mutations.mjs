@@ -144,6 +144,9 @@ const MUTATIONS = [
   { id: 'M32', file: 'component', protects: 'case 14: the update restart really queues a continuation for an in-flight conversation',
     anchor: "          try { enqueue(CONTINUATION_PROMPT, entry.view.sessionId, entry.agent); continued.push(entry.view.sessionId); }",
     replacement: "          try { continued.push(entry.view.sessionId); }" },
+  { id: 'M33', file: 'component', protects: 'case 15: the continuation restores the goal state instead of assuming it',
+    anchor: "先恢复这个对话的目标状态：读 get_goal；若 phase:\"active\" 且 activation:\"disarmed\"（会话恢复后宿主会把进行中的目标解除武装），调用 update_goal{action:\"resume\"} 重新武装；若 phase:\"paused\" 保持暂停，不要 resume；没有 goal 则跳过。",
+    replacement: "" },
 ];
 
 /** One gate run. The gate's own verdict is its summary line and its not-ok lines, not the exit code alone. */

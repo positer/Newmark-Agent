@@ -87,14 +87,18 @@ fs.mkdirSync(ROOT_BASE, { recursive: true });
 
 function fakeAgent(id, options = {}) {
   const delivered = [];
+  // The fixture carries the HOST's shape, not the component's assumption: dsh-agent marks a
+  // Session's Agent running as `agent.status === 'running'`, and there is deliberately NO
+  // `agent.running` and no `session.running` here. Those fields do not exist on the host, and
+  // having them in the fixture is what let the component read them and still look green while
+  // every loaded conversation was treated as working.
   const agent = {
-    running: options.running === true,
+    status: options.running === true ? 'running' : 'idle',
     options: { provider: 'fixture', model: 'fixture' },
     session: {
       id,
       title: options.title ?? (id + ' 对话'),
       lastActivityAt: options.lastActivityAt ?? 1000,
-      running: false,
       snapshotEvents: () => [],
     },
     followup: async message => { delivered.push(message); },
@@ -204,7 +208,7 @@ async function mountHeartbeatTools(root) {
 await section('case 1', async () => {
   const s = scenario();
   s.add('R', { title: 'requester 对话' });
-  s.add('C', { title: 'other 对话' });
+  s.add('C', { title: 'other 对话', running: true });
   const begun = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
   check('1- beginBarrier opens a preparing intent for both live sessions', begun.ok === true && begun.phase === 'preparing' && begun.participants.length === 2, JSON.stringify(begun));
   check('1- ackMode and deadline are reported from the persisted intent', begun.ackMode === 'auto' && typeof begun.deadline === 'number', JSON.stringify({ ackMode: begun.ackMode, deadline: begun.deadline }));
@@ -227,14 +231,17 @@ await section('case 1', async () => {
 await section('case 2', async () => {
   const s = scenario();
   s.add('R');
-  s.add('C', { title: 'silent 对话' });
+  s.add('C', { title: 'silent 对话', running: true });
   const begun = await s.beat.beginBarrier({ ackMode: 'agent' }, s.exec('R'));
   check('2- agent mode leaves every participant pending until it answers', begun.participants.every(p => p.ack === 'pending'), JSON.stringify(begun.participants));
   await s.beat.acknowledge({ intentId: begun.intentId, continuation: 'registered' }, s.exec('R'));
   const aborted = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
   check('2- a participant that never answered aborts the barrier', aborted.ok === false && aborted.phase === 'aborted' && aborted.reason === 'missing_acks', JSON.stringify(aborted));
   const named = aborted.missing.find(entry => entry.sessionId === 'C');
-  check('2- the missing receipt names that session with sessionId/title/state', Boolean(named) && named.title === 'silent 对话' && named.state === 'live' && named.ack === 'pending', JSON.stringify(aborted.missing));
+  // The receipt must carry the state the HOST reports, and C is running: 'busy' is the host's own
+// 'agent.status === "running"' rendered, so an assertion that still said 'live' would be pinning
+// the very bug this round removed.
+  check('2- the missing receipt names that session with sessionId/title/state', Boolean(named) && named.title === 'silent 对话' && named.state === 'busy' && named.ack === 'pending', JSON.stringify(aborted.missing));
   check('2- no restart was launched and the intent closed into history', s.calls.restart === 0 && s.state().intent === null && s.state().intents.at(-1)?.abortReason === 'missing_acks' && s.state().intents.at(-1)?.phase === 'aborted', JSON.stringify({ restart: s.calls.restart, intent: s.state().intent, history: s.state().intents.at(-1)?.abortReason }));
 });
 
@@ -287,7 +294,7 @@ await section('case 3 mounted', async () => {
 await section('case 4', async () => {
   const s = scenario();
   s.add('R');
-  s.add('C');
+  s.add('C', { running: true });
   const begun = await s.beat.beginBarrier({ ackMode: 'agent' }, s.exec('R'));
   await s.beat.acknowledge({ intentId: begun.intentId, continuation: 'registered' }, s.exec('R'));
   await s.beat.acknowledge({ intentId: begun.intentId, continuation: 'none' }, s.exec('C'));
@@ -304,7 +311,7 @@ await section('case 4', async () => {
 await section('case 5', async () => {
   const s = scenario();
   s.add('R');
-  s.add('V');
+  s.add('V', { running: true });
   const begun = await s.beat.beginBarrier({ ackMode: 'agent' }, s.exec('R'));
   await s.beat.acknowledge({ intentId: begun.intentId, continuation: 'registered' }, s.exec('R'));
   await refused('5- a session that is not a participant cannot answer for the intent', () => s.beat.acknowledge({ intentId: begun.intentId, continuation: 'registered' }, s.exec('impostor')), '不是本次重启准备的参与者');
@@ -317,7 +324,7 @@ await section('case 5 schedule', async () => {
   /* The tool path's own registration IS that session's receipt (ackSource schedule). */
   const s = scenario();
   s.add('R');
-  s.add('C');
+  s.add('C', { running: true });
   const begun = await s.beat.beginBarrier({ ackMode: 'agent' }, s.exec('R'));
   const registered = s.beat.schedule('继续工作', undefined, s.exec('R'), { intentId: begun.intentId });
   const persisted = s.state().intent.participants.find(p => p.sessionId === 'R');
@@ -330,7 +337,7 @@ await section('case 5 schedule', async () => {
 await section('case 6', async () => {
   const s = scenario({ start: 7000 });
   s.add('R');
-  s.add('C');
+  s.add('C', { running: true });
   const first = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
   const again = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
   check('6- the second beginBarrier is rejected', again.ok === false && again.phase === 'rejected' && again.reason === 'intent_in_progress', JSON.stringify(again));
@@ -344,7 +351,7 @@ await section('case 6', async () => {
 await section('case 7', async () => {
   const s = scenario();
   s.add('R');
-  s.add('C');
+  s.add('C', { running: true });
   const begun = await s.beat.beginBarrier({ ackMode: 'agent' }, s.exec('R'));
   await s.beat.acknowledge({ intentId: begun.intentId, continuation: 'none' }, s.exec('C'));
   const aborted = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
@@ -358,7 +365,7 @@ await section('case 7', async () => {
 await section('case 8', async () => {
   const s = scenario({ start: 9000 });
   s.add('R');
-  s.add('C');
+  s.add('C', { running: true });
   const begun = await s.beat.beginBarrier({ ackMode: 'auto', ackTimeoutMs: 1000 }, s.exec('R'));
   s.clock.value = begun.deadline + 1;
   const aborted = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
@@ -378,7 +385,7 @@ await section('case 9', async () => {
   /* 9a — auto mode: covered at prepare time, then closed before the commit. */
   const s = scenario();
   s.add('R');
-  s.add('C', { title: 'closed 对话' });
+  s.add('C', { title: 'closed 对话', running: true });
   const begun = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
   s.close('C');
   const committed = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
@@ -401,7 +408,7 @@ await section('case 9b', async () => {
   /* 9b — agent mode: still pending when it closed, so the liveness re-read marks it closed. */
   const s = scenario();
   s.add('R');
-  s.add('C');
+  s.add('C', { running: true });
   const begun = await s.beat.beginBarrier({ ackMode: 'agent' }, s.exec('R'));
   await s.beat.acknowledge({ intentId: begun.intentId, continuation: 'registered' }, s.exec('R'));
   s.close('C');
@@ -489,7 +496,7 @@ await section('the failure modes', async () => {
 await section('case 11 cancel', async () => {
   const s = scenario();
   s.add('R', { title: 'requester 对话' });
-  s.add('C');
+  s.add('C', { running: true });
   const begun = await s.beat.beginBarrier({ ackMode: 'agent' }, s.exec('R'));
   const cancelled = await s.beat.cancelBarrier({ intentId: begun.intentId }, s.exec('R'));
   check('11- cancel closes the preparing intent as aborted(cancelled) in one transition', cancelled.ok === true && cancelled.phase === 'aborted' && cancelled.reason === 'cancelled' && cancelled.intentId === begun.intentId, JSON.stringify(cancelled));
@@ -509,7 +516,7 @@ await section('case 11 cancel', async () => {
 await section('case 11 impostor', async () => {
   const s = scenario();
   s.add('R');
-  s.add('C');
+  s.add('C', { running: true });
   const begun = await s.beat.beginBarrier({ ackMode: 'agent' }, s.exec('R'));
   const refusedCancel = await s.beat.cancelBarrier({ intentId: begun.intentId }, s.exec('C'));
   check('11- a non-requester cancel is refused with the named code not_requester', refusedCancel.ok === false && refusedCancel.phase === 'refused' && refusedCancel.reason === 'not_requester' && refusedCancel.intentId === begun.intentId, JSON.stringify(refusedCancel));
@@ -624,6 +631,37 @@ await section('case 12 success is not termination', async () => {
   const state = s.state();
   check('12- a task that succeeds is consumed as a delivery receipt', state.tasks.every(t => t.id !== taskId) && state.receipts.some(r => r.id === taskId && typeof r.delivered === 'number' && r.status === undefined && r.reason === undefined), JSON.stringify(state.receipts));
   check('12- a task that succeeds is never terminated', (state.terminated ?? []).length === 0 && s.delivered('R').length === 1, JSON.stringify({ terminated: state.terminated, delivered: s.delivered('R').length }));
+});
+
+/* ================================================================= case 13 =====
+ * The broadcast goes to conversations CONFIRMED to be running, not to every conversation the host
+ * happens to have loaded. Measured defect (2026-10-17): the component read \`agent.running\` /
+ * \`agent.session.running\` — fields the host never sets — so every live conversation was labelled
+ * 'live', became a participant, and was woken by a continuation after the restart. The host's own
+ * predicate is \`agent.status === 'running'\` (dsh-agent's installTurnArchiveAdmission reads exactly
+ * that). This case pins the narrow set end to end: participants, queued continuations, and the
+ * delivery after the restart. */
+await section('case 13', async () => {
+  const s = scenario();
+  s.add('R', { title: 'requester 对话' });                       // idle, but it is the one asking
+  s.add('IDLE', { title: '闲着的对话' });                          // live, nothing in flight
+  s.add('WORK', { title: '工作中的对话', running: true });
+  const begun = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
+  const ids = begun.participants.map(p => p.sessionId).sort();
+  check('13- only the running conversation and the requester are participants', begun.ok === true && ids.length === 2 && ids.includes('R') && ids.includes('WORK') && !ids.includes('IDLE'), JSON.stringify(begun.participants));
+  check('13- the idle live conversation is not named in missing[] either', !begun.missing.some(m => m.sessionId === 'IDLE'), JSON.stringify(begun.missing));
+  const waiting = s.state().tasks.filter(t => t.status === 'waiting');
+  check('13- exactly one continuation per participant and none for the idle conversation', waiting.length === 2 && !waiting.some(t => t.destination === 'IDLE') && new Set(waiting.map(t => t.destination)).size === 2, JSON.stringify(waiting));
+  const committed = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
+  check('13- the barrier still commits with the confirmed-running set only', committed.ok === true && committed.phase === 'committed' && committed.missing.length === 0, JSON.stringify({ ok: committed.ok, phase: committed.phase, missing: committed.missing }));
+  committed.helper.commit();
+  const folder = committed.helper.folder;
+  fs.writeFileSync(path.join(folder, 'job.json'), JSON.stringify({ owner: { path: 'fixture-host', created: 'old' } }));
+  fs.writeFileSync(path.join(folder, 'status.json'), JSON.stringify({ state: 'running' }));
+  const rebooted = s.create({ pid: 2000, probe: async () => ({ path: 'fixture-host', created: 'new' }) });
+  await rebooted.tick();
+  await rebooted.tick();
+  check('13- after the restart the idle conversation was never woken', s.delivered('WORK').length === 1 && s.delivered('R').length === 1 && s.delivered('IDLE').length === 0, JSON.stringify({ R: s.delivered('R').length, WORK: s.delivered('WORK').length, IDLE: s.delivered('IDLE').length }));
 });
 
 /* ------------------------------------------------- backward compatibility --- */

@@ -40,11 +40,11 @@ NewMate 创建时即只读加载 index.json 的全部 tag 名及 parents/childre
 
 `heartbeat_restart {broadcast:true}` 不重启，只开一次「准备」：
 
-- 参与者由宿主取得（`agents().roots()`），不接受调用方传入的目标名——由被保护方之外的人点名参与者，等于没有屏障。同一时刻只允许一个进行中的 intent；第二次 begin 返回 `intent_in_progress` 与进行中 intent 的进度。
+- 参与者由宿主取得（`agents().roots()`），不接受调用方传入的目标名——由被保护方之外的人点名参与者，等于没有屏障。**0.3.17 起参与者不再等于「宿主载入的对话」，而等于「确认在工作的对话」**：`roots()` 返回的每个 agent 只有 `status === 'running'`（宿主自己的判据，dsh-agent 的 `installTurnArchiveAdmission` 用的就是它，注释写明「a turn waiting for an approval or an answer included」）才算参与者，requester 无论如何都在（它是发起方）。载入但空闲的对话没有在飞的回合，重启打断不了它，给它登记接续只会把它白叫醒——这正是 0.3.17 修的过度广播：此前组件读的是 `agent.running` / `agent.session.running` 这两个宿主**从不设置**的字段，于是每个载入的对话都被当成在工作的，重启后统统被叫醒。同一时刻只允许一个进行中的 intent；第二次 begin 返回 `intent_in_progress` 与进行中 intent 的进度。
 - `ackMode:'auto'`（默认）为每个参与者登记一条持久接续任务，不花模型 token，忙会话也覆盖；这条登记本身就是回执（`ackSource:'auto'`）。
 - `ackMode:'agent'` 把一条持久通知投进每个会话，要求该会话自己调用 `heartbeat_after_restart {intentId}` 登记（`ackSource:'schedule'`），或 `heartbeat_restart_ack {intentId, continuation:'none'}` 声明无需接续。通知走与任务相同的 `sessions.flush` 持久化屏障，所以「已通知」表示消息已落盘，而不是某个 socket 收下了字节。
 - 回执只按宿主给的会话身份归属，一个会话无法替另一个会话回执；通知不投给 requester 本身（它就在这次调用里，用自己的工具回执）。
-- 准备期间消失的参与者移出必需集合（记为 `closed`），记录保留，因为它的接续任务仍欠着、仍要在重启后投递；准备期间新出现的会话被**加入**而不是忽略——在它背后重启它，正是这个屏障要防的事。
+- 准备期间消失的参与者移出必需集合（记为 `closed`），记录保留，因为它的接续任务仍欠着、仍要在重启后投递；准备期间新出现的会话：**在工作的**被加入而不是忽略——在它背后重启它，正是这个屏障要防的事；新出现但仍然空闲的不加入，理由与上面同一条（出现 ≠ 在工作）。
 
 `heartbeat_restart_commit {intentId}` 等回执：只有全部参与者终态**且** requester 自己已登记，才准备并提交重启（返回 `committed`）；否则返回 `aborted` 并点名缺失的会话，宿主继续运行。原因分类：`no_intent`、`not_requester`、`deadline_exceeded`、`missing_acks`、`requester_not_registered`、`intent_mismatch`。`intent_mismatch` 是 0.3.17 加的：commit 只认被点名的那个 intent，否则一个已被撤销的 `intentId` 能花掉重新打开的新屏障并真的重启宿主。`not_requester` 与 `no_intent` 不关闭 intent（别人的失败不是 requester 的放弃），其余中止都会把它关进历史。`onTimeout:'abort'`（默认）超时后拒绝重启；`'proceed'` 记录缺失者后照常重启；`force` 跳过检查，并在 intent 里留下「这次是强制的」。
 

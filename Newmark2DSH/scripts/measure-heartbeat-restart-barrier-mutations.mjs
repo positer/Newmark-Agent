@@ -132,6 +132,12 @@ const MUTATIONS = [
   { id: 'M28', file: 'component', protects: 'case 12: the status the component reports actually SHOWS the termination',
     anchor: "    return { ...state, tasks: state.tasks || [], receipts: state.receipts || [], terminated: state.terminated || [] };",
     replacement: "    return { ...state, tasks: state.tasks || [], receipts: state.receipts || [], terminated: [] };" },
+  { id: 'M29', file: 'component', protects: 'case 13: the running predicate is the host own status field',
+    anchor: "  const looksBusy = agent => agent?.status === 'running';",
+    replacement: "  const looksBusy = agent => agent?.running === true || agent?.session?.running === true;" },
+  { id: 'M30', file: 'component', protects: 'case 13: the participant set is narrowed to confirmed-running conversations',
+    anchor: "    const participants = live.filter(entry => entry.view.sessionId === requesterSessionId || entry.view.state === 'busy');",
+    replacement: "    const participants = live;" },
 ];
 
 /** One gate run. The gate's own verdict is its summary line and its not-ok lines, not the exit code alone. */

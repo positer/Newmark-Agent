@@ -64,7 +64,14 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
   /* ------------------------------------------------------------------ participants --- */
   // "Running conversation" is read from the host, never from a caller's argument: a barrier whose
   // members are named by the party restarting protects nobody.
-  const looksBusy = agent => agent?.running === true || agent?.session?.running === true;
+  // The host's OWN predicate for "this Session's Agent is running" is `agent.status === 'running'`
+  // — dsh-agent's installTurnArchiveAdmission reads exactly that, and documents it as "a turn
+  // waiting for an approval or an answer included". Reading `agent.running` /
+  // `agent.session.running` (fields the host never sets) made this false for EVERY conversation,
+  // so every loaded conversation was labelled 'live', became a participant, and was woken by a
+  // continuation after the restart. Measured 2026-10-17: a broadcast over two live sessions
+  // continued a conversation that had nothing in flight.
+  const looksBusy = agent => agent?.status === 'running';
   const identity = agent => {
     const sessionId = typeof agent?.session?.id === 'string' ? agent.session.id : (typeof agent?.id === 'string' ? agent.id : null);
     if (!sessionId) return null;
@@ -186,6 +193,10 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
     const seen = new Set((store.read().intent?.participants || []).map(p => p.sessionId));
     for (const entry of live) {
       if (seen.has(entry.view.sessionId)) continue;
+      // Same rule as beginBarrier: APPEARING is not the same as WORKING. A conversation that
+      // appeared and is not in a turn cannot be interrupted by the restart, so it is not added —
+      // waking it would be the over-broadcast this narrowing exists to remove.
+      if (entry.view.state !== 'busy' && entry.view.sessionId !== intent.requesterSessionId) continue;
       store.change(s => { if (s.intent?.id !== intent.id) return; s.intent.participants.push({ ...entry.view, ack: 'pending', ackSource: null, ackAt: null, note: 'appeared-after-prepare' }); s.schema = 3; });
       if (intent.ackMode === 'auto') await cover(entry, intent);
     }
@@ -209,15 +220,19 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
     if (live === null) throw Error('DSH agents 服务不可用，无法确认运行中的对话，不发起广播重启');
     const at = now();
     const requester = live.find(entry => entry.view.sessionId === requesterSessionId);
+    // Only conversations CONFIRMED to be running are protected and woken. An idle-but-loaded
+    // conversation has no turn in flight: the restart cannot interrupt it, and a continuation
+    // would only wake it for nothing. The requester is always a participant — it is the one asking.
+    const participants = live.filter(entry => entry.view.sessionId === requesterSessionId || entry.view.state === 'busy');
     const intent = {
       id: randomUUID(), requesterSessionId, requesterPid: pid, createdAt: at, updatedAt: at,
       deadline: at + ackTimeoutMs, ackMode, onTimeout, force: options.force === true, reason,
       requesterModel: requester ? conversationModel(requester.agent) : null,
       phase: 'preparing', ticket: null, folder: null, committedAt: null, delivery: null, bubble: null,
-      participants: live.map(entry => ({ ...entry.view, ack: 'pending', ackSource: null, ackAt: null, note: null })),
+      participants: participants.map(entry => ({ ...entry.view, ack: 'pending', ackSource: null, ackAt: null, note: null })),
     };
     store.change(s => { s.intent = intent; s.intents ||= []; s.schema = 3; });
-    for (const entry of live) {
+    for (const entry of participants) {
       if (ackMode === 'auto') await cover(entry, intent);
       else if (entry.view.sessionId !== requesterSessionId) await notify(entry, intent);
     }

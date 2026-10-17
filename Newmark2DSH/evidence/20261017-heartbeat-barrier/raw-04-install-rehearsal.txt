@@ -1,0 +1,29 @@
+throwawayProfile=C:\Users\12252\AppData\Local\Temp\nm-profile-c029c984
+sourceFilesBefore=104
+junctionLinkType=Junction
+--- pack --apply against the throwaway profile ---
+--- progress ---
+  ok   - npm pack produced newmark2dsh-0.3.16.tgz
+  ok   - the packed version is the manifest version
+  ok   - the tar reader and npm agree on the shipped file set
+  ok   - every one of the 92 shipped files matches the source byte for byte
+  ok   - 12 file(s) in the package tree are not shipped (runtime byproducts)
+  ok   - tarball would land at C:\Users\12252\AppData\Local\Temp\nm-profile-c029c984\newmark2dsh-0.3.16-heartbeat-767fbdfb.tgz
+  ok   - before-state written (104 installed files hashed)
+  ok   - installed plugin backed up (104 files)
+  ok   - the tarball copied into the profile is the packed tarball
+  ok   - profile manifest declares newmark2dsh as file:C:/Users/12252/AppData/Local/Temp/nm-profile-c029c984/newmark2dsh-0.3.16-heartbeat-767fbdfb.tgz
+  ok   - pnpm install completed in 1.3s
+  ok   - installed 92/92 files match the tarball byte for byte
+  ok   - install-after evidence written
+applyExit=0 ok=True performed=True removedInstalledDir=unlinked-reparse-point
+installedVersion=0.3.16 matched=92/92 missing=0 mismatched=0 linked=0
+linkTypes={"file":0,"hardLinkedFile":92,"reparsePoint":0}
+installedDirIsLink=True backupDir=C:\Users\12252\AppData\Local\Temp\nm-profile-c029c984\.newmark-install-backups\20261017-171011-972-newmark2dsh-0.3.16-before-0.3.16
+sourceFilesAfter=104
+sourceTreeUnchanged=True
+throwawayBundleLinkTypeAfter=[Junction]
+--- the installed heartbeat component in the throwaway profile ---
+installedHeartbeatBytes=24286 broadcastOccurrences=4
+sourceHeartbeatBytes=24286
+throwawayProfilePath=C:\Users\12252\AppData\Local\Temp\nm-profile-c029c984

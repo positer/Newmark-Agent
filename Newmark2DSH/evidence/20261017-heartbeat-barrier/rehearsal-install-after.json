@@ -1,0 +1,46 @@
+{
+  "at": "2026-10-17T09:10:13.670Z",
+  "profileDir": "C:\\Users\\12252\\AppData\\Local\\Temp\\nm-profile-c029c984",
+  "specifier": "file:C:/Users/12252/AppData/Local/Temp/nm-profile-c029c984/newmark2dsh-0.3.16-heartbeat-767fbdfb.tgz",
+  "backupDir": "C:\\Users\\12252\\AppData\\Local\\Temp\\nm-profile-c029c984\\.newmark-install-backups\\20261017-171011-972-newmark2dsh-0.3.16-before-0.3.16",
+  "verification": {
+    "installedDir": "C:\\Users\\12252\\AppData\\Local\\Temp\\nm-profile-c029c984\\node_modules\\newmark2dsh",
+    "installedDirIsLink": true,
+    "installedDirRealPath": "C:\\Users\\12252\\AppData\\Local\\Temp\\nm-profile-c029c984\\node_modules\\.pnpm\\newmark2dsh@file+newmark2dsh-0.3.16-heartbeat-767fbdfb.tgz\\node_modules\\newmark2dsh",
+    "installedDirLinkAccepted": true,
+    "installedVersion": "0.3.16",
+    "expectedVersion": "0.3.16",
+    "missing": [],
+    "mismatched": [],
+    "linked": [],
+    "extra": [],
+    "linkTypes": {
+      "file": 0,
+      "hardLinkedFile": 92,
+      "reparsePoint": 0
+    },
+    "checked": 92,
+    "matched": 92,
+    "profileComponentLinks": [
+      {
+        "name": "newmark2dsh-memorylab",
+        "exists": false
+      },
+      {
+        "name": "newmark2dsh-computeruse",
+        "exists": false
+      }
+    ]
+  },
+  "tarball": {
+    "stagedPath": "C:\\Users\\12252\\AppData\\Local\\Temp\\newmark-pack-O1Y1cd\\newmark2dsh-0.3.16.tgz",
+    "filename": "newmark2dsh-0.3.16.tgz",
+    "sha256": "767fbdfb1344d4a686b8535ad5425e66170e5321d765f0ed032fedb08681d2e4",
+    "npmShasum": "b5a157c5dd3543b2a9e4214d163717dd907e09cb",
+    "npmIntegrity": "sha512-CJRgXcugAzmoFwNB3tXLetTGGdLLj9/9tHGtPaQ+7n1ZvB1pEFP3//b04pCV0PB7iSW3clZf04ewxDHeR38LSA==",
+    "bytes": 1163467,
+    "unpackedBytes": 3283672,
+    "members": 92,
+    "metaMembers": []
+  }
+}

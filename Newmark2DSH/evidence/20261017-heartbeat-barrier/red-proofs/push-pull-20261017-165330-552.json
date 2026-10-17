@@ -1,0 +1,37 @@
+{
+  "tool": "release-heartbeat-0.3.16",
+  "command": "push-pull",
+  "ok": false,
+  "at": "2026-10-17T08:53:29.097Z",
+  "workspace": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent",
+  "requestedPaths": [
+    "Newmark2DSH/archive/20261017-155232-preset-cwd-fix/RESULT.md"
+  ],
+  "steps": [
+    {
+      "name": "resolved 1 path(s) inside C:/Users/12252/Desktop/Files/Code/Newmark Agent",
+      "ok": true,
+      "detail": [
+        "Newmark2DSH/archive/20261017-155232-preset-cwd-fix/RESULT.md"
+      ]
+    },
+    {
+      "name": "the paths name at least one git-visible file",
+      "ok": false,
+      "detail": {
+        "ignored": [
+          "Newmark2DSH/archive/20261017-155232-preset-cwd-fix/RESULT.md"
+        ]
+      }
+    }
+  ],
+  "commands": [],
+  "evidence": [
+    "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\Newmark2DSH\\evidence\\20261017-heartbeat-barrier\\push-pull-20261017-165330-552.json"
+  ],
+  "repo": {
+    "root": "C:/Users/12252/Desktop/Files/Code/Newmark Agent",
+    "gitDir": "C:/Users/12252/Desktop/Files/Code/Newmark Agent/.git",
+    "branch": "master"
+  }
+}

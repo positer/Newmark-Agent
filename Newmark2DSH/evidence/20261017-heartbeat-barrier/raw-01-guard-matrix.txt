@@ -1,0 +1,29 @@
+# Guard matrix: the exact command, its real exit code, and the refusal it produced.
+
+exit=2  case=empty path list
+    push-pull --paths
+    refusing: the path list is empty. This script stages only the paths you name and never runs a bare "git add" or "git add -A".
+exit=1  case=git-ignored path
+    push-pull --paths Newmark2DSH/archive/20261017-155232-preset-cwd-fix/RESULT.md
+    FAIL - the paths name at least one git-visible file  {"ignored":["Newmark2DSH/archive/20261017-155232-preset-cwd-fix/RESULT.md"]}
+exit=3  case=path does not exist
+    push-pull --paths Newmark2DSH/scripts/does-not-exist.mjs
+    refusing: path does not exist: Newmark2DSH/scripts/does-not-exist.mjs (resolved C:\Users\12252\Desktop\Files\Code\Newmark Agent\Newmark2DSH\scripts\does-not-exist.mjs)
+exit=3  case=cu-hidden-agent tree
+    push-pull --paths Newmark2DSH/evidence/cu-hidden-agent
+    refusing: refusing to stage the pre-existing browser-cache tree: Newmark2DSH/evidence/cu-hidden-agent
+exit=3  case=path outside the repo
+    push-pull --paths C:\Windows\win.ini
+    refusing: path is outside the repository: C:\Windows\win.ini
+exit=2  case=pack, neither flag
+    pack
+    refusing: pass exactly one of --dry-run (preview) or --apply (install). This script never writes into the live profile by default.
+exit=2  case=pack, both flags
+    pack --dry-run --apply
+    refusing: pass exactly one of --dry-run (preview) or --apply (install). This script never writes into the live profile by default.
+exit=2  case=unknown command
+    frobnicate
+    refusing: unknown command "frobnicate"; expected pack or push-pull
+exit=0  case=pack --dry-run
+    pack --dry-run
+    

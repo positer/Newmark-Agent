@@ -1,0 +1,68 @@
+{
+  "name": "newmark2dsh",
+  "version": "0.3.16",
+  "type": "module",
+  "description": "Newmark Core for DeepSeek Harness：MemoryLab、ComputerUse、Agent API、NewMate 陪伴内核与 heartBeat 重启投递，五个独立开关，共用 ~/.Newmark 用户库。",
+  "meta": {
+    "title": "Newmark Core",
+    "description": "Newmark Core for DeepSeek Harness：MemoryLab、ComputerUse、Agent API、NewMate 陪伴内核与 heartBeat 重启投递，五个独立开关，共用 ~/.Newmark 用户库。"
+  },
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/*.js",
+    "lib/*.ps1",
+    "components/*/*.js",
+    "components/*/package.json",
+    "components/*/lib/*.js",
+    "components/*/lib/*.swift",
+    "components/*/lib/*.plist",
+    "components/*/lib/*.cs",
+    "components/*/lib/*.py",
+    "components/*/assets/*.png",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json",
+    "LICENSE",
+    "components/*/lib/*.html",
+    "components/*/vendor/webview2/*"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "author": {
+    "name": "Newmark AI",
+    "email": "support@newmark.ai"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/positer/newmark2dsh.git"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "newmark",
+    "memorylab",
+    "computeruse"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "tag": "latest"
+  }
+}

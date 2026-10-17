@@ -1,0 +1,159 @@
+{
+  "tool": "release-heartbeat-0.3.16",
+  "command": "pack",
+  "mode": "dry-run",
+  "ok": false,
+  "at": "2026-10-17T09:06:27.183Z",
+  "workspace": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent",
+  "packageDir": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\Newmark2DSH\\packages\\newmark-core",
+  "profileDir": "C:\\Users\\12252\\.dsh\\profiles\\desktop",
+  "steps": [
+    {
+      "name": "npm pack produced newmark2dsh-0.3.16.tgz",
+      "ok": true,
+      "detail": "1163467 bytes, 92 entries"
+    },
+    {
+      "name": "the packed version is the manifest version",
+      "ok": true,
+      "detail": "0.3.16 vs 0.3.16"
+    },
+    {
+      "name": "the tar reader and npm agree on the shipped file set",
+      "ok": true,
+      "detail": {
+        "tarMembers": 92,
+        "npmEntries": 92
+      }
+    },
+    {
+      "name": "every one of the 92 shipped files matches the source byte for byte",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "12 file(s) in the package tree are not shipped (runtime byproducts)",
+      "ok": true,
+      "detail": [
+        "components/computeruse/.runtime/hidden-agent-ledger.jsonl",
+        "components/computeruse/.runtime/payload/NmAgentDesktop.cs",
+        "components/computeruse/.runtime/payload/NmAgentJob.cs",
+        "components/computeruse/.runtime/payload/NmAgentProcess.cs",
+        "components/computeruse/.runtime/payload/NmAgentWindow.cs",
+        "components/computeruse/.runtime/payload/NmHiddenLauncher.cs",
+        "components/computeruse/.runtime/payload/NmHiddenMaker.cs",
+        "components/computeruse/.runtime/payload/NmProcessFacts.cs",
+        "components/computeruse/.runtime/payload/agent.ps1",
+        "components/computeruse/.runtime/payload/keep-desktop.ps1",
+        "components/computeruse/.runtime/payload/launch-desktop.ps1",
+        "components/computeruse/lib/__pycache__/linux-desktop.cpython-312.pyc"
+      ]
+    },
+    {
+      "name": "tarball would land at C:\\Users\\12252\\.dsh\\profiles\\desktop\\newmark2dsh-0.3.16-heartbeat-767fbdfb.tgz",
+      "ok": true
+    },
+    {
+      "name": "before-state written (104 installed files hashed)",
+      "ok": true,
+      "detail": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\Newmark2DSH\\evidence\\20261017-heartbeat-barrier\\install-before.json"
+    }
+  ],
+  "commands": [
+    {
+      "display": "node \"C:\\\\Program Files\\\\nodejs\\\\node_modules\\\\npm\\\\bin\\\\npm-cli.js\" pack --json --pack-destination C:\\Users\\12252\\AppData\\Local\\Temp\\newmark-pack-Efh3Ud",
+      "cwd": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\Newmark2DSH\\packages\\newmark-core",
+      "exitCode": 0,
+      "ms": 2765
+    }
+  ],
+  "evidence": [
+    "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\Newmark2DSH\\evidence\\20261017-heartbeat-barrier\\install-before.json",
+    "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\Newmark2DSH\\evidence\\20261017-heartbeat-barrier\\pack-dry-run-20261017-170630-189.json"
+  ],
+  "package": {
+    "name": "newmark2dsh",
+    "version": "0.3.16",
+    "files": [
+      "index.js",
+      "client.js",
+      "lib/*.js",
+      "lib/*.ps1",
+      "components/*/*.js",
+      "components/*/package.json",
+      "components/*/lib/*.js",
+      "components/*/lib/*.swift",
+      "components/*/lib/*.plist",
+      "components/*/lib/*.cs",
+      "components/*/lib/*.py",
+      "components/*/assets/*.png",
+      "cordis.patch.yml",
+      "icon.svg",
+      "locale/*.json",
+      "LICENSE",
+      "components/*/lib/*.html",
+      "components/*/vendor/webview2/*"
+    ],
+    "manifestSha256": "a09e8d50c6a1ac108ab81e87860a7fff7a4eb95d9542f78e75dc10687d6be758"
+  },
+  "profile": {
+    "manifestSpecifier": "file:C:/Users/12252/.dsh/profiles/desktop/newmark2dsh-0.3.14-official.tgz",
+    "bundles": [
+      "@deepseek-ai/dsh-base",
+      "@deepseek-ai/dsh-web-app",
+      "@deepseek-ai/dsh-experimental-agent-team-profile",
+      "newmark2dsh",
+      "dsh-opencode-go"
+    ],
+    "fileHashes": {
+      "package.json": "3004b3ae77bb7716b0e73ef5f64f89d7152b0e69ab8214d61dd56f6415b407a4",
+      "pnpm-lock.yaml": "0b93b36af943c132ac8f1748b6566ec29dcf62bf6245ba6f7c79448daa2b7784",
+      "pnpm-workspace.yaml": "a9688923752e9798abb52167551e368e1e3298b268e1bb8477025e2044a33fcd",
+      "cordis.yml": "c300dcf2ebc5f02062d6591268d29d3db6fe45e0cb138f5467276fe2ba06076e",
+      "cordis.patch.yml": "ec0e535344073e49350ce4214774426014df4997cf118b2fb7cf68a125a40663"
+    }
+  },
+  "tarball": {
+    "stagedPath": "C:\\Users\\12252\\AppData\\Local\\Temp\\newmark-pack-Efh3Ud\\newmark2dsh-0.3.16.tgz",
+    "filename": "newmark2dsh-0.3.16.tgz",
+    "sha256": "767fbdfb1344d4a686b8535ad5425e66170e5321d765f0ed032fedb08681d2e4",
+    "npmShasum": "b5a157c5dd3543b2a9e4214d163717dd907e09cb",
+    "npmIntegrity": "sha512-CJRgXcugAzmoFwNB3tXLetTGGdLLj9/9tHGtPaQ+7n1ZvB1pEFP3//b04pCV0PB7iSW3clZf04ewxDHeR38LSA==",
+    "bytes": 1163467,
+    "unpackedBytes": 3283672,
+    "members": 92,
+    "metaMembers": []
+  },
+  "sourceCheck": {
+    "membersChecked": 92,
+    "matched": 92,
+    "mismatched": [],
+    "diskFilesNotShipped": [
+      "components/computeruse/.runtime/hidden-agent-ledger.jsonl",
+      "components/computeruse/.runtime/payload/NmAgentDesktop.cs",
+      "components/computeruse/.runtime/payload/NmAgentJob.cs",
+      "components/computeruse/.runtime/payload/NmAgentProcess.cs",
+      "components/computeruse/.runtime/payload/NmAgentWindow.cs",
+      "components/computeruse/.runtime/payload/NmHiddenLauncher.cs",
+      "components/computeruse/.runtime/payload/NmHiddenMaker.cs",
+      "components/computeruse/.runtime/payload/NmProcessFacts.cs",
+      "components/computeruse/.runtime/payload/agent.ps1",
+      "components/computeruse/.runtime/payload/keep-desktop.ps1",
+      "components/computeruse/.runtime/payload/launch-desktop.ps1",
+      "components/computeruse/lib/__pycache__/linux-desktop.cpython-312.pyc"
+    ]
+  },
+  "install": {
+    "performed": false,
+    "plan": {
+      "tarballFinalPath": "C:\\Users\\12252\\.dsh\\profiles\\desktop\\newmark2dsh-0.3.16-heartbeat-767fbdfb.tgz",
+      "dependencySpecifier": "file:C:/Users/12252/.dsh/profiles/desktop/newmark2dsh-0.3.16-heartbeat-767fbdfb.tgz",
+      "previousSpecifier": "file:C:/Users/12252/.dsh/profiles/desktop/newmark2dsh-0.3.14-official.tgz",
+      "backupDir": "C:\\Users\\12252\\.dsh\\profiles\\desktop\\.newmark-install-backups\\20261017-170630-093-newmark2dsh-0.3.14-before-0.3.16",
+      "installedBefore": "0.3.14",
+      "removeInstalledDirBeforeInstall": true,
+      "pnpmCommand": "C:\\Program Files\\nodejs\\node.exe C:\\Users\\12252\\AppData\\Roaming\\npm\\node_modules\\pnpm\\bin\\pnpm.cjs install"
+    },
+    "reason": "dry run: the profile was not written, pnpm was not run, no backup was needed"
+  }
+}

@@ -1,0 +1,763 @@
+{
+  "at": "2026-10-17T09:12:02.088Z",
+  "mode": "dry-run",
+  "profileDir": "C:\\Users\\12252\\.dsh\\profiles\\desktop",
+  "installedDir": "C:\\Users\\12252\\.dsh\\profiles\\desktop\\node_modules\\newmark2dsh",
+  "installedExists": true,
+  "installedVersion": "0.3.14",
+  "installedFileCount": 104,
+  "installedFiles": [
+    {
+      "path": "LICENSE",
+      "sha256": "1c2a3f524a32d4fa83384ae84af42f44062e603bcc620f90162af4f35ac3974c",
+      "bytes": 705,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "README.md",
+      "sha256": "b7add955c9bd93f65de25d30fa53d82457e1f2e6ab545941dcc4d560d3c7aa8e",
+      "bytes": 3140,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "client.js",
+      "sha256": "f4bbba11995bb36977d92d85be2fa600c67cc9803f9c5852f695349bca1f949d",
+      "bytes": 208785,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/agent-api/component.js",
+      "sha256": "5354d485c715f7295bd265f33416dbf4857f9f78e164aad901e1aa52f178b794",
+      "bytes": 97209,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/agent-api/index.js",
+      "sha256": "c02bf5d03398ba6f93b9423a2a94940d4b2897fa5ba106bfb6abe1be751252b4",
+      "bytes": 15910,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/agent-api/lib/contract.js",
+      "sha256": "258c919975a6dd07f701d2e983adef0bbe26c2f9a9dbcae653fad4d09268e007",
+      "bytes": 28345,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/agent-api/lib/core-model.js",
+      "sha256": "2f1cff8bc174b6ef67227aa64fbf39315060601d79dd7cbb9e2ec2e2e231babb",
+      "bytes": 8452,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/agent-api/lib/embed.js",
+      "sha256": "bb02fc4e9d65694d638a4568d613d78da311daf66a12617e72d01372d688269e",
+      "bytes": 395,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/agent-api/lib/llm-seam.js",
+      "sha256": "929dfc33bebafb2153298f4a70acefdb1ea7992f862004dbb2f4844fd26e9b47",
+      "bytes": 33631,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/agent-api/lib/loop.js",
+      "sha256": "ca1e8f0626513cdb9646db0a76e35ea82db88b3d9b4453ec23f74f19617376e6",
+      "bytes": 26997,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/agent-api/lib/presence.js",
+      "sha256": "49312c2a2aa0b5b98d9371b46a3bbe74c52f9a8ab6b6381a1e73fced2a67aad5",
+      "bytes": 6019,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/agent-api/lib/root.js",
+      "sha256": "33a54c7ec7d322865991c98ff769e9ee0ebebc47312c7cfd8df8a8f812c5c81f",
+      "bytes": 651,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/agent-api/lib/schema.js",
+      "sha256": "90bed4c0c46d410d32cbaa37e01274303cc83d0b541a85de9c1ce38407781f34",
+      "bytes": 666,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/agent-api/lib/visual.js",
+      "sha256": "f2fb1d3f80de57a60ff8855debd4e024ab797e09aa5df68722a7f11dbb5247cc",
+      "bytes": 5222,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/agent-api/package.json",
+      "sha256": "9d41ad810428e024dd924f0081df816fe80e66b08bb241cfe2e626f8e2b77d9e",
+      "bytes": 490,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/.runtime/hidden-agent-ledger.jsonl",
+      "sha256": "8174d38be1d0b9f70f011cdd773ebcce1616071b1a8dc405a19cfa1b024f957b",
+      "bytes": 1359,
+      "link": false,
+      "nlink": 1
+    },
+    {
+      "path": "components/computeruse/.runtime/payload/NmAgentDesktop.cs",
+      "sha256": "adcff457749bce165eb233fc35db7a2f226c2568d8dab291b869ae9701fa41e2",
+      "bytes": 2563,
+      "link": false,
+      "nlink": 1
+    },
+    {
+      "path": "components/computeruse/.runtime/payload/NmAgentJob.cs",
+      "sha256": "6d91fdc54c5314cf7c697249ab1a1dd44e76c211ece4f19ebdfd83fe96c1ee91",
+      "bytes": 10062,
+      "link": false,
+      "nlink": 1
+    },
+    {
+      "path": "components/computeruse/.runtime/payload/NmAgentProcess.cs",
+      "sha256": "c4b99af1401b34624bb0b4150f394bd0e3327daaf97b759875ff58ee1ccd7ee2",
+      "bytes": 3057,
+      "link": false,
+      "nlink": 1
+    },
+    {
+      "path": "components/computeruse/.runtime/payload/NmAgentWindow.cs",
+      "sha256": "2105defbc2489dc40a44802f0664e161f625645eaac269f19c994e539af2449a",
+      "bytes": 15167,
+      "link": false,
+      "nlink": 1
+    },
+    {
+      "path": "components/computeruse/.runtime/payload/NmHiddenLauncher.cs",
+      "sha256": "9d467bcb0f7ac094187d0edbc1c7e1b3eaeb3fa7860c2a12aa5c7303e0210bd3",
+      "bytes": 3402,
+      "link": false,
+      "nlink": 1
+    },
+    {
+      "path": "components/computeruse/.runtime/payload/NmHiddenMaker.cs",
+      "sha256": "365f2a6d3f19682fd799f7937e7ae75a1ae474f808fc87460fac3b8f0e90a608",
+      "bytes": 3499,
+      "link": false,
+      "nlink": 1
+    },
+    {
+      "path": "components/computeruse/.runtime/payload/NmProcessFacts.cs",
+      "sha256": "a0bbe26d8889b0af9dc7f2f37bd6e06778bbfb2e9fa86b05ae0cc84df6b12e4f",
+      "bytes": 5984,
+      "link": false,
+      "nlink": 1
+    },
+    {
+      "path": "components/computeruse/.runtime/payload/agent.ps1",
+      "sha256": "b7f376e6723e8be7eb582d7d007e4edf8012f35da1aa90c6d214708e36f57143",
+      "bytes": 29962,
+      "link": false,
+      "nlink": 1
+    },
+    {
+      "path": "components/computeruse/.runtime/payload/keep-desktop.ps1",
+      "sha256": "8bb0309a8a2b178477e3a2e666a0218f3880bd20cedf9bda0a3e1b86182a5e42",
+      "bytes": 1120,
+      "link": false,
+      "nlink": 1
+    },
+    {
+      "path": "components/computeruse/.runtime/payload/launch-desktop.ps1",
+      "sha256": "8089b1cb6f9c450cb87df3379c3247d2b81ca90713b4de3c8db779b9255ba827",
+      "bytes": 4836,
+      "link": false,
+      "nlink": 1
+    },
+    {
+      "path": "components/computeruse/assets/desktop-pet.png",
+      "sha256": "6e5a5051354627f35d7d2f712bc9a6aeac168ce3abd8d0f6631b5af6b7b2ce93",
+      "bytes": 466310,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/component.js",
+      "sha256": "1452ec61c3048dd081d237a355aa2f82c8218271af5b0023dcac14e4abbc2f12",
+      "bytes": 32732,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/index.js",
+      "sha256": "be88d944600f6965fa03e6ddeed85265af9f64c4ad6251505894e27b5ddbf329",
+      "bytes": 3424,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/csharp-dialect.js",
+      "sha256": "b0a89ce0accb1793a6970cdc9478448ece6481e202819ec3f747d62738cf4b25",
+      "bytes": 12889,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/darwin-native.swift",
+      "sha256": "49c075c732f4e9cf37a9caa356cedfe56bbdb43c2c73af6e2913375cecda9d93",
+      "bytes": 51344,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/lib/darwin-space.js",
+      "sha256": "064899a397a83f6da13d01c8f45b97c5807ed733a10fd97e1fb9f4b6fc6c3846",
+      "bytes": 2440,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/lib/darwin-vm.entitlements.plist",
+      "sha256": "915e2b39357ecf8d211dc7fac43195c9cdcf55a0a1ecdbf931c116a4eac421f3",
+      "bytes": 236,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/lib/darwin-vm.swift",
+      "sha256": "f7fe0c63525e0eb992bbd5f8f99f714d911edf5bf64ae890959dc6c35e332498",
+      "bytes": 4080,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/lib/darwin.js",
+      "sha256": "0ba03f263e1284a936371ac0249975eaac7b6dc4ccc094c41d9c0f861bc58966",
+      "bytes": 14660,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/lib/desktop-menu-client.js",
+      "sha256": "f25464ec58601629239e349303713dd3c8a4027de16c2c3e87f81ce276e9c32d",
+      "bytes": 7073,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/lib/desktop-menu-theme.js",
+      "sha256": "501874c0074cc7c96f7f647191b373891d5f9a67931a01dd638c085184bc6684",
+      "bytes": 3591,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/lib/desktop-menu.cs",
+      "sha256": "37589bf24ff4ef56e9d31da9f157b9fe2d5d954140e9dc30e9e3d1b98589c98d",
+      "bytes": 9723,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/lib/desktop-menu.html",
+      "sha256": "af569976d502a05f4370ab6bea60a800bb5ee42677422c8fe171fd61ea917fd4",
+      "bytes": 2839,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/lib/desktop-pet-darwin.swift",
+      "sha256": "eabf69227c69ea399140eb34de60f6e56468cd0a6f53e3c717fbeacab573d00e",
+      "bytes": 16677,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/lib/desktop-pet.cs",
+      "sha256": "f33feaf08564c3f4c6c7e910b5b0eb0cfa83d90fb9d98af59bad762c80d9e795",
+      "bytes": 64268,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/lib/desktop-pet.js",
+      "sha256": "ee585587e19c88f0790f8498680100f1db54da434a99b8c3ec3c2d6dbaefac62",
+      "bytes": 14145,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/lib/desktop-transfer.cs",
+      "sha256": "b303e14c673faf3cbcaf51fab3e63f7dbfbfc06a82fedafa330250726aad5441",
+      "bytes": 35028,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/desktop-transfer.js",
+      "sha256": "cd937a4ba389f6ff47ae4f87c54c985658fdf2061490f55a56449ad87ec6d2b6",
+      "bytes": 12214,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/embed.js",
+      "sha256": "1ae14f88db891b8d74e6d407fc2ec217a9b239c96fafa77957bc7863e8e10de9",
+      "bytes": 545,
+      "link": false,
+      "nlink": 7
+    },
+    {
+      "path": "components/computeruse/lib/hidden-agent.js",
+      "sha256": "2e79be8a3ca4d5cd702ff1c8bd6b0d47bae0d3cdaae9d398307d8f7a6bfac635",
+      "bytes": 114025,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/linux-desktop.js",
+      "sha256": "9a685674ea9146ea204770af6261ba7ea4972d29e01f319891b2791da3ddcc93",
+      "bytes": 3155,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/linux-desktop.py",
+      "sha256": "31af68484bf3093ac4aa2a8eeaefd38b00c059dd54925ae7787201b86f8617b1",
+      "bytes": 50364,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/linux-process-guard.py",
+      "sha256": "4c15eafeba6185a80f60e3f7a7b0e1bb7ed9b38abe50e1f8afce3b86230cc0d7",
+      "bytes": 757,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/linux.js",
+      "sha256": "d847a58e319863f970a1c6188bdebab8c0bd72f0ca2592019749bfe3d4767ef8",
+      "bytes": 178465,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/overlay-win32.js",
+      "sha256": "1d155159c574ef76e7bed3ba2ef4635581f65cc203f3079c65fa551064d77a78",
+      "bytes": 65626,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/root.js",
+      "sha256": "6fd2c4c43ded6a8232cc309871e9323b807d36c5282063883b24af6b46735e0a",
+      "bytes": 664,
+      "link": false,
+      "nlink": 5
+    },
+    {
+      "path": "components/computeruse/lib/schema.js",
+      "sha256": "a3072462022ce28167283cf1f3d7ddb1db76ef65eb49481eeb2d5dc60dc70e54",
+      "bytes": 133,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/takeover-lock.cs",
+      "sha256": "3346d7caf7330b2c657c877683f537ba9a37996a25643cf83018a76ed8bf3bf6",
+      "bytes": 2203,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/takeover-lock.js",
+      "sha256": "04e05dc4269c28582f4da1e99f56b215b8bfa2aeb2210c77f0e694c7fb8dcf2b",
+      "bytes": 3631,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/lib/win32.js",
+      "sha256": "ab8aa8f08447f8cedc9c2e4135f3335c7daa76bdd8718d02ad68d82f95b8d18a",
+      "bytes": 302918,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/package.json",
+      "sha256": "ebd552c828c4ccecb4d08ef1fbf925ae14f448c53cb38b99cd9dbfa00b5e0f1d",
+      "bytes": 413,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/computeruse/vendor/webview2/LICENSE.txt",
+      "sha256": "0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55",
+      "bytes": 1487,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/vendor/webview2/Microsoft.Web.WebView2.Core.dll",
+      "sha256": "d684f9f3d91fe7c8e210fae55a335533d49822974a59413993a2ce0c10d11a9e",
+      "bytes": 649792,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/vendor/webview2/Microsoft.Web.WebView2.WinForms.dll",
+      "sha256": "e743a1f78c24c4fa8e226756088d93219b2a09550952f780954c6178c0daeb20",
+      "bytes": 39016,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/vendor/webview2/NOTICE.txt",
+      "sha256": "106423785c5b7eba0a8e61d1837f2132e9c828e20ad530f565d981c1df60dd90",
+      "bytes": 3894,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/vendor/webview2/WebView2Loader.dll",
+      "sha256": "ae26d6ef7c8f6b533585ead76318b6cbf8efad708064953a312dd97f4761ba45",
+      "bytes": 159336,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/computeruse/vendor/webview2/sdk.json",
+      "sha256": "383ff578dcd0a7b9c991843ea0a3ed964aac129bafdd2ac9d3f3dbf64d7f0ab1",
+      "bytes": 750,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/heartbeat/component.js",
+      "sha256": "1b6278ddfc6c8676b5cc6d83b3cdd80ac74c0db48f2ff55b45447e55c1f38c0b",
+      "bytes": 4604,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/heartbeat/index.js",
+      "sha256": "c5e4fd25d5476eb3a8e616fe86043439e7d9c0749b52a6bece3ca15721cea307",
+      "bytes": 2691,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/heartbeat/package.json",
+      "sha256": "45f0ff02b790432de03599dc0533975076e88a48f70df221a2b61504f41e92c2",
+      "bytes": 182,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/memorylab/component.js",
+      "sha256": "d1ae2fd3bfbe85c1dbe5ce9cfd0b7a0ede1796edcb663f80ac1c28eb9cd95b69",
+      "bytes": 79063,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/memorylab/index.js",
+      "sha256": "b80d5cf5fea2a27742cff69bb59042f67f3cc4633c036d7c829256cccd331005",
+      "bytes": 13259,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/memorylab/lib/embed.js",
+      "sha256": "1ae14f88db891b8d74e6d407fc2ec217a9b239c96fafa77957bc7863e8e10de9",
+      "bytes": 545,
+      "link": false,
+      "nlink": 7
+    },
+    {
+      "path": "components/memorylab/lib/memory-store.js",
+      "sha256": "e0b8b8ae10528b53eb19938c9f893bf1b429757544e24d5f869447a4ea295ab5",
+      "bytes": 200774,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/memorylab/lib/root.js",
+      "sha256": "6fd2c4c43ded6a8232cc309871e9323b807d36c5282063883b24af6b46735e0a",
+      "bytes": 664,
+      "link": false,
+      "nlink": 5
+    },
+    {
+      "path": "components/memorylab/lib/schema.js",
+      "sha256": "a3072462022ce28167283cf1f3d7ddb1db76ef65eb49481eeb2d5dc60dc70e54",
+      "bytes": 133,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "components/memorylab/lib/short-memory.js",
+      "sha256": "53138ed33288fa25871741e55344fd8cb642bdf36d4051382ca229805f0d3b04",
+      "bytes": 2375,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/memorylab/package.json",
+      "sha256": "28cd09ed8432ca00eb768ba01cda8ac45279384b8b3167ef1f264ae6e7cdfdd7",
+      "bytes": 354,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/newmate/component.js",
+      "sha256": "229239f5bb0190ac70ca35185d8d0b56ca90f3287c485bf1758cf46ee4284a78",
+      "bytes": 33403,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/newmate/index.js",
+      "sha256": "113b3e45e823417cb6b3b85c495f8a1eabfe4adcaeb11751b48319ad40a46544",
+      "bytes": 9233,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/newmate/lib/file-navigation.js",
+      "sha256": "b38511ac91b87e29d646544f113df692cc6a0088d1f6188641ad7d48ee4510f3",
+      "bytes": 1530,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/newmate/lib/initiative.js",
+      "sha256": "260579c155e5913c1b89ec92803388313252103d504b4b2d9b7956cdd4e10f32",
+      "bytes": 3339,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/newmate/lib/mcp.js",
+      "sha256": "806ec597e8074efa3a13f4b54c6965d18f53f81224d2592e2dc5cd854094e032",
+      "bytes": 7821,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/newmate/lib/memory-context.js",
+      "sha256": "4a5db91b83e456aac1ed43899dd2e0face9c09bbabdc2f37aef806fb67db4d21",
+      "bytes": 1382,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/newmate/lib/presentation.js",
+      "sha256": "15421af103066567d712b61e23db44837e4b43f75b763e6e0491a0c2c1083540",
+      "bytes": 1108,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/newmate/lib/proactive-message.js",
+      "sha256": "42685f1ac7b50c03b23c99cbd74b5848dd868bd248bb39d63c8891aee819425a",
+      "bytes": 1931,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/newmate/lib/thread-handoff.js",
+      "sha256": "33475b17dc5b8d06cee9579a609cb360790f9bbdb859eb1e6c91e27c5f4cb27e",
+      "bytes": 1202,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/newmate/lib/todo-list.js",
+      "sha256": "2209102d370b110e24fad16a864d2d4c5ea4635d64616d715374b830aaeffb78",
+      "bytes": 1132,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "components/newmate/package.json",
+      "sha256": "fd691e5e16718a0483ef87ea48e5dd580a40222d3ad24952b793bdd5b3f85e86",
+      "bytes": 180,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "cordis.patch.yml",
+      "sha256": "ed9f6fff39bd568e3af592c481f8196601458420e5d40038cd601c405e228eb6",
+      "bytes": 30076,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "icon.svg",
+      "sha256": "8c1f0c68ab09e1cd9b9bc54db140df480de085cf02d6d0d0331c635f09280371",
+      "bytes": 1967,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "index.js",
+      "sha256": "6080ded798cf9c4b00571bb1eb41e2187c93a138631ac27c0c9a75e158882cc2",
+      "bytes": 40985,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "lib/conversation-delivery.js",
+      "sha256": "a3f0b66b98535e5a82ef31daa7281768f8f045f1709b5dc8835c1392613fb7e5",
+      "bytes": 2555,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "lib/core-restart.js",
+      "sha256": "f194815b7ae032c68b63c2f9846d6edcee4cb187898ce0c5b557726b6394135b",
+      "bytes": 4585,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "lib/core-restart.ps1",
+      "sha256": "c3c572c55e6c0718bf051bb61c348b5db6c5be4d2077d473b64524a2920a76d1",
+      "bytes": 4198,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "lib/core-update.js",
+      "sha256": "b7a40846d0ad24f66d436abd3b7c5b6b0325834f86adfc5d7965595d27514858",
+      "bytes": 1640,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "lib/cu-caller.js",
+      "sha256": "77ca837b2b3578dc78f71cd3d77df362d2e31af84c8f5bf25869d81281f226da",
+      "bytes": 549,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "lib/durable-state.js",
+      "sha256": "028f54e28607c3ac7c05656a85cc0099aa96e7bf2b095dbeb88c947b94f50b41",
+      "bytes": 854,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "lib/embed.js",
+      "sha256": "1ae14f88db891b8d74e6d407fc2ec217a9b239c96fafa77957bc7863e8e10de9",
+      "bytes": 545,
+      "link": false,
+      "nlink": 7
+    },
+    {
+      "path": "lib/errors.js",
+      "sha256": "9f78c14fa8f26ea57cf38c3ab924d2a24a01e45b9e691d3ef2b43d858dccf0b2",
+      "bytes": 13627,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "lib/model-selection.js",
+      "sha256": "d5858ea7f4e54558b1d7132b96b448953f653ab29e2d19e6aa2da302f468b841",
+      "bytes": 11699,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "lib/newmate-context.js",
+      "sha256": "7cc3926e18dbb324f7c3a02533f58d8d66d23a303f26f043d6a9057dce9f771e",
+      "bytes": 215,
+      "link": false,
+      "nlink": 2
+    },
+    {
+      "path": "lib/newmate-settings.js",
+      "sha256": "201c8da2e7e81ab0c40def91a3a096bbe265044a9a3a14f76b954e4e64987615",
+      "bytes": 1514,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "lib/root.js",
+      "sha256": "d1a8db0b77b122c591fe0ab5e5b079f44c3a6d64b7bb271ac4332a98f12a6dfd",
+      "bytes": 3487,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "lib/schema.js",
+      "sha256": "29dff5ff8543a5943eff0d979846fdfbe5ce57a420cc55c29757fc76e68351cb",
+      "bytes": 1944,
+      "link": false,
+      "nlink": 5
+    },
+    {
+      "path": "locale/en.json",
+      "sha256": "14334fad0677ba73b42a4c95b7452e7c10be336237d900f849a17cef0fe39579",
+      "bytes": 256,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "locale/zh.json",
+      "sha256": "e97c1aac94d2e21d90f07e52b7506c1453f07f6f7f890bbd5f20240750d1e5c1",
+      "bytes": 258,
+      "link": false,
+      "nlink": 3
+    },
+    {
+      "path": "package.json",
+      "sha256": "21244694978a64635cf41dd8a57473113562fbf5c484bf58f5acb8f535f735eb",
+      "bytes": 1775,
+      "link": false,
+      "nlink": 2
+    }
+  ],
+  "profileComponentLinks": [
+    {
+      "name": "newmark2dsh-memorylab",
+      "exists": true,
+      "isLink": true,
+      "linkTarget": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\Newmark2DSH\\packages\\newmark-core\\components\\memorylab"
+    },
+    {
+      "name": "newmark2dsh-computeruse",
+      "exists": true,
+      "isLink": true,
+      "linkTarget": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\Newmark2DSH\\packages\\newmark-core\\components\\computeruse"
+    }
+  ],
+  "profileFileHashes": {
+    "package.json": "3004b3ae77bb7716b0e73ef5f64f89d7152b0e69ab8214d61dd56f6415b407a4",
+    "pnpm-lock.yaml": "0b93b36af943c132ac8f1748b6566ec29dcf62bf6245ba6f7c79448daa2b7784",
+    "pnpm-workspace.yaml": "a9688923752e9798abb52167551e368e1e3298b268e1bb8477025e2044a33fcd",
+    "cordis.yml": "c300dcf2ebc5f02062d6591268d29d3db6fe45e0cb138f5467276fe2ba06076e",
+    "cordis.patch.yml": "ec0e535344073e49350ce4214774426014df4997cf118b2fb7cf68a125a40663"
+  },
+  "profileDependencySpecifier": "file:C:/Users/12252/.dsh/profiles/desktop/newmark2dsh-0.3.14-official.tgz",
+  "backupDir": null,
+  "note": "measured by a dry run; the profile was not touched, so no backup was made"
+}

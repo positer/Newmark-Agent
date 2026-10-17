@@ -1,0 +1,176 @@
+fixture=C:\Users\12252\AppData\Local\Temp\nm-roundtrip-7a9a8b9c
+realIndexStagedBefore=[work/junk.txt]
+realIndexFileSha256Before=B472C88DDA0956580FE6EF4BD213F62C76737C10A11ACD041B5D618A80E56F3A
+--- node Newmark2DSH/scripts/release-heartbeat-0.3.16.mjs push-pull --repo <fixture> --paths work/target.txt ---
+ok   - resolved 1 path(s) inside C:/Users/12252/AppData/Local/Temp/nm-roundtrip-7a9a8b9c/repo
+ok   - 1 file(s) will be staged (11 bytes)
+ok   - staging changed exactly the named index entries (3 entries in the index)
+ok   - staged 1 changed named file(s)
+ok   - commit 6ce2b83a62bb created
+ok   - the commit contains only the named paths, and changes at least one
+ok   - git push reported success
+ok   - git pull --ff-only reported success
+ok   - HEAD, origin/<branch> and the remote ref are all the new commit
+ok   - the named paths are clean in the working tree after the round trip
+{
+  "tool": "release-heartbeat-0.3.16",
+  "command": "push-pull",
+  "ok": true,
+  "at": "2026-10-17T09:10:36.924Z",
+  "workspace": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent",
+  "requestedPaths": [
+    "work/target.txt"
+  ],
+  "steps": [
+    {
+      "name": "resolved 1 path(s) inside C:/Users/12252/AppData/Local/Temp/nm-roundtrip-7a9a8b9c/repo",
+      "ok": true,
+      "detail": [
+        "work/target.txt"
+      ]
+    },
+    {
+      "name": "1 file(s) will be staged (11 bytes)",
+      "ok": true,
+      "detail": [
+        "work/target.txt"
+      ]
+    },
+    {
+      "name": "staging changed exactly the named index entries (3 entries in the index)",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "staged 1 changed named file(s)",
+      "ok": true
+    },
+    {
+      "name": "commit 6ce2b83a62bb created",
+      "ok": true,
+      "detail": "[master 6ce2b83] fixture: only the named path"
+    },
+    {
+      "name": "the commit contains only the named paths, and changes at least one",
+      "ok": true,
+      "detail": "1 file(s)"
+    },
+    {
+      "name": "git push reported success",
+      "ok": true,
+      "detail": "   e3f3cc3..6ce2b83  HEAD -> master"
+    },
+    {
+      "name": "git pull --ff-only reported success",
+      "ok": true,
+      "detail": "Already up to date."
+    },
+    {
+      "name": "HEAD, origin/<branch> and the remote ref are all the new commit",
+      "ok": true,
+      "detail": {
+        "head": "6ce2b83a62bb254882f83d9da677a556db0fdd34",
+        "origin": "6ce2b83a62bb254882f83d9da677a556db0fdd34",
+        "remote": "6ce2b83a62bb254882f83d9da677a556db0fdd34",
+        "commit": "6ce2b83a62bb254882f83d9da677a556db0fdd34"
+      }
+    },
+    {
+      "name": "the named paths are clean in the working tree after the round trip",
+      "ok": true,
+      "detail": []
+    }
+  ],
+  "commands": [
+    {
+      "display": "git add -- work/target.txt",
+      "cwd": "C:/Users/12252/AppData/Local/Temp/nm-roundtrip-7a9a8b9c/repo",
+      "exitCode": 0
+    },
+    {
+      "display": "git commit --no-gpg-sign -m \"fixture: only the named path\" -- work/target.txt",
+      "cwd": "C:/Users/12252/AppData/Local/Temp/nm-roundtrip-7a9a8b9c/repo",
+      "exitCode": 0
+    },
+    {
+      "display": "git push origin HEAD:refs/heads/master",
+      "cwd": "C:/Users/12252/AppData/Local/Temp/nm-roundtrip-7a9a8b9c/repo",
+      "exitCode": 0
+    },
+    {
+      "display": "git pull --ff-only origin master",
+      "cwd": "C:/Users/12252/AppData/Local/Temp/nm-roundtrip-7a9a8b9c/repo",
+      "exitCode": 0
+    }
+  ],
+  "evidence": [
+    "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\Newmark2DSH\\evidence\\20261017-heartbeat-barrier\\push-pull-20261017-171041-018.json"
+  ],
+  "repo": {
+    "root": "C:/Users/12252/AppData/Local/Temp/nm-roundtrip-7a9a8b9c/repo",
+    "gitDir": "C:/Users/12252/AppData/Local/Temp/nm-roundtrip-7a9a8b9c/repo/.git",
+    "branch": "master"
+  },
+  "before": {
+    "head": "e3f3cc34b3b97161320d614ac887d2aa126cc554",
+    "originTrackedRef": "e3f3cc34b3b97161320d614ac887d2aa126cc554",
+    "remoteRef": "e3f3cc34b3b97161320d614ac887d2aa126cc554",
+    "statusOnPaths": [
+      "M work/target.txt"
+    ]
+  },
+  "plan": {
+    "repoRoot": "C:/Users/12252/AppData/Local/Temp/nm-roundtrip-7a9a8b9c/repo",
+    "branch": "master",
+    "files": 1,
+    "bytes": 11,
+    "ignored": [],
+    "includeIgnored": false,
+    "commands": [
+      "git add -- <1 named path(s)>",
+      "git commit --no-gpg-sign -m <message> -- <same named path(s)>",
+      "git push origin HEAD:refs/heads/master",
+      "git pull --ff-only origin master"
+    ]
+  },
+  "staging": {
+    "indexFileSha256Before": "b472c88dda0956580fe6ef4bd213f62c76737c10a11acd041b5d618a80e56f3a",
+    "indexFileSha256After": "9578f460066f323357fa0edb931f36e57af9660e3da04ad1bff85b6941d21c02",
+    "entriesChanged": [
+      "work/target.txt"
+    ],
+    "strayEntries": [],
+    "indexEntriesTotal": 3
+  },
+  "commit": {
+    "sha": "6ce2b83a62bb254882f83d9da677a556db0fdd34",
+    "message": "fixture: only the named path",
+    "files": [
+      "work/target.txt"
+    ],
+    "onlyTheNamedPaths": true,
+    "namedPaths": [
+      "work/target.txt"
+    ]
+  },
+  "after": {
+    "head": "6ce2b83a62bb254882f83d9da677a556db0fdd34",
+    "originTrackedRef": "6ce2b83a62bb254882f83d9da677a556db0fdd34",
+    "remoteRef": "6ce2b83a62bb254882f83d9da677a556db0fdd34",
+    "statusOnPaths": [],
+    "changedFromBefore": true
+  }
+}
+scriptExit=0
+realIndexStagedAfter=[work/junk.txt]
+realIndexFileSha256After=CC7081169FBE09242887803664E64B1348E03F746B62E0E169649F918B8BBE11
+--- the commit (changed paths only) ---
+6ce2b83a62bb254882f83d9da677a556db0fdd34
+fixture: only the named path
+work/target.txt
+--- refs ---
+HEAD=6ce2b83a62bb254882f83d9da677a556db0fdd34
+origin/master=6ce2b83a62bb254882f83d9da677a556db0fdd34
+ls-remote=6ce2b83a62bb254882f83d9da677a556db0fdd34
+statusOnNamedPath=[]
+logCount=2

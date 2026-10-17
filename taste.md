@@ -1,5 +1,355 @@
 # Newmark Agent Project Taste
 
+## 2026-10-13 Newmark2DSH 0.3.14正式发布
+
+0.3.14 已发布 GitHub/npm latest，并取回官方包核对全部 93 文件；Windows安装已替换为同一正式包，逐字节一致，官方ASAR与原配置/消息保留，heartBeat重启不重复投递。不可变标签 b5c8a3b46152da88bb1b16713fc93be9f575c320；只读官方云验收也通过。上一轮200/0/0完整门禁与Mac ARM六作业作为同一运行代码的验收证据；发布源只规范化Git文本换行，正式安装再次通过23项共享桌宠原生检查。
+
+[发布证据](Newmark2DSH/archive/20261013-release-0.3.14/REPORT.md)。
+
+
+## 2026-10-13 Windows安装与Mac包边对照（0.3.14候选）
+
+0.3.14 已安装本机官方DSH，尚未发布。修复Mac屏幕四层灰度框为顺时针周长黑白渐变，桌宠按Alpha裁剪保持比例；修复Win隐藏CU先启动后开启陪伴重建桌宠的问题。200/0/0完整门禁、92文件源码/安装一致；23共享桌宠、5尺寸、20原生GPU预览、3菜单检查通过。实际宿主待办模型激活、阅读保护、MCP和heartBeat重启不重放通过，原设置/消息/其他插件保留。Mac14/15/26 ARM六云作业成功，原生52场景、生产渲染1x/2x及实际双Space通过。视觉风格与比例对齐，不宣称逐物理像素一致、官方Mac DSH整机或Neo性能实测；Win不激活桌宠实体双击/右键本轮未独立复验。
+
+[完整证据与边界](Newmark2DSH/archive/20261013-win-mac-parity/REPORT.md)。
+
+
+## 2026-10-13 macOS动态包边专项（0.3.14候选）
+
+修正Mac桌宠矩形外框为图片Alpha轮廓波形，normal CU用四层平滑灰度边框，单调时钟3秒相位、30Hz common-mode计时器；CU决定闪边，预览展开/仅陪伴无闪边，右键菜单不中断动画，释放清理正常。ARM macOS14/15/26原生51场景与双Space均通过；实际连续像素变化、静态无闪边、轮廓邻接0脱离像素通过，生产渲染类1x/2x离屏检查通过。不是实体Retina或官方Mac DSH整机验收。0.3.14仍为未安装发布候选，包含此前toDo对话激活。
+
+[专项证据](Newmark2DSH/archive/20261013-macos-dynamic-border/REPORT.md)。
+
+动态渲染验收须比较相邻帧真实像素，并与无描边基线核对新增Alpha邻接；不能用一张截图或outline_active代替动画证明。轮廓缓存随尺寸/backing scale变化，计时用monotonic相位，不用计数toggle。菜单跟踪使用common run-loop模式。区分名义计时频率、真实paint和物理屏幕FPS；离屏2x不能称实体Retina验收。
+
+
+## 2026-10-13 toDoList 适时激活 NewMate（0.3.14 候选）
+
+新待办默认激活一轮 NewMate，结合原生MemoryLab记忆和上下文回应或处理明确委托。阅读、草稿、输入、运行任务、静默和暂停时等待；适时按现有关注策略选当前或新对话。回复通过桌宠气泡、点击进入页面，不自动弹出窗口。页面/对话工具/MCP可选择仅原文提醒，旧待办保持原语义。持久化唯一激活任务与消息回执，失败/运行中崩溃不自动重试。21激活、20提醒、23steer、12网页与12版本检查通过；完整门禁200/0/0。六manifest同步0.3.14，无新组件；本轮未安装发布。
+
+[实现与候选包记录](Newmark2DSH/archive/20261013-todo-activation/REPORT.md)。
+
+区分定时原文通知与用户委托的定时Agent激活。后者受关注与打扰门禁约束，但不消耗普通寒暄每日预算；不凭空扩大工具授权。领取时原子创建固定任务，已落盘回复优先消费恢复；不自动重跑不确定的模型/工具动作。历史记录缺mode保持旧语义；新创建显式可选双模式。
+
+
+## 2026-10-13 0.3.13 已发布：Windows安装与Apple Silicon云验收
+
+NewMate toDoList 已随现有五组件发布，未新增子组件。GitHub v0.3.13、npm latest=0.3.13；93个包内文件与Windows官方DSH安装逐字节一致。完整门禁200通过、零失败/跳过；实际GUI创建、到期等待陪伴开启、精确投递、第二次heartBeat重启不重放，以及实际宿主MCP创建/查询/取消通过。原39条消息、其他插件依赖和Loader配置保留，陪伴恢复原关闭状态。Apple Silicon macOS14/15/26完整和双Space六作业通过；每环境269项检查与5组真实Space场景，不包括官方Mac DSH整机安装、实体输入时序及Neo性能验收。首次npm传播门禁超时，后续官方取回及只读CI完整验证成功；同版本未重发。
+
+[完整发布验收记录](Newmark2DSH/archive/20261013-release-0.3.13/REPORT.md) · [公共发布](https://github.com/positer/newmark2dsh/releases/tag/v0.3.13)。
+
+提醒先持久化固定消息ID再通知，重启按真实消费状态去重；同版本npm上传成功但检索未就绪时等待官方扫描，不重发/改标签。只读验证取回官方tar逐文件与不可变Git标签比对，同时核验latest；后续CI等待最长30分钟。测试数量按实际注册器观察更新，新增工具必须实际调用，不因旧字符串/CRLF假设失败而跳过。区分安装GUI、真实原生云夹具、浏览器宿主模型夹具与实体设备证据。
+
+
+## 2026-10-13 NewMate toDoList（0.3.13 候选）
+
+NewMate 新增 toDoList 页面按钮，可手动填写激活时间和发送内容、查看状态并取消未投递项目。任意 DSH 对话、NewMate 本身及认证 MCP Agent 可通过 newmate_todo_add/list/cancel 创建与管理。到期直接投递预存内容，复用现有关注保护和自动换新对话策略，不额外调用模型；陪伴关闭时等待开启，静默/暂停/气泡冷却沿用现有规则。固定消息 ID 和持久化投递回执防止重启重复发送，历史及取消记录保留。版本为 0.3.13 源码候选，属于现有组件更新，无新增子组件。尚未安装或发布。
+
+定时待办归属 NewMate，不扩张 heartBeat 的重启与当前对话权限。时间用带时区 ISO 输入、毫秒 epoch 存储；既定内容直接投递，明确的用户待办不消耗自主推理预算。先持久化消息、再通知；重启仅依据消息回执恢复，不能反复投递。取消只改状态，不删除文件或历史。当前阅读/草稿/聊天优先，等待定时器不可改变无待办时的即时 steer 时序。
+
+[实现、测试及候选包记录](Newmark2DSH/archive/20261013-newmate-todo/REPORT.md)。
+
+
+## 2026-10-13 Apple Silicon 渲染至操作验收
+
+0.3.12 源码候选的渲染至操作验证已扩展：macOS 14.8.9、15.7.9、26.6.2 ARM64 每环境通过 93 组 JS 契约、45 组原生场景、28 组 Chromium/WebKit 页面场景。修复自身输入误判、组合键、macOS 26 滚动、桌宠预览遮挡、预览帧清理及 React fallback snapshot。视觉与 AX 同时可用、分别选择，交叉核验可选；Space 共享输入，100ms 用户 idle 优先。后续仅面向 Apple Silicon，Intel 旧结果仅归档。本地 288 项检查通过。尚未验收官方 Mac DSH 整机、实体键鼠、多屏组合与 Neo 硬件性能；候选未发布或安装。
+原生视觉与 AX 保持独立可选择；不得强制交叉核验或在明确通道失败后悄悄切换。跨 Space 必须有真实 WindowServer 前后可见性证据；合成输入不能代表实体输入，原生事件路由不能代表 DSH 容器恢复。CI 仅 Apple Silicon，不添加 Intel 检查。
+
+[完整报告与逐项证据](Newmark2DSH/archive/20261013-macos-render-pipeline/REPORT.md)。
+
+补测：macOS 14/15/26 ARM64 的真实双 Space 流程全部通过。修正离屏 AX 首次绑定、异步 Space 动画和原窗口可见性恢复；离屏像素可通过显式 activate_for_observation 受保护采集，默认/桌宠预览不会自动切换。官方 DSH Mac 容器及实体设备验收仍单列。
+
+
+
+## 2026-10-13 免费Mac云验证结果
+
+0.3.12候选已利用公开仓库免费标准Mac CI完成两轮测试：macOS 14.8.9/15.7.9 ARM64均编译CU与桌宠，通过原生只读协议及自产AppKit窗口AXPress/原前台窗口恢复集成；normal边框创建、Space无全屏边框也通过运行检查。210项本地检查通过。鼠标恢复目前为原生返回值证据；真实跨Space、实体键鼠100ms时序、桌宠点击/DSH恢复和边框视觉、Neo硬件仍待独立验收。没有取得可长期交互的免费云Mac，当前安装与npm latest仍为0.3.11。
+
+源码契约、SDK编译、原生自产窗口动作、视觉几何与实体用户输入验收必须分开记录；免费CI不等同长期云服务器。不得为云测试修改TCC或宣称Space实现独立输入隔离。
+
+[报告与证据](Newmark2DSH/archive/20261013-macos-cloud-test/REPORT.md)。
+
+## 2026-10-13 Mac桌宠展开与normal CU边框
+
+0.3.12候选补上Mac原生共享桌宠：Space接管单击展开/收起只读目标窗口预览，双击复用open-chat事件并唤起DSH，原生菜单退出陪伴/打开设置，气泡沿用主主题；没有独立托盘。normal CU以显式mouse_mode:real保留原生输入路径，边框按每个NSScreen渲染、点击穿透、跨Space/全屏显示，并在停止/退出时清理。CU主线程不再阻塞读取stdin。预览只在展开时500ms检查，不更换Agent AX标识，最多保留2张自产临时画面。此前100ms用户优先与操作后恢复约束继续适用。Windows本机安装和公开发布仍为0.3.11；此候选未发布。
+
+预览不转发输入，观察缓存和AX目标不能与Agent控制互相污染。normal与Space展示职责分开；用户主动点击桌宠是交互意图，不能被后台焦点恢复覆盖。Mac SDK编译、实际原生协议、自产窗口动作、跨Space和Neo硬件效果分别记录。
+
+[本次记录](Newmark2DSH/archive/20261013-macos-pet-border/REPORT.md)。
+
+## 2026-10-13 Space 用户优先输入与恢复
+
+按用户最终选择，macOS CU 采用 Space＋AX，不接入额外账户或VM。Space租约绑定用户预先放入目标Space的现有窗口；不创建Space或使用私有Space ID。Agent输入等到物理键鼠连续空闲至少100ms、且无按键/鼠标按钮保持按下后投递，最多等待5秒，超时不投递旧动作。每个输入保存鼠标位置和原前台AX窗口，成功/失败均尝试恢复；新用户操作优先，恢复失败明确报告，已执行动作不自动重放。后台点击/文本仅使用支持的AX动作；按键/滚动可能短暂激活目标Space再恢复。仍是0.3.12源码候选，Mac编译、100ms硬件时序及焦点/鼠标恢复均未实机验收。Windows安装/公开发布维持0.3.11。
+
+Space不标为独立输入隔离。阻断对象是Agent，用户输入不被屏蔽；等待为至少100ms，不承诺实时系统的精确100ms截止。每个原生写操作前重验硬件状态，键鼠成对释放保持完整。恢复优先保留用户新状态；恢复失败携带action_applied，不能重放已执行动作。
+
+[本次记录](Newmark2DSH/archive/20261013-macos-space-input/REPORT.md)。
+
+## 2026-10-13 macOS 无障碍辅助候选
+
+已将 macOS CU 源码更新为无障碍 AX 优先：返回有界控件树，使用 AXPress 点击、AXSelectedText 插入选中文本、AXRaise 激活指定窗口；目标标识仅供同调用者和同窗口使用，有效期30秒。无需屏幕录制权限也可观察 AX 结构，像素采集失败时保留 AX 结果。稀疏测量结合控件标题、角色、状态、动作及几何变化，不将随机目标标识当成变化；不读取输入框值，安全字段拒绝编辑。无明确目标且控件不支持语义动作时保留 CoreGraphics 回退，已尝试失败的 AX 动作不重复投递。版本为0.3.12源码候选，尚未在Mac编译或实机验收；本机已安装/发布的0.3.11不变。
+
+Mac CU 优先公共 Accessibility API。AX目标不得跨调用者、窗口或观察时效复用；明确目标的错误不降级成坐标事件，避免重复动作。仅选中文本插入，不能用AXValue整字段替换冒充输入。观察值脱敏、树规模与消息等待有界，语义标识更新不制造稀疏测量假变化。区分源码契约检查、SDK编译、TCC授权及硬件实际效果。
+
+[本次记录](Newmark2DSH/archive/20261013-macos-accessibility/REPORT.md)。
+
+## 2026-10-13 0.3.11 回复内交互与原生侧栏
+
+0.3.11 已安装并经 heartBeat 重启。生成式 HTML 直接在回复中渲染，支持输入、按钮、展开收起、源码及复制；当前对话和只读历史复用相同实现。文件链接在 NewMate 自己的侧栏挂载 DSH 实时注册的原生组件，未委托本体对话或自写文档预览器；无法支持时通过原生文件管理器定位。NewMate 获得 MemoryLab 新建、增量更新和标签工具，以及 shortMemory_add，仍没有删除许可。259 项相关检查通过，真实模型生成的计数器及原生 Markdown 已实机验证；89 个交付文件源码、包、安装一致。原有 37 条消息均保留，增加 2 条验收消息，陪伴开关保持关闭。0.3.11 已推送 main/v0.3.11 并发布 GitHub Release，CI 成功；官方 npm latest=0.3.11，下载的90个公开文件与发布源码一致。
+
+文档展示只接入 DSH 原生注册组件，注册表动态发现，不按后缀自行实现渲染器。NewMate 有自己的原生组件生命周期，不能切换到本体对话偷用侧栏。生成式 UI 的脚本仅在不授予同源的 sandbox iframe 内执行，禁外部网络；窗口消息须验证来源和随机令牌。源码开关及尺寸变化不得重建交互状态。记忆写入验收使用隔离库，需断言任务真实完成，避免调度器捕获异常造成假阳性。
+
+[本次验收记录](Newmark2DSH/archive/20261013-generative-ui-test/REPORT.md)。
+
+## 2026-10-13 0.3.10 原生兼容与 Mac 原型
+
+0.3.10 已本地安装，并由 heartBeat 完成重启。Agent API 统一接到 DSH 公共模型解析、请求准备和标准流回复解析，兼容能力由供应商适配层提供；同名模型按供应商隔离，未安装或点名外部供应商插件做特殊适配。NewMate 文件链接采用原生侧栏能力优先、文件管理器定位回退，实时发现未来注册类型；无边框、加粗下划线，历史仍只读。桌宠菜单修复启动主题快照缺失、预热及重复加载，原生隔离窗口测得预热后 38 ms 打开。699 项相关检查通过，包含真实 DSH Runtime/BlockAssembler 内存适配器测试和 Windows WebView 集成测试。macOS 原生 CU 与 Virtualization VM 已加入源码原型，但未经过 Mac 编译/硬件验证，guest CU 仍未接通，virtual 请求明确拒绝物理回退。未远端发布。
+
+模型兼容位于 DSH 公共服务末端：按 provider/model 精确匹配，供应商私有 replayState 不跨供应商复用，每次重试重新 prepareCall，使用原生 BlockAssembler 解析标准流，不按插件名字分支。原生 UI 服务通过公开 get/已声明 inject 取得，不跨入未声明 remote 子代理；文件预览查询实时注册表，由原生预览组件处理读取授权和正文。全局面板切换后先等待原生会话/侧栏挂载。macOS 虚拟请求不可降级到物理桌面；源码原型、SDK 编译、硬件验收和 guest CU 路由分别记录，不混称已支持。
+
+[本次验收记录](Newmark2DSH/archive/20261013-native-provider-darwin/REPORT.md)。
+
+
+## 2026-10-12 0.3.9 主动消息内容约束
+
+0.3.9 已本地安装并完成 heartBeat 重启。NewMate 明确区分用户提问与后台触发：主动联系要有具体可信的新内容，自然简短，最多两句、240 字符；没有可核实内容就保持安静，不主动发送能力边界、权限清单或“我不能为你做什么”的无请求说明。发送前拦截常见能力声明与长篇报告格式，不写聊天、不弹气泡、不触发换新或占消息额度；用户明确询问能力时仍如实回答。外部 agent 主动发信使用同一能力声明防线，完整正文和气泡摘要仍分离。
+
+385 项相关检查通过。实际模型处理重启后台任务后 completed / not_actionable，未追加消息，35 条基线消息保持一致；任务物理消费为永久回执。最终源码、包、安装 84/84 文件同哈希。限频、静默、关注保护和记忆缓存保持，未新增模型审核或子组件，未远端发布。
+后台信号不是用户提问，不能续答旧问题或主动解释能力限制。无可核实新内容时静默是成功结果，不是需要重试的失败。抑制必须发生在持久消息、未读、换新及桌宠通知之前，保留用户主动问答的诚实边界；不添加第二次模型调用做内容审核。
+
+[本次验收记录](Newmark2DSH/archive/20261012-newmate-proactive-format/REPORT.md)。
+
+
+## 2026-10-12 0.3.8 重启恢复、桌宠配置与气泡投递
+
+0.3.8 已本地安装并由 heartBeat 重启加载。修复原对话冷恢复缺少 `{{model}}`：在提示词装配前恢复该对话的供应商、模型和推理等级，保留运行中选择，禁止混用供应商或退回全局默认模型。重启辅助程序跳过已退出子进程的复用 PID，同时保留主进程身份检查。真实后台冷恢复已完成模型回复，任务物理移除并留下永久消费回执；随后再次更新重启，没有重复投递。
+
+NewMate 取消 Windows 系统通知，仅使用桌宠气泡提醒，完整消息保存在聊天。右键菜单改为“退出伴随”“打开设置”；退出只释放陪伴的桌宠所有权，CU 可继续使用同一桌宠。配置页重构为组件卡片、模型与桌宠配置、插件更新、陪伴偏好四个区域，使用 DSH 的主题变量，独立开关和供应商模型隔离继续保留。
+
+此次相关门禁 401 项通过；最终源码、包、安装 83/83 文件同哈希。真实重启与配置页截图已留痕，原生菜单动作经过独立窗口测试，工具限制下未完成用户桌宠的物理右键手势验收。未新增子组件，未远端发布。
+恢复模型必须在 agent 发布及首次 loop 前完成，provider/model 必须作为同一选择对；重启只操作已核对身份的进程，不能误杀复用 PID。NewMate 的系统通知设置仅作关闭兼容，不允许从旧配置重新开启。桌宠菜单是配置入口，不关闭 DSH，不干涉 CU 的所有权。主题必须采用实际 DSH token，源码测试通过后仍需检查实际卡片边界和背景。
+
+[本次验收记录](Newmark2DSH/archive/20261012-heartbeat-model-context/REPORT.md)。
+
+
+## 2026-10-12 0.3.7 NewMate 实时引导与关注保护
+
+0.3.7 已本地安装：NewMate 用户输入直接加入当前运行的 steer guide，不再为每次补充另建排队轮次；界面运行中显示“引导”，补充要求在模型/工具边界生效，旧工具调用被配对为未执行结果，旧回答不会作为最终回复发出。用户打断自动 JSON 判断时复用同一持久任务转为普通回复；显式换新对话的输入会中断旧运行，用户任务优先于后台投递。
+
+自动换新基于可观察的关注状态：正在阅读、近期输入/关注、已有草稿及用户任务保护当前对话。话题变化且至少八小时未互动，或一天以上且连续两次未回应时，在主动消息确实被允许发送前考虑换新；每天最多自动换新一次，旧对话只读保留，不清零预算、冷却或未回应退避。多窗口草稿具有所属窗口与事件序号，其他窗口和旧事件不能清除保护。用户消息上方只保留时间，删除两个“你”；NewMate 回复头像、名称、时间和格式保持不变。
+
+实时引导/关注/换新 23/23、Agent API 268/268、客户端 123/123、低打扰激活 57/57、shortMemory/MCP 37/37、聊天 21/21、供应商隔离 18/18、版本 12/12，共 559 项通过。真实模型验证第二次输入 mode=steer，与第一次共用任务 ID，最终只回复“引导已收到”；实机截图确认用户气泡只显示时间，NewMate 标签完整。最终源码/包/安装 83/83 同哈希，25 条基线消息保留。heartBeat 重启 running，更新后任务已消费为永久回执。未新增子组件，未远端发布。
+
+用户输入不能被当作等待上一回答完成的下一轮队列。引导保持在当前运行作用域，不暴露跨运行/供应商的全局缓冲；最新输入不能使旧工具继续执行。自动换新只依据元数据，不推断用户心理；宁可保持当前对话，也不在关注或草稿状态下切走。换新不得恢复历史或重置主动限频。后台持久任务仍保持交付职责，用户交互具有优先权。
+
+[实现与实机证据](Newmark2DSH/archive/20261012-newmate-steer-handoff/REPORT.md)。
+
+
+## 2026-10-12 0.3.6 NewMate 唤起、气泡与回复预览
+
+2026-10-12 用户实机确认：关闭 DSH 主窗口、保留后台运行后，双击桌宠可以恢复主窗口并进入 NewMate。此项验收通过；原生消息气泡点击仍待确认。下文待确认措辞为反馈前的历史记录。
+
+0.3.6 本地更新：发送按钮保持正常右对齐；桌宠显式清除 Electron-as-Node 启动变量，通过已验证的 DSH 单实例入口唤起隐藏主窗口，并请求进入当前 NewMate。气泡跟随主设置的浅色/深色/系统外观，展示最多 80 字的独立摘要；完整正文保存在聊天页，MCP newmate_message 可传 summary。NewMate 回复约束为亲近务实的私人秘书，真实文件链接在回复内可点击，只读打开已引用的文本文件（2 MB 上限）。自包含 HTML 回复以卡片打开独立面板，支持展开、页面/源码切换和复制；iframe 采用不带同源能力的脚本沙箱及受限资源策略。未新增子组件、未远端发布。
+
+客户端 123/123、版本 12/12、聊天 21/21、shortMemory/MCP 37/37、低打扰激活 57/57、呈现行为 8/8、原生共享桌宠 19/19，共 277 项通过；另有两条实机 HTTP 文件边界拒绝测试。实机验证 HTML 按钮计数 0→1、展开面板、文件预览及主设置浅色切换后原生 bubble_dark=false，已恢复原来的跟随系统外观。物理桌宠双击和原生气泡点击尚待用户确认，电脑控制工具拒绝对其他原生窗口的点击；不将页面测试计为这两项验收。
+
+呈现只消费完整回复的独立摘要，禁止用气泡截断正文来替换持久消息。文件读取由用户点击触发且必须对应回复中的真实绝对路径，不扩充模型工具权限。交互 HTML 不与宿主共享源或系统能力；预览内容不能成为 MemoryLab 事实。原生用户点击唤起走验证的本体单实例入口，清除派生进程的 Node 模式；视觉层继续只共享 CU 桌宠，CU 决定闪边。
+
+[实现与实机证据](Newmark2DSH/archive/20261012-newmate-bubble-preview/REPORT.md)。
+
+
+最终包与安装 82/82 同哈希，23 条基线消息保持完整；heartBeat 终态 running，更新后任务已完成并真实消费为永久回执。
+
+## 2026-10-12 0.3.5 NewMate 发送按钮对齐
+
+已本地安装 0.3.5：移除 client.js 中按桌宠运行状态固定添加的发送按钮右外边距，陪伴开启和关闭沿用同一输入框行布局。客户端 123/123、版本约束 12/12；源码/包/安装 81/81 一致，实机截图确认陪伴开启时发送按钮位于输入框右侧。未新增子组件，未远端发布。
+
+[修复与实机证据](Newmark2DSH/archive/20261012-newmate-send-alignment/REPORT.md)。
+
+
+## 2026-10-12 0.3.4 NewMate 低打扰自主激活
+
+已实现并本地安装 0.3.4：NewMate 不再依赖用户先开口、文件变化或外部任务才工作。开启陪伴后约 20 分钟进入自主检查；默认适中频率，每天最多 4 次自动模型判断、2 条自主消息，未回应后间隔从 4 小时逐步退避至 8/16/24 小时。夜间 23:00–08:00（北京时间）、正在输入、阅读聊天、DSH/后台任务或 CU 忙碌、锁定/安全桌面、离开设备 90 分钟时延后。读过主动消息也算回应兴趣，不要求打字。文件事件先合并，长期记忆正文的元数据变化、标签/短记忆变化与低频空闲检查共用预算；没有必要内容时不发消息。第一整天没有主动内容时允许一条不调用模型的轻量问候，后续同类兜底至少间隔三天。自主消息不抢焦点，首次系统提醒静音，持续未回应后只保留气泡/未读；外部 agent 连发保留全部内容但 30 分钟内只打扰一次。配置页新增主动开关、安静/适中/活跃频率、静默时段和暂停八小时。未新增子组件，patch +1；未远端发布。
+
+主动激活 57/57、原生共享桌宠 16/16、客户端 123/123、聊天 21/21、陪伴/heartBeat 57/57、shortMemory/MCP 37/37、Agent API 268/268、供应商隔离 18/18、版本 12/12；最终源码/包/安装 81/81 一致，原有 19 条消息保持完整。七天无用户主动输入的模拟共 8 次模型检查、8 条消息、首次 1 条系统通知。长周期以模拟时间及确定性模型结果验证；实机验证设置、暂停/恢复和原生可用性，未把模拟结果冒称真实七天运行或实际费用。实际定时模型已复验通过：本次没有合适内容保持静默，预算只加一次，旧失败任务未重放。
+
+自主性不能等于高频模型轮询，也不能只靠文件事件触发。先用本地粗粒度元数据/用户可用性决定是否值得推理，再用持久预算控制判断与可见消息，生成结束时重查静默、忙碌和线程边界。冷却与额度重启不清零，不追赶漏掉的时点；自动任务禁止手动重试绕过预算，关闭主动功能只中止自动 run。查看旧历史不重新激活；无删除或任意执行能力。未回应时同时降低频率和通知强度，低成本问候必须限频且不伪造个性化事实。粗粒度用户输入时长不包含键位、窗口内容或屏幕采集。
+
+[策略与验收证据](Newmark2DSH/archive/20261012-newmate-initiative/REPORT.md)。
+
+
+## 2026-10-12 0.3.3 NewMate 打开链路与界面细节
+
+实机闭环：用户已确认在其他应用前台时，双击桌宠可以正常恢复 dsh 并打开 NewMate 当前聊天（2026-10-12）。下文的待反馈措辞属于确认前记录。
+
+0.3.3 已本地安装：桌宠打开聊天时先恢复并激活已验证的 dsh 主窗口，保留单实例启动兜底；新增双击松键判定与重复事件抑制，单击/拖动不会误打开。打开事件优先处理，恢复焦点时立即检查，缺少布局服务时保留重试；已在历史或设置页时切回当前聊天并聚焦输入框。侧栏头像降低亮度并以更克制的比例向右显示；NewMate 标题、欢迎文案、快捷按钮、历史行、输入框细节和设置页陪伴开关几何已完善。历史仍为按钮进入的只读记录，CU 仍独占闪边，NewMate 无独立托盘。未新增组件，patch +1，未远端发布。
+
+原生点击处理 6/6、共享桌宠 15/15、客户端 123/123、聊天 21/21、陪伴/heartBeat 57/57、shortMemory/MCP 37/37、供应商隔离 18/18、版本 12/12；最终包 80/80 文件与源码和安装一致。已实机检查界面与历史/设置到聊天的导航。真实鼠标双击因无激活工具窗口不能被电脑控制工具直接定位，等待用户反馈；不把事件单测或显式 IPC 夹具声称为物理双击验证。
+
+呈现进程收到用户打开意图时，只恢复 executable 路径严格匹配的 dsh 窗口；无激活桌宠不能靠启动一个单实例进程替代显式前台恢复。用户打开事件先于通知权限路径，消费 ID 只在真实选择页面成功后更新；已在 NewMate 面板时要复位只读历史/设置视图，不修改当前线程。双击松键与原生双击事件须去重，拖动清除候选。实机物理手势、事件单测和 IPC 夹具分别留证。
+
+[本轮验收记录](Newmark2DSH/archive/20261012-newmate-polish/REPORT.md)。
+
+
+## 2026-10-12 0.3.2 NewMate 页面与陪伴体验
+
+已实现并本地安装 0.3.2：NewMate 提供常驻输入框、独立只读历史入口、新对话、设置和陪伴开关。历史不常驻，不允许编辑、重新激活、继续发送或重试历史任务；新对话关闭上一段记录，旧消息完整保留。侧栏共用桌宠图片，横向翻转朝向右侧，先放大 20% 后按反馈缩小 10%（最终为原尺寸 108%）。陪伴与 CU 共享一个桌宠，CU 单独决定闪边。NewMate 内核由 dsh Cordis 托管，原生辅助窗口只负责呈现并随宿主结束；无独立托盘，系统通知由现有 dsh 窗口承载。焦点不在 NewMate 聊天页时主动消息显示桌宠气泡，返回页面后收起。未新增子组件，patch +1，未远端发布。
+
+专项通过：聊天 21/21、客户端 123/123、共享桌宠原生 15/15、陪伴/heartBeat 57/57、shortMemory/MCP 37/37、供应商隔离 18/18、Agent API 268/268、版本 12/12；最终源码/包/安装 80/80 字节一致。实机查看正常聊天、按钮进入历史与无输入框的只读阅读、右向图标、后台气泡和前台抑制。双击的原生事件单测与实际 IPC 导航通过；自动化工具不能直接定位无激活桌宠窗口，未声称完成真实鼠标双击。系统通知调用归属 dsh，不声称观察到 Windows 通知中心弹窗。旧总门禁的两个宿主/源码前提失败不归入本轮专项通过。
+
+历史只读必须在服务端执行，不能只隐藏 UI 控件；查看历史不得修改 activeThreadId。共享桌宠用声明状态组合生命周期，CU 独占闪边决策；图片原资产不翻转，侧栏局部 transform 做光学比例与朝向适配。前台抑制结合页面声明与操作系统实际焦点；通知由 dsh 窗口承载，辅助呈现进程不得创建托盘。消息、记忆与模型身份保持各自边界，旧记录不删除。
+
+[本轮验收与证据](Newmark2DSH/archive/20261012-newmate-ui/REPORT.md)。
+
+
+## 2026-10-12 0.3.1 供应商同名模型隔离
+
+已修复并安装 0.3.1：Agent API 可用性与视觉能力以供应商和模型 ID 同时匹配，核心目录拒绝将外部供应商模型重标为自身；每次 run 固定原始供应商、模型与 reasoningEffort，后续切换不改变重试和后续轮次。记忆缓存仅复用模型无关的背景文本，不共享供应商能力或凭据。未新增组件，patch +1，未远端发布。
+
+隔离专项 18/18、Agent API 268/268、客户端 123/123、陪伴 57/57、版本 12/12；已安装 80/80 文件与源码和 tarball 一致。真实同名 deepseek-flash 的两个供应商 profile 隔离，MCP 0.3.1 与 NewMate QA031_OK 回复通过，原准用模型已恢复。总门禁 195/197，帧循环源码断言及旧 CLI 宿主前提未通过，详见报告。[验收报告](Newmark2DSH/archive/20261012-provider-isolation/REPORT.md)。
+
+模型身份始终为 (provider, model ID)，供应商账户 ID 不归并为品牌名，展示名不能作为路由键。目录显式归属必须与查询供应商一致；图像能力只从该身份取得。共享记忆前缀的本地内容复用不能声称为供应商缓存命中。
+
+
+## 2026-10-12 0.3.0 本地安装与实机验收
+
+Windows DSH 已安装 0.3.0，80/80 包内文件与最终 tarball 和源码一致。实机验证 NewMate 侧栏/对话、DSH 与外部 MCP 调用、shortMemory 七天到期与灰显、两个独立开关、真实视觉识别，以及两次 heartBeat 全局重启：第一次自动投递后任务载荷移除，第二次不重复投递。实机修复冷启动入口缺失和 opencode-go 缺传输 sessionId，并补齐完整短记忆日期与输入框样式。准用模型恢复原 DeepSeek，桌宠倍率保持 60.1%。未发布远端。
+
+[安装与实机证据](Newmark2DSH/archive/20261012-installed-030/REPORT.md)。下文的“源码候选/未安装”是先前阶段记录；当前状态以本节为准。旧 CLI 完整 ToolRuntime 导入门禁仍未闭环，实际宿主路径已另行验收。
+
+实机发现必须回到当前接口契约：组件状态键用宿主 name；provider sessionId 是传输关联而非持久会话。传输成功、模型实际输出、本地视觉真值和重启后消费分别验证；安装必须核对实际依赖内容，不信相同 tarball 定位器的缓存提示。
+
+## 2026-10-11 0.3.0 新组件实现（源码候选）
+
+已接入 NewMate 陪伴内核与 heartBeat 重启投递，五子组件独立开关；Agent API 支持真实图像附件；MemoryLab 增加 shortMemory（默认七天）及“总览/详细/短期”。NewMate 在首轮推理前原生注入全部标签关系和最近十条短期记忆，并开放 DSH/MCP 共用接口；无文件删除工具，文件测量默认关闭、变动去重且低打扰。heartBeat 成功投递后移除可执行任务，保留无正文收据。
+
+本轮为源码实现与本地候选打包，尚未发布或覆盖本地安装。[验收记录](Newmark2DSH/archive/20261011-newmate-heartbeat/REPORT.md)。[实现和接口](Newmark2DSH/docs/09-newmate-heartbeat-implementation.md) · [OpenDot 参考边界](Newmark2DSH/docs/10-opendot-reference.md)。下文的“仅设计”是先前预研记录，当前实现状态以本节与本次验收报告为准。
+
+约束：原生记忆背景不构成执行授权；调用方身份由宿主提供；短期过期保留灰显；任务消费必须跨过宿主持久化屏障；缓存计数不能冒充提供商命中；只有显式来源绑定的陪伴任务可唤起原对话。源码、隔离测试、候选包和已安装状态分别陈述。
+
+## 2026-10-11 Newmark2DSH 陪伴组件预研纪律
+
+陪伴状态持久化与Agent API临时run分离；稀疏测量仅负责唤醒，完整观察与语义判断显式接续。进程级API不自动继承会话审批/沙箱，需动作与资源级Broker；不能以工具allow或workspace冒充安全边界。现有NewMate桌宠不证明陪伴内核完成。闭源竞品官方披露、源码核查、设计提案分别标明；不将候选参数或成本公式当实测性能。完整规则见 [子项目taste](Newmark2DSH/taste.md)与 [设计](Newmark2DSH/docs/08-newmate-kernel-design.md)。
+
+## 2026-10-08 最终安装：0.2.31
+
+NewMate 显示同步优化及 Linux X11/WSLg 支持已接入并发布。最终远端提交 c7b7165 / v0.2.31 经全新网络克隆拉回，Windows 和 WSL 分别重装同一 tarball；Windows DSH 已完全退出旧进程并重新启动，三个组件均由新宿主激活。65/65 发布文件一致，64 运行文件匹配源码；用户当前倍率 60.1% 保持不变。
+
+0.2.31 另将窗口映射控制心跳与显示绘制分离，解决显示时钟停止时控制也停止的问题，避免 WM_TIMER 在高刷新绘制下饥饿。最终安装态：核心195/195、Windows原生专项102/102、CU边界34/34、方言45/45、隐藏路由54/54、Linux后端47/47与Qt15/15、真实模型33/33，以及配置slider门禁通过。实装桌宠约151绘制回调/秒，WSLg稳定预览约60交换回调/秒；不等同物理扫描帧率。测试映射、接管槽和辅助进程已清空。
+
+npm索引当时仍返回404，当前明确安装远端拉回的tarball；不声称从注册表解析安装。首轮失败、后续修正、真实输入范围和完整文件树均见 [最终验收报告](Newmark2DSH/archive/20261008-release-031/REPORT.md)。
+
+
+Linux 桌面实现必须明确区分 X11、WSLg 应用表面和原生 Wayland；不把窗口呈现映射写成原生客户端迁移，不把 Qt 合成事件写成物理用户操作。平台隔离、SaveSet 恢复和发布文件核验约定见 [Newmark2DSH taste](Newmark2DSH/taste.md)，本轮操作与失败记录见 [Linux WSL 归档](Newmark2DSH/archive/20261008-linux-wsl/REPORT.md)。
+
+## 2026-10-08 进程迁移动画层级与纯黑桌面（0.2.29）
+
+进程窗口推出/拉入动画读取实际呈现 HWND 的层级，真实窗口保持遮挡关系，虚拟来源跟随展开预览层并位于 NewMate 下方；动画不抢焦点、不强制收起预览。空桌面使用纯黑，移除正常状态工程提示，并修复零窗口枚举误报失败。核心 195/195、原生层级 8/8、GPU 15/15、窗口往返 17/17、空桌面逐像素 15/15。提交 45635d1 与 v0.2.29 已推送发布，经缓存对象加远端 fetch 核验后拉回打包重装，DSH 完全重启且界面显示 0.2.29；62/62 文件一致，安装后层级 8/8、空桌面 15/15、工具 25/25、CU 34/34，测试残留为零。详细状态见 Newmark2DSH/archive/20261008-transfer-visibility/REPORT.md 。用户倍率保持 45.9%。
+
+实现位于 desktop-pet.cs/js、desktop-transfer.cs/js 和 win32.js；新增原生层级探针，GPU 门禁支持无应用空桌面。归档 before 保存修改前源码，layers/gpu/transfers 保存原生回执，empty-desktop 保留失败，empty-desktop-fixed 保存修复后的纯黑截图，core.log 为完整回归。
+
+## 2026-10-08 真实桌面输入补测
+
+0.2.28 已安装包补测确认：DSH 配置页真实点击/滚动正常，滑杆 65%→181.7% 后桌宠与持久化同步；推出窗口真实鼠标/键盘计数 0/0→1/1，双向往返保留 PID、启动身份与 HWND，真实源窗口恢复后仍接收键盘。测试进程已清理。用户随后手动调整并明确要求保留 **45.9%**。透明 NewMate 窗口不在 Sky 可选目标中，右键被目标校验拦截，因此桌宠拖动、菜单滑杆和点击展开/收起仍未记为真实输入通过。详见 `Newmark2DSH/archive/20261008-newmate-real-ui/REPORT.md`，其中保存 runner、原始动作回执、进程身份、输入计数、两张实机截图和清理记录。本轮仅增加验收记录，未修改产品包。
+
+## 2026-10-08 NewMate 窗口推出/拉入（0.2.28，远端拉回重装）
+
+已发布 `process_push` / `process_pull`，采用用户接受的交互映射保留原 PID、启动时间、HWND 和应用状态，配有 NewMate 弹性响应与 GPU 飞入飞出。全 DSH 在同一 Windows 用户下，真实/虚拟模式各一个接管槽；跨越操作同时保留两槽，身份绑定真实会话。已修复关闭竞态，导出应用保活、导入窗口恢复，并验证宿主及呈现层崩溃恢复。
+
+最终版本 0.2.28（805d535b）已推送、从远端标签拉回打包重装，并完全重启 DSH。62 个已安装文件与远端一致，61 个运行文件与源码一致，用户大小仍为 65%。安装后：全工具 25/25、CU 34/34、真实模型 33/33、内核锁 8/8、双槽 16/16、身份 9/9、迁移 17/17、恢复 6/6、GPU 12/12。无测试映射、原生辅助进程或隐藏代理残留。npm 索引尚未同步，当前依赖指向远端拉回的 tarball。
+
+前台真实鼠标复测尚未闭环：桌面自动化对 DSH 和呈现窗口均返回 `failed to activate captured window`；不将这一项计为通过。截图与原生消息路径验证分别有据。完整范围、失败修复和目录结构见 `Newmark2DSH/archive/20261007-cu-transfer/REPORT.md`（子项目中为 `archive/20261007-cu-transfer/REPORT.md`）。
+
+## 2026-10-08 进程窗口映射约定
+
+`process_push` / `process_pull` 保留原进程 PID、启动时间、状态和 HWND，通过可交互呈现窗口跨真实/隐藏桌面使用，不能宣称原生窗口线程迁移。显式选择单个顶层窗口；多窗口进程须指定 HWND，新增对话框另选。以回执中的呈现 HWND 继续操作。Windows 用户范围内真实/虚拟接管各一个，跨越时同时保留两个槽；DSH 调用身份不能由模型 owner_id 冒充。导出窗口保留其 Job Object，退出时只结束未导出的任务；拉入窗口在退出时恢复。宿主死亡和呈现层崩溃必须独立验收，不能以正常退出代替。
+
+实现文件：`desktop-transfer.cs` 管理捕获、交互代理、Job 保活/清理、守护恢复和 GPU 动画；`desktop-transfer.js` 管理有身份校验的原生状态协议；`hidden-agent.js` 监测宿主退出；`takeover-lock.cs/js` 实现内核双槽；`lib/cu-caller.js` 绑定真实会话。`verify-desktop-transfer.mjs` 验证往返和正常结束，`verify-desktop-transfer-recovery.mjs` 验证强制结束恢复。归档 `archive/20261007-cu-transfer/` 包含 before 源码快照、evidence 门禁日志、integration-* 原生回执、recovery-* 异常恢复回执、native 编译试验、PLAN/STATUS/REPORT 工作记录；失败试验保留供复查。该段记录 0.2.27 候选阶段；最终 0.2.28 发布与重装结果见上方。
+
+## NewMate 主题菜单与连续大小控制
+
+配置页和原生菜单必须共用版本化的用户根偏好；调试隔离根时不可用屏幕上测试桌宠判断正式配置同步。滑杆写入串行合并最新值，原生偏好轮询不反向重复写入；初始位图前恢复大小。默认倍率与本体基准尺寸分别定义。菜单复用 DSH 实际结构、主题 token 和有序 CSS，不硬编码 CSS module 哈希；新增控件样式置于低优先级 cascade layer，允许插件覆盖。原生 WebView 按实际 devicePixelRatio 计算物理窗口尺寸，不能以 DeviceDpi 替代。验收包含 200% DPI、亮暗主题、CSS 覆盖、启动持久化及已安装文件核对。
+
+## 2026-10-07 原生桌宠与虚拟桌面验收
+
+吉祥物正式名称为 **NewMate**；桌宠窗口、右键菜单与预览提示统一使用此名称。
+
+DSH 接入验收同时保存实际加载版本、已安装包哈希、原始工具回执和独立进程清理证据；模型对工具结果的解释不替代回执。透明工具窗口无法由某自动化接口枚举时，如实区分宿主现场检查与候选包原生交互测试。
+
+虚拟桌面预览必须保持只读，不将用户输入转发到源桌面；截图阻塞必须隔离到可回收进程。透明桌宠的描边来自 alpha 轮廓，拖动起点使用输入事件坐标。提示状态由真实可见预览窗口决定，启动取消与宿主退出不得留下置顶窗口。发布清单包含资源并在实际候选包上验证，文档应区分源码候选、隔离安装验收和用户正在运行的旧宿主模块。
+
+桌宠动画按时间步进使用弹性伸缩，倍率缩小时保留足够画布；预览缩放允许连续反向，不能重建窗口造成跳变。大小选择原子保存到共用用户根目录，下次第一帧就恢复最后倍率。实机测试隔离用户偏好，截图采样率不得冒充渲染帧率。
+
+## 2026-10-05 向上游提 issue 的纪律
+
+- **目标仓库要用证据选，不要按名字猜。** 先问三件事：这个仓库存在吗、`has_issues` 是不是 true、缺陷代码到底在哪个包。本轮 "dsh-github 仓库" 对应两个仓库 —— 缺陷所属的 `deepseek-ai/deepseek-harness` `has_issues: false`（只有 Discussions），产品仓库 `anywhere-labs/dsh-desktop` 才开着 issue。**当自然归属地不能收报告时，去能收的地方发，并在正文里明确写出"修复位置在这个包"**；不要因为"发在这里不完美"就什么都不发，也不要假装两个仓库是同一个。
+- **先看对方要什么格式，再写。** 目标仓库的 `.github/ISSUE_TEMPLATE/bug_report.yml` 是**表单**（YAML issue form），字段就是维护者分诊时按顺序找的东西。用 API 创建时表单不会被强制，所以**正文要逐字段复刻它的结构**（含查重勾选、区域、系统、安装方式、版本、第三方插件、对照结果、现象、复现、预期、频率、日志）。表单里写着"不要只写无"，那就真的给日志。
+- **先查重，并把查到的近邻点名。** 本轮搜了 `EMPTY_RESPONSE`、`reasoning 空回答`、`思考块 无输出 完成`、`静默`，把最接近的三条（#170 断流、#707 标题预算、#635 reasoning 回传）写进正文并说明**为什么不是同一个**。查重不是为了满足勾选框，是为了让维护者不用自己再搜一遍。
+- **创建之后必须回读，而且断言正文内容，不是看退出码。** `gh issue create` 本轮退出码 0、stderr 为空，**标签却一个都没打上**；只有 `gh issue edit --add-label` 才吐出真实原因 `positer does not have the correct permissions to execute AddLabelsToLabelable`。规则：**带副作用的写操作，"命令说成功"和"远端真的变成了那样"是两件事** —— 用 `gh issue view --json ...` 取回远端对象，逐项断言关键字符串还在（本轮 10 项），并单独检查那些"静默失败"的附加参数（标签、assignee、milestone）。
+- **公开发布前先脱敏，并且用程序核对。** 报告里的本机路径改成 `C:\Users\<user>\...`，然后**扫描成文正文断言它不含真实用户名**（本轮断言 `body` 中不出现 `Users\\12252`）。"我记得我改过了"不算核对。
+- **把"没做的事"写在最显眼的地方。** 公开报告里最容易被误读成承诺的是"如需我可以补做 X"。本轮写了"可按指示补做全新 Profile 对照"，就必须在归档的边界一节里标明**尚未执行**，否则下一轮会有人以为已经做过。
+- **本地归档是记录，不是权威副本。** issue 一旦公开就可以被编辑、转移、引用；归档里存的 `issue-body-as-filed.md` 只是"我提交了什么"的证据，两者不一致时以 GitHub 上的为准。把这句话写进归档，免得后来者拿本地文件当现行文本。
+- **发现工作树被插件污染时，只报告，不清理。** 本轮读回 `git status --porcelain` 得到 4,853 条，暂存区里躺着大批 `.tmp-*` 与 `DESKTOP/scripts/*.cjs`，与 DSH `workspace-changes` 插件执行的 `git add --all` 一致。判定规则：**能证明「某个进程执行了这条命令」（日志）和能证明「索引是它写的」（因果）是两件事** —— 前者有、后者没有，所以只能写成「一致、未证明」。处置规则：`git reset` / 清理暂存**不是**分析任务的一部分，它会丢掉别人（或另一个 agent）刻意暂存的内容；报告给用户，让他决定。
+- **给维护者的复现步骤要连"读取工具本身的坑"一起给。** 本轮的会话文件是多 zstd 帧拼接，Node 解压器只解第一帧 —— 不写这一条，维护者按常规方法只会读到 1 行 session 头，然后把报告当成不可复现关掉。**任何"我用的读取方法和你的默认方法不同"的地方，都是复现步骤的一部分。**
+
+## 2026-10-05 静默终止的定位纪律
+
+- **"没报错"和"做完了"是两件事。** 用户看到的「已完成」只是外壳对"没有工具调用"的解释，不是"任务完成"的证据。定位这类问题时先问三件事：这条消息是谁产出的（`source.provider/model`）、它带没带可见内容（`text`/`tool-call`/`reasoning` 的构成）、流以什么结束（`finish.reason.kind` 是 `stop`、`max-tokens` 还是 `error`）。本轮就是靠这三项把"外壳崩了"排除掉的：`finish{kind:"stop"}` + 只有 `reasoning` + `turn/end {kind:"completed"}`。
+- **用户给的猜想是要证伪的假设，不是线索清单。** 两个猜想都要给出"如果成立会看到什么"和"实际看到了什么"。本轮对①给的是四条独立反证（插件无失败记录、消息来自 provider、插件装载于全部 48 个会话而症状只在 1 个、同版本下正常轮次与静默轮次交替），而不是"没发现异常所以应该不是它"。
+- **时间相邻不等于因果，巧合要写下来而不是咽下去。** 10-02 13:19 与 10-05 14:13 两次插件重载都紧邻静默起点，看起来像证据；把它按同一条时间线摊开就会发现 10-04 无重装而照样静默，10-02 重载后的 turn 200/201/202/204/205 也正常。**先找同一份数据里的反例，再决定要不要保留这个巧合**；保留时照实写成"未解释的巧合"。
+- **剂量-反应曲线不是单调的就不许画成单调的。** 本轮分档是 0/103、1/23、3/23、5/14、7/57，最后一档回落到 12.3% —— 因为压缩让上下文在时间线上非单调。可以说的只有"45 万以下零发生"，不能说的包括"越深越容易"这种趋势断言和"45 万是阈值"这种阈值断言。**给区间统计时必须同时给该区间的样本是怎么被选进来的。**
+- **"必要不充分"要明确写出来。** 45 万以上共 1,345 条消息，只有 16 条退化；另有两个峰值 50 万的会话一条都没有。承认这一点比给一个干净的相关性更有用，因为它直接决定了下一步该做控制实验而不是宣布根因。
+- **DSH 的 `session.v4.jsonl.zstd` 是帧序列，不是一个 zstd 流。** 它是上万个小帧顺次拼接（本会话 10,980 帧），Node 的 `createZstdDecompress` 和 `zstdDecompressSync` 读到第一帧就返回 —— 于是"解压成功"只给你第一行 session 头，看起来像"这个会话没有内容"。正确做法：扫帧魔数 `28 B5 2F FD` 逐帧解码（`archive/20261005-144403-dsh-silent-turn-stop/evidence/analyze-session-turns.mjs`）。**这类"语法上成功、语义上什么都没读到"的输出，和上一节那个 `-Include '.ts'` 的 0 命中是同一种陷阱**：先确认这次读取有能力看到已知存在的东西（本会话应当有 221 个 `turn/start`），再相信它的结论。
+- **分析脚本要放进归档并能被一条命令重跑。** 本轮两个只读脚本（`analyze-session-turns.mjs`、`dump-session-timeline.mjs`）只用 `node:fs`/`node:zlib`，原始输出与脚本一起归档，报告里每个数字都能追到同一条命令；`node` 版本要求（≥ 22.15）也写在同一段里。把数字和"它从哪来"一起交付，比把数字写进聊天记录强。
+- **报告诊断结论时把"已证实 / 已测得 / 未验证"分开挂牌。** 本轮"机制"是代码级已证实，"分布"是实测，"调低压缩阈值能不能解决"与"上游一行改动的效果"都明确标为未验证 —— 因为本轮**没有**动过 DSH 安装目录或插件，任何"已修复"的说法都会是编的。
+
+## 2026-09-30 退役项目的清除纪律
+
+- **清除一个退役项目之前，先证明它不是历史荷载。** 判断顺序固定：该目录是否被 git 跟踪、有没有嵌套仓库、有没有构建或测试入口引用它。三项都要实测：`newmark-cu-lab/` 的 `git ls-files` 为 0、无嵌套 `.git`、`DESKTOP`/`TUI`/`WEB`/`android` 命中为 0 —— 于是删除不需要改写历史，也不会让任何门禁变红。反过来说，只要有一项不成立，删除就不是「清理」而是「破坏证据」。
+- **释放存储与保留证据是两件事，必须分开决定。** 这类目录的常态是「源码很小、数据很大」（本次源码 1.25 MiB 对数据 50.2 GiB）。冻结一份源码快照 + 逐文件 SHA-256 的成本可以忽略，而删掉的数据集、权重与训练账本不可再生；因此默认先冻结源码再删数据，并把「哪一类被删、哪一类被留」写成显式清单，而不是一句「已清理」。
+- **快照必须自证完整。** 复制完要把「源侧应用排除规则之后的文件列表」与「快照文件列表」做双向差集，两个方向都必须为空（本次 151/151），并连同哈希清单一起归档。只报一个文件数不足以证明没有静默漏拷。
+- **二十万级文件的删除用镜像工具，不用递归删除。** `robocopy <空目录> <目标> /MIR` 比 `Remove-Item -Recurse` 更能处理长路径与超长目录树，且退出码 0–7 都算成功——所以判定不能只看退出码，必须再 `Test-Path` 断言目录真的不存在。
+- **删除后的校验要同时覆盖三个面：** 目录不存在、`git ls-files` 仍为 0（没有意外提交）、外部引用点为 0。只测第一项会把「文件没了但记录仍被跟踪」判成通过。
+- **文档与代码冲突时以代码为准，并点名冲突。** 目录删除后，所有把它写成「现役/保留」的句子都变成假陈述：本次修掉 `README.md`、`OVERVIEW.md`、`taste.md` 里的现状断言，并在 `Newmark2DSH/` 的治理文档里标注被引用源已移除。带日期的历史段落不改写——它们描述的是当时事实，改写它们等于伪造记录。
+- **冷证据与工作树分开表述。** `archive/` 里的 culab 记录是过去结论的证据，按归档只增不改的规则不随本轮删除；因此只能说「工作树已无 culab」，不能说「全仓清零」。把两者的边界写清楚，比给一个更漂亮的结论重要。
+- **防复发要落在仓库自己的配置里。** 删掉一个未跟踪的大目录后，顺手在 `.gitignore` 里留一行并注明清除日期与记录路径：下一次有人重建它时，`git add -A` 不会把 50 GiB 带进历史。
+- **语法上「匹配不到任何东西」的审计，和干净结果长得一模一样。** 本轮第一次引用审计就栽在这里，三处缺陷都打印出「0 命中」这种最令人放心的输出：`-Include '.ts'` 少了 `*`（`-Include` 匹配的是文件名而不是扩展名，于是匹配不到任何文件）、`-Include` 在非递归的 `Get-ChildItem -File` 上被静默忽略、扩展名表漏了 `*.kts`（`*.kt` 不匹配 `build.gradle.kts`）。规则：**任何否定性结论都必须先证明这次扫描有能力命中** —— 在同一次扫描里先看到一个已知的真命中（本次是反耦合门禁那 2 行），再相信其余的 0。判定「有没有」用大小写敏感扫描（`Select-String` 默认不敏感，`NES-T` 会命中 `kotlinx-coroutines-test` 里的 `nes-t`），对可疑命中先做原始字节级复核再下结论。
+
+## 2026-09-29 DSH agent preset 与 Dev 模式
+
+- DSH 模式（preset）是一份 `@deepseek-ai/dsh-agent-preset` 声明，只能通过“安装 bundle patch 覆盖 Loader 行”来创建或修改，不能就地编辑已安装的声明。本仓库把这类本地 bundle 放在 `_local/<name>/`（`_local/` 不入库），bundle 只有 `package.json`（`dsh.bundle.patch` 指向）与 `cordis.patch.yml` 两个文件；profile 侧只保留一行 `link:` 依赖与 bundle 名单。
+- 派生一个模式时复制源 preset 的整份插件清单，只改真正需要改的行。`dev` = `ptc` 的 20 行插件清单 + 换掉 `persona.prefix`；工具面、`planning`/`compaction`/`delegation` 三个 group 的 `isolate` 与全部 `!!js` 平台开关保持与 `ptc` 一致，避免派生模式悄悄多带或少带能力。
+- 模式的身份写在 `persona.prefix`：它是 order 0 的系统提示词段落，取代部署级默认人设，且 `{{model}}`/`{{cwd}}` 是渲染期变量。项目协议这类“每次执行都要生效”的约束属于这里，不要写成只在一轮对话里有效的提示词，也不要靠聊天里重复交代。
+- 新增模式必须带 `order`（`dev` 取 2.5，排在 `standard` 1 与 `ptc` 2 之后、`cordis` 4 之前），否则 roster 顺序不可控。
+- bundle 的 YAML 必须先本地解析验证再安装：`description` 一类含冒号的标量要加引号，`!!js` 是 Loader 表达式而不是 `!js`。安装失败时 `plugin_manager` 会回滚 `package.json`、lockfile 与 `node_modules`，修复后重装即可，不要手工改 profile 依赖。
+- 验证顺序固定：`install_bundle` → `plugin_manager list_plugins` 看到 `preset-<id>` 行 `enabled=true` 且 `fiberPhase=active` → 对比 profile `node_modules` 里安装副本与源码的 SHA-256。安装后的声明是本机运行的权威副本，源码与它对不上就说明改动没真正生效。
+
+## 2026-09-29 CU 真实鼠标与虚拟窗口模式
+
+- Mouse mode is a session choice made only on `takeover_start`; the shared `ComputerUseSessionRegistry` is authoritative and host execution injects the saved mode. Stop, toggle-off, runtime cancellation, and lease expiry return the mode to `real`. Never allow an action call to switch its own mode.
+- Real mode intentionally touches the user's system cursor. Route physical moves through the DPI-aware native 50 ms smooth curve; clicks and drags share a minimum 350 ms action interval. A drag must always release its held button in `finally`, including movement failure, and `sequence` must not bypass the limiter.
+- Virtual mode must not call `SetCursorPos`, `mouse_event`, `SendInput`, `SetForegroundWindow`, or activation helpers. Bind every action to the chosen HWND, post only to that window or its child, keep virtual position per CU owner, and distinguish queued messages from completed app behavior. A drag posts button-down, held-state mouse-moves, then button-up to its captured child and still attempts release if any intermediate move fails.
+- Virtual screenshots use `PrintWindow` on a dedicated killable worker, never Electron's UI thread or the normal action lane. Terminating a stuck helper protects Newmark's UI, but the synchronous render request may still slow the target app while it handles `WM_PRINT`. Minimized windows, non-client chrome, UIPI restrictions, GPU-only presentation, Raw Input and apps that ignore posted messages are explicit compatibility boundaries; never silently fall back to real input.
+- Virtual input requires fresh `app_observe` evidence and app-scoped actions; `sequence` remains disabled because its scene guard observes the foreground desktop. Test real and virtual drag against an isolated native window with a real drop-state assertion, and verify virtual drag leaves both the physical cursor and foreground HWND unchanged.
+
+## 2026-09-29 Windows Computer Use 实机可靠性
+
+- `mouse_event` 的 `dwExtraInfo` 必须显式使用 `[System.UIntPtr]::Zero`；点击与水平/垂直滚轮的按下/抬起路径都覆盖。通过 DPI 感知线程上下文把 `SetCursorPos` 坐标解释为物理像素；用 200% 缩放的受控 GUI fixture 检查实际输入落点。
+- 键盘工具面向模型接受 `ctrl+l`、`alt+f4`、`enter` 等常见拼写，边界处归一成 SendKeys 格式。文字输入要转义 SendKeys 保留字符；URL 和代码符号不能被误解析成组合键。
+- 对指定窗口操作前先确认真实前台窗口句柄；激活失败就拒绝输入，不能报告成功后把键发给用户的另一个窗口。
+- UIA 是建议性观察 lane：超时后以 500、1000、2000、4000 ms 退避，成功后清除退避；动作 lane 仍保留较长隔离。快速重复观察既要验证 UIA 命中，也要允许返回明确的截图-only/超时状态并恢复。
+- 回归同时覆盖隔离 Windows 原生输入 fixture 与已安装 GUI。真模型验收仅向 DeepSeek 发送合成测试窗口的 Computer Use 观察图像，并设置只读动作守卫；不要把这种观察闭环说成真实桌面的鼠标点击验收。
+
+## 2026-09-29 PC 对话归档响应性
+
+- The desktop main process must never busy-wait on the shared conversation-state lock during archive, Flow interruption, or archive finalization. Async archive paths acquire the lock with promise-based filesystem calls and timer yields; preserve synchronous APIs only for callers whose contract is synchronous.
+- Archive one selected conversation at a time. Do not serialize a whole workspace state for each archive click. Preserve lazy shard-backed fields when detaching the target entry, and test a second Agent instance archiving a transcript it did not load.
+- Long Markdown exports should yield between bounded message batches. Recheck branch fallback and user-history matching remain stable while reducing repeated per-message work.
+- A lock with a live PID remains owned even when its timestamp is old. Reclaim only a dead recorded owner, or an old lock with no owner PID; test both the aged-live and dead-owner cases.
+- Write the Markdown and restore manifest before removing active state. Under one latest-state mutation, remove the selected conversation and its Flow suspension; then remove its shard. Verify that a failed export leaves active state intact, and that a completed archive is not resurrected by a late runtime write.
+- Keep the entire synchronous state mutation under one `try/finally` after acquiring the lock. Callback conflicts, serialization errors, and the unchanged-content fast return must all release the handle and lock file; test a revision conflict followed by an immediate Agent reload to catch same-process self-deadlock.
+- Archive acceptance pressure covers rapid renderer clicks, 48 concurrent backend archives, active Build/Flow cancellation, cross-process shards, lock contention, stale-lock recovery, and a 1,000-message large transcript. Measure event-loop lag as well as total completion time; a build or a completed archive alone does not prove the PC stayed responsive.
+
 ## 2026-09-28 ComputerUse 与 Windows-MCP 调研
 
 - 将快速视觉观察和语义 UIA 观察做成同一 ComputerUse 通道的显式模式：`include_ui_tree=false` 只交付新鲜截图并清空旧 `target_id`；默认模式继续返回有限大小的语义控件。
@@ -24,7 +374,7 @@
 - Desktop Computer Use 不加载本地 CULab/NES-T/NMEP/ONNX 模型；App 不保留这条模型发现、ABI 或推理接口。
 - 稀疏摘要只用于降低等待期的采样负担。唤醒、超时、失败或显示几何变化后，都必须重新采集完整截图和 UIA；不得把稀疏测量本身当作可执行的场景理解。
 - 观察截图沿当前对话 Provider 通道作为一次性视觉输入；会话/对话目标绑定、动作授权、取消和 stale-target 防护继续由生产工具处理。
-- CU-Lab 的模型、数据和 NPU 代码是隔离的历史研究材料，不参与 Desktop 构建或运行。真实模型能力必须按 provider/model 单独验证工具调用、稀疏结果、完整图像回传和语义答复。
+- CU-Lab 的模型、数据和 NPU 代码是隔离的历史研究材料，不参与 Desktop 构建或运行。**（2026-09-30 取代：`newmark-cu-lab/` 已整体删除，其数据与 NPU 代码不再存在于本机工作树，只剩源码快照。）**真实模型能力必须按 provider/model 单独验证工具调用、稀疏结果、完整图像回传和语义答复。
 - 这套灰度唤醒不是严格压缩感知：当前远端模型收到的是完整图像，没有稀疏重构协议。
 
 ## 2026-09-26 JEV 当前模型与严格 JSON 约束
@@ -1020,3 +1370,174 @@ Never report installed-runtime performance from the old installed version. Separ
 - 对同一路径串行化内部读写；只有专用文件变更入口和明确写入目标的 web_catch 适用。Shell、终端、浏览器/CDP、ComputerUse、Flow、Memory Lab、技能下载及结构化状态修改需要独立对象回执，不能声称本门禁已经拦截这些旁路。
 - 写入门禁压力测试必须走实际 ToolExecutor，并覆盖过期/漂移拒绝、分段完整读取、回执单次消费和跨执行器同路径争写；可另用异步门禁回调确定性验证路径锁，且最多只能有一个提交者成功。
 - 真实 ComputerUse 模型测试使用隔离 Electron 与合成视觉目标，记录模型工具调用、稀疏变化唤醒、新鲜全图上传和模型语义完成；实时测试进程设置只读动作保护，不能让模型点击或输入。
+
+## 2026-09-30 Newmark2DSH 开发准则与接口核验思路
+
+这一节固化 Newmark2DSH 子工作区（`Newmark2DSH/packages/newmark-core`）的开发纪律与接口核验方法。
+素材来自一次完整的重构：插件卡片把组件显示成 `file:///…` 路径 → 尝试子路径寻址 → 相对路径 → `ctx.plugin()`
+组合 → 自定义配置面板 + CSS 抑制原生行 + 真开关。**四次方向被推翻，每一次都是先改后验造成的。**
+
+### 一、开发准则
+
+**1. 先证明前提，再改结构。**
+本轮四次改动方向被推翻，每一次都是「先改后验」。
+正确的顺序是：写一个**只验证前提、不改生产代码**的探针（如 `scripts/probe-compose.mjs`），
+证明成立之后再切换生产形态。`ctx.plugin()` 组合方案就是先由探针证明「五个 + 两个工具真的注册」才动的。
+
+**2. 不要为了绿灯而改断言。**
+重构未被独立验证之前，**不要**动那些会因此变红的断言——先改断言等于污染实验结论。
+正确顺序：重构 → 用**新的**断言独立证明它 → 一次性对齐旧断言。
+本轮 `verify-newmark-core.mjs` 有 11 条断言红了整整几轮，是刻意的。
+
+**3. 改完先语法检查，再谈重启。**
+`node --check` 抓到过一次把 `const` 写进对象字面量（`apply(ctx) {` 是方法定义，其外不是函数体），
+那会让**整个客户端半边加载失败**。任何要求用户重启之前，两个半边都必须先过 `node --check`。
+
+**4. 脚本必须幂等，或明确不幂等。**
+一次非幂等脚本在第二次运行时于第一个锚点中止，留下「`index.js` 已改、`cordis.patch.yml` 未改」的
+不一致状态——那会**重复注册全部七个工具**。多步改动优先用**行范围替换**，而不是文本锚点匹配。
+
+**5. 生成器里不要出现反引号或嵌套引号。**
+本轮因 `\``、`'` 在生成器字符串里被吞或提前闭合，失败三次。
+需要生成代码时：用行范围替换，或让生成出来的代码用字符串拼接而不是模板字面量。
+
+**6. 区分「没找到」和「不存在」。**
+声明「没有机制」之前，把代码读到尽头。
+我曾断言「插件侧无法隐藏 bundle 自己的行区块」——那只查了 API（`plugins.bundle.hidden` /
+`plugins.item.hidden` 确实只作用于列表页），**没查渲染结构**。
+实际上面板与行区块同页渲染，CSS 可以精确抑制。**结论下得太早，比不下结论更糟。**
+
+**7. 缓存会撒谎。**
+`npm view` / `npm install` 走本地缓存。判定 registry 真实状态必须直连并带 `no-cache`
+（`Invoke-RestMethod -Headers @{'Cache-Control'='no-cache'}`）。
+我曾因缓存把一次**成功发布**误判为失败，还准备去改 CI。
+
+**8. 不要把测量外推。**
+「`npm install` 能自动装组件依赖」**不等于**「pnpm 能」——后者对已发布包的 `file:` 依赖按**项目根**解析，
+报 `ERR_PNPM_LINKED_PKG_DIR_NOT_FOUND`。测量到的事实**只对被测对象成立**，
+跨工具/跨包管理器使用必须重新测量。这一条我犯过一次，代价是整个「走发布安装」策略被推翻。
+
+**9. 行模块按行缓存。**
+源码改动必须**重启 DSH** 才生效；`set_bundle` 循环与重装都只重跑 `apply()`，不重新 `import`。
+判据是**进程启动时间 vs 源文件 mtime**，以及「只有新代码才有的字段」是否出现
+（如 `lease.expiry === 'none'`、`overlay_contract.implicit_stop_paths`）。
+我靠这一条定位过「CU 看不到全屏边框」。
+
+**10. 不写用户的库。**
+`C:\Users\12252\.Newmark` 是**生产记忆库**。任何测试、探针、插件偏好都不得写入。
+开关状态因此**只存在于内存**，重启回到 row 配置的默认值——这是刻意的取舍，不是遗漏。
+宿主半边的门禁里有一条断言把这件事钉死：`!/writeFile|mkdir|rmSync/.test(index)`。
+
+**11. 部分应用的状态是危险的。**
+一次改动如果只落一半，可能比不改更糟（重复注册、单边不一致）。改完立刻验证一致性，
+宁可回滚也不要留下「看起来对」的中间态。
+
+### 二、接口核验思路
+
+**1. 用 Inspect Provider，不要猜。**
+写插件代码之前先 `cordis_inspect_list`，再按需查 `Service` / `Event` / `Config` / `Tool` / `Slots` / `Theme`。
+Slot 树会给出**每个插槽的 kind、registration 契约、keyDomain、以及已被占用的键**——
+这是本轮找到 `plugins.bundle.config`（官方配置位）与 `plugins.row.config` 的唯一路径。
+
+**2. 读出货源码，而不是读文档或类型。**
+接口的形状、键语义、返回结构，都从 `resources/app/node_modules/...` 里**读实现**。
+本轮据此确认：`dsh-client-modules` 第 746/781 行对**裸标识符**的向上查找被钉死在自身包名上
+（所以子路径寻址必然归结到同一个包 → 致命冲突），而**路径式**的查找不受限（所以相对路径能得到三个不同的包）。
+
+**3. 非官方机制必须写明前提，并把前提做成门禁。**
+`[data-plugin-rows] { display: none; }` 不是官方能力。它的作用域来自
+「style 标签住在面板里，而插件页一次只显示一个包」。
+`scripts/verify-config-panel.mjs` 因此**直接读 DSH 安装目录的源码**，断言两条前提仍在：
+行区块仍带 `data-plugin-rows`；该页仍同时渲染配置位与行区块。
+DSH 若改变结构，**门禁先红并说明后果**，而不是让面板静悄悄地悬在一个本该被它替代的行列表上面。
+
+**4. 进程外探针与运行中实测，缺一不可。**
+探针证明**逻辑**（`probe-compose.mjs`：组合出七个工具；关掉后工具真的从注册表消失）；
+重启后的真实应用证明**时序与集成**（动态 `import()` 在 Cordis fiber 里的装配）。
+只做前者会漏掉加载期问题，只做后者会得到一个又慢又脆的门禁。
+
+**5. 门禁断言行为，不断言实现。**
+「关闭 MemoryLab 之后，五个 `memory_lab_*` 真的不在注册表里」——
+而不是「代码里调用了 `dispose`」。本轮为此让探针**驱动真实的路由 handler**
+（用假的 `req`/`res` 走完整的 `data`/`end` 流程），断言的是可观察结果。
+
+**6. 让显示忠于来源。**
+自定义面板里的开关**显示宿主的回答，而不是用户的点击**；切换失败时那行显示「切换失败」并把错误写在下方。
+预设那一行的状态是**挂载时向宿主 GET 到的真实值**，不是写死的 `true`。
+**读不到的组件不印「运行中」**——那是在没有测量的地方制造确信。
+
+## 2026-10-06 transport 故障归因与诊断边界
+
+Transport 包装错误的三条路径（即时拒绝、流异常、已收到工具调用后异常）统一传递原始错误给 failureText，避免只取 message 丢掉 cause。诊断回归同时检查底层原因和已收到工具调用时不重复派发。宿主已经序列化丢失的 cause 不得推测补全；跨预设及标题生成故障可削弱预设特有归因，但插件仍全局加载时不能冒称插件关闭的 A/B 验证。失败尝试日志不是总请求分母；注明解码失败和运行中日志快照边界。工作树候选、已安装版本、发布状态分别记录，保留既有并行改动。
+
+## 2026-10-06 插件开关与真实预设复测
+
+实机验证需先读取插件实际开关；关闭 bundle 时 UI 保留的原始预设 id 不证明该预设已加载。临时启用测试后恢复初始状态，并区分既有失败日志与本轮新请求。两个顺序短文本请求只证明当下可用，不支持长上下文、工具链稳定性或故障归因结论。
+
+## 2026-10-07 transport debug 安装验收约定
+
+界面组件状态与说明必须采用同一Host挂载回执；页面快照缺失不等于组件关闭，lease快照缺失不能称为lease free。安装版验收需真实包版本、逐文件哈希、重启后UI和真实原生工具/模型回执。界面完成仍需核对隐藏重试。错误包装要保留完整cause/code；有限重试只用于尚未产生工具副作用的模型请求。网络TLS原因与rDev特有缺陷须分清，未知代理因果不推断。保留全部能力和生产记忆，脚本注入验证只在隔离测试/显式scratch执行。监控只查看新增事件、无使用不视为稳定证据；异常才通知，不反复消耗真实模型请求。
+
+
+## 2026-10-07 一次性全工具与长上下文 heavy 验收
+
+长任务验收需保留同一已有上下文、真实宿主turn/end完成事件、原生工具回执和产物回读，并区分自动重试与人工重发。声明全工具覆盖时明确注册范围：插件15工具与宿主50工具不是同一集合。确定性模型夹具、真实模型结果、源码推导、直接函数运行分别记证据；历史native无run_code时不得伪造PTC完成哨兵。测试夹具拒绝应修夹具并完整重跑，不能据此误改生产代码。用户取消持续监控后删除自动任务，以一次性验收收尾。
+
+
+## 2026-10-07 新发重试耗尽与限定连接修复
+
+连接故障先比较相同origin的代理和直连，再采用明确可回退的限定请求路由；不改变全局代理、不关闭TLS校验。Electron内置fetch与外部Undici dispatcher不可假设跨版本兼容，限定覆盖需配对同版本fetch/Agent并真实模型验证。无凭据401只证明TLS/HTTP路径，不能替代模型执行。失败会话历史含发布指令时，不盲目重试发布；明确诊断限定工具，保留副作用边界。历史失败和修复后成功分别统计，记录初版修复自身错误并纠正，不扩大成永久网络可靠性结论。
+
+
+## 2026-10-07 连接补丁后功能无损伤复核
+
+功能无损伤结论需修复前安装哈希、当前源码一致性、完整组件/预设/客户端回归与全部注册工具覆盖。宿主连接补丁另核对请求序列化、鉴权、流解析、取消/重试是否只改路由；夹具模型与真实模型证据明确分开，不替代未实测的所有应用/视觉模型承诺。
+
+
+## 2026-10-07 NewMate 发布拉回规则
+
+发布使用独立的公开仓库 checkout，逐项对照已验收运行文件，避免推送主工作区并行改动。Git 标签、CI 发布成功、npm 可下载、实际 profile 安装以及 DSH 新宿主加载是独立门禁；重装后必须完整退出旧主进程及宿主，再启动并验证新进程，不能用页面刷新代替。新增公开 README 造成 tarball integrity 变化时，另保留 45 个运行文件逐字节等价和 46 个发布文件安装对照证据。
+
+
+
+## 2026-10-07 GPU 动画与安装态验证纪律
+
+动画计时与捕获吞吐分开验收，阶段 FPS、p95、原始回执同时保留；不把 rAF 回调当硬件显示帧。UI 线程每次只保留一个待绘制帧，像素面/轮廓数据复用，窗口尺寸固定后用合成变换动画。预览不转发输入，缓存 WebView 必须随宿主结束清理。测试已安装 pnpm 包时先规范真实路径并从同一包导入组件，避免夹具接错模块；配置实时同步需连接与 DSH 相同的用户根，结束恢复原偏好。公开发布、注册表安装、完整进程重启和源/包/安装文件一致性分别留证。
+
+
+## 2026-10-08 桌面迁移与全 DSH 接管互斥（开发中，未发布）
+
+Win32 桌面与 Task View 虚拟桌面不可混淆。原生窗口迁移受系统约束时必须说明并实测，不能把代理画面报告成原 HWND 已迁移。CU 互斥按 Windows 用户及真实/虚拟模式分别由系统持有，不用模型给出的 owner_id 代替 DSH 会话身份；同一模式的实机验收串行执行。交互映射需要独立处理被映射进程和 Job Object 的生命周期，不以静默重启或丢失进程状态冒充迁移。 [工作状态](Newmark2DSH/archive/20261007-cu-transfer/STATUS.md)。
+
+
+## 2026-10-08 显示同步与性能验证
+
+以目标显示器节拍驱动渲染，不以固定 30/60 FPS 定时器封顶，也不通过关闭垂直同步追求空转 FPS。GUI 只保留最新状态和一个待处理帧；采集连接归工作线程独占，退出前停止并回收。静态内容复用 GPU 纹理，轮廓/动画按真实时间演进。WSLg 必须核对实际 GL renderer，不能把 llvmpipe 当 GPU 加速。分别记录冷启动、展开/收起、稳定预览、捕获与渲染吞吐；交换请求不等于硬件扫描回执。源码回归、正式包发布和生产 DSH 完整重启是独立结论。
+
+显示绘制节拍不可承担控制心跳；命令、状态与进程保活在暂停绘制时仍必须前进。高刷新动画下不依赖低优先级WM_TIMER调度关键命令。发布后发现问题使用新版本，不覆盖已发布tag；验收失败原样保留，区分已确定的故障与未证实的初次失败归因。
+
+### 2026-10-11 用户补充后的最终设计范围
+
+newMate以授权本地文件事件、元数据和必要差分作稀疏测量，默认消极主动响应：无变化不后台思考，无关变化不读正文，有意义才调用Agent API，有必要才唤起DSH本体对话。定制陪伴以MemoryLab确认为权威来源；自主链硬禁止删除文件及间接删除。CU读屏只作可选任务辅助。宿主真实会话创建/消息投递/导航契约待核实，不以API临时run或桌宠气泡冒充。设计、工具与文件结构均未实现。
+
+## 2026-10-13 macOS 隔离与 Neo 最低档评估
+
+用户暂停 Space 实现并要求评估，最低部署基线为 MacBook Neo A18 Pro／8GB。Space 不提供独立输入，另用户虚拟显示会话具有原生操作分离的官方依据，但本项目同机接入未验收；VM 系统边界更强，资源开销以测前预算记录。此次仅写评估，不改CU源码、版本、安装或发布。详见[比较与容量预算](Newmark2DSH/docs/12-macos-spaces-vm-assessment.md)。
+
+隔离结论分别描述输入、应用、文件、内核与资源边界；跨机器性能比较不能当成同机虚拟化损失，容量预算和Neo实测必须分开标识。
+
+
+## 2026-10-14 Newmark2DSH README 格式约束
+
+Newmark2DSH 后续 README 更新须遵循 [子项目 README 首页格式约束](Newmark2DSH/taste.md#2026-10-14-readme-首页格式约束持续适用)。首页按当前产品功能维护，五组件与 Dev/rDev 预设分开，历史记录留在版本记录和 archive；不得再把操作日志置于产品定位之前。
+## 2026-10-17 两阶段重启（广播 + 回执屏障）的五条硬规则
+
+完整表述见 [Newmark2DSH/taste.md](Newmark2DSH/taste.md) 同日同名小节，这里只记对本仓库其余部分同样适用的部分：
+
+- **参与者只能从宿主取。** 屏障的成员集合必须来自宿主事实（如 `agents().roots()`），绝不接受调用方传入的会话名；回执按宿主给的会话身份归属，一个会话不能替另一个会话回执。
+- **回执必须与投递读同一个事实。** 登记下来的那条持久记录**就是**回执，不是它的影子；任何「先记回执、以后再补」的写法都会把屏障变成只会点头的装饰。
+- **跨进程状态才叫持久。** 只活在进程里的屏障在两个方向上都撒谎——它既不认账，也不承认失败；提交过的与没能提交的，都必须由新进程分别收尾。
+- **让位与过期都要有出口。** 过期且无人推进的准备要自行关闭，否则一个被遗忘的记录会永久拒绝新的广播；已有屏障时，绕过屏障的旧路径必须拒绝执行。
+- **默认值必须是旧行为。** 新能力默认关闭；更严格但更贵的语义不能成为默认。做不到的部分写成缺口，不要写成功能。
+- **门禁的每条用例都要有自己的边界。** 一条让门禁崩溃的变异，和一条让门禁变红的变异，不是同一件事；只有后者才算覆盖。被破坏的状态必须打印成点名的 `not ok`，不能是栈回溯。
+- **改写受跟踪文件的变异门禁必须给出还原哈希。** 「已还原」唯一可核对的证据是还原后的 sha256。

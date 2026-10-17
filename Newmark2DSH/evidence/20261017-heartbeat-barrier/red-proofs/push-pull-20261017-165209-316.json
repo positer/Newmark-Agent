@@ -1,0 +1,52 @@
+{
+  "tool": "release-heartbeat-0.3.16",
+  "command": "push-pull",
+  "ok": false,
+  "at": "2026-10-17T08:52:05.473Z",
+  "workspace": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent",
+  "requestedPaths": [
+    "Newmark2DSH/archive/20261017-155232-preset-cwd-fix/RESULT.md"
+  ],
+  "steps": [
+    {
+      "name": "resolved 1 path(s) inside C:/Users/12252/Desktop/Files/Code/Newmark Agent",
+      "ok": true,
+      "detail": [
+        "Newmark2DSH/archive/20261017-155232-preset-cwd-fix/RESULT.md"
+      ]
+    },
+    {
+      "name": "1 file(s) will be staged",
+      "ok": true,
+      "detail": [
+        "Newmark2DSH/archive/20261017-155232-preset-cwd-fix/RESULT.md"
+      ]
+    },
+    {
+      "name": "git add of the named paths",
+      "ok": false,
+      "detail": "The following paths are ignored by one of your .gitignore files:\nNewmark2DSH/archive\nhint: Use -f if you really want to add them.\nhint: Disable this message with \"git config advice.addIgnoredFile false\""
+    }
+  ],
+  "commands": [
+    {
+      "display": "git add -- Newmark2DSH/archive/20261017-155232-preset-cwd-fix/RESULT.md",
+      "cwd": "C:/Users/12252/Desktop/Files/Code/Newmark Agent",
+      "exitCode": 1
+    }
+  ],
+  "evidence": [
+    "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\Newmark2DSH\\evidence\\20261017-heartbeat-barrier\\push-pull-20261017-165209-316.json"
+  ],
+  "repo": {
+    "root": "C:/Users/12252/Desktop/Files/Code/Newmark Agent",
+    "gitDir": "C:/Users/12252/Desktop/Files/Code/Newmark Agent/.git",
+    "branch": "master"
+  },
+  "before": {
+    "head": "419428f329ec294a2ef128255b1090817f8ee061",
+    "originTrackedRef": "419428f329ec294a2ef128255b1090817f8ee061",
+    "remoteRef": "419428f329ec294a2ef128255b1090817f8ee061",
+    "statusOnPaths": []
+  }
+}

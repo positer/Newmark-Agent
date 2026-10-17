@@ -28,7 +28,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHeartBeat } from '../packages/newmark-core/components/heartbeat/component.js';
+import * as HEARTBEAT from '../packages/newmark-core/components/heartbeat/component.js';
+const createHeartBeat = HEARTBEAT.createHeartBeat;
+/* The product's own limit, so the gate drives the number the product ships rather than a copy of it.
+ * The fallback exists so this gate still RUNS against a build that predates the limit and reports its
+ * cases as failures — a gate that dies at import time cannot show anything about the product. */
+const DELIVERY_FAILURE_LIMIT = Number.isInteger(HEARTBEAT.DELIVERY_FAILURE_LIMIT) ? HEARTBEAT.DELIVERY_FAILURE_LIMIT : 3;
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE = path.resolve(HERE, '..', 'packages', 'newmark-core');
@@ -252,7 +257,13 @@ await section('case 3 mounted', async () => {
   const properties = Object.keys(restartTool?.parameters?.properties ?? {});
   check('3- heartbeat_restart declares the opt-in barrier arguments', ['broadcast', 'ackMode', 'ackTimeoutMs', 'onTimeout', 'force', 'reason'].every(name => properties.includes(name)) && restartTool?.parameters?.properties?.broadcast?.type === 'boolean', properties.join(', '));
   check('3- the barrier modes and bounds are the frozen ones', restartTool?.parameters?.properties?.ackMode?.enum?.join(',') === 'auto,agent' && restartTool?.parameters?.properties?.onTimeout?.enum?.join(',') === 'abort,proceed' && restartTool?.parameters?.properties?.ackTimeoutMs?.minimum === 1000 && restartTool?.parameters?.properties?.ackTimeoutMs?.maximum === 600000);
-  check('3- the heartBeat component registers exactly its four tools', ['heartbeat_after_restart', 'heartbeat_restart', 'heartbeat_restart_commit', 'heartbeat_restart_ack'].every(name => mounted.tools.has(name)) && mounted.tools.size === 4, [...mounted.tools.keys()].join(', '));
+  /* Five tools since the cancel tail. The COUNT is the point, not the list: a sixth tool without a
+   * case for it fails here exactly as a missing one does. */
+  check('3- the heartBeat component registers exactly its five tools', ['heartbeat_after_restart', 'heartbeat_restart', 'heartbeat_restart_commit', 'heartbeat_restart_cancel', 'heartbeat_restart_ack'].every(name => mounted.tools.has(name)) && mounted.tools.size === 5, [...mounted.tools.keys()].join(', '));
+  const cancelTool = mounted.tools.get('heartbeat_restart_cancel');
+  check('3- heartbeat_restart_cancel declares the required intentId and nothing else', Object.keys(cancelTool?.parameters?.properties ?? {}).join(',') === 'intentId' && cancelTool?.parameters?.required?.join(',') === 'intentId' && cancelTool?.parameters?.additionalProperties === false && cancelTool?.parameters?.properties?.intentId?.type === 'string', JSON.stringify(cancelTool?.parameters));
+  const wiredCancel = await cancelTool.execute({ intentId: 'no-such-intent' }, { agent: { session: { id: 'mounted-requester' } } });
+  check('3- the mounted cancel tool reaches the state machine and refuses an unknown intent', wiredCancel?.ok === false && wiredCancel.phase === 'refused' && wiredCancel.reason === 'unknown_intent', JSON.stringify(wiredCancel));
   const indexSource = fs.readFileSync(HEARTBEAT_INDEX, 'utf8');
   const legacyAt = indexSource.indexOf('if (a.broadcast !== true) {');
   const globalAt = indexSource.indexOf('beat.globalRestart()');
@@ -468,6 +479,151 @@ await section('the failure modes', async () => {
   await s.beat.acknowledge({ intentId: begun.intentId, continuation: 'registered' }, s.exec('R'));
   const aborted = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
   check('F- an unreachable participant blocks the commit and is named', aborted.reason === 'missing_acks' && aborted.missing.some(entry => entry.sessionId === 'C' && entry.ack === 'unreachable'), JSON.stringify(aborted));
+});
+
+/* ================================================================== case 11 ====
+ * heartbeat_restart_cancel: ONE state transition preparing -> aborted(reason 'cancelled') plus a
+ * durable notice to the requester. Afterwards the cancelled promise cannot be spent, the barrier is
+ * free to re-open, and a stranger / an unknown id / an intent that is no longer preparing are each
+ * refused by name without writing anything. */
+await section('case 11 cancel', async () => {
+  const s = scenario();
+  s.add('R', { title: 'requester 对话' });
+  s.add('C');
+  const begun = await s.beat.beginBarrier({ ackMode: 'agent' }, s.exec('R'));
+  const cancelled = await s.beat.cancelBarrier({ intentId: begun.intentId }, s.exec('R'));
+  check('11- cancel closes the preparing intent as aborted(cancelled) in one transition', cancelled.ok === true && cancelled.phase === 'aborted' && cancelled.reason === 'cancelled' && cancelled.intentId === begun.intentId, JSON.stringify(cancelled));
+  const after = s.state();
+  check('11- the persisted intent is closed and its history record says cancelled', after.intent === null && after.intents.at(-1)?.id === begun.intentId && after.intents.at(-1)?.phase === 'aborted' && after.intents.at(-1)?.abortReason === 'cancelled' && typeof after.intents.at(-1)?.closedAt === 'number', JSON.stringify({ intent: after.intent, last: after.intents.at(-1) }));
+  check('11- cancelling launches no restart at all', s.calls.prepare === 0 && s.calls.restart === 0 && s.calls.commits === 0, JSON.stringify(s.calls));
+  const noticed = s.delivered('R');
+  check('11- the requester receives one durable cancellation notice', cancelled.notified === 'sent' && noticed.length === 1 && noticed[0].id === 'newmark-task:intent-cancelled:' + begun.intentId && String(noticed[0].content?.[0]?.text ?? '').includes('取消'), JSON.stringify({ notified: cancelled.notified, noticed }));
+  const again = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
+  check('11- the barrier can be re-opened after a cancel', again.ok === true && again.phase === 'preparing' && again.intentId !== begun.intentId && s.state().intent?.id === again.intentId, JSON.stringify(again));
+  const stale = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
+  check('11- the cancelled intent can never be committed', stale.ok === false && stale.phase === 'aborted' && stale.intentId === begun.intentId && stale.reason === 'intent_mismatch', JSON.stringify(stale));
+  check('11- and the stale commit does not spend the live barrier it could have reached', s.state().intent?.id === again.intentId && s.state().intent?.phase === 'preparing' && s.calls.restart === 0, JSON.stringify({ live: s.state().intent?.id, calls: s.calls }));
+  const committed = await s.beat.commitBarrier({ intentId: again.intentId }, s.exec('R'));
+  check('11- the live barrier still commits normally after a cancel', committed.ok === true && committed.phase === 'committed' && committed.intentId === again.intentId && s.calls.restart === 1, JSON.stringify({ committed: committed.phase, calls: s.calls }));
+});
+await section('case 11 impostor', async () => {
+  const s = scenario();
+  s.add('R');
+  s.add('C');
+  const begun = await s.beat.beginBarrier({ ackMode: 'agent' }, s.exec('R'));
+  const refusedCancel = await s.beat.cancelBarrier({ intentId: begun.intentId }, s.exec('C'));
+  check('11- a non-requester cancel is refused with the named code not_requester', refusedCancel.ok === false && refusedCancel.phase === 'refused' && refusedCancel.reason === 'not_requester' && refusedCancel.intentId === begun.intentId, JSON.stringify(refusedCancel));
+  const state = s.state();
+  check('11- the stranger refusal leaves the preparing intent open and writes no history', state.intent?.id === begun.intentId && state.intent?.phase === 'preparing' && state.intents.length === 0 && state.tasks.length === 0, JSON.stringify({ intent: state.intent?.phase, intents: state.intents.length, tasks: state.tasks.length }));
+  const noIdentity = await s.beat.cancelBarrier({ intentId: begun.intentId }, {}).then(() => false, error => String(error.message).includes('可信的 DSH 对话身份'));
+  check('11- a caller without a host session identity is refused before any state is read', noIdentity === true);
+});
+await section('case 11 unknown and not preparing', async () => {
+  const s = scenario();
+  s.add('R');
+  const begun = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
+  const unknown = await s.beat.cancelBarrier({ intentId: 'no-such-intent' }, s.exec('R'));
+  check('11- an unknown intent is refused with the named code unknown_intent', unknown.ok === false && unknown.phase === 'refused' && unknown.reason === 'unknown_intent' && unknown.intentId === 'no-such-intent', JSON.stringify(unknown));
+  check('11- the unknown-intent refusal leaves the live intent open', s.state().intent?.id === begun.intentId, JSON.stringify(s.state().intent?.id));
+  const first = await s.beat.cancelBarrier({ intentId: begun.intentId }, s.exec('R'));
+  const second = await s.beat.cancelBarrier({ intentId: begun.intentId }, s.exec('R'));
+  check('11- cancelling an already closed intent is refused as not_preparing', first.ok === true && first.reason === 'cancelled' && second.ok === false && second.reason === 'not_preparing' && s.state().intents.filter(record => record.abortReason === 'cancelled').length === 1, JSON.stringify(second));
+});
+await section('case 11 committing is not cancellable', async () => {
+  /* Once the helper has been launched the intent is a restart that HAS happened, not a promise that
+   * can be withdrawn, so the cancel boundary is exactly 'preparing' — and a refused cancel must not
+   * close the committing intent. */
+  const s = scenario();
+  s.add('R');
+  const begun = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
+  const committed = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
+  const late = await s.beat.cancelBarrier({ intentId: begun.intentId }, s.exec('R'));
+  check('11- a committing intent cannot be cancelled', late.ok === false && late.phase === 'refused' && late.reason === 'not_preparing' && late.intentId === begun.intentId, JSON.stringify(late));
+  check('11- the commit that already happened is untouched by the refused cancel', s.state().intent?.phase === 'committing' && s.state().intent?.id === begun.intentId && s.calls.restart === 1 && typeof committed.helper?.folder === 'string', JSON.stringify({ phase: s.state().intent?.phase, calls: s.calls }));
+});
+
+/* ================================================================== case 12 ====
+ * A failed armed task is terminated as failed(final) after N consecutive FAILED delivery attempts
+ * instead of being retried forever, and a WAITING task is never counted as a failure. N and the
+ * reason for it are printed below; every assertion carries a planted mutation in
+ * measure-heartbeat-restart-barrier-mutations.mjs. Measured production case this exists for:
+ * ~/.Newmark/heartBeat/state.json held 7 tasks, every one status:"armed", every helper status.json
+ * state:"failed" — never delivered, never reclaimed. */
+check('12- the component exports the delivery-failure limit this gate drives (N=' + DELIVERY_FAILURE_LIMIT + ')', Number.isInteger(HEARTBEAT.DELIVERY_FAILURE_LIMIT) && HEARTBEAT.DELIVERY_FAILURE_LIMIT === 3, String(HEARTBEAT.DELIVERY_FAILURE_LIMIT));
+console.log('  termination policy: N=' + DELIVERY_FAILURE_LIMIT + ' consecutive FAILED delivery attempts -> status "failed(final)" with the reason recorded and the executable record swept. WAITING (helper not running yet / owner unchanged / companion target off) is never counted, so a transient has three ticks (~6 s at the 2 s tick) before it is reclaimed.');
+await section('case 12 failed task terminates', async () => {
+  const s = scenario();
+  s.add('R');
+  const begun = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
+  const committed = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
+  const folder = committed.helper.folder;
+  const taskId = s.state().tasks.find(t => t.status === 'armed')?.id;
+  fs.writeFileSync(path.join(folder, 'job.json'), JSON.stringify({ owner: { path: 'fixture-host', created: 'old' } }));
+  fs.writeFileSync(path.join(folder, 'status.json'), JSON.stringify({ state: 'failed', detail: 'DSH exited during startup (fixture)' }));
+  const rebooted = s.create({ pid: 2000 });
+  await rebooted.tick();
+  const afterOne = s.state();
+  const held = afterOne.tasks.find(t => t.id === taskId);
+  check('12- one failed attempt leaves the task armed and records the helper reason', held?.status === 'armed' && held?.failures === 1 && String(held?.error).includes('DSH exited during startup'), JSON.stringify(held));
+  check('12- nothing is terminated or delivered before the limit', (afterOne.terminated ?? []).length === 0 && afterOne.receipts.length === 0 && afterOne.tasks.some(t => t.id === taskId), JSON.stringify({ terminated: afterOne.terminated, receipts: afterOne.receipts }));
+  for (let attempt = 1; attempt < DELIVERY_FAILURE_LIMIT; attempt += 1) await rebooted.tick();
+  const swept = s.state();
+  check('12- at N=' + DELIVERY_FAILURE_LIMIT + ' the task is terminated as failed(final), not left armed', swept.tasks.every(t => t.id !== taskId) && swept.terminated?.length === 1 && swept.terminated[0].id === taskId && swept.terminated[0].status === 'failed(final)' && swept.terminated[0].attempts === DELIVERY_FAILURE_LIMIT, JSON.stringify(swept.terminated));
+  check('12- the termination carries the reason it was terminated', String(swept.terminated[0]?.reason).includes('DSH exited during startup') && swept.terminated[0]?.destination === 'R', JSON.stringify(swept.terminated[0]));
+  check('12- a terminated task is NOT reported as delivered, and the status reports it', swept.receipts.length === 0 && rebooted.state().terminated.length === 1 && rebooted.state().tasks.length === 0, JSON.stringify({ receipts: swept.receipts, statusTerminated: rebooted.state().terminated.length, statusTasks: rebooted.state().tasks.length }));
+});
+await section('case 12 armed count does not grow', async () => {
+  const s = scenario();
+  s.add('R');
+  const begun = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
+  const committed = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
+  const folder = committed.helper.folder;
+  const taskId = s.state().tasks.find(t => t.status === 'armed')?.id;
+  fs.writeFileSync(path.join(folder, 'job.json'), JSON.stringify({ owner: { path: 'fixture-host', created: 'old' } }));
+  fs.writeFileSync(path.join(folder, 'status.json'), JSON.stringify({ state: 'failed', detail: 'Process identity changed; restart stopped' }));
+  const armedBefore = s.state().tasks.filter(t => t.status === 'armed').length;
+  const armedCounts = [];
+  for (const boot of [2000, 2100, 2200]) {
+    const beat = s.create({ pid: boot });
+    for (let attempt = 0; attempt < DELIVERY_FAILURE_LIMIT; attempt += 1) await beat.tick();
+    armedCounts.push(s.state().tasks.filter(t => t.status === 'armed').length);
+  }
+  check('12- the armed-and-not-terminated count never grows across repeated restarts', armedBefore === 1 && armedCounts.every(count => count <= armedBefore) && armedCounts.at(-1) === 0, 'armed before=' + armedBefore + ' after each restart=' + JSON.stringify(armedCounts));
+  check('12- and it is terminated exactly once across those restarts, with its reason', s.state().terminated?.length === 1 && s.state().terminated[0].id === taskId && String(s.state().terminated[0].reason).includes('Process identity changed'), JSON.stringify(s.state().terminated));
+});
+await section('case 12 waiting is not failing', async () => {
+  /* The wait the policy must NOT eat: the helper is running and the new process has not been
+   * observed yet (the job owner equals the current owner), so the task is not deliverable — but
+   * nothing has failed. Ticking past the limit must leave it armed and unterminated. */
+  const s = scenario();
+  s.add('R');
+  const begun = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
+  const committed = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
+  const folder = committed.helper.folder;
+  const taskId = s.state().tasks.find(t => t.status === 'armed')?.id;
+  fs.writeFileSync(path.join(folder, 'job.json'), JSON.stringify({ owner: { path: 'fixture-host', created: 'fixture-created' } }));
+  fs.writeFileSync(path.join(folder, 'status.json'), JSON.stringify({ state: 'running' }));
+  const rebooted = s.create({ pid: 2000 });
+  for (let attempt = 0; attempt < DELIVERY_FAILURE_LIMIT + 2; attempt += 1) await rebooted.tick();
+  const state = s.state();
+  check('12- a task waiting for the new process is never counted as a failure', state.tasks.some(t => t.id === taskId && t.status === 'armed' && t.error === undefined && t.failures === undefined), JSON.stringify(state.tasks));
+  check('12- so it is neither delivered nor terminated, however long the wait', state.receipts.length === 0 && (state.terminated ?? []).length === 0 && s.delivered('R').length === 0, JSON.stringify({ receipts: state.receipts, terminated: state.terminated }));
+});
+await section('case 12 success is not termination', async () => {
+  const s = scenario();
+  s.add('R');
+  const begun = await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
+  const committed = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
+  const folder = committed.helper.folder;
+  const taskId = s.state().tasks.find(t => t.status === 'armed')?.id;
+  fs.writeFileSync(path.join(folder, 'job.json'), JSON.stringify({ owner: { path: 'fixture-host', created: 'old' } }));
+  fs.writeFileSync(path.join(folder, 'status.json'), JSON.stringify({ state: 'running' }));
+  const rebooted = s.create({ pid: 2000, probe: async () => ({ path: 'fixture-host', created: 'new' }) });
+  await rebooted.tick();
+  await rebooted.tick();
+  const state = s.state();
+  check('12- a task that succeeds is consumed as a delivery receipt', state.tasks.every(t => t.id !== taskId) && state.receipts.some(r => r.id === taskId && typeof r.delivered === 'number' && r.status === undefined && r.reason === undefined), JSON.stringify(state.receipts));
+  check('12- a task that succeeds is never terminated', (state.terminated ?? []).length === 0 && s.delivered('R').length === 1, JSON.stringify({ terminated: state.terminated, delivered: s.delivered('R').length }));
 });
 
 /* ------------------------------------------------- backward compatibility --- */

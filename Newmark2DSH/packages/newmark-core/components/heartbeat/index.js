@@ -54,6 +54,10 @@ export function apply(ctx, config) {
       return { ok: true, phase: result.phase, intentId: result.intentId, acks: result.acks, missing: result.missing };
     },
   }), 'heartbeat-barrier-commit-tool');
+  ctx.effect(() => ctx.tools.register({ name: 'heartbeat_restart_cancel', description: 'Cancel an open two-phase restart opened by heartbeat_restart {broadcast:true}, without restarting. ONE state transition: preparing -> aborted(reason "cancelled"), plus a durable notice to the requester. The cancelled intent can never be committed afterwards and the barrier is free to be re-opened. Only the conversation that opened the intent may cancel it, and only while it is still preparing — once committing the restart helper is already launched and the intent is no longer a promise that can be withdrawn. A refusal is a named code: not_requester, unknown_intent, not_preparing.',
+    parameters: { type: 'object', properties: { intentId: { type: 'string', maxLength: 100 } }, required: ['intentId'], additionalProperties: false }, output,
+    execute: (a, execution) => beat.cancelBarrier(a, execution),
+  }), 'heartbeat-barrier-cancel-tool');
   ctx.effect(() => ctx.tools.register({ name: 'heartbeat_restart_ack', description: 'Give this conversation\'s own continuation receipt for an open two-phase restart. The receipt is attributed to the conversation that calls it, from the host session identity, so one conversation can never answer for another. continuation "registered" means this conversation already has a post-restart continuation; "none" declares that it needs none.',
     parameters: { type: 'object', properties: { intentId: { type: 'string', maxLength: 100 }, continuation: { type: 'string', enum: ['registered', 'none'] } }, required: ['intentId', 'continuation'], additionalProperties: false }, output,
     execute: (a, execution) => beat.acknowledge(a, execution),

@@ -76,7 +76,7 @@ const MUTATIONS = [
   { id: 'M10', file: 'component', protects: 'case 9: a pending participant that closed is marked closed',
     anchor: "if (!alive.has(participant.sessionId) && !TERMINAL_ACKS.includes(participant.ack)) ack(participant.sessionId, 'closed', 'liveness', intent.id);",
     replacement: "if (false) ack(participant.sessionId, 'closed', 'liveness', intent.id);" },
-  { id: 'M11', file: 'component', protects: 'case 10: committing -> committed needs a changed owner',
+  { id: 'M11', file: 'component', protects: 'case 10 + case 12: committing -> committed needs a changed owner (and a wait is not a failure)',
     anchor: "if (owner.path !== job.owner.path || owner.created === job.owner.created) return;",
     replacement: "if (owner.path !== job.owner.path || owner.created !== job.owner.created) return;" },
   { id: 'M12', file: 'component', protects: 'case 10: a leftover preparing intent from another pid becomes interrupted',
@@ -88,12 +88,50 @@ const MUTATIONS = [
   { id: 'M14', file: 'index', protects: 'case 3: broadcast=false is the legacy branch of the wrapper',
     anchor: "if (a.broadcast !== true) {",
     replacement: "if (a.broadcast === true) {" },
-  { id: 'M15', file: 'index', protects: 'tool surface: the four heartbeat tools are registered',
+  { id: 'M15', file: 'index', protects: 'tool surface: the heartbeat tools are registered',
     anchor: "name: 'heartbeat_restart_ack'",
     replacement: "name: 'heartbeat_restart_ack_typo'" },
   { id: 'M16', file: 'index', protects: 'tool surface: broadcast=true opens the barrier rather than faking a phase',
     anchor: "return beat.beginBarrier(a, execution);",
     replacement: "return { ok: true, phase: 'preparing' };" },
+  /* --- the cancel tail (case 11) --- */
+  { id: 'M17', file: 'component', protects: 'case 11: only the requester may cancel (a stranger is refused)',
+    anchor: "    if (intent.requesterSessionId !== requesterSessionId) return { ok: false, phase: 'refused', reason: 'not_requester', intentId: intent.id, missing: pendingOf(intent) };",
+    replacement: "    if (false) return { ok: false, phase: 'refused', reason: 'not_requester', intentId: intent.id, missing: pendingOf(intent) };" },
+  { id: 'M18', file: 'component', protects: 'case 11: the cancel really closes the intent (preparing -> aborted(cancelled) on disk)',
+    anchor: "    const closed = finishIntent('cancelled', 'aborted');",
+    replacement: "    const closed = { ...intent, phase: 'aborted', abortReason: 'cancelled', closedAt: now(), updatedAt: now() };" },
+  { id: 'M19', file: 'component', protects: 'case 11: the requester is actually notified (durably, not just reported as notified)',
+    anchor: "    const notified = await notifyCancelled(closed);",
+    replacement: "    const notified = 'sent';" },
+  { id: 'M20', file: 'component', protects: 'case 11: a cancelled/closed intentId cannot spend the live barrier',
+    anchor: "    if (wanted && intent.id !== wanted) return { ok: false, phase: 'aborted', intentId: wanted, reason: 'intent_mismatch', missing: [] };",
+    replacement: "    if (false) return { ok: false, phase: 'aborted', intentId: wanted, reason: 'intent_mismatch', missing: [] };" },
+  { id: 'M21', file: 'index', protects: 'tool surface: the cancel tool is registered',
+    anchor: "name: 'heartbeat_restart_cancel'",
+    replacement: "name: 'heartbeat_restart_cancel_typo'" },
+  /* --- the failed-armed termination tail (case 12) --- */
+  { id: 'M22', file: 'component', protects: 'case 12: the chosen N (one failure is not terminal, N failures are)',
+    anchor: "export const DELIVERY_FAILURE_LIMIT = 3;",
+    replacement: "export const DELIVERY_FAILURE_LIMIT = 1;" },
+  { id: 'M23', file: 'component', protects: 'case 12: a task that keeps failing is terminated, not left armed',
+    anchor: "            if (attempts >= DELIVERY_FAILURE_LIMIT) { terminateTask(task, reason, attempts); return; }",
+    replacement: "            if (false) { terminateTask(task, reason, attempts); return; }" },
+  { id: 'M24', file: 'component', protects: 'case 12: the helper reporting failed is a FAILURE, not a wait',
+    anchor: "            if (status.state === 'failed') { fail(Error(status.detail || '重启辅助程序报告失败')); continue; }",
+    replacement: "            if (false) { fail(Error(status.detail || '重启辅助程序报告失败')); continue; }" },
+  { id: 'M25', file: 'component', protects: 'case 12: termination sweeps the executable record out of tasks',
+    anchor: "      s.tasks = s.tasks.filter(t => t.id !== task.id);",
+    replacement: "      void task.id;" },
+  { id: 'M26', file: 'component', protects: 'case 12: a task that succeeds is never terminated',
+    anchor: "            store.change(s => {s.receipts ||= [];if(!s.receipts.some(r=>r.id===task.id))s.receipts.push({id:task.id,delivered:Date.now()});s.tasks=s.tasks.filter(t=>t.id!==task.id);s.schema=3;});",
+    replacement: "            store.change(s => {s.receipts ||= [];if(!s.receipts.some(r=>r.id===task.id))s.receipts.push({id:task.id,delivered:Date.now()});s.terminated ||= [];s.terminated.push({id:task.id,status:TERMINATED_STATUS,reason:'mutation',attempts:99,destination:task.destination,terminated:Date.now()});s.tasks=s.tasks.filter(t=>t.id!==task.id);s.schema=3;});" },
+  { id: 'M27', file: 'component', protects: 'case 12: a task waiting for the new process is not deliverable, and that wait is not a failure',
+    anchor: "            if (owner.path !== job.owner.path || owner.created === job.owner.created) continue;",
+    replacement: "            if (false) continue;" },
+  { id: 'M28', file: 'component', protects: 'case 12: the status the component reports actually SHOWS the termination',
+    anchor: "    return { ...state, tasks: state.tasks || [], receipts: state.receipts || [], terminated: state.terminated || [] };",
+    replacement: "    return { ...state, tasks: state.tasks || [], receipts: state.receipts || [], terminated: [] };" },
 ];
 
 /** One gate run. The gate's own verdict is its summary line and its not-ok lines, not the exit code alone. */
@@ -166,9 +204,9 @@ for (const mutation of MUTATIONS) {
     restoredSha = sha(readFileSync(file));
   }
   const caught = run.failedCount !== null && run.failedCount > 0;
-  console.log('    planted sha256 ' + mutatedSha.slice(0, 16) + '...  (' + mutatedBytes.length + ' B)');
+  console.log('    planted sha256 ' + mutatedSha + '  (' + mutatedBytes.length + ' B)');
   console.log('    gate: ' + run.passed + '/' + (run.failedCount === null ? '?' : run.passed + run.failedCount) + ' passed, ' + run.failedCount + ' failed (exit ' + run.exitCode + (run.timedOut ? ', TIMED OUT' : '') + ')');
-  console.log('    restored sha256 ' + restoredSha.slice(0, 16) + '...  byte-for-byte=' + (restoredSha === originalSha[mutation.file]));
+  console.log('    restored sha256 ' + restoredSha + '  byte-for-byte=' + (restoredSha === originalSha[mutation.file]));
   if (caught) {
     for (const name of run.failed) console.log('      red: ' + name);
   } else {
@@ -189,7 +227,7 @@ const finalRun = runGate();
 const finalSha = Object.fromEntries(Object.entries(FILES).map(([key, file]) => [key, sha(readFileSync(file))]));
 const allRestored = Object.entries(finalSha).every(([key, value]) => value === originalSha[key]);
 console.log('    ' + finalRun.passed + '/' + (finalRun.passed + finalRun.failedCount) + ' passed, ' + finalRun.failedCount + ' failed (exit ' + finalRun.exitCode + ')');
-for (const [key, value] of Object.entries(finalSha)) console.log('    ' + key + ' sha256 ' + value.slice(0, 16) + '...  byte-for-byte-original=' + (value === originalSha[key]));
+for (const [key, value] of Object.entries(finalSha)) console.log('    ' + key + ' sha256 ' + value + '  byte-for-byte-original=' + (value === originalSha[key]));
 report.final = { ...finalRun, sha256: finalSha, byteForByteOriginal: allRestored };
 report.finishedAt = new Date().toISOString();
 writeFileSync(join(SCRATCH, 'report.json'), JSON.stringify(report, null, 2));

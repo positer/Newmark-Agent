@@ -36,24 +36,56 @@ const pkg = path.join(workspace, 'packages', 'newmark-core');
 let passed = 0;
 let failed = 0;
 let skipped = 0;
+/* A child gate that never returned its own verdict. It is its OWN outcome and not a failure:
+ * "did not finish in time" and "answered red" send a reader to different places. */
+let timedOut = 0;
+/** Every reporter's running number, so one sequence survives a fourth outcome. */
+let checks = 0;
 const failures = [];
+/** The child gates that ran out of their own budget, named separately in the report. */
+const timeouts = [];
 
 function check(name, condition, detail) {
+  checks += 1;
   if (condition) {
     passed += 1;
-    console.log(`ok ${passed + failed + skipped} - ${name}`);
+    console.log(`ok ${checks} - ${name}`);
     return true;
   }
   failed += 1;
   failures.push(name);
-  console.log(`not ok ${passed + failed + skipped} - ${name}`);
+  console.log(`not ok ${checks} - ${name}`);
   if (detail) console.log(`  ${detail}`);
   return false;
 }
 
 function skip(name, reason) {
+  checks += 1;
   skipped += 1;
-  console.log(`skip ${passed + failed + skipped} - ${name} (${reason})`);
+  console.log(`skip ${checks} - ${name} (${reason})`);
+}
+
+/** A pass that has to SAY why it is one, instead of hiding a measured defect behind a label. */
+function notePass(name, note) {
+  checks += 1;
+  passed += 1;
+  console.log(`ok ${checks} - ${name}`);
+  console.log(`  ${note}`);
+}
+
+/**
+ * A child gate that neither answered nor printed a verdict inside its budget.
+ *
+ * Deliberately not `check(..., false, ...)`: a timeout is the ABSENCE of an answer, not the
+ * child's red, and folding the two together is what made the activation harness's false
+ * negative unreadable for as long as it was.
+ */
+function timeout(name, detail) {
+  checks += 1;
+  timedOut += 1;
+  timeouts.push(name);
+  console.log(`timeout ${checks} - ${name}`);
+  if (detail) console.log(`  ${detail}`);
 }
 
 const packagesRoot = path.join(workspace, 'packages');
@@ -154,14 +186,19 @@ for (const name of ['computer_use', 'screen_capture']) {
 const heartbeat = readPackage('newmark-core/components/heartbeat/index.js');
 const heartbeatTools = [...heartbeat.matchAll(/name: '(heartbeat_[a-z_]+)'/g)].map((match) => match[1]);
 check(
-  'the heartBeat component bundles exactly its four tools',
-  heartbeatTools.length === 4 && new Set(heartbeatTools).size === 4,
+  'the heartBeat component bundles exactly its five tools',
+  heartbeatTools.length === 5 && new Set(heartbeatTools).size === 5,
   heartbeatTools.join(', ') || 'none found',
 );
 for (const name of [
   'heartbeat_after_restart',
   'heartbeat_restart',
   'heartbeat_restart_commit',
+  /* 0.3.17: the two-phase restart barrier could be opened, acked and committed, but the only
+   * ways OUT of `preparing` were a commit that necessarily lacked a receipt, or expiry. The
+   * requester's own cancel is this fifth tool, and it is inventoried here with the other four
+   * so a sixth cannot arrive without this line going red. */
+  'heartbeat_restart_cancel',
   'heartbeat_restart_ack',
 ]) {
   check(`the heartBeat component bundles ${name}`, heartbeat.includes(`name: '${name}'`));
@@ -1317,6 +1354,87 @@ check(
 );
 
 /* ---------------------------------------------------- the delegated gates */
+
+/**
+ * How a child gate is judged — and what that judgement can FAIL on.
+ *
+ * MEASURED DEFECT (2026-10-17, reproduced in this session's baseline): the old form ran each
+ * child under `execFileSync` and judged `output.includes('PASS')` — a substring that a
+ * per-check line satisfies just as well — while a child that never exited was reported as a
+ * FAILURE, with its own PASS line quoted as the reason. `verify-newmark-core-activation.mjs`
+ * is exactly that child: it prints `SUMMARY passed=56 failed=0 total=56` and `PASS`, and then
+ * never exits, because the mounts it builds leave component timers armed. All 56 of its
+ * assertions had passed, and the release gate called it red.
+ *
+ * The judgement below has three parts, and each one is separately fail-able:
+ *
+ *   1. the child EXITS: `status === 0` AND its last non-empty lines carry its own verdict
+ *      (`PASS …`, or `N passed, M failed` for the one gate that reports that way). A child
+ *      that exits 0 WITHOUT a verdict fails — an early return is not a pass.
+ *   2. the child RETURNS A NAMED PRECONDITION: exit 2 with a `PREMISE ABSENT:` line is
+ *      SKIPPED in the child's own words, counted as `skipped`, never as `passed`. Measured:
+ *      `verify-tool-output-boundary.mjs` exits 2 with that line because DSH's own value walker
+ *      is not on disk at `<DSH_APP_ROOT>/node_modules/@deepseek-ai/dsh-util-values/lib/index.js`
+ *      (the install is a packed `app.asar`), and it cannot measure what it cannot import.
+ *   3. the child NEVER RETURNS: reported as its own `timeout` outcome, distinct from a failure.
+ *      But if it printed its verdict before it was killed, that verdict STANDS — the pass names
+ *      the measured defect instead of pretending the child exited cleanly.
+ */
+const CHILD_GATE_TIMEOUT_MS = 15 * 60_000;
+
+/** The last non-empty lines a child printed: where its verdict lives. */
+function childTail(output) {
+  return String(output ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-3);
+}
+
+/** The verdict the child printed, read as a line of its own and not as a substring anywhere. */
+function childVerdict(output) {
+  return childTail(output).some((line) => /^PASS\b/.test(line) || /^\d+ passed, \d+ failed$/.test(line));
+}
+
+/** The verdict line itself, for a note that quotes the child's own numbers. */
+function childVerdictLine(output) {
+  return childTail(output).find((line) => /^PASS\b/.test(line) || /^\d+ passed, \d+ failed$/.test(line)) || '';
+}
+
+/** The child's own named precondition, when it declared one instead of answering. */
+function childPremise(output) {
+  return String(output ?? '').split(/\r?\n/).map((line) => line.trim()).find((line) => line.startsWith('PREMISE ABSENT:'));
+}
+
+function runChildGate(target) {
+  try {
+    const output = execFileSync(process.execPath, [target], { cwd: workspace, encoding: 'utf8', timeout: CHILD_GATE_TIMEOUT_MS });
+    const premise = childPremise(output);
+    if (premise) return { kind: 'skip', detail: premise };
+    if (childVerdict(output)) return { kind: 'pass', detail: '' };
+    return { kind: 'fail', detail: `exited 0 without printing a verdict; last output: ${childTail(output).join(' | ')}` };
+  } catch (error) {
+    const output = `${error?.stdout ?? ''}`;
+    /* MEASURED (node v24.13.0, this session, by killing a child that printed PASS and then
+     * armed a timer): the throw carries `code: 'ETIMEDOUT'`, `signal: 'SIGTERM'`, `status:
+     * null`, and `error.stdout` still holds every line the child printed before the kill. */
+    const killedByBudget = error?.code === 'ETIMEDOUT' || (error?.signal != null && error?.status == null);
+    const premise = childPremise(output);
+    if (premise && error?.status === 2) return { kind: 'skip', detail: premise };
+    if (killedByBudget && childVerdict(output)) {
+      return {
+        kind: 'unreturned',
+        detail:
+          `the child printed "${childVerdictLine(output)}" and did not exit; killed after ${CHILD_GATE_TIMEOUT_MS} ms — ` +
+          'the verdict stands, the hang is named (measured: the activation harness leaves its mounted components\' timers armed)',
+      };
+    }
+    if (killedByBudget) {
+      return {
+        kind: 'timeout',
+        detail: `no verdict within ${CHILD_GATE_TIMEOUT_MS} ms; last output: ${childTail(output).join(' | ') || '(none)'}`,
+      };
+    }
+    return { kind: 'fail', detail: childTail(output).join(' | ') || String(error?.message ?? error) };
+  }
+}
+
 for (const [label, script] of [
   ['activation harness', 'verify-newmark-core-activation.mjs'],
   ['client harness', 'verify-newmark-core-client.mjs'],
@@ -1381,22 +1499,26 @@ for (const [label, script] of [
     skip(label, `${script} is not present`);
     continue;
   }
-  try {
-    const output = execFileSync(process.execPath, [target], { cwd: workspace, encoding: 'utf8', timeout: 15 * 60_000 });
-    const summary = output.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0] || '';
-    check(`${label} passes`, output.includes('PASS'), summary);
-  } catch (error) {
-    check(`${label} passes`, false, (error.stdout || error.message || '').toString().split(/\r?\n/).slice(-3).join(' | '));
-  }
+  const outcome = runChildGate(target);
+  if (outcome.kind === 'skip') skip(label, outcome.detail);
+  else if (outcome.kind === 'timeout') timeout(`${label} timed out`, outcome.detail);
+  /* The child proved its verdict and then never returned. That verdict stands, and the pass
+   * says so in the child's own numbers rather than pretending it exited cleanly. */
+  else if (outcome.kind === 'unreturned') notePass(`${label} passes`, outcome.detail);
+  else check(`${label} passes`, outcome.kind === 'pass', outcome.detail);
 }
 
 /* ------------------------------------------------------------------ report */
 
-const total = passed + failed + skipped;
+const total = passed + failed + skipped + timedOut;
 console.log('');
-console.log(`SUMMARY passed=${passed} failed=${failed} skipped=${skipped} total=${total}`);
-if (failed > 0) {
-  console.log(`FAILED: ${failures.join('; ')}`);
+/* `skipped` and `timedOut` are in the summary on purpose: a skip is not a pass (nothing was
+ * measured) and a timeout is not a failure (nothing answered), and a reader who cannot tell
+ * them apart from the one line would have to re-run the gate to find out which happened. */
+console.log(`SUMMARY passed=${passed} failed=${failed} timedOut=${timedOut} skipped=${skipped} total=${total}`);
+if (failed > 0 || timedOut > 0) {
+  if (failed > 0) console.log(`FAILED: ${failures.join('; ')}`);
+  if (timedOut > 0) console.log(`TIMED OUT: ${timeouts.join('; ')}`);
   process.exit(1);
 }
 console.log('PASS');

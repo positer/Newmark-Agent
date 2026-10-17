@@ -134,7 +134,7 @@ heartBeat 负责持久化重启后任务与消费回执，也为插件更新流�
 ## 快速开始
 
 1. 在 DSH 配置好模型供应商，确认所选模型可用。
-2. 通过 DSH 插件管理器安装 **`newmark2dsh@0.3.16`**。使用明确版本可避免宿主新发布包等待策略选中较旧版本。
+2. 通过 DSH 插件管理器安装 **`newmark2dsh@0.3.14`**（npm 上最新已发布版本；本仓库源码版本为 0.3.17，见「当前版本与更新」）。使用明确版本可避免宿主新发布包等待策略选中较旧版本。
 3. 打开 **Newmark Core** 配置页，选择允许插件使用的供应商／模型，并开启需要的组件。
 4. 从侧栏打开 **MemoryLab** 维护记忆，或打开 **NewMate** 开始聊天；需要桌宠陪伴时，再开启陪伴设置；桌面操作则通过 `computer_use` 发起。
 5. 更换已经加载的后端或原生代码后重启宿主；官方 Windows 容器可使用启用的 heartBeat 完成交接。
@@ -216,7 +216,7 @@ node scripts/check-release-bundle.mjs .
 
 ## 当前版本与更新
 
-**当前版本：0.3.15；本文于 2026-10-17 核对。** 本版本修正 Dev／rDev 两个预设的提示词变量断点：预设声明不再插值宿主未注册的 `{{cwd}}`，此前它让这两个预设的每一轮在提示词组装阶段失败、模型从未被调用。0.3.15 为源码版本，npm 最新仍为 0.3.14；已安装实例的同一份声明已按本版修正，待宿主重启后生效，实机一轮对话的验收需在重启后进行。历史版本可在 [GitHub Releases](https://github.com/positer/newmark2dsh/releases) 中查看。
+**源码版本：0.3.17；本文于 2026-10-17 核对。npm 上最新已发布版本为 0.3.14。** 0.3.17 修的是桌宠「坏合成一旦发生就永久留在屏幕上」这条缺陷：分层窗口只由 `UpdateLayeredWindow` 呈现，而陪伴模式（`cu:false`）静止时几乎不重绘，于是一次错误合成会一直卡住（本机实测整块纯白、持续数分钟）；现在按已有的 1 s 节拍重新呈现、`WM_DPICHANGED` 之后补一次呈现、呈现被拒时重建一次表面。同一版新增两条**像素级**门禁（宠物矩形四角必须等于其后方桌面像素；恰好 (255,255,255) 的占比不得越过 0.8）并给「陪伴模式保活重绘」加上前置条件，三条 planted mutation 全部变红并逐字节还原。heartbeat 侧补上 `heartbeat_restart_cancel {intentId}` 与 armed 任务的失败终结策略（连续 3 次投递失败即 `failed(final)`，原因记入 `terminated[]`）。**0.3.15/0.3.16/0.3.17 都只是源码版本**（0.3.15 修 Dev／rDev 的提示词变量断点），npm 上仍是 0.3.14，本机安装用的是本仓库打出的 tarball。限定：`heartbeat_restart_cancel` 的通知、`ackMode:'agent'`、`onTimeout:'proceed'`、`force`、「不回执参与者 → `aborted`」目前只有**门禁级**证据。历史版本可在 [GitHub Releases](https://github.com/positer/newmark2dsh/releases) 中查看。
 
 README 按当前功能维护；公开版本历史集中保存在 GitHub Releases，历史 CHANGELOG 留在本地归档中。文档更新不代表重新发布 npm 包或改变已经安装的版本。
 

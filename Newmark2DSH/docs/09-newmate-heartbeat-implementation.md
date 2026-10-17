@@ -46,11 +46,11 @@ NewMate 创建时即只读加载 index.json 的全部 tag 名及 parents/childre
 - 回执只按宿主给的会话身份归属，一个会话无法替另一个会话回执；通知不投给 requester 本身（它就在这次调用里，用自己的工具回执）。
 - 准备期间消失的参与者移出必需集合（记为 `closed`），记录保留，因为它的接续任务仍欠着、仍要在重启后投递；准备期间新出现的会话被**加入**而不是忽略——在它背后重启它，正是这个屏障要防的事。
 
-`heartbeat_restart_commit {intentId}` 等回执：只有全部参与者终态**且** requester 自己已登记，才准备并提交重启（返回 `committed`）；否则返回 `aborted` 并点名缺失的会话，宿主继续运行。原因分类：`no_intent`、`not_requester`、`deadline_exceeded`、`missing_acks`、`requester_not_registered`。`not_requester` 与 `no_intent` 不关闭 intent（别人的失败不是 requester 的放弃），其余中止都会把它关进历史。`onTimeout:'abort'`（默认）超时后拒绝重启；`'proceed'` 记录缺失者后照常重启；`force` 跳过检查，并在 intent 里留下「这次是强制的」。
+`heartbeat_restart_commit {intentId}` 等回执：只有全部参与者终态**且** requester 自己已登记，才准备并提交重启（返回 `committed`）；否则返回 `aborted` 并点名缺失的会话，宿主继续运行。原因分类：`no_intent`、`not_requester`、`deadline_exceeded`、`missing_acks`、`requester_not_registered`、`intent_mismatch`。`intent_mismatch` 是 0.3.17 加的：commit 只认被点名的那个 intent，否则一个已被撤销的 `intentId` 能花掉重新打开的新屏障并真的重启宿主。`not_requester` 与 `no_intent` 不关闭 intent（别人的失败不是 requester 的放弃），其余中止都会把它关进历史。`onTimeout:'abort'`（默认）超时后拒绝重启；`'proceed'` 记录缺失者后照常重启；`force` 跳过检查，并在 intent 里留下「这次是强制的」。
 
 intent 写进 `~/.Newmark/heartBeat/state.json`（schema 3，新增 `intent` 与最多 20 条 `intents` 历史，旧 schema 2 文件照常读），所以新宿主能收尾：`committing` 在 helper 报告新进程身份（路径相同、创建时间不同）后变成 `committed`，并把本次投递的任务写进 `delivery.tasks`；旧进程留下的 `preparing` 变成 `interrupted` 并通知 requester「上一次没有提交就中断，DSH 仍在原进程中」。没有这条清扫，这个功能本身就会制造它要防止的静默丢失——用户以为重启了，其实没有。过期且无人提交的准备会自行关闭，否则一个被遗忘的 intent 会永久拒绝新的广播。
 
-已知缺口（本轮不做）：没有单独的「取消」工具。取消等价于不提交、提交一次必然缺回执的 commit（以 `missing_acks` 或 `deadline_exceeded` 结束）、或等它过期。intent 打开时向 NewMate 发一条气泡提示这件事（气泡带取消/立即重启的说明文字，不是客户端按钮）；陪伴开关关闭或气泡被静音时记为 `skipped:*`，不影响屏障判定，也不伪报「已告知用户」。
+`heartbeat_restart_cancel {intentId}` 已在 0.3.17 补上：一次状态转换 `preparing -> aborted(reason:'cancelled')` + 向 requester 的持久通知；非 requester / 未知 intent / 非 preparing 分别以 `not_requester` / `unknown_intent` / `not_preparing` 拒绝，`not_requester` 不关闭 intent；取消后屏障可重开、该 intent 不可再 commit。取消只覆盖 `preparing`：`committing` 之后不可撤回，仍走 committing -> committed 的清扫（helper 已启动）。它的门禁证据是 fixture 级的 —— 通知确实写进 durable state，但「requester 真的看到了」没有活体会话证据，与 `ackMode:'agent'` / `onTimeout:'proceed'` / `force` / 「不回执参与者 → aborted」一样。intent 打开时向 NewMate 发一条气泡提示这件事（气泡带取消/立即重启的说明文字，不是客户端按钮）；陪伴开关关闭或气泡被静音时记为 `skipped:*`，不影响屏障判定，也不伪报「已告知用户」。
 
 ## Agent API 视觉
 

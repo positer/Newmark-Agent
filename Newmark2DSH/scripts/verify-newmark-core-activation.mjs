@@ -126,8 +126,8 @@ try {
     both.rows.map((row) => `${row.key}:${row.origin}`).join(', '),
   );
   check(
-    'the five components register all thirty-three tools',
-    both.tools.size === 33,
+    'the five components register all thirty-four tools',
+    both.tools.size === 34,
     `registered: ${[...both.tools.keys()].join(', ')}`,
   );
   for (const name of TOOL_NAMES.memoryLab) check(`MemoryLab registers ${name}`, both.tools.has(name));
@@ -347,3 +347,6 @@ if (failed > 0) {
   process.exit(1);
 }
 console.log('PASS');
+// Exit on the verdict. Without this the child prints its verdict and stays alive holding its
+// mounts, so a delegating gate can only learn the outcome by killing it at its budget.
+process.exit(0);

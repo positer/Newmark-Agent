@@ -22,6 +22,12 @@ const NOTIFY_PROMPT = id => 'Newmark2DSH 准备重启（intentId=' + id + '）�
  * was restarted, and it must not silently keep waiting for a helper that will never run. */
 const INTERRUPTED_PROMPT = id => 'Newmark2DSH 上一次两阶段重启（intentId=' + id + '）没有提交就中断了，DSH 仍在原进程中运行。'
   + '请检查是否有未完成的登记；需要时重新发起 heartbeat_restart {broadcast:true}。';
+/* Cancelling an open preparation is a decision the requester made, so the notice says who ended it
+ * and what it means: the host was NOT restarted and the promise to the participants is withdrawn.
+ * It travels the same durable delivery path the interrupted notice uses — that is what makes "the
+ * requester was told" a persisted fact rather than a claim about a socket. */
+const CANCELLED_PROMPT = id => 'Newmark2DSH 两阶段重启（intentId=' + id + '）已被 requester 取消：DSH 继续运行，未执行重启。'
+  + '该 intent 不会再被提交；需要重启时请重新发起 heartbeat_restart {broadcast:true}。';
 
 const ACK_MODES = ['auto', 'agent'];
 const TIMEOUT_POLICIES = ['abort', 'proceed'];
@@ -34,10 +40,23 @@ const DEFAULT_ACK_TIMEOUT_MS = 90000;
 const MIN_ACK_TIMEOUT_MS = 1000;
 const MAX_ACK_TIMEOUT_MS = 600000;
 const INTENT_HISTORY_LIMIT = 20;
+/* N consecutive FAILED delivery attempts end an armed task. The tick runs every 2 s, so three
+ * failures is ~6 s of retrying — long enough that a transient throw (a flush that answers false, an
+ * unreadable half-written status.json) is not mistaken for a dead task, short enough that the task
+ * is reclaimed inside the session that observed it. ONLY a failure counts: a task whose restart
+ * helper has not yet reported the new process, or whose companion target is switched off, is
+ * WAITING, not failing, and is never counted. Without this bound an armed task whose helper
+ * reported a "failed" status is retried forever — measured on this machine before the change: 7 tasks,
+ * state.json schema 3, every one status:"armed", every helper status.json state:"failed". */
+export const DELIVERY_FAILURE_LIMIT = 3;
+/* The status a terminated task records ("failed(final)") is deliberately not "failed": an armed task
+ * already carries an "error" field on a task that keeps retrying, so a reader must be able to tell
+ * "this failed once and may still be delivered" from "this is over, and here is why". */
+const TERMINATED_STATUS = 'failed(final)';
 
 export function createHeartBeat({ root, core, agents, controller = createRestartController(root), probe = probeDesktop, pid = process.pid, version, logger, now = Date.now }) {
   const failures = createErrorLog({root,logger});
-  const store = durableState(path.join(root, 'heartBeat', 'state.json'), { schema: 3, tasks: [], receipts: [], intent: null, intents: [] });
+  const store = durableState(path.join(root, 'heartBeat', 'state.json'), { schema: 3, tasks: [], receipts: [], terminated: [], intent: null, intents: [] });
   // Retire the previous delivered marker into a permanent consumption receipt.
   if(store.read().tasks.some(t=>t.status==='delivered')) store.change(s=>{s.receipts ||= [];for(const t of s.tasks.filter(t=>t.status==='delivered'))if(!s.receipts.some(r=>r.id===t.id))s.receipts.push({id:t.id,delivered:t.delivered||Date.now()});s.tasks=s.tasks.filter(t=>t.status!=='delivered');s.schema=3;});
   let pumping = false, stopped = false;
@@ -213,9 +232,14 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
 
   async function commitBarrier(options = {}, execution) {
     const requesterSessionId = currentConversation(execution);
+    const wanted = typeof options.intentId === 'string' && options.intentId ? options.intentId : null;
     const state = store.read();
     const intent = state.intent;
-    if (!intent || !OPEN_PHASES.includes(intent.phase)) return { ok: false, phase: 'aborted', intentId: intent?.id ?? null, reason: 'no_intent', missing: [] };
+    if (!intent || !OPEN_PHASES.includes(intent.phase)) return { ok: false, phase: 'aborted', intentId: wanted ?? intent?.id ?? null, reason: 'no_intent', missing: [] };
+    // The named intent must BE the open one. Without this, a commit for an intent that was already
+    // cancelled (or already closed for any other reason) would silently spend whatever barrier is
+    // open at that moment — i.e. withdraw a promise nobody committed to and restart the host on it.
+    if (wanted && intent.id !== wanted) return { ok: false, phase: 'aborted', intentId: wanted, reason: 'intent_mismatch', missing: [] };
     // Only the session that opened the barrier may spend it. A refusal here leaves the intent open,
     // because a stranger's failed attempt is not the requester's decision to abandon.
     if (intent.requesterSessionId !== requesterSessionId) return { ok: false, phase: 'aborted', intentId: intent.id, reason: 'not_requester', missing: pendingOf(intent) };
@@ -253,6 +277,44 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
     return { ok: true, phase: 'committed', intentId: intent.id, acks, missing, helper };
   }
 
+  /* The one transition the state machine did not have: an open preparation is a promise the
+   * requester may withdraw explicitly, instead of abandoning it by committing a barrier that is
+   * certain to be missing receipts or by waiting the deadline out. Only the session that OPENED the
+   * intent may cancel it — a stranger's cancel is not the requester's decision, exactly as a
+   * stranger's commit is not — and only while the intent is still 'preparing': once 'committing'
+   * the helper has already been launched and the restart is a thing that has happened, not a
+   * promise that can be withdrawn. Every refusal is a named code and writes nothing. */
+  async function cancelBarrier(options = {}, execution) {
+    const requesterSessionId = currentConversation(execution);
+    const wanted = typeof options.intentId === 'string' && options.intentId ? options.intentId : null;
+    const state = store.read();
+    const intent = state.intent;
+    if (!intent || intent.id !== wanted) {
+      const closed = (state.intents || []).some(record => record.id === wanted);
+      return { ok: false, phase: 'refused', reason: closed ? 'not_preparing' : 'unknown_intent', intentId: wanted, missing: [] };
+    }
+    if (intent.requesterSessionId !== requesterSessionId) return { ok: false, phase: 'refused', reason: 'not_requester', intentId: intent.id, missing: pendingOf(intent) };
+    if (intent.phase !== 'preparing') return { ok: false, phase: 'refused', reason: 'not_preparing', intentId: intent.id, missing: pendingOf(intent) };
+    const missing = pendingOf(intent);
+    const closed = finishIntent('cancelled', 'aborted');
+    const notified = await notifyCancelled(closed);
+    return { ok: true, phase: 'aborted', intentId: closed.id, reason: 'cancelled', missing, notified };
+  }
+
+  /* Best effort and recorded, for the same reason the interrupted notice is: "the requester was
+   * told" has to be readable after the fact, and a notice that could not be delivered must not turn
+   * a cancel that DID happen into a failed call. */
+  async function notifyCancelled(intent) {
+    if (!intent?.requesterSessionId) return 'no-requester';
+    try {
+      await deliverConversation(agents(), intent.requesterSessionId, { id: 'intent-cancelled:' + intent.id, prompt: CANCELLED_PROMPT(intent.id), modelSelection: intent.requesterModel });
+      return 'sent';
+    } catch (error) {
+      failures.record({ where: 'heartbeat/barrier-cancel-notice', code: error.code || 'notice_failed', message: String(error.message), fields: { intentId: intent.id } });
+      return 'skipped:' + String(error.message);
+    }
+  }
+
   function acknowledge(options = {}, execution) {
     const sessionId = currentConversation(execution);
     const intent = store.read().intent;
@@ -266,6 +328,13 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
   }
 
   const barrierState = () => { const state = store.read(); return { intent: state.intent || null, intents: state.intents || [] }; };
+  /* The status a reader gets back: the durable file plus the collections that may be absent in a
+   * file written before they existed. A terminated task is REPORTED here — never silently dropped —
+   * because "this armed task is over, and here is why" is the fact a reader of the queue needs. */
+  const status = () => {
+    const state = store.read();
+    return { ...state, tasks: state.tasks || [], receipts: state.receipts || [], terminated: state.terminated || [] };
+  };
 
   /* -------------------------------------------------------------------- delivery --- */
   /* A leftover intent is swept on every tick, because a barrier that only exists in the process
@@ -306,8 +375,21 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
     if (now() > intent.deadline) finishIntent('deadline_exceeded', 'aborted');
   }
 
+  /* The same atomic sweep the committed delivery uses: one durable mutation consumes the
+   * executable record and leaves a payload-free audit record behind. The record says the task is
+   * terminal and carries the reason it was terminated, so "this armed task is over, and why" is
+   * readable from the status instead of being inferred from a task that quietly stopped appearing. */
+  function terminateTask(task, reason, attempts) {
+    store.change(s => {
+      s.terminated ||= [];
+      if (!s.terminated.some(r => r.id === task.id)) s.terminated.push({ id: task.id, status: TERMINATED_STATUS, reason: String(reason).slice(0, 400), attempts, destination: task.destination, terminated: Date.now() });
+      s.tasks = s.tasks.filter(t => t.id !== task.id);
+      s.schema = 3;
+    });
+  }
+
   return {
-    state: store.read, schedule, stop() { stopped = true; },
+    state: status, schedule, stop() { stopped = true; },
     prepare: targetVersion => controller.prepare(targetVersion),
     async restart(ticket, update = false) {
       const helper = await controller.restart(ticket);
@@ -329,14 +411,30 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
       if (running) throw Error('已有一个进行中的两阶段重启准备（intentId=' + running.id + '），请先提交或等它结束');
       const prepared = await controller.prepare(version); return this.restart(prepared.ticket);
     },
-    beginBarrier, commitBarrier, acknowledge, barrierState,
+    beginBarrier, commitBarrier, cancelBarrier, acknowledge, barrierState,
     async tick() {
       if (pumping || stopped) return; pumping = true;
       const delivered = [];
       try {
         for (const task of store.read().tasks.filter(t => t.status === 'armed' && t.restartPid !== pid)) {
+          /* One FAILED delivery attempt, counted in the durable record. At DELIVERY_FAILURE_LIMIT the
+           * task is terminated instead of retried: either the restart happened and the delivery keeps
+           * failing, or the helper reported failure and no restart is coming. A task that is merely
+           * WAITING — helper not yet running, owner unchanged, companion target switched off — is not
+           * counted, because waiting is not failing. */
+          const fail = error => {
+            const reason = String(error?.message ?? error);
+            const attempts = (task.failures || 0) + 1;
+            if (task.error !== reason) failures.record({ where: 'heartbeat/delivery', code: error?.code || 'delivery_failed', message: reason, fields: { taskId: task.id, attempt: attempts, limit: DELIVERY_FAILURE_LIMIT } });
+            if (attempts >= DELIVERY_FAILURE_LIMIT) { terminateTask(task, reason, attempts); return; }
+            store.change(s => { const target = s.tasks.find(t => t.id === task.id); if (!target) return; target.error = reason; target.failures = attempts; s.schema = 3; });
+          };
           try {
             const status = JSON.parse(fs.readFileSync(path.join(task.folder, 'status.json'), 'utf8').replace(/^﻿/, ''));
+            // The helper's own terminal failure: it will never report the new process, so this task
+            // can never be delivered. That is a failure, not a wait — and it is the measured
+            // production case (state:"failed", detail:"DSH exited during startup").
+            if (status.state === 'failed') { fail(Error(status.detail || '重启辅助程序报告失败')); continue; }
             if (status.state !== 'running') continue;
             const job = JSON.parse(fs.readFileSync(path.join(task.folder, 'job.json'), 'utf8'));
             const owner = await probe();
@@ -350,7 +448,7 @@ export function createHeartBeat({ root, core, agents, controller = createRestart
             // One atomic durable mutation consumes the executable record and leaves only its ID.
             store.change(s => {s.receipts ||= [];if(!s.receipts.some(r=>r.id===task.id))s.receipts.push({id:task.id,delivered:Date.now()});s.tasks=s.tasks.filter(t=>t.id!==task.id);s.schema=3;});
           } catch (error) {
-            if (task.error !== String(error.message)) { failures.record({where:'heartbeat/delivery',code:error.code || 'delivery_failed',message:String(error.message),fields:{taskId:task.id}}); store.change(s => { s.tasks.find(t => t.id === task.id).error = String(error.message); }); }
+            fail(error);
           }
         }
         await sweepIntent(delivered);

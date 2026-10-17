@@ -98,7 +98,7 @@ try {
     // — `components: { computerUse: false }` switches off ComputerUse and nothing else. Asserted
     // as a partition rather than as one number: a count alone cannot tell "MemoryLab is complete"
     // from "something new arrived and MemoryLab lost a tool to make room for it".
-    mount.tools.size === 31 && ['shortMemory_add','shortMemory_recall','shortMemory_where','shortMemory_size'].every(name=>mount.tools.has(name)) &&
+    mount.tools.size === 32 && ['shortMemory_add','shortMemory_recall','shortMemory_where','shortMemory_size','heartbeat_restart_cancel'].every(name=>mount.tools.has(name)) &&
       mount.tools.has('newmate_task') && mount.tools.has('newmate_state') && mount.tools.has('heartbeat_after_restart') && mount.tools.has('heartbeat_restart') &&
       [...mount.tools.keys()].filter((name) => name.startsWith('memory_lab_')).length === 9 &&
       [...mount.tools.keys()].filter((name) => name.startsWith('agent_api_')).length === 4,

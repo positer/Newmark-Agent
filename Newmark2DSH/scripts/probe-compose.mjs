@@ -172,8 +172,8 @@ taps.length = 0;
     names.join(', '),
   );
   check(
-    'all thirty-three component tools are registered',
-    names.length === 33,
+    'all thirty-four component tools are registered',
+    names.length === 34,
     `${names.length}: ${names.join(', ')}`,
   );
   check(

@@ -18,10 +18,10 @@ Newmark2DSH 将 Newmark 的持久记忆、桌面自动化与私人秘书式陪�
 
 | 组件 | 帮你完成什么 | 主要入口 |
 | --- | --- | --- |
-| **MemoryLab** | 保存、检索和整理长期知识，管理有到期标记的短期记忆 | MemoryLab 侧栏、记忆工具 |
+| **MemoryLab** | 长期树状记忆（用户画像、知识图谱）与短期到期列表（跨对话任务交接） | MemoryLab 侧栏、记忆工具 |
 | **ComputerUse** | 观察屏幕和应用，执行鼠标、键盘及窗口操作 | `computer_use`、`screen_capture`、原生接管提示与预览 |
 | **Agent API** | 用统一接口发现工具、派发工具、调用授权模型完成一次 Agent 运行 | `agent_api_catalog`、`agent_api_tool`、`agent_api_send` |
-| **NewMate** | 带记忆的对话、实时引导、低打扰主动联系与定时待办 | NewMate 侧栏、共享桌宠、对话工具、认证 MCP |
+| **NewMate** | 带记忆的对话、实时引导、低打扰主动联系、定时待办、明确请求时的桌面操作与实时 Agent 循环状态 | NewMate 侧栏、共享桌宠、对话工具、认证 MCP |
 | **heartBeat** | 登记重启后任务，在宿主恢复后可靠交接并留下消费回执；广播式重启会等其他对话先接好 | `heartbeat_after_restart`、`heartbeat_restart`、`heartbeat_restart_commit`、`heartbeat_restart_ack`、插件更新流程 |
 
 另外随包提供 **Dev / rDev 两种 Agent 预设**。预设决定对话使用的工具组合，不计入五个组件开关。
@@ -32,29 +32,31 @@ Newmark2DSH 将 Newmark 的持久记忆、桌面自动化与私人秘书式陪�
 
 项目的命名约定、反复引用的理论推导、已经确定的个人偏好，都可以成为长期记忆。MemoryLab 用 Markdown 内容和标签关系组织这些信息，让 Agent 既能查到具体段落，也能了解一条记忆在知识图中的位置。
 
+- **两种记忆，分工写在每一条工具描述里。** MemoryLab 是长期、稳定、树状的持久记忆（标签父链构成知识图），适合用户画像与知识图谱；`shortMemory_*` 是扁平列表式的短期记忆，默认七天到期、过期行保留并标记，用于跨对话的临时任务交接。13 个记忆工具的描述都以各自那一句开头，所以模型读到一个工具就知道该写哪一边，而不必先把整个索引读一遍。
 - **长期记忆与共享文件格式。** 默认使用 `~/.Newmark/Memory Lab`，包含索引、记忆正文、历史归档和操作记录，与 Newmark 用户库共用文件格式。可配置根目录。
 - **可探索的标签图。** 总览展示知识关系，详细视图显示标签与关联记忆；支持搜索、拖动、缩放、选择和双向／父链／子树／直接四种关注方式。
 - **按需检索。** 查询可限定结果数量和返回文本长度，支持读取记忆、获取根标签和子标签树，避免每次都把整座知识库塞进上下文。
 - **可核对的更新。** 支持新建、追加和局部替换。修改前归档旧版本，用 `expectedUpdatedAt` 检查记忆是否已被其他操作更新，重建索引并回读核对后才报告完成。
 - **标签整理。** 重建索引会规范化标签，重复重建得到一致的标签关系；标签审阅与应用工具帮助进一步整理关系，保留明确的修改记录。
-- **短期记忆。** 默认七天到期，可指定到期时间。页面展示序号、存入与到期时间；过期内容灰显保留，召回返回最近十条并标注是否过期。
+- **短期记忆。** 默认七天到期，可指定到期时间。页面展示序号、存入与到期时间；过期内容灰显保留，召回返回最近十条并标注是否过期。它适合跨对话的临时任务交接（做到哪一步、下一步做什么），长期内容写 MemoryLab。
 
 主要工具：`memory_lab_read`、`memory_lab_query`、`memory_lab_root_tags`、`memory_lab_subtag_tree`、`memory_lab_update`、`memory_lab_delete`、`memory_lab_reindex`、`memory_lab_tag_review`、`memory_lab_tag_apply`，以及 `shortMemory_add`、`shortMemory_recall`、`shortMemory_where`、`shortMemory_size`。
 
-**一个例子：** 将“项目采用何种单位制、变量命名和误差定义”保存为带标签的记忆；下次讨论模型时按标签读取，并在结论变化后增量更新。NewMate 会自动取得标签图和最近短期记忆作为背景，具体长期正文仍按需查询。
+**一个例子：** 将“项目采用何种单位制、变量命名和误差定义”保存为带标签的记忆；下次讨论模型时按标签读取，并在结论变化后增量更新。NewMate 初始化即取得人格、完整标签树、全部短期记忆与工具组 schema 作为背景，具体长期正文仍按需查询。
 
 ### 🖥️ ComputerUse：让 Agent 看见窗口，也能动手操作
 
-当任务需要使用图形界面，ComputerUse 提供从观察到操作的统一入口。它可以列出应用、观察窗口、等待变化、组合连续动作，也能执行点击、拖动、滚动、输入文本和组合键。
+当任务需要使用图形界面，ComputerUse 提供从观察到操作的统一入口。它可以列出应用、观察窗口、等待变化、组合连续动作，也能执行点击、拖动、滚动、输入文本和组合键；需要连续相对鼠标运动（转向、转视角、环绕相机）时用 `sweep` 按方向、速度、时长交付。
 
 - **观察与操作分开。** `screen_capture` 只读采集，不改变接管租约；`computer_use` 负责观察、应用操作和接管生命周期。
 - **完整与稀疏观察。** 完整观察提供当前画面；稀疏观察在限定范围内检查画面或控件变化，减少重复采集，需要具体画面时再做完整观察。Windows 可结合 UI Automation，macOS 可选择像素或 Accessibility（AX）通道。
 - **真实与隔离桌面路径。** Windows 支持真实桌面与隐藏桌面，Linux 提供 X11 / Xvfb 路径；macOS 采用用户预先准备的 Mission Control Space 与 AX 操作，具体区别见“平台支持与验证范围”。
 - **明确的接管归属。** 租约绑定调用者，冲突返回占用信息；停止与异常退出执行释放和清理。Windows 与 Linux 支持将已有窗口映射到另一桌面的预览与输入界面，并通过推出／拉入切换呈现位置，应用继续在原进程中运行。
-- **看得见的工作状态。** 真实桌面接管使用黑白动态包边；共享桌宠显示相应状态，展开后可查看只读目标预览。预览用于了解进度。
+- **看得见的工作状态。** 真实桌面接管使用黑白动态包边；**没有取得接管**而直接驱动真实桌面时，变更类动作（点击、拖动、`sweep`、滚动、输入、按键）会点亮一次约 2.5 秒的包边脉冲，所以「桌面正在被操作」这件事不会悄无声息。共享桌宠显示相应状态，展开后可查看只读目标预览。预览用于了解进度。
 - **用户优先。** macOS Space 输入等待用户键鼠空闲，操作后尝试恢复原前台窗口和鼠标；用户重新操作时让出。Space 共享用户输入，按键或滚动可能短暂激活目标窗口。
+- **连续相对鼠标运动（`sweep`，Windows）。** 传 `direction`（方向名或屏幕角度：0 向右、90 向下）、`speed`（像素/秒）、`duration_ms`（持续多久），可选 `button`（整个手势按住左/右键）与 `inject_steps`。它交付的是**相对**注入（`mouse_event` + `MOUSEEVENTF_MOVE`），因此读取原始鼠标增量的消费方（游戏转视角）能收到；`restore_cursor` 默认把指针放回原处，重复手势不会把指针走丢。绝对定位的 `drag` 做不到这件事：实测它把指针移动了 200 px，而原始增量包为 **0**。已知边界：隐藏桌面永远不是输入桌面，系统不在那里派发指针运动，所以隐藏桌面上 `sweep` 按名拒绝（`sweep_unsupported_on_hidden_desktop`，实测 0 个原始包）；Linux/macOS 本轮未提供该动作。
 
-主要动作包括 `observe`、`app_list`、`app_observe`、`wait_for`、`sequence`、`takeover_start`、`takeover_stop`、`move`、`click`、`drag`、`scroll`、`type`、`key` 和应用级操作。
+主要动作包括 `observe`、`app_list`、`app_observe`、`wait_for`、`sequence`、`takeover_start`、`takeover_stop`、`move`、`click`、`drag`、`sweep`、`scroll`、`type`、`key` 和应用级操作。
 
 **一个例子：** 先观察目标应用，确认窗口和控件，再输入内容并回看结果；较长工作可通过桌宠预览查看进度，结束后释放接管。Windows 隐藏桌面与 macOS Space 的行为不同，应按平台选择路径。
 
@@ -77,7 +79,7 @@ NewMate 是一位亲近、务实的私人秘书式 Agent。它拥有独立聊天
 
 **日常对话**
 
-- 模型上下文自动加入 MemoryLab 标签图与最近短期记忆，每次推理前检查是否需要更新；长期正文按需读取。
+- 初始化上下文在首轮推理前一次给全：**人格 prompt**（身份、风格、记忆写入规则与权限边界）、**完整的 MemoryLab 标签树**（全部标签与每个记忆节点的名称/所属标签，不含正文）、**全部短期记忆**（每行含 createdAt/expiresAt/expired）与**本轮工具组 schema**。工具组取自 NewMate 自己的 allow list，按**当前注册表暴露做只读投影**（不执行任何工具），兼容插件提供的工具；暴露里没有的组内工具写进 `toolsMissing`，不会冒充可调用。0.3.21 的组是 19 条（含 `computer_use`、`screen_capture`、`newmate_search`），本机活库实测前缀约 3.14 万字符（104 标签、19 节点、11 条短期；其中 ComputerUse 参数 schema 约 0.59 万、搜索 schema 约 0.03 万）。
 - 当前轮运行时可以继续补充要求，输入作为实时引导在模型／工具边界生效；用户工作优先于后台任务。
 - 支持只读历史与关注保护，结合阅读、草稿、输入和任务状态决定是否适合自动换新对话，旧记录保留。
 - 回复中的真实文件链接在 NewMate 侧栏调用 DSH 已注册的原生预览；无法预览时定位到文件管理器。
@@ -91,6 +93,14 @@ NewMate 是一位亲近、务实的私人秘书式 Agent。它拥有独立聊天
 - 桌宠沿用浅色／深色／系统主题，支持大小配置与右键设置入口；退出陪伴释放陪伴的所有权，CU 可继续使用共享桌宠。
 - 可显式指定目录做浅层文件变化观察，默认不启用；根据变化标记，在次数和范围限制内判断是否需要回应，文件事件可能合并或遗漏。
 
+**桌面操作与实时 Agent 循环**
+
+- 只有在**用户明确要求**时才使用 ComputerUse：本轮聊天，或用户预先安排的待办。主动检查与自主联系轮次没有 `computer_use` / `screen_capture`；记忆、推测、文件变化都不构成授权。
+- 需要查资料或新闻时用 `newmate_search`：它接入 **DSH 原生网页搜索**，优先走宿主的 `ctx.web` 搜索接缝，接缝在插件作用域不可达时回退到 DSH 自带的 `deepseek-official` 搜索提供者（同一官方端点、同一 `DEEPSEEK_API_KEY`、同一默认模型），不另建搜索 API、不另存密钥。搜索同样是请求绑定的：自主检查轮次没有这个工具；返回的网页内容按不可信外部资料处理。
+- 接管以稳定的 `newmate` 身份登记，不借用请求对话的会话身份，也不落到共用的 `dsh`。一轮结束（完成、失败、被引导替换或中断）时运行时以同一身份释放 real / virtual 两个槽位，不依赖模型记得；别的会话的租约只会被拒绝，不会被动到。
+- 运行中的循环是可见的：`newmate_state`、GET `/newmark-newmate` 的 `agentLoop`、MCP `newmate_task_status` 和页面读同一份快照——phase、第几轮、工具调用数、当前工具、耗时、停止原因与最近 24 个事件。页面运行中每 800 ms 刷新，结束后保留上一轮快照。
+- 页面把工具使用简写成浅色小字：记忆工具显示「正在查看记忆／已查看记忆」，ComputerUse 显示「正在控制电脑／已控制电脑」，其余显示「正在调用工具／已调用工具」。模型推理与工具调用按**发生顺序**排在**同一个可折叠的「过程」块**里：**每段思考可单独展开**（「思考中/进行了思考」+ 灰色正文），**工具调用只保留短标签、不展开调用内容**，块标题实时显示「过程 · 最新动作 · N 步」。页面回到暴露 agentloop 之前的对话形态（用户输入 + 落盘回复），只额外显示一条最新实时工况：最新一段思考的尾部或正在使用的工具；官方搜索显示「正在进行搜索」，完整过程时间线不再渲染。需要用户决定时模型用 `newmate_ask` 提问，页面按本体的选项块渲染（2–6 个带说明的选项 + 手填），答案作为工具结果继续同一次运行；NewMate 聊天不再设轮次上限（`max_steps: 0`，仍受超时/重复失败约束），运行中的输入只插队不排队（进入引导缓冲，在下一个模型步插入）。
+
 **定时待办 toDoList**
 
 页面、任意 DSH 对话、NewMate 和认证 MCP 都可以创建、查询或取消待办。每项保存明确的激活时间（含时区）和内容，有两种到期方式：
@@ -102,9 +112,9 @@ NewMate 是一位亲近、务实的私人秘书式 Agent。它拥有独立聊天
 
 待办复用静默、暂停、输入与阅读保护，陪伴关闭时等待开启，所以**到期表示最早可激活时间，不保证精确到秒送达**。稳定任务身份和消息回执用于防止重启后重复激活或提醒；失败和运行中崩溃不会自动重试，已有旧提醒保留原语义。
 
-主要工具：`newmate_chat`、`newmate_task_status`、`newmate_memory_context`、`newmate_state`、`newmate_message`、`newmate_todo_add`、`newmate_todo_list`、`newmate_todo_cancel`、`newmate_mcp_info`。有宿主绑定的原对话时，`newmate_task` 可把具体后续任务交回该对话；模型参数不能另选目标。
+主要工具：`newmate_chat`、`newmate_task_status`、`newmate_memory_context`、`newmate_state`、`newmate_message`、`newmate_todo_add`、`newmate_todo_list`、`newmate_todo_cancel`、`newmate_mcp_info`。有宿主绑定的原对话时，`newmate_task` 可把具体后续任务交回该对话；模型参数不能另选目标。`newmate_state` 与 `newmate_task_status` 都带 `agentLoop`（运行中或上一轮的循环快照）。`newmate_search` 是 NewMate 的原生搜索入口，供它在用户明确要求查资料时调用。
 
-NewMate 可以读取、新建和增量更新可信记忆、整理标签及添加短期记忆；其工具组合不开放记忆删除、任意 Shell 执行或 CU 操作。需要更广权限的工作由原 DSH 对话继续处理，记忆内容本身不会增加授权。
+NewMate 可以读取、新建和增量更新可信记忆、整理标签、添加短期记忆，并在用户明确请求时使用完整的 ComputerUse 工具组（`computer_use` 与只读的 `screen_capture`）。仍然不开放记忆删除、任意 Shell 执行或递归 Agent API；桌面权限按用户请求授予，不因记忆内容或自主推测而扩大。
 
 ### 💓 heartBeat：让一次重启，有明确的交接点
 
@@ -134,7 +144,7 @@ heartBeat 负责持久化重启后任务与消费回执，也为插件更新流�
 ## 快速开始
 
 1. 在 DSH 配置好模型供应商，确认所选模型可用。
-2. 通过 DSH 插件管理器安装 **`newmark2dsh@0.3.14`**（npm 上最新已发布版本；本仓库源码版本为 0.3.17，见「当前版本与更新」）。使用明确版本可避免宿主新发布包等待策略选中较旧版本。
+2. 通过 DSH 插件管理器安装 **`newmark2dsh@0.3.20`**（npm 上最新已发布版本；本机已用本地 tarball 重装 0.3.21 并经更新路由重启生效，见「当前版本与更新」）。使用明确版本可避免宿主新发布包等待策略选中较旧版本。
 3. 打开 **Newmark Core** 配置页，选择允许插件使用的供应商／模型，并开启需要的组件。
 4. 从侧栏打开 **MemoryLab** 维护记忆，或打开 **NewMate** 开始聊天；需要桌宠陪伴时，再开启陪伴设置；桌面操作则通过 `computer_use` 发起。
 5. 更换已经加载的后端或原生代码后重启宿主；官方 Windows 容器可使用启用的 heartBeat 完成交接。
@@ -155,13 +165,13 @@ heartBeat 负责持久化重启后任务与消费回执，也为插件更新流�
 
 | 平台 | 当前桌面路径 | 已有验证与使用前提 |
 | --- | --- | --- |
-| **Windows** | 真实／隐藏桌面、UIA 与像素观察、共享桌宠与窗口呈现；官方容器自动重启 | 0.3.14 已在官方 Windows DSH 安装并核对包内容，通过完整验收及原生预览、菜单、待办、MCP、重启恢复检查；原生辅助程序使用系统 .NET Framework 编译并按源码缓存 |
-| **macOS · Apple Silicon** | 像素／AX 双通道、用户准备的 Mission Control Space、共享桌宠与真实桌面接管包边 | macOS 14／15／26 ARM 云端原生与网页矩阵、真实双 Space 夹具及 1x／2x 渲染检查；按所用通道授予 Accessibility／屏幕采集权限 |
+| **Windows** | 真实／隐藏桌面、UIA 与像素观察、共享桌宠与窗口呈现；官方容器自动重启 | 0.3.20 已在官方 Windows DSH 安装并核对包内容，通过完整验收及原生预览、菜单、待办、MCP、重启恢复检查；0.3.21 已于 2026-10-21 14:36 以本地 tarball 重装并重启生效（未发布 npm）；原生辅助程序使用系统 .NET Framework 编译并按源码缓存 |
+| **macOS · Apple Silicon** | 像素／AX 双通道、用户准备的 Mission Control Space、共享桌宠与真实桌面接管包边 | **0.3.18 的 macOS 14.8.9／15.7.9／26.6.2 ARM 云矩阵已通过**（原生 dispatch、AX、Space、桌宠呈现、通道、todo、短期记忆+MCP、npm 产物执行与 Chromium/WebKit 真实渲染）；另有真实双 Space 夹具及 1x／2x 渲染检查；按所用通道授予 Accessibility／屏幕采集权限。**`sweep` 在 macOS 未实现**（Darwin 后端无物理相对注入），云矩阵证明的是没有回归，不是该动作可用 |
 | **Linux / WSLg · X11** | 真实 X11 应用观察与输入、带认证的 Xvfb 隔离会话、Qt 桌宠及呈现映射 | 已有 X11／WSLg 路径验证；依赖 Xvfb、xauth、Openbox、xdotool、wmctrl、Python Xlib／PIL／PyQt5；WSLg 路径针对 Linux GUI 应用，原生 Wayland 控制尚不支持 |
 
 Mac 云端夹具验证不等于官方 Mac DSH 整机安装、实体键鼠时序、多屏／全屏组合或最低硬件性能验收；Space 也不提供完整输入隔离。跨平台保持相近的包边、桌宠比例与主题风格，原生菜单和物理像素表现会随平台与 DPI 变化。
 
-[Mac 原生／网页矩阵](https://github.com/positer/newmark2dsh/actions/runs/38394193819) · [Mission Control 双 Space 矩阵](https://github.com/positer/newmark2dsh/actions/runs/38395064819) · [Mac 验收边界](https://github.com/positer/newmark2dsh/blob/main/MACOS-CANDIDATE.md)
+[0.3.18 Apple Silicon 矩阵（macos-14/15/26）](https://github.com/positer/newmark2dsh/actions/runs/39110503481) · [0.3.14 Mac 原生／网页矩阵](https://github.com/positer/newmark2dsh/actions/runs/38394193819) · [Mission Control 双 Space 矩阵](https://github.com/positer/newmark2dsh/actions/runs/38395064819) · [Mac 验收边界](https://github.com/positer/newmark2dsh/blob/main/MACOS-CANDIDATE.md)
 
 ## 本地数据与组件协作
 
@@ -180,7 +190,7 @@ flowchart LR
     HB --> Resume[原对话或 NewMate 持久队列]
 ```
 
-图中箭头表示能力协作关系。NewMate 与 CU 共享桌宠，但陪伴消息、CU 接管租约与各自启停状态分别管理。开启陪伴不等于给 NewMate 开放整台电脑操作权限。
+图中箭头表示能力协作关系。NewMate 与 CU 共享桌宠，但陪伴消息、CU 接管租约与各自启停状态分别管理。开启陪伴不等于常开桌面权限：NewMate 只在用户明确的请求里使用 ComputerUse，租约以 `newmate` 身份登记并在每轮结束时释放。
 
 ## 项目结构与开发入口
 
@@ -216,7 +226,7 @@ node scripts/check-release-bundle.mjs .
 
 ## 当前版本与更新
 
-**源码版本：0.3.17；本文于 2026-10-17 核对。npm 上最新已发布版本为 0.3.14。** 0.3.17 修的是桌宠「坏合成一旦发生就永久留在屏幕上」这条缺陷：分层窗口只由 `UpdateLayeredWindow` 呈现，而陪伴模式（`cu:false`）静止时几乎不重绘，于是一次错误合成会一直卡住（本机实测整块纯白、持续数分钟）；现在按已有的 1 s 节拍重新呈现、`WM_DPICHANGED` 之后补一次呈现、呈现被拒时重建一次表面。同一版新增两条**像素级**门禁（宠物矩形四角必须等于其后方桌面像素；恰好 (255,255,255) 的占比不得越过 0.8）并给「陪伴模式保活重绘」加上前置条件，三条 planted mutation 全部变红并逐字节还原。heartbeat 侧补上 `heartbeat_restart_cancel {intentId}` 与 armed 任务的失败终结策略（连续 3 次投递失败即 `failed(final)`，原因记入 `terminated[]`）。**0.3.15/0.3.16/0.3.17 都只是源码版本**（0.3.15 修 Dev／rDev 的提示词变量断点），npm 上仍是 0.3.14，本机安装用的是本仓库打出的 tarball。限定：`heartbeat_restart_cancel` 的通知、`ackMode:'agent'`、`onTimeout:'proceed'`、`force`、「不回执参与者 → `aborted`」目前只有**门禁级**证据。历史版本可在 [GitHub Releases](https://github.com/positer/newmark2dsh/releases) 中查看。
+**源码版本：0.3.23；本文于 2026-10-21 核对。npm 上最新已发布版本为 0.3.20；0.3.21 已于 2026-10-21 14:36 以本地 tarball 重装（sha256 `614F7C22…`，95 文件逐文件一致）并经更新路由 + heartBeat 托管重启生效；0.3.22 已于 2026-10-21 14:52 以本地 tarball 重装（sha256 `856E3510…`，95 文件逐文件一致）并 14:53 经更新路由 + heartBeat 托管重启生效（npm 未发布）；0.3.23 已于 2026-10-21 15:24 本地重装并重启生效（96 文件，sha256 D0ACA55F…）；0.3.25 已于 2026-10-21 16:0x 本地重装并重启生效（私有工具通道 + 自主压缩；96 文件，sha256 A82C93F7…）；0.3.26 已安装（实时工况 200ms 轻量轮询 + 本地 250ms 计时，全量轮询 2s）。** **0.3.22** 把 Agent 循环的过程显示改为按真实顺序排列思考与工具调用、收进一个可折叠块（参考 Newmark 本体 Build 渲染）。**0.3.21** 给 NewMate 完整的 ComputerUse 工具权限（只在用户明确请求的聊天轮或用户安排的待办里；自主检查轮次没有），接管以稳定的 `newmate` 身份登记并在每轮结束时由运行时释放；同一轮把它的 Agent 循环变成运行中可见（`newmate_state`、GET `/newmark-newmate` 的 `agentLoop`、MCP `newmate_task_status` 与页面读同一份快照）。初始化前缀在活库上 24,863 → 31,390 字符（人格 +374、ComputerUse 参数 schema +5,866、搜索 schema +287）。同日追加两项：页面把工具使用简写成「正在/已 查看记忆、控制电脑、调用工具」的浅色小字，并把模型推理以可折叠灰色小字实时刷新（seam 按 reasoning-delta 流式发布，回执不收录，避免挤出工具事件）；`newmate_search` 接入 DSH 原生搜索（优先 `ctx.web`，不可达时用 DSH 自带 `deepseek-official` 提供者，官方端点/凭据/默认模型不变）。0.3.20 让 NewMate 初始化一次给全人格、完整标签树、全部短期记忆与只读对齐的工具组 schema；0.3.19 把长期／短期记忆的分工写进每条工具描述。**0.3.18** 新增 `sweep`（按方向、速度、时长交付连续相对鼠标运动），并把三件被实测确认的事写进代码：**①** 绝对拖动 `drag` 把指针移动 200 px 却交付 **0** 个原始鼠标包——它用 `SetCursorPos` 定位，读取原始增量的消费方（游戏转视角）因此收不到任何运动，这就是「无法转向」的根因；`sweep` 改用 `mouse_event` + `MOUSEEVENTF_MOVE` 相对注入，16 步交付原始增量合计 **(300, 0)**（请求 `dx=300`），手势结束用绝对调用把指针放回原处（该调用不产生原始运动）。**②** 绝对 `drag` 此前按文档形状根本调不通：`x`/`y` 的 `point_required` 守卫排在 drag 分支之前，只有传了哑元 `x`/`y` 才会走到拖动脚本；本轮已修（`drag` 豁免该守卫，保留自己的 `drag_points_required`）。**③** 隐藏桌面**永远不是输入桌面**，系统不在那里派发指针运动：一个注册了原始输入的探针在该桌面接收 **0** 个包（探针存活，1 Hz 自发布 15 → 38 次），而注入调用每一步都返回成功——因此 `sweep` 在隐藏桌面按名拒绝（`sweep_unsupported_on_hidden_desktop`），而不是回一份 `ok:true` 却什么都没发生。同一轮 `app_drag` 的拒绝文案改为指向真实桌面。门禁 `scripts/verify-cu-sweep.mjs` 以「同一支原始输入探针上的 A/B」钉住这些结论（`drag` → 0 个运动包 + 两次按键跳变；`sweep` → 原始增量精确等于 `dx`,`dy`），并用 planted mutation 证明它能变红（变异后检查 3 变红、还原后逐字节一致并变绿）。**本机状态**：源码 0.3.18 已打成 tarball（sha256 `7cdcad59…`）并安装进本机 DSH profile，安装态与仓库逐文件一致；**宿主重启（或走更新路由）后才会挂载 0.3.18**，所以「新版本在宿主里能转向」这件事还没有被观测过。0.3.17 修的是桌宠「坏合成一旦发生就永久留在屏幕上」这条缺陷：分层窗口只由 `UpdateLayeredWindow` 呈现，而陪伴模式（`cu:false`）静止时几乎不重绘，于是一次错误合成会一直卡住（本机实测整块纯白、持续数分钟）；现在按已有的 1 s 节拍重新呈现、`WM_DPICHANGED` 之后补一次呈现、呈现被拒时重建一次表面。同一版新增两条**像素级**门禁（宠物矩形四角必须等于其后方桌面像素；恰好 (255,255,255) 的占比不得越过 0.8）并给「陪伴模式保活重绘」加上前置条件，三条 planted mutation 全部变红并逐字节还原。heartbeat 侧补上 `heartbeat_restart_cancel {intentId}` 与 armed 任务的失败终结策略（连续 3 次投递失败即 `failed(final)`，原因记入 `terminated[]`）。**0.3.15–0.3.20 的实际发布状态以 GitHub Releases 为准**；本机安装的是 0.3.20，0.3.21 尚未安装。限定：`heartbeat_restart_cancel` 的通知、`ackMode:'agent'`、`onTimeout:'proceed'`、`force`、「不回执参与者 → `aborted`」目前只有**门禁级**证据。历史版本可在 [GitHub Releases](https://github.com/positer/newmark2dsh/releases) 中查看。
 
 README 按当前功能维护；公开版本历史集中保存在 GitHub Releases，历史 CHANGELOG 留在本地归档中。文档更新不代表重新发布 npm 包或改变已经安装的版本。
 

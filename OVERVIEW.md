@@ -1,5 +1,82 @@
 # Newmark Agent Overview
 
+## 2026-10-21 Newmark2DSH 0.3.21 候选：NewMate 的 CU 权限与实时 Agent 循环
+
+**用户要求**：「为 newMate 添加完整的 newmark2dsh 配套 CU 工具使用权限，并暴露实时 Agent loop 状态」。
+
+**改动（Newmark2DSH/packages/newmark-core）**
+- `components/newmate/component.js`：`NEWMATE_RUN_TOOLS` 16 → 18（+`computer_use`、`screen_capture`）；新增 `NEWMATE_CU_TOOLS` / `NEWMATE_CU_OWNER='newmate'` / `NEWMATE_CU_RELEASE_TIMEOUT_MS` / `newMateRunTools({automatic,origin})`；run 用 `withComputerUseOwner → withComputerUseCaller → withNewMateContext({...,onEvent})` 包裹；`live=createLoopStatus(now)`；finally 先 `releaseComputerUse(task.id)` 再 `live.finish(outcome)`；导出 `loopStatus()`。
+- `components/newmate/lib/agent-loop.js`（新）：纯记录器，快照 `{running,phase,runId,kind,startedAt,finishedAt,elapsedMs,turns,toolCalls,currentTool,stopReason,error,events≤24/≤6000,cleanup,dropped}`，事件文本 ≤200 字符，结束保留上一轮。
+- `components/newmate/lib/persona.js`：697 → 966 字符，写入 CU 授权边界、takeover_start/stop 规则与「ok:true 不等于发生」。
+- `lib/cu-caller.js`：新增 owner ALS 与 `computerUseOwner`（宿主对话身份 > 显式 owner > caller 通道）；`components/computeruse/component.js` 改读它。
+- `components/agent-api/component.js`：`pushEvent` 在回执两条界之前同步转发 `eventView` 给 `newMateContext()?.onEvent`（观察者异常被吞）。
+- `components/newmate/index.js` / `lib/mcp.js` / `client.js`：`newmate_state`、GET `/newmark-newmate`、MCP `newmate_task_status` 三面加 `agentLoop`；页面加状态行动态文案与 `<details class="nm-loop">`（最近 8 个事件），运行中 800 ms / 空闲 2000 ms 轮询。
+- 六个 manifest 0.3.21（只改版本字段，CRLF 与字节数不变）；`VERSION.md` 增 0.3.21 行；`Newmark2DSH/README.md`、`OVERVIEW.md`、`taste.md` 写回。
+- 门禁：新增 `scripts/verify-newmate-agent-loop.mjs`（45 条；同日追加后 **66**）；`verify-short-memory-mcp`、`verify-newmate-memory-writes`、`verify-newmate-heartbeat`、`verify-newmate-initiative` 中旧的「无 CU」断言改写；`verify-memorylab-tools` 的初始化断言改成「暴露 + toolsMissing = allow list」（该 mount 关掉 ComputerUse）；umbrella 注册新门禁。
+
+**实测（本机活库）**：初始化前缀 24,863 → 30,997 字符（+6,134 = 人格 +269 + CU 参数 schema 5,866；18 条 schema、104 标签、19 节点、11 条短期）；CU schema 只有 `parameters`，不含 description。门禁：新 45（追加后 66）、short-mcp 44、memory-writes 7、heartbeat 57、initiative 57、memorylab-tools 182、agent-api 268、client 123、config-panel 31、compose 25、activation 57、package 54、version 12；`verify-tool-output-boundary` PREMISE ABSENT（DSH 安装路径改名，默认 `DSH_APP_ROOT` 不存在；不是通过）。Umbrella 单次运行 **206 passed / 2 failed / 1 skipped**：win32 与 sweep 在该运行窗口内分别以 `foreground_window_unavailable` 与「原始增量含物理鼠标运动」红。两处都是活桌面前提——win32 随后单独复跑 **25/25 PASS**；sweep 在安静桌面下复跑 **8/8 测量项 PASS**（第 8 项 planted mutation 按设计跳过），再以 `--mutations` 单独跑该项 **PASS**（种植后 check 3 变红、还原 sha256 `6632a72d…` 核对）。因此这两条不计为代码回归，也不把 umbrella 写成全绿。
+
+**状态与边界**：源码候选 0.3.21（**该「未安装」已被 2026-10-21 14:36 的本地重装与重启取代**）；CU 权限不是常开，自动轮次没有桌面工具；租约释放是运行时尽力而为（8 s 有界）；`newmate` owner 的接管只能由之后的一轮 NewMate 或进程退出释放，其他会话会收到拒绝；页面 800 ms 是轮询而非推送。
+
+**归档**：`Newmark2DSH/archive/20261021-133000-newmate-cu-loop/`（before/after、evidence、OPERATION.md）。
+
+## 2026-10-21（追加⑥）Newmark2DSH 0.3.26：实时工况刷新与计时解耦（已安装）
+
+全量轮询 2s；/loop 200ms 刷新；LiveStatus 本地 250ms 按 startedAt 计时。实测版本 0.3.26、/loop 正常；页面无浏览器实测。
+
+## 2026-10-21（追加⑤）Newmark2DSH 0.3.25：私有工具通道 + 自主压缩（已安装）
+
+newmate_search/compact_context 从全局注册表移除，私有映射只供 NewMate 运行；compact_context 由 loop 拦截替换历史。实测 catalog 37 不含两者、初始化 21 工具含两者、toolsMissing=[]；已安装重启。页面无浏览器实测。
+
+## 2026-10-21（追加④）Newmark2DSH 0.3.24 候选：最新实时工况
+
+对话页回到暴露 agentloop 前的形态，只加一条最新工况（最新思考尾部/当前工具，搜索显示「正在进行搜索」）；完整过程时间线删除。门禁 agent-loop 71、client 123、ask 20。**源码候选 0.3.24，未安装未重启**；页面无浏览器实测。PTC 压缩：已定位 compaction 服务，尚未接入。归档：Newmark2DSH/archive/20261021-153456-newmate-live-state/。
+
+## 2026-10-21（追加③）Newmark2DSH 0.3.23 候选：对话页对齐本体
+
+**指令**：对话页完全复用 Newmark 本体设计（含选项询问）；不限对话轮次；只插队不排队。**范围**：只对齐对话页表现，不移植会话内核。**改动**：newmate_ask（2–6 选项 + 手填，阻塞等待，答案作为工具结果继续同一次运行；请求绑定）；agent_api_send `max_steps: 0` = 无轮次上限（NewMate 聊天用 0，自动检查 3）；运行中输入只插队不排队（steer 门禁新增「steering===2 且无 pending chat 队列」断言，待启动任务新输入改为追加）。**门禁**：ask 20、steer 24、agent-api 270、memorylab 182、activation 57、compose 25、heartbeat 57。**0.3.23 已于 2026-10-21 15:24 本地重装并重启生效**（96 文件，sha256 D0ACA55F…；npm 未发布）；页面无浏览器实测。**归档**：`Newmark2DSH/archive/20261021-150654-newmate-option-ask/`。
+
+## 2026-10-21（追加②）Newmark2DSH 0.3.22 候选：Agent 循环过程块
+
+**指令**：「agentloop显示要正确的排列对话思考和工具调用，并将思考与工具调用归纳为可折叠部分，具体参考newmark本体的对话渲染」。参考 `DESKTOP/src/ui/index.html` 的 `renderWorkThought`/`renderWorkToolGroup`。
+**改动**：`components/newmate/lib/agent-loop.js`（thinking 时间线片段：原位替换、1,200 字符上限、共享 24/6,000 界、`trimBudget`）；`client.js`（`renderProcess` 单块 `<details class="nm-run">`，按 `events` 顺序渲染思考段与工具短标签，删除旧两块）；门禁 66→**71**；4/4 mutation。
+**边界（2026-10-21 14:54 更新）**：**0.3.22 已于 14:52 本地重装、14:53 更新路由 + heartBeat 托管重启生效**（tarball sha256 `856E3510…`，95 文件一致；备份 `0.3.21-before-0.3.22-*`；npm 未发布）；重启后更新路由的 NewMate 任务跑出真实样本，`agentLoop.events` 为 `agent_start,turn_start,thinking,tool_start,tool_end,…,turn_start,thinking,…`（按真实顺序交错）、GET `/newmark-newmate` 200 带 `agentLoop`、进程 catalog 37 含 `newmate_search`。页面仍无浏览器实测；过程块只在运行中渲染。
+**归档**：`Newmark2DSH/archive/20261021-145500-newmate-process-timeline/`。
+
+## 2026-10-21（追加，同一 0.3.21 候选）Agent 循环简写标签 + 思考流 + DSH 原生搜索
+
+**用户追加指令**：「newMate 的 agentloop 暴露中工具使用简写为浅色小字…思考内容以可折叠灰色小字实时刷新」；「newMate 接入 dsh 原生搜索接口调用默认官方 api」。0.3.21 未发布未安装，并入同一候选，不新增版本号。
+
+**改动（Newmark2DSH/packages/newmark-core）**
+- `components/agent-api/lib/llm-seam.js`：`collectAssistant` 的 `onPartial` 接上思考通道，`reasoning-delta` 累积后按 `THINKING_CHUNK_CHARS=120` / `THINKING_CHUNK_MS=200` 通过队列发布 `thinking` 事件；失败重试重开文本。
+- `components/agent-api/lib/loop.js`：`streamAssistantResponse` 处理 `thinking` 事件并 `emit`。
+- `components/agent-api/component.js`：`eventView` 增加 `thinking`（尾部 `THINKING_LIVE_LIMIT=4000` + 截断标记）；`pushEvent` 对该类型只转发观察者、不入回执。
+- `components/newmate/lib/agent-loop.js`：追踪器新增替换式 `thinking:{text,at,truncated}`（不进事件环、不占 dropped）。
+- `components/newmate/lib/web-search.js`（新）与 `components/newmate/index.js`：`newmate_search` 工具；接缝优先、`DeepSeekSearchProvider` 回退（官方默认端点/模型/凭据），1–4 query、最多 8 来源、60 s、不可信声明、具名拒绝。
+- `components/newmate/component.js` + `lib/persona.js`：组 18→19；`NEWMATE_REQUEST_TOOLS=[...CU, newmate_search]` 扣在自主轮次；人格 966→1071 字符。
+- `client.js`：`toolAction()` 三类映射 + 「正在/已」两态（浅色 11px）；`<details class="nm-thinking">` 灰色小字实时思考；原始工具名/参数不再显示。
+- 门禁：新门禁 45→**66**；`probe-compose`（工具 34→35）、`verify-newmark-core-activation`（34→35）、`verify-memorylab-tools`（组合 32→33、初始化含 newmate_search）、`verify-newmate-heartbeat`（允许名加搜索）同步更新。
+
+**实测**：前缀 30,997 → **31,390**（+393）；19 条 schema、toolsMissing=[]。宿主进程层 `agent_api_send {allow:['web_search','web_fetch']}` 回执 `tool_names: []`、`tools_withheld: 2`。门禁全绿（新 66、compose 25、activation 57、memorylab-tools 182、heartbeat 57、short-mcp 44、memory-writes 7、initiative 57、chat 23、todo 20/21/23、agent-api 268、client 123、config-panel 31、package 54、version 12）；6/6 planted mutation 变红还原。
+
+**边界（2026-10-21 14:39 更新）**：**已本地重装 0.3.21 并经更新路由 + heartBeat 托管重启生效**（tarball sha256 `614F7C22…`，95 文件一致；备份 `0.3.20-before-0.3.21-20261021-143602`）；npm 未发布。重启后实测：`newmate_state` 带 `agentLoop`（真实运行 3 轮/4 工具/16.0 s/思考 4,015 字符 truncated）、`/newmark-newmate` 返回 `agentLoop`、进程层 catalog 37 含 `newmate_search`、搜索实测 `provider:"ctx.web"` 返回 8 来源。**更正**：旧句「`ctx.web` 在本机是 agent 预设服务，NewMate 实际走 provider 回退」错误——`web_search` 工具不在进程层，但 `ctx.web` 服务在插件作用域可达；回退只留给没有该服务的宿主，门禁用假 provider 覆盖。页面无浏览器实测（无 Playwright），client 断言为源契约；思考只在模型发 `reasoning-delta` 时出现；简写是展示层，服务端事件保留原始工具名。
+
+**归档**：`Newmark2DSH/archive/20261021-133000-newmate-cu-loop/evidence/addendum/` 与 OPERATION.md 第 9 节。
+
+## 2026-10-20 Newmark2DSH 0.3.20 候选：NewMate 初始化四项一次给全
+
+**改动**：新增 `components/newmate/lib/persona.js`（`NEWMATE_PERSONA`，697 字符）；`lib/memory-context.js` 生成 `{tree, shortMemory, shortMemoryTotal, shortMemoryOmitted, tools, toolsMissing}` 并把人格放在前缀首段——`tree` 为完整标签树（全部标签 + 每个记忆节点 slug/name/tags，无正文/description/路径/bytes）；`shortMemory` 全部行（createdAt/expiresAt/expired）；`tools` 为 `NEWMATE_RUN_TOOLS`（16 条）按当前注册表暴露的只读投影，`toolsMissing` 列出暴露里没有的组内工具，插件提供的工具与包内工具一视同仁；`component.js` 的 allow list 与 schema 来源共用同一常量，user prompt 只保留时间/待办/历史/任务/协议。**实测**：活库前缀 14,438 → 24,626 字符；缓存命中；门禁 44、182、7 与 NewMate 回归 57/57、57/57、23/23 全绿。**边界**：正文不进初始化、节点上限 1000、短期内容上限 48,000 字符并写明省略；schema 读取不执行工具；未安装、未重启（宿主 0.3.19；**该状态已被本段末的发布记录取代**）。
+
+**2026-10-20 23:45 已发布并生效**：main `76674f4`、tag `v0.3.20`、npm latest=0.3.20（94 文件 79 逐字节 + 15 仅换行、0 实质差异）、拉回安装 94 文件一致、更新路由重启 23:45:47、活体实测通过。
+
+## 2026-10-20 Newmark2DSH 0.3.19 候选：记忆工具的描述分工（长期树状记忆 / 短期到期列表）
+
+**改动**：`components/memorylab/component.js` 新增 `LONG_TERM_ROLE`（249 字符）并让 9 条 `memory_lab_*` 描述以它开头；`components/memorylab/lib/short-memory.js` 新增 `SHORT_TERM_ROLE`（296 字符）并让 4 条 `shortMemory_*` 描述以它开头，四段正文收进 `DESCRIPTIONS`；`components/memorylab/lib/memory-store.js` 的 `instructions()` 增加 MEMORY SPLIT 两段；`scripts/verify-memorylab-tools.mjs` 168 → 176 条断言，钉住每族描述的前缀、角色句事实、不许借用对方生命周期、单句 ≤320 字符、13 条合计 ≤10000 字符、instructions 同口径。
+
+**证据**：注册表读回 13 条描述 5558 → 8978 字符；门禁 176/0/176；`measure-role-descriptions-mutations.mjs` 5/5 变红、逐字节还原、控制组全绿；short memory + MCP 39 条、版本纪律 12/12、打包 54/54；另做一次 6 场景措辞路由测试（deepseek-flash）6/6 选对库，但只证明文本可读，不构成部署验收。
+
+**状态与边界**：源码候选 0.3.19，**未安装、未重启**，本机宿主仍 0.3.18（**该状态当晚已被取代：已推送、已安装、经更新路由 + heartBeat 托管重启并验证生效，见本段末**）；`dist/newmark2dsh-repo` 已同步。归位时第一次用 JSON 重写 manifest 丢了 CRLF，已按 before 快照逐字节恢复（只改版本字段，字节数与 CRLF 不变），教训写进 `Newmark2DSH/taste.md`。归档 `Newmark2DSH/archive/20261020-213034-memorylab-memory-roles/`。**同日晚些**：发布仓分支 `codex/memorylab-roles-0.3.19` 已推送（`932451f`，main 未动）；0.3.19 已安装（tgz sha256 `A140188C…`，安装态三文件同哈希），并经更新路由 `prepare(0.3.19)` + heartBeat `restart(ticket, update=true)` 重启、接续本对话。重启后已验证生效（22:32）：活体 `memory_lab_read` 的 instructions 含 MEMORY SPLIT，活体注册表 13 条描述均以角色句开头、合计 8978 字符。**2026-10-20 22:40（按用户指令「监听npm版本直至正确公开」）**：`v0.3.19` 标签已推送并触发 publish 工作流（run 39440904853 success），npm `latest` 已是 **0.3.19**；integrity 一致、93 文件（78 逐字节 + 15 仅 CRLF 规范化、实质差异 0），空目录 `npm install newmark2dsh@0.3.19` 通过。**发布仓 main 已更新推送**：`f5d9ebb..a6f7fa1`（2026-10-20 22:47:46 推送）——0.3.19 包内容与 tag `v0.3.19` 逐 blob 相同，main 的公开文档策略保留（根 CHANGELOG 仍归档、`docs/` 只留公开页、版本历史走 GitHub Releases）；远端 `git ls-remote` 读回 `a6f7fa1`，干净 worktree 上 `check-release-bundle.mjs` = `GUARD PASSES`。
+
 ## 2026-10-17 Newmark2DSH 0.3.16 候选：heartBeat 两阶段重启（广播 + 回执屏障）
 
 `heartbeat_restart` 增可选两阶段形式：`broadcast:true` 按宿主 `agents().roots()` 枚举运行中的对话（不接受调用方传入的目标名），`ackMode:'auto'`（默认）为每个参与者登记持久接续、不花模型 token，`ackMode:'agent'` 投递持久通知并要求该会话自己回执；`heartbeat_restart_commit` 只在回执到齐且发起方自己已登记时才真正重启，否则 `aborted` 并点名缺失者。intent 持久化到 `~/.Newmark/heartBeat/state.json`（schema 3），新宿主清扫 `committing → committed`（记录本次投递）与旧进程残留 `preparing → interrupted`（通知 requester 本次没有重启）。`broadcast=false` 与 0.3.15 一致，屏障打开期间即时重启被拒绝。

@@ -24,7 +24,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mountCore, callRoute } from './lib/mount-newmark-core.mjs';
-import { createMemoryLab } from '../packages/newmark-core/components/memorylab/component.js';
+import { createMemoryLab, LONG_TERM_ROLE } from '../packages/newmark-core/components/memorylab/component.js';
+import { SHORT_TERM_ROLE } from '../packages/newmark-core/components/memorylab/lib/short-memory.js';
+import { NEWMATE_RUN_TOOLS } from '../packages/newmark-core/components/newmate/component.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const workspace = path.resolve(here, '..');
@@ -93,13 +95,13 @@ try {
     [...mount.tools.keys()].join(', '),
   );
   check(
-    'the composed bundle retains memory, Agent API, companion/todo and heartbeat tools when CU is off',
+    'the composed bundle retains memory, Agent API, companion/todo, native search and heartbeat tools when CU is off',
     // The core row composes every component, so this mount carries agent-api's four tools too
     // — `components: { computerUse: false }` switches off ComputerUse and nothing else. Asserted
     // as a partition rather than as one number: a count alone cannot tell "MemoryLab is complete"
     // from "something new arrived and MemoryLab lost a tool to make room for it".
-    mount.tools.size === 32 && ['shortMemory_add','shortMemory_recall','shortMemory_where','shortMemory_size','heartbeat_restart_cancel'].every(name=>mount.tools.has(name)) &&
-      mount.tools.has('newmate_task') && mount.tools.has('newmate_state') && mount.tools.has('heartbeat_after_restart') && mount.tools.has('heartbeat_restart') &&
+    mount.tools.size === 33 && ['shortMemory_add','shortMemory_recall','shortMemory_where','shortMemory_size','heartbeat_restart_cancel'].every(name=>mount.tools.has(name)) &&
+      mount.tools.has('newmate_task') && mount.tools.has('newmate_state') && mount.tools.has('newmate_ask') && mount.tools.has('heartbeat_after_restart') && mount.tools.has('heartbeat_restart') &&
       [...mount.tools.keys()].filter((name) => name.startsWith('memory_lab_')).length === 9 &&
       [...mount.tools.keys()].filter((name) => name.startsWith('agent_api_')).length === 4,
     `${mount.tools.size}: ${[...mount.tools.keys()].sort().join(', ')}`,
@@ -1679,6 +1681,53 @@ try {
     `imports reaching agent-api: ${implementationImports.join(', ') || '(none)'}`,
   );
 
+  /* ------------------------------------------ NewMate's initialization payload --- */
+
+  /* The requirement is that INITIALIZATION exposes the whole picture — not that a later tool call
+   * can discover it. So this exercises the registered tool that hands NewMate's payload out, against
+   * the same store the rest of this gate built, and pins the three parts the user asked for: the
+   * whole tree (tags AND components), every short row with its own expiry, and the memory tool-group
+   * schema read from the live registry. */
+  const initProbe = await update({ name: 'Initialization Probe', tags: ['#init-probe'], content: '# Init\n\nmetadata only, never in the bootstrap', reason: 'functional test: initialization payload', source: 'gate-memorylab-tools' });
+  const initSlug = initProbe.slug || initProbe.component?.slug;
+  const memoryContextDefinition = mount.tools.get('newmate_memory_context');
+  check('NewMate exposes its initialization payload as a registered tool', typeof memoryContextDefinition?.execute === 'function', typeof memoryContextDefinition);
+  const initialization = await memoryContextDefinition.execute({});
+  /* The run group now contains the two ComputerUse tools, and THIS mount switches ComputerUse
+   * off ('components: { computerUse: false }' is what makes the switch assertions above real).
+   * So the payload must do the two things the design promises: describe every group member the
+   * live registry carries, and NAME the two it does not carry instead of pretending they are
+   * callable. That is a stronger assertion than the old "all members exposed", which would have
+   * passed even with a broken toolsMissing. */
+  check(
+    'initialization exposes the complete tag tree, every short row and the run tool-group schema, and names the desktop tools this mount switched off',
+    initialization.tree?.counts?.components >= 1 && Array.isArray(initialization.tree?.tags) && Array.isArray(initialization.shortMemory) && initialization.tools?.length === NEWMATE_RUN_TOOLS.length - 2 && JSON.stringify(initialization.toolsMissing) === JSON.stringify(['computer_use', 'screen_capture']),
+    JSON.stringify({ tags: initialization.tree?.counts?.tags, components: initialization.tree?.counts?.components, short: initialization.shortMemory?.length, tools: initialization.tools?.length, missing: initialization.toolsMissing }),
+  );
+  check(
+    'the tree carries each memory node by identity and placement (slug, name, tags) and nothing heavier',
+    initialization.tree.components.some((component) => component.slug === initSlug && component.name === 'Initialization Probe' && Array.isArray(component.tags)) &&
+      initialization.tree.components.every((component) => Object.keys(component).sort().join(',') === 'name,slug,tags'),
+    initialization.tree.components.slice(0, 3).map((component) => component.slug).join(', '),
+  );
+  check(
+    'the bootstrap carries metadata, not component bodies',
+    !JSON.stringify(initialization.tree).includes('metadata only, never in the bootstrap'),
+  );
+  check(
+    'every exposed tool carries its parameter schema, and exposed plus missing is exactly the run allow list',
+    initialization.tools.every((tool) => tool.parameters && tool.parameters.type === 'object') &&
+      JSON.stringify([...initialization.tools.map((tool) => tool.name), ...initialization.toolsMissing].sort()) === JSON.stringify([...NEWMATE_RUN_TOOLS].sort()),
+    initialization.tools.map((tool) => tool.name).join(', '),
+  );
+  check(
+    'short-memory rows carry their own expiry, and the payload counts the rows it did not include',
+    initialization.shortMemory.every((row) => typeof row.expiresAt === 'string' && typeof row.expired === 'boolean') &&
+      initialization.shortMemoryTotal === initialization.shortMemory.length + initialization.shortMemoryOmitted,
+    JSON.stringify({ rows: initialization.shortMemory.length, total: initialization.shortMemoryTotal, omitted: initialization.shortMemoryOmitted }),
+  );
+  await remove({ component: initSlug, reason: 'functional test: initialization probe cleanup', source: 'gate-memorylab-tools' });
+
   /* ------------------------------------------------------ the live store --- */
 
   check('the live store was never touched', digest(LIVE_INDEX) === liveBefore, `${liveBefore.slice(0, 16)} -> ${digest(LIVE_INDEX).slice(0, 16)}`);
@@ -1779,6 +1828,92 @@ check(
     navigationInstructions.includes('memory_lab_subtag_tree') &&
     /Both are reads/.test(navigationInstructions),
   navigationInstructions.split('\n').filter((line) => line.includes('memory_lab_root_tags')).join(' | ').slice(0, 200),
+);
+
+/* -------------------------------------- the two stores' division of labour --- */
+
+/* THE TWO MEMORY STORES ARE ONE DECISION, AND EVERY DESCRIPTION CARRIES IT.
+ *
+ * The role sentence is ONE exported constant per family, so the nine (and four) copies cannot
+ * drift from each other. These checks pin both halves of the contract:
+ *
+ *   - every description in a family OPENS with that family's role, which is what makes a single
+ *     description enough to route a write — a model reads tools one at a time, not as a set;
+ *   - the role itself still states the facts the routing decision needs. Rewording is allowed;
+ *     dropping a fact is not.
+ *
+ * The last two are the cost and contradiction guards. The sentence is repeated thirteen times in
+ * the surface a model is handed on every request, so it has a length cap and the whole surface has
+ * a budget; and neither family may borrow the other's lifetime, because "where do I put this" is
+ * exactly the question a contradictory pair of descriptions makes unanswerable. */
+const shortDefinitions = ['add', 'recall', 'where', 'size'].map((action) => mount.tools.get(`shortMemory_${action}`));
+
+const longTermFacts = [
+  ['it is long-term', /long-term/i],
+  ['it is durable', /durable/i],
+  ['it is a tag tree', /tag-tree|tag tree/i],
+  ['it is shared across conversations', /across every conversation|across conversations/i],
+  ['it is for a user profile', /user profile/i],
+  ['it is for a knowledge graph', /knowledge graph/i],
+  ['it names shortMemory_* as the other store', /shortMemory_\*/],
+];
+check(
+  'the long-term role says durable tag-tree knowledge shared across conversations, for user profiles and knowledge graphs, and names shortMemory_*',
+  longTermFacts.every(([, pattern]) => pattern.test(LONG_TERM_ROLE)),
+  longTermFacts.filter(([, pattern]) => !pattern.test(LONG_TERM_ROLE)).map(([what]) => `missing: ${what}`).join(', ') || 'all facts present',
+);
+check(
+  'every memory_lab_* description opens with that role, so one description is enough to route a write',
+  definitions.every((definition) => definition.description.startsWith(LONG_TERM_ROLE)),
+  definitions.map((definition) => `${definition.name}:${definition.description.startsWith(LONG_TERM_ROLE)}`).join(', '),
+);
+
+const shortTermFacts = [
+  ['it is short-term', /short-term/i],
+  ['it is a flat list', /flat[^.]*list|list-style/i],
+  ['its items expire on their own', /expire/i],
+  ['the default is seven days', /seven days|7 days/i],
+  ['expired rows stay in the list, flagged', /flagged/i],
+  ['it is for cross-conversation task handoff', /cross-conversation/i],
+  ['it names memory_lab_* as the durable store', /memory_lab_\*/],
+];
+check(
+  'the short-term role says a flat expiring list (seven days by default, expired rows kept and flagged) for cross-conversation task handoff, and names memory_lab_*',
+  shortTermFacts.every(([, pattern]) => pattern.test(SHORT_TERM_ROLE)),
+  shortTermFacts.filter(([, pattern]) => !pattern.test(SHORT_TERM_ROLE)).map(([what]) => `missing: ${what}`).join(', ') || 'all facts present',
+);
+check(
+  'every shortMemory_* description opens with that role, so one description is enough to route a write',
+  shortDefinitions.every((definition) => definition.description.startsWith(SHORT_TERM_ROLE)),
+  shortDefinitions.map((definition) => `${definition.name}:${definition.description.startsWith(SHORT_TERM_ROLE)}`).join(', '),
+);
+
+/* The role is stripped before the search, because the role itself states each family's lifetime:
+ * the long-term one says "Nothing here expires", the short-term one says "expire". What must not
+ * appear is the OTHER family's lifetime in a tool's own body. */
+const body = (definition, role) => definition.description.slice(role.length);
+check(
+  'neither family borrows the other lifetime: no long-term tool body talks about expiry, and no short-term body promises permanence',
+  definitions.every((definition) => !/(expire|seven days|7 days)/i.test(body(definition, LONG_TERM_ROLE))) &&
+    shortDefinitions.every((definition) => !/(nothing here expires|never expires|permanent)/i.test(body(definition, SHORT_TERM_ROLE))),
+  [...definitions, ...shortDefinitions].filter((definition) => /(expire|seven days|7 days|nothing here expires|never expires|permanent)/i.test(body(definition, definition.description.startsWith(LONG_TERM_ROLE) ? LONG_TERM_ROLE : SHORT_TERM_ROLE))).map((definition) => definition.name).join(', ') || 'no borrowed lifetimes',
+);
+
+check(
+  'the repeated role sentences stay signposts: at most 320 characters each, because they are paid for on every request',
+  LONG_TERM_ROLE.length <= 320 && SHORT_TERM_ROLE.length <= 320,
+  `long-term ${LONG_TERM_ROLE.length}, short-term ${SHORT_TERM_ROLE.length}`,
+);
+const surfaceChars = [...definitions, ...shortDefinitions].reduce((sum, definition) => sum + definition.description.length, 0);
+check(
+  'the whole memory tool surface stays under 10,000 characters, so routing clarity is not bought with a wall of text',
+  surfaceChars <= 10000,
+  `${surfaceChars} chars across ${definitions.length + shortDefinitions.length} tools`,
+);
+check(
+  'the usage instructions memory_lab_read hands a model state the same split, not just the tool descriptions',
+  /LONG-TERM half/.test(navigationInstructions) && /SHORT-TERM half is shortMemory_\*/.test(navigationInstructions),
+  navigationInstructions.split('\n').filter((line) => /MEMORY SPLIT|SHORT-TERM half/.test(line)).join(' | ').slice(0, 200),
 );
 
 console.log('');

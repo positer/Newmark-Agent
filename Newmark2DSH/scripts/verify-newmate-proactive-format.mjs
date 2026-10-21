@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
+import {createNewMate} from '../packages/newmark-core/components/newmate/component.js';
+import {proactiveMessageGate} from '../packages/newmark-core/components/newmate/lib/proactive-message.js';
+import {MINUTE} from '../packages/newmark-core/components/newmate/lib/initiative.js';
+let checks=0;
+const check=(name,value)=>{assert.ok(value,name);console.log(`ok ${++checks} - ${name}`);};
+for(const text of ['我现在不能为你执行任何操作。','我只有 Memory Lab 的只读检索工具，无法探测 DSH。','我这边查不到运行状态，不能替你确认。','I cannot access your desktop.'])check('unsolicited capability report suppressed: '+text,proactiveMessageGate(text)==='unprompted_capability_report');
+for(const text of ['你记下的投稿截止日快到了，要一起看看还剩哪些材料吗？','忙了一阵的话，喝口水歇一会儿吧。','这个任务不能拖到截止日之后，今天可以先准备摘要。'])check('concrete reminder or natural care remains allowed',proactiveMessageGate(text)==='');
+for(const text of ['# 我能确认的\n清单','```json\n{}\n```','消息'.repeat(121)])check('unsolicited long or report-style output suppressed',proactiveMessageGate(text)==='proactive_format');
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'newmate-proactive-format-'));
+function fixture(text,kind='self_activation'){
+ let time=Date.parse('2026-10-12T01:00:00Z');const notices=[],calls=[];
+ const mate=createNewMate({root:path.join(root,String(checks)),now:()=>time,agents:()=>null,onNotify:async m=>notices.push(m),tools:{execute:async call=>{calls.push(call);return{isError:false,value:{ok:true,result:call.arguments.output_schema?{structured:{notify:true,text,topic:'qa-format'}}:{output:text}}};}}});
+ return{mate,calls,notices,async run(){await mate.configure({companion:true});time+=21*MINUTE;if(kind==='chat')mate.chat('你有什么权限，能确认 DSH 状态吗？');else if(kind==='background')mate.enqueue('更新后请检查状态');await mate.tick();}};
+}
+const bad=fixture('我现在不能为你确认运行状态。');await bad.run();
+check('autonomous bad output creates no chat message or pet bubble',bad.mate.state().messages.length===0&&bad.notices.length===0);
+check('suppressed message neither consumes message quota nor rotates conversation',bad.mate.state().initiative.sent===0&&bad.mate.state().threads.length===1&&bad.mate.state().tasks[0].suppressed==='unprompted_capability_report');
+check('suppressed attempt completes without replay and still uses reasoning budget',bad.mate.state().tasks[0].status==='completed'&&bad.mate.state().initiative.attempts===1);
+check('model receives explicit no-user-request context and silent fallback',bad.calls[0].arguments.prompt.includes('用户这次没有提问')&&bad.calls[0].arguments.prompt.includes('不用能力声明填补空白'));bad.mate.stop();
+const background=fixture('我只有只读权限，不能执行工作。','background');await background.run();
+check('restart-style background task is not mistaken for a user question',background.mate.state().messages.length===0&&background.mate.state().tasks[0].status==='completed');background.mate.stop();
+const quiet=fixture('','background');await quiet.run();check('background without useful facts may finish silently',quiet.mate.state().messages.length===0&&quiet.mate.state().tasks[0].status==='completed');quiet.mate.stop();
+const silent=fixture('[保持安静]','background');await silent.run();check('background silence marker is consumed without publishing it',silent.mate.state().messages.length===0&&silent.mate.state().tasks[0].suppressed==='not_actionable');silent.mate.stop();
+const manual=fixture('我只有只读记忆权限，无法探测 DSH。','chat');await manual.run();check('explicit user question still gets an honest capability answer',manual.mate.state().messages.at(-1).text.includes('只读记忆权限'));manual.mate.stop();
+const valid=fixture('你记下的投稿截止日快到了，要一起看看还剩哪些材料吗？');await valid.run();check('useful unsolicited message keeps ordinary quota and bubble delivery',valid.mate.state().messages.length===1&&valid.notices.length===1&&valid.mate.state().initiative.sent===1);
+const before=valid.mate.state().messages.length;const result=await valid.mate.message('我现在不能为你执行任务。',{id:'external-bad'});check('external agent proactive message uses same capability guard',result.suppressed==='unprompted_capability_report'&&valid.mate.state().messages.length===before);
+await valid.mate.message('完整结果'.repeat(100),{id:'external-useful',summary:'结果已整理好'});check('external complete body remains separate from concise pet summary',valid.mate.state().messages.at(-1).text.length===400&&valid.mate.state().messages.at(-1).summary==='结果已整理好');valid.mate.stop();
+console.log(`PASS ${checks} proactive content and user-response boundary checks`);

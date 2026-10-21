@@ -1,0 +1,35 @@
+import fs from 'node:fs';import path from 'node:path';import {execFileSync,spawn} from 'node:child_process';import {pathToFileURL} from 'node:url';
+const out=path.resolve(process.argv[2]||'Newmark2DSH/archive/20261007-cu-transfer/integration');fs.mkdirSync(out,{recursive:true});process.env.NEWMARK_USER_ROOT=path.join(out,'user-root');
+const pkg=path.resolve(process.argv[3]||'Newmark2DSH/packages/newmark-core');
+const {runComputerUse,stopAll}=await import(pathToFileURL(path.join(pkg,'components/computeruse/lib/win32.js')));
+const fixture=path.join(out,'fixture.exe'),state=path.join(out,'fixture.json');
+const source=fs.readFileSync('Newmark2DSH/scripts/lib/desktop-pet-probe.cs','utf8').replace('File.WriteAllText(state,','if(File.Exists(state+".close")){Close();return;} File.WriteAllText(state,');
+fs.writeFileSync(path.join(out,'fixture.cs'),source);fs.rmSync(state+'.close',{force:true});
+execFileSync(path.join(process.env.WINDIR,'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),['/nologo','/target:winexe','/r:System.Drawing.dll','/r:System.Windows.Forms.dll','/r:System.Web.Extensions.dll','/out:'+fixture,path.join(out,'fixture.cs')],{windowsHide:true});
+let seq=0;const checks=[];const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const call=async args=>{const r=JSON.parse(await runComputerUse({ownerId:'transfer-qa',mouseMode:'virtual',...args}));fs.writeFileSync(path.join(out,`${++seq}-${args.action}.json`),JSON.stringify(r,null,2));if(!r.ok)throw Error(JSON.stringify(r));return r;};
+const check=(name,ok)=>{checks.push({name,ok:!!ok});console.log(`${ok?'PASS':'FAIL'} ${name}`);if(!ok)throw Error(name);};
+try{
+ const start=await call({action:'takeover_start',desktop:'hidden',launch:`"${fixture}" "${state}"`});await sleep(1800);
+ const original=JSON.parse(fs.readFileSync(state));const hwnd='0x'+original.hwnd.toString(16);
+ const pushed=await call({action:'process_push',windowHandle:hwnd});check('export preserves original PID',pushed.original_process_id===original.pid&&!pushed.original_process_restarted);check('export animation completes',pushed.animation.completed&&pushed.animation.frames>12);
+ await sleep(500);check('original still updates after concealment',Date.now()-fs.statSync(state).mtimeMs<1000);
+ const pulled=await call({action:'process_pull',transferId:pushed.transfer_id});check('return uses original HWND',pulled.returned_to_original_window&&pulled.window_handle===hwnd);
+ await call({action:'app_key',windowHandle:hwnd,key:'a'});await sleep(500);check('original still responds after return',JSON.parse(fs.readFileSync(state)).keys>original.keys);
+ const again=await call({action:'process_push',windowHandle:hwnd});const stop=await call({action:'takeover_stop'});
+ check('export survives virtual stop',stop.hidden_desktop.preserved_process_ids.includes(original.pid));await sleep(800);check('exported application continues running',Date.now()-fs.statSync(state).mtimeMs<1000);
+ check('unexported agent terminated',stop.hidden_desktop.non_exported_processes_gone);
+ fs.writeFileSync(state+'.close','done');await sleep(1600);
+ const report=await call({action:'mode_report'});check('closed original retires mapping',!report.desktop_transfers.some(t=>t.transfer_id===again.transfer_id));
+ let presentationAlive=true;try{process.kill(again.proxy_process_id,0);}catch{presentationAlive=false;}check('closing original terminates presentation process',!presentationAlive);
+ fs.rmSync(state+'.close',{force:true});const real=spawn(fixture,[state],{windowsHide:false,stdio:'ignore'});await sleep(1000);
+ const realOriginal=JSON.parse(fs.readFileSync(state));await call({action:'takeover_start',desktop:'hidden'});await sleep(1500);
+ const imported=await call({action:'process_pull',processId:real.pid});check('import preserves original real process',imported.original_process_id===real.pid&&!imported.original_process_restarted);
+ await call({action:'app_key',windowHandle:imported.window_handle,key:'a'});await sleep(500);check('hidden proxy forwards key to real source',JSON.parse(fs.readFileSync(state)).keys>realOriginal.keys);
+ await call({action:'app_click',windowHandle:imported.window_handle,x:100,y:150});await sleep(400);check('hidden proxy forwards click to real source',JSON.parse(fs.readFileSync(state)).clicks>realOriginal.clicks);
+ const picture=await call({action:'app_observe',windowHandle:imported.window_handle,observation:'full',imagePath:path.join(out,'imported-live.png')});check('imported presentation remains capturable',picture.ok);
+ const returned=await call({action:'process_push',transferId:imported.transfer_id});check('real source restored with same HWND',returned.window_handle.toLowerCase()==='0x'+realOriginal.hwnd.toString(16));
+ const importedAgain=await call({action:'process_pull',processId:real.pid});await call({action:'takeover_stop'});await sleep(500);
+ const final=await call({action:'mode_report'});check('stop removes import presentation',!final.desktop_transfers.some(t=>t.transfer_id===importedAgain.transfer_id));check('stop preserves original real process',Date.now()-fs.statSync(state).mtimeMs<1000);
+ fs.writeFileSync(state+'.close','done');await sleep(800);
+}finally{fs.writeFileSync(state+'.close','done');try{await call({action:'takeover_stop'});}catch{}stopAll();fs.writeFileSync(path.join(out,'checks.json'),JSON.stringify(checks,null,2));}

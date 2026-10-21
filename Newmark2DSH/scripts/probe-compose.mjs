@@ -153,7 +153,7 @@ taps.length = 0;
 
   // Composition loads the components with a dynamic import, so the registration lands
   // after apply() returns. Waiting is the honest way to observe it.
-  for(let attempt=0;tools.size!==29&&attempt<100;attempt++)await new Promise(resolve=>setTimeout(resolve,50));
+  for(let attempt=0;tools.size!==35&&attempt<100;attempt++)await new Promise(resolve=>setTimeout(resolve,50));
 
   const names = [...tools.keys()].sort();
   check(
@@ -172,8 +172,8 @@ taps.length = 0;
     names.join(', '),
   );
   check(
-    'all thirty-four component tools are registered',
-    names.length === 34,
+    'all thirty-five component tools are registered',
+    names.length === 35,
     `${names.length}: ${names.join(', ')}`,
   );
   check(
@@ -248,7 +248,7 @@ let controlRouteShape = null;
 {
   const root = makeCtx();
   core.apply(root, { root: process.env.TEMP, compose: true });
-  for(let attempt=0;tools.size!==29&&attempt<100;attempt++)await new Promise(resolve=>setTimeout(resolve,50));
+  for(let attempt=0;tools.size!==35&&attempt<100;attempt++)await new Promise(resolve=>setTimeout(resolve,50));
 
   // The live routes this ONE composition registered, read before the toggle sequence below
   // adds and retires a MemoryLab route of its own. Read here rather than at the end of the
@@ -281,7 +281,7 @@ let controlRouteShape = null;
 
   const on = await callRoute(route, 'POST', { component: 'memoryLab', enabled: true });
   check('turning MemoryLab back on answers ok', on.json?.ok === true, JSON.stringify(on.json));
-  for(let attempt=0;tools.size!==29&&attempt<100;attempt++)await new Promise(resolve=>setTimeout(resolve,50));
+  for(let attempt=0;tools.size!==35&&attempt<100;attempt++)await new Promise(resolve=>setTimeout(resolve,50));
   const afterOn = [...tools.keys()].filter((n) => n.startsWith('memory_lab_')).length;
   check('turning MemoryLab back on restores its nine tools', afterOn === 9, `${afterOn}`);
 

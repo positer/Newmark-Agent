@@ -126,17 +126,27 @@ try {
     both.rows.map((row) => `${row.key}:${row.origin}`).join(', '),
   );
   check(
-    'the five components register all thirty-four tools',
-    both.tools.size === 34,
+    'the five components register all thirty-five tools',
+    both.tools.size === 35,
     `registered: ${[...both.tools.keys()].join(', ')}`,
   );
   for (const name of TOOL_NAMES.memoryLab) check(`MemoryLab registers ${name}`, both.tools.has(name));
   for (const name of TOOL_NAMES.computerUse) check(`ComputerUse registers ${name}`, both.tools.has(name));
   for (const name of TOOL_NAMES.agentApi) check(`agent-api registers ${name}`, both.tools.has(name));
+  /* Compared to the component's own declaration, not to a count. The hard-coded 23 here went
+   * stale the moment `sweep` was added (2026-10-18), and a count is exactly the copy of the
+   * list that goes stale in silence: the next action added would have had to remember this
+   * number. The named assertion below is what makes the addition visible in the output. */
+  const componentActions = (await import(new URL('../packages/newmark-core/components/computeruse/component.js', import.meta.url).href)).COMPUTER_USE_ACTIONS;
+  const publishedActions = both.tools.get('computer_use').parameters.properties.action.enum;
   check(
-    'the ComputerUse tool still publishes the full action surface',
-    both.tools.get('computer_use').parameters.properties.action.enum.length === 23,
+    'the ComputerUse tool publishes exactly the component action surface',
+    Array.isArray(publishedActions) &&
+      publishedActions.length === componentActions.length &&
+      componentActions.every((name) => publishedActions.includes(name)),
+    `published ${publishedActions.length}, component declares ${componentActions.length}: ${publishedActions.join(', ')}`,
   );
+  check('the relative-motion action is on the published surface', publishedActions.includes('sweep'));
   check('each of the six parts contributes its own index injection', both.taps.length === 6, `count: ${both.taps.length}`);
 
   const page = both.html();

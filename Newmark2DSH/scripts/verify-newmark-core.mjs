@@ -1465,6 +1465,12 @@ for (const [label, script] of [
   ['NewMate initiative', 'verify-newmate-initiative.mjs'],
   ['companion + restart + visual gate', 'verify-newmate-heartbeat.mjs'],
   ['short memory + native cache + MCP gate', 'verify-short-memory-mcp.mjs'],
+  /* NewMate is the one component that drives its own agent loop, and 0.3.21 gave it the
+   * ComputerUse tools and made that loop observable while it runs. This gate owns both halves:
+   * the allow-list conditions (a user-initiated turn gets the desktop tools, an autonomous
+   * check-in does not), the lease owner and the release it must not skip, and the live event
+   * channel from agent-api's receipt view out to the page, the state tool and the MCP status. */
+  ['NewMate ComputerUse + live loop gate', 'verify-newmate-agent-loop.mjs'],
   /* EVERY TOOL THIS BUNDLE REGISTERS, against the boundary that has silently discarded two of its
    * real runs. `memory_lab_reindex` (0.2.2) and `agent_api_send` (0.2.8) both DID their work and
    * were then reported to their caller as failures, because DSH rejects a tool value that is not
@@ -1503,6 +1509,17 @@ for (const [label, script] of [
   ['failure log', 'verify-failure-log.mjs'],
   ['store gate', 'verify-memorylab-store.mjs'],
   ['win32 gate', 'verify-computeruse-win32.mjs'],
+  /* The sweep gate is the only one here that measures an OPERATING-SYSTEM property rather than
+   * this bundle's own behaviour: a WinForms probe registers for raw mouse input (RIDEV_INPUTSINK)
+   * and counts WM_INPUT packets, so "a drag moves the pointer but tells a raw-input consumer
+   * nothing, and a sweep tells it exactly dx,dy" is a measurement of the delivery path, not a
+   * restatement of the plan. It is also the gate that produced the evidence behind the
+   * hidden-desktop refusal (sweep_unsupported_on_hidden_desktop): a live probe on that desktop
+   * received 0 raw packets from an injection the agent reported as complete, and check 7 now
+   * holds that refusal in place, so a future build that routes pointer motion to a hidden
+   * desktop turns it red instead of shipping silence. Windows only: it exits 2 with a named
+   * premise on any other platform, which this chain counts as skipped, never as passed. */
+  ['cu sweep gate', 'verify-cu-sweep.mjs'],
 ]) {
   const target = path.join(workspace, 'scripts', script);
   if (!fs.existsSync(target)) {

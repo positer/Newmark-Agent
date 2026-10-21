@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {readNewMateSettings as read,writeNewMateSettings as write,newMateSettingsPath as file} from '../packages/newmark-core/lib/newmate-settings.js';
+import {mountCore,callRoute} from './lib/mount-newmark-core.mjs';
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'newmate-slider-test-'));
+let core;
+try {
+  assert.equal(read(root).sizeMultiplier,1);
+  for(const value of [.3,1,1.374,3])assert.equal(write(root,value).sizeMultiplier,value);
+  const before=fs.readFileSync(file(root),'utf8');
+  for(const value of [0,.299,3.001,NaN,Infinity,'1',null])assert.throws(()=>write(root,value));
+  assert.equal(fs.readFileSync(file(root),'utf8'),before);
+  fs.writeFileSync(file(root),JSON.stringify({version:1,size_multiplier:.75}));
+  assert.equal(read(root).sizeMultiplier,1);
+  fs.writeFileSync(file(root),JSON.stringify({version:1,size_multiplier:1}));
+  assert.equal(read(root).sizeMultiplier,1/.75);
+  fs.writeFileSync(file(root),'broken');assert.equal(read(root).ok,false);
+  assert.equal(fs.readFileSync(file(root),'utf8'),'broken');
+  core=await mountCore({root,packagesDir:path.resolve('Newmark2DSH/packages'),components:{memoryLab:false,computerUse:false,agentApi:false}});
+  const route=core.routes.find(r=>r.path==='/newmark-core/components');
+  const result=await callRoute(route,'POST',{component:'newMate',sizeMultiplier:1.374});
+  assert.equal(result.json.ok,true);assert.equal(read(root).sizeMultiplier,1.374);
+  const state=await callRoute(route,'GET',undefined,'/newmark-core/components?view=newMate');
+  assert.equal(state.json.newMate.sizeMultiplier,1.374);assert.equal(state.json.model,undefined);
+  const invalid=await callRoute(route,'POST',{component:'newMate',sizeMultiplier:4});
+  assert.equal(invalid.json.ok,false);assert.equal(read(root).sizeMultiplier,1.374);
+  console.log('PASS: defaults, continuous endpoints, invalid-write integrity, legacy migration, corrupt-file preservation, live core GET/POST with CU disabled');
+} finally {await core?.dispose();fs.rmSync(root,{recursive:true,force:true});}

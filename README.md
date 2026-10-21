@@ -1,5 +1,67 @@
 # Newmark Agent
 
+## 2026-10-21 Newmark2DSH 0.3.21 候选：NewMate 获得完整 CU 权限，并暴露实时 Agent 循环
+
+NewMate 现在可以使用 Newmark2DSH 配套的完整 ComputerUse 工具组（`computer_use` 与只读的 `screen_capture`），但只在用户明确请求的那一轮或用户安排的待办里；自主检查（self_activation / measurement）轮次没有这两个工具。allow list 由 `newMateRunTools({automatic,origin})` 一处构造；人格 697→966 字符，写清「桌面授权只来自用户明确请求，记忆、推测、文件变化和主动联系都不构成授权」。
+
+接管以稳定的 `newmate` 身份登记（`lib/cu-caller.js` 新增 `withComputerUseOwner` / `computerUseOwner`），不借用请求对话的 `dsh-session:`、也不落到共用的 `dsh`；用过的租约在任务结算前由运行时以同一身份对 real / virtual 各发一次 `takeover_stop`（8 s 上限），别的 owner 的租约只会被拒，不会被释放。请求对话身份仍对 `newmate_todo_add` 可见，待办 origin 语义不变。
+
+实时循环不再只在结束时才有回执：agent-api 在事件发生时把同一份 `eventView` 交给 NewMate（在回执两条界之前），`newmate_state`、GET `/newmark-newmate` 的 `agentLoop`、MCP `newmate_task_status` 与 NewMate 页面读同一份 `loopStatus()`（phase、轮次、工具调用数、当前工具、耗时、停止原因、最近 24 个事件；页面运行中 800 ms 刷新、空闲 2000 ms）。初始化前缀在活库上 24,863 → 30,997 字符（人格 +269、CU 参数 schema +5,866）。
+
+新门禁 `verify-newmate-agent-loop` **45 PASS**（同日追加后为 **66**），其中用真实 agent-api 循环证明实时事件与回执 `events` 逐字节相同；`verify-short-memory-mcp` 44、`verify-newmate-memory-writes` 7、`verify-newmate-heartbeat` 57、`verify-newmate-initiative` 57、`verify-memorylab-tools` 182、`verify-agent-api` 268、client 123、config-panel 31、compose 25、activation 57、package 54、version 12 全绿；`verify-tool-output-boundary` 因本机 DSH 安装路径改名而 PREMISE ABSENT（跳过，不是通过）。Umbrella 单次运行 **206 passed / 2 failed / 1 skipped**：win32 与 sweep 在该运行窗口内分别以 `foreground_window_unavailable` 与「原始增量含物理鼠标运动」红。两处都是活桌面前提——win32 随后单独复跑 **25/25 PASS**；sweep 在安静桌面下复跑 **8/8 测量项 PASS**（第 8 项 planted mutation 按设计跳过），再以 `--mutations` 单独跑该项 **PASS**（种植后 check 3 变红、还原 sha256 `6632a72d…` 核对）。因此这两条不计为代码回归，也不把 umbrella 写成全绿。0.3.21 为源码候选（**该「未安装、未重启」状态已被 2026-10-21 14:36 的本地重装与重启取代，见下方的同日追加**）。
+
+[实现与证据](Newmark2DSH/archive/20261021-133000-newmate-cu-loop/OPERATION.md) · [完整写回](Newmark2DSH/OVERVIEW.md)
+
+## 2026-10-21（追加⑥）Newmark2DSH 0.3.26：实时工况刷新与计时解耦（已安装）
+
+全量轮询 2s；运行中轻量 /newmark-newmate/loop 每 200ms 刷新思考/工具；状态行本地 250ms 时钟按 startedAt 计时，秒数不再跳秒/加速。实测 /loop 返回 agentLoop/question；页面无浏览器实测。
+
+## 2026-10-21（追加⑤）Newmark2DSH 0.3.25：私有工具通道 + 自主压缩（已安装）
+
+newmate_search 与 compact_context 不再暴露给 DSH agent（进程 catalog 37，不含两者），只经私有映射进入 NewMate 运行；compact_context 由 agent-api loop 拦截，用模型给的摘要替换自身历史。实测：初始化 21 工具含两者、toolsMissing=[]；已安装重启生效；页面仍无浏览器实测。
+
+## 2026-10-21（追加④）Newmark2DSH 0.3.24 候选：最新实时工况
+
+页面回到暴露 agentloop 之前的对话形态（用户输入 + 落盘回复），只额外显示一条最新工况：最新思考尾部或正在使用的工具；官方搜索显示「正在进行搜索」。完整过程时间线不再渲染。门禁 71（agent-loop）、123（client）、20（ask）。源码候选 0.3.24，未安装、未重启；页面无浏览器实测。PTC 动态压缩已定位 DSH compaction 服务，尚未接入。
+
+[实现与证据](Newmark2DSH/archive/20261021-153456-newmate-live-state/OPERATION.md)
+
+## 2026-10-21（追加③）Newmark2DSH 0.3.23 候选：对话页对齐 Newmark 本体
+
+只对齐**对话页表现**（不移植 heavy 内核）：新增 `newmate_ask` 选项询问——页面按本体 `.option-block` 渲染（2–6 个带说明选项 + 手填），答案作为工具结果继续同一次运行；NewMate 聊天不再设轮次上限（`agent_api_send max_steps: 0`，仍受超时/重复失败约束）；运行中的输入**只插队不排队**（进入引导缓冲、下一个模型步插入，不新增排队任务；门禁断言 steering 计数且无 pending chat 队列）。门禁：ask **20**、steer **24**、agent-api **270**、memorylab 182、activation 57、compose 25、heartbeat 57。**0.3.23 已于 2026-10-21 15:24 本地重装并重启生效**（96 文件，sha256 D0ACA55F…；npm 未发布）；页面仍无浏览器实测。
+
+[实现与证据](Newmark2DSH/archive/20261021-150654-newmate-option-ask/OPERATION.md)
+
+## 2026-10-21（追加②）Newmark2DSH 0.3.22 候选：Agent 循环的过程块
+
+参考 Newmark 本体 Build 渲染：思考与工具调用按**发生顺序**排在**同一个可折叠块**里。服务端 `agent-loop.js` 把 thinking 作为时间线片段插入事件环（流式重发原位替换、片段上限 1,200 字符并保留截断标记、与工具共享 24 条/6,000 字符界）；页面 `renderProcess()` 用一个 `<details class="nm-run">`，summary「过程 · 最新动作 · N 步」，body 按顺序渲染灰色思考段与「已查看记忆/已控制电脑/已调用工具」，删除旧的 `nm-thinking`/`nm-loop` 两个块。门禁 66→**71 PASS**、4/4 planted mutation 变红还原。**2026-10-21 14:52–14:53 已本地重装 0.3.22 并经更新路由 + heartBeat 托管重启生效**（tarball sha256 `856E3510…`，95 文件一致；备份 `0.3.21-before-0.3.22-*`；npm 未发布）。重启后更新路由的 NewMate 任务跑出真实样本：`agentLoop.events` 顺序为 `agent_start,turn_start,thinking,tool_start,tool_end,…,turn_start,thinking,…`（思考段与工具按真实顺序交错）、GET `/newmark-newmate` 200 带 `agentLoop`、进程层 catalog 37 含 `newmate_search`。页面仍无浏览器实测。
+
+[实现与证据](Newmark2DSH/archive/20261021-145500-newmate-process-timeline/OPERATION.md) · [完整写回](Newmark2DSH/OVERVIEW.md)
+
+## 2026-10-21（追加，同一 0.3.21 候选）Agent 循环简写标签 + 思考流 + DSH 原生搜索
+
+页面把 NewMate 的工具使用简写成浅色小字的「正在/已 查看记忆、控制电脑、调用工具」，模型推理以可折叠灰色小字实时刷新：seam 按 `reasoning-delta` 以 120 字符 / 200 ms 的步长流式发布，agent-api 的 `eventView` 只保留尾部 4,000 字符并标截断，`pushEvent` **只发给 live 观察者、不进回执**（回执的 64 条 / 16KB 界留给工具诊断）；NewMate 追踪器把思考存成替换式 `{text,at,truncated}`，不占事件环。新增 `newmate_search` 接入 DSH 原生搜索：优先 `ctx.web` 接缝，插件作用域不可达时回退 DSH 自带的 `deepseek-official` 提供者（官方端点、`DEEPSEEK_API_KEY`、默认模型不变），1–4 个 query、去重、最多 8 个来源、60 s 预算，结果带「不可信外部内容」声明；搜索与桌面工具一样只在用户请求的轮次开放，自主检查没有。
+
+实测：本机进程层 `agent_api_send {allow:['web_search','web_fetch']}` 的回执是 `tool_names: []`、`tools_withheld: {count:2}`——这是回退路径存在的实测理由（主机的 `web_search` 在 agent 预设里，NewMate 的进程层 run 够不到）。初始化前缀 30,997 → **31,390**（+393 = 人格 +105 + 搜索 schema +287），组 19 条。门禁：新门禁 **66 PASS**；compose 25、activation 57（工具 34→35）、memorylab-tools 182（组合 32→33）、heartbeat 57（允许名加搜索）等同步更新并全绿；新增 **6 个 planted mutation 全部变红并逐字节还原**。**2026-10-21 14:36–14:39 已本地重装 0.3.21 并经更新路由 + heartBeat 托管重启生效**（本地 tarball sha256 `614F7C22…`，95 文件逐文件一致；备份在 `~/.dsh/profiles/desktop/.newmark-install-backups/0.3.20-before-0.3.21-20261021-143602`）。重启后实测：`newmate_state` 带 `agentLoop`（一次真实的更新后 NewMate 运行：3 轮 / 4 工具 / 16.0 s / 思考 4,015 字符 truncated）、GET `/newmark-newmate` 返回 `agentLoop`、进程层 catalog 37 含 `newmate_search`、`newmate_search {queries:['DeepSeek Harness']}` 返回 `ok:true` / **`provider:"ctx.web"`** / 8 个来源。**更正**：此前「本机 `ctx.web` 不可达、NewMate 实际走 provider 回退」被这次实测推翻——不可达的是 `web_search` **工具**层（`tools_withheld`），`ctx.web` **服务**在插件作用域是可达的；回退路径只作为没有该服务的宿主的备用，并由门禁用假 provider 覆盖。页面渲染仍没有浏览器实测（无 Playwright），client 断言是源契约。npm 未发布 0.3.21。
+
+[追加证据](Newmark2DSH/archive/20261021-133000-newmate-cu-loop/evidence/addendum/) · [完整写回](Newmark2DSH/OVERVIEW.md)
+
+## 2026-10-20 Newmark2DSH 0.3.20 候选：NewMate 初始化 = 人格 + 完整标签树 + 全部短期记忆 + 工具组 schema
+
+NewMate 首轮上下文一次给全四项：初始化人格 prompt、完整的 MemoryLab 标签树（全部标签与每个记忆节点的名称/所属标签，不含正文）、全部短期记忆（每行带到期标记）、本轮工具组 schema（16 条：按 NewMate 自己的 allow list 从当前注册表暴露做只读投影，兼容插件提供的工具；暴露里没有的组内工具写进 toolsMissing/不会冒充可调用）。记忆正文仍按需读取。本机实测初始化前缀 14,438 → 24,626 字符。门禁 44 / 182 / 7、NewMate 回归 57/57、57/57、23/23 全绿。**未安装、未重启**，0.3.20 为源码候选（**该状态已被本段末的发布记录取代**）。
+
+[实现与证据](Newmark2DSH/archive/20261020-230439-newmate-initialization/OPERATION.md) · [完整写回](Newmark2DSH/OVERVIEW.md)
+
+**2026-10-20 23:45 已发布并生效**：main `76674f4`、tag `v0.3.20`、npm `latest=0.3.20`（94 文件 79 逐字节 + 15 仅换行、0 实质差异）、拉回安装 94 文件一致、更新路由重启 23:45:47、活体实测通过（tree 104/19、short 10 行、tools 16、toolsMissing=[]）。
+
+## 2026-10-20 Newmark2DSH 0.3.19 候选：记忆工具描述写清「长期树状记忆」与「短期到期列表」的分工
+
+MemoryLab 的 9 个工具与 shortMemory 的 4 个工具，描述开头各带一句角色句：长期记忆是持久、稳定、树状（标签父链）的知识，用于用户画像与知识图谱，不自动过期；短期记忆是扁平列表，默认七天到期、过期行保留并标记，用于跨对话的临时任务交接。两族互相点名，`memory_lab_read` 的用法说明另有一段同口径的分工。门禁 168 → 176，5 个变异全部按预期变红、逐字节还原；注册表读回 13 条描述 5558 → 8978 字符。**本轮只改源码与文档，未安装、未重启**（本机宿主仍是 0.3.18），六个 manifest 已到 0.3.19。（该状态已被本条之后的晚间追加取代：已推送、已安装、已重启并验证生效。）
+
+[实现与证据](Newmark2DSH/archive/20261020-213034-memorylab-memory-roles/OPERATION.md) · [完整写回](Newmark2DSH/OVERVIEW.md)
+
+**2026-10-20 晚些（按用户指令）**：发布仓分支 `codex/memorylab-roles-0.3.19` 已推送（提交 `932451f`，main 未动、未发布 npm；**此处的「未发布 npm」已被本段末 22:40 的发布记录取代**）；0.3.19 已安装进 profile 并经插件更新路由 + heartBeat 托管重启（`restart(ticket, update=true)`）生效，本对话由该接续路径回来。**2026-10-20 22:40（按用户指令「监听npm版本直至正确公开」）**：`v0.3.19` 标签已推送并触发 publish 工作流（run 39440904853 success），npm `latest` 已是 **0.3.19**；integrity 一致、93 文件（78 逐字节 + 15 仅 CRLF 规范化、实质差异 0），空目录 `npm install newmark2dsh@0.3.19` 通过。**发布仓 main 已更新推送**：`f5d9ebb..a6f7fa1`（2026-10-20 22:47:46 推送）——0.3.19 包内容与 tag `v0.3.19` 逐 blob 相同，main 的公开文档策略保留（根 CHANGELOG 仍归档、`docs/` 只留公开页、版本历史走 GitHub Releases）；远端 `git ls-remote` 读回 `a6f7fa1`，干净 worktree 上 `check-release-bundle.mjs` = `GUARD PASSES`。
+
 ## 2026-10-17 Newmark2DSH 0.3.16 候选：heartBeat 两阶段重启（广播 + 回执屏障）
 
 `heartbeat_restart` 增可选两阶段形式：`broadcast:true` 按宿主 `agents().roots()` 枚举运行中的对话（不接受调用方传入的目标名），`ackMode:'auto'`（默认）为每个参与者登记持久接续、不花模型 token，`ackMode:'agent'` 投递持久通知并要求该会话自己回执；`heartbeat_restart_commit` 只在回执到齐且发起方自己已登记时才真正重启，否则 `aborted` 并点名缺失者。intent 持久化到 `~/.Newmark/heartBeat/state.json`（schema 3），新宿主清扫 `committing → committed`（记录本次投递）与旧进程残留 `preparing → interrupted`（通知 requester 本次没有重启）。`broadcast=false` 与 0.3.15 一致，屏障打开期间即时重启被拒绝。

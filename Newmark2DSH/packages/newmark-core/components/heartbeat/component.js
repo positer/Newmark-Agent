@@ -30,7 +30,7 @@ import { createErrorLog } from '../../lib/errors.js';
  * generated from the same facts a gate can assert, so the two cannot drift apart again.
  */
 export const CONTINUATION_GOAL_POLICY = Object.freeze({
-  allowed: Object.freeze(['get_goal']),
+  allowed: Object.freeze(['get_goal', 'goal_restore']),
   refused: Object.freeze([
     'create_goal',
     'update_goal:edit',
@@ -39,10 +39,10 @@ export const CONTINUATION_GOAL_POLICY = Object.freeze({
     'update_goal:complete',
     'update_goal:blocked',
   ]),
-  authority: 'update_goal pause/resume/edit and create_goal need a direct human message in this turn; complete/blocked are also legal on the goal\'s own admitted round; a restart continuation is neither.',
-  resume_hint: '若目标仍是 active/disarmed：这一轮不要调用 update_goal，用一句话请用户回复“继续”，那一句人类输入才是重新武装它的授权。',
+  authority: 'update_goal pause/resume/edit and create_goal need a direct human message in this turn; complete/blocked are also legal on the goal\'s own admitted round; a restart continuation is neither, which is why it restores through goal_restore instead of the host tool.',
+  resume_hint: '若目标被暂停（phase:"paused"）或在会话恢复时被解除武装（phase:"active" 且 activation:"disarmed"），调用 goal_restore 恢复它；它只做这一件事，不改写目标、不解除阻断。',
 });
-const CONTINUATION_PROMPT = 'Newmark2DSH 已重启。先读 get_goal 了解目标状态，但这一轮不要写目标：create_goal 与 update_goal 的 edit/pause/resume 需要直接的人类轮次，complete/blocked 只在本目标自己的轮次里被接受，而重启接续两者都不是，调用它们必定被拒（"requires a direct human turn on a top-level agent"）。若目标是 active 且 disarmed，说明宿主在会话恢复时解除了武装——' + CONTINUATION_GOAL_POLICY.resume_hint + '若 phase 是 paused 就保持暂停；没有 goal 则跳过。然后从上一句用户消息继续；不要重复已经完成的动作，未完成的工作先说明状态。';
+export const CONTINUATION_PROMPT = 'Newmark2DSH 已重启。重启前本组件已记录每个活动对话的目标状态，并在新进程里**自动**恢复当时处于 active 的目标（见 heartbeat_activity 的 goal_restore 回执），所以正常情况下目标已经在跑，你不需要做任何目标操作。先读 get_goal 确认：若仍是 active 且 armed，直接继续；若仍是 paused、或仍是 active 但 disarmed（说明自动恢复失败或晚于本次接续），调用 goal_restore 补一次。不要调用 create_goal 或 update_goal（自动续跑轮里它们必被拒：requires a direct human turn on a top-level agent），也不要改写目标或解除阻断。没有 goal 则跳过。然后从上一句用户消息继续；不要重复已经完成的动作，未完成的工作先说明状态。';
 /* Agent-mode broadcast. It names the two tools by their exact parameters because the session's own
  * agent is the only party that can give a receipt for that session, and it must be able to do it
  * without guessing which call shape counts. */
@@ -93,6 +93,10 @@ const TERMINATED_STATUS = 'failed(final)';
  * (so a continuation registered moments ago is never stolen), and at most ADOPT_LIMIT are adopted so
  * a stale queue cannot turn one boot into a flood. */
 const ADOPT_MIN_AGE_MS = 60000;
+/* How many 2 s ticks the post-restart goal restore waits for the host to load agents before it
+ * records "could not read the services" and stops. 30 ticks is a minute: boot normally has the
+ * sessions up long before that, and a receipt that says it gave up beats an endless retry. */
+const GOAL_RESTORE_ATTEMPTS = 30;
 const ADOPT_LIMIT = 8;
 
 export function createHeartBeat({ root, core, agents, goals = () => null, controller = createRestartController(root), probe = probeDesktop, pid = process.pid, version, logger, now = Date.now }) {
@@ -111,6 +115,7 @@ export function createHeartBeat({ root, core, agents, goals = () => null, contro
   // Retire the previous delivered marker into a permanent consumption receipt.
   if(store.read().tasks.some(t=>t.status==='delivered')) store.change(s=>{s.receipts ||= [];for(const t of s.tasks.filter(t=>t.status==='delivered'))if(!s.receipts.some(r=>r.id===t.id))s.receipts.push({id:t.id,delivered:t.delivered||Date.now()});s.tasks=s.tasks.filter(t=>t.status!=='delivered');s.schema=3;});
   let pumping = false, stopped = false;
+  let goalRestoreAttempts = 0;
   // A continuation registered by an earlier process is evidence that a restart was intended. If this
   // process is that restart (whatever performed it), the task must be delivered here instead of
   // waiting for a helper that will never report.
@@ -163,6 +168,100 @@ export function createHeartBeat({ root, core, agents, goals = () => null, contro
     return service.roots().map(agent => ({ agent, view: identity(agent) })).filter(entry => entry.view);
   };
 
+  /* ------------------------------------------------------- goal continuity --- */
+  /**
+   * Snapshot every live conversation's GOAL state and RUNNING state, right before a restart.
+   *
+   * Why this exists. The host keeps a goal's durable phase but its continuation authority
+   * (activation) is PROCESS-local: on the session-start edge after a restart, dsh-goal publishes
+   * 'disarmed' (dsh-goal/lib/index.js, the session-start subscription, and runtimeState() which
+   * starts every process with activation 'disarmed'). A goal that was running therefore stops being
+   * continued by dsh-goal-round-driver - the driver only acts when phase==='active' &&
+   * activation==='armed' - until something calls goals.resume(agent, ref). The host's own tool can't:
+   * update_goal{action:'resume'} requires a direct human turn. So the restart itself has to remember
+   * what was running and re-arm it once the new process has the agents back.
+   *
+   * What is recorded is what the re-arm decision needs and nothing else: session id, whether the
+   * conversation was running, and the goal's id/phase/activation/revision/rounds. The objective is
+   * deliberately NOT copied - this snapshot must never become a way to rewrite a goal.
+   */
+  const captureGoalSnapshot = (reason) => {
+    const live = liveAgents();
+    if (live === null) return { ok: false, code: 'agents_unavailable', record: null };
+    const service = goals?.() ?? null;
+    const entries = [];
+    for (const entry of live) {
+      let goal = null;
+      try { goal = service?.get?.(entry.agent) ?? null; } catch (error) { goal = null; }
+      entries.push({
+        sessionId: entry.view.sessionId,
+        title: entry.view.title,
+        running: entry.view.state === 'busy',
+        goalId: goal?.id ?? null,
+        phase: goal?.phase ?? null,
+        activation: goal?.activation ?? null,
+        revision: goal?.revision ?? null,
+        roundsStarted: goal?.roundsStarted ?? null,
+        maxGoalRounds: goal?.maxGoalRounds ?? null,
+      });
+    }
+    const record = { schema: 1, at: now(), reason, entries };
+    store.change((s) => { s.schema = 3; s.goalSnapshot = record; s.goalRestore = null; });
+    return { ok: true, code: 'captured', record, count: entries.length };
+  };
+
+  /**
+   * Re-arm the goals that were RUNNING when the restart happened, once, on the new process.
+   *
+   * Only a goal whose phase was 'active' before the restart is a candidate. 'paused' is the user's
+   * stop and 'blocked' is a conclusion a human reached - the service would happily resume a blocked
+   * goal (its resumable set is active/paused/blocked), which is exactly why this check is here: the
+   * restart must not turn either decision into a side effect. A complete goal has nothing to resume.
+   *
+   * It waits for the agents to exist (the host loads sessions asynchronously after boot), and gives
+   * up honestly: after GOAL_RESTORE_ATTEMPTS ticks the receipt says so instead of retrying forever.
+   */
+  const restoreGoalSnapshot = () => {
+    const snapshot = store.read().goalSnapshot;
+    if (!snapshot || !Array.isArray(snapshot.entries) || !snapshot.entries.length) return { state: 'none' };
+    if (snapshot.appliedAt || snapshot.gaveUpAt) return { state: 'done', receipt: store.read().goalRestore || null };
+    const service = goals?.() ?? null;
+    const live = liveAgents();
+    if (!service || typeof service.resume !== 'function' || typeof service.get !== 'function' || live === null) {
+      goalRestoreAttempts += 1;
+      if (goalRestoreAttempts >= GOAL_RESTORE_ATTEMPTS) {
+        store.change((s) => {
+          s.schema = 3;
+          s.goalSnapshot = { ...snapshot, gaveUpAt: now() };
+          s.goalRestore = { at: now(), snapshotAt: snapshot.at, reason: snapshot.reason, gaveUp: 'services_unavailable', attempts: goalRestoreAttempts, resumed: [], skipped: snapshot.entries.map((entry) => ({ sessionId: entry.sessionId, reason: 'services_unavailable', phase_before: entry.phase })) };
+        });
+        failures.record({ where: 'heartbeat/goal-restore', code: 'services_unavailable', message: 'restart goal restore could not read the goal service or the agent registry', fields: { attempts: goalRestoreAttempts } });
+      }
+      return { state: 'waiting', attempts: goalRestoreAttempts };
+    }
+    const resumed = [];
+    const skipped = [];
+    for (const entry of snapshot.entries) {
+      if (entry.phase !== 'active') { skipped.push({ sessionId: entry.sessionId, reason: 'not_active_before_restart', phase_before: entry.phase }); continue; }
+      const found = live.find((candidate) => candidate.view.sessionId === entry.sessionId);
+      if (!found) { skipped.push({ sessionId: entry.sessionId, reason: 'agent_not_loaded', phase_before: entry.phase }); continue; }
+      let goal = null;
+      try { goal = service.get(found.agent) ?? null; } catch (error) { skipped.push({ sessionId: entry.sessionId, reason: 'goal_read_failed', error: String(error?.message || error) }); continue; }
+      if (!goal) { skipped.push({ sessionId: entry.sessionId, reason: 'no_goal_now', phase_before: entry.phase }); continue; }
+      if (goal.phase !== 'active') { skipped.push({ sessionId: entry.sessionId, reason: 'phase_changed', phase_before: entry.phase, phase: goal.phase }); continue; }
+      if (goal.activation === 'armed') { skipped.push({ sessionId: entry.sessionId, reason: 'already_armed' }); continue; }
+      try { service.resume(found.agent, { id: goal.id, revision: goal.revision }); }
+      catch (error) { skipped.push({ sessionId: entry.sessionId, reason: 'resume_refused', error: String(error?.message || error) }); continue; }
+      let after = null;
+      try { after = service.get(found.agent); } catch { after = null; }
+      const verified = Boolean(after && after.phase === 'active' && after.activation === 'armed');
+      resumed.push({ sessionId: entry.sessionId, goalId: goal.id, before: { phase: entry.phase, activation: entry.activation, roundsStarted: entry.roundsStarted }, after: after ? { phase: after.phase, activation: after.activation, roundsStarted: after.roundsStarted } : null, verified });
+    }
+    const receipt = { at: now(), snapshotAt: snapshot.at, reason: snapshot.reason, attempts: goalRestoreAttempts + 1, resumed, skipped, resumed_count: resumed.length, skipped_count: skipped.length, verified_count: resumed.filter((entry) => entry.verified).length };
+    store.change((s) => { s.schema = 3; s.goalSnapshot = { ...snapshot, appliedAt: now() }; s.goalRestore = receipt; });
+    goalRestoreAttempts = 0;
+    return { state: 'applied', receipt };
+  };
   /**
    * The pre-restart probe: who ELSE is running right now.
    *
@@ -191,6 +290,8 @@ export function createHeartBeat({ root, core, agents, goals = () => null, contro
       count: running.length,
       idleOthers: Math.max(0, idleOthers),
       intent: intent ? progressOf(intent) : null,
+      /* What the LAST restart did to goals, so a caller can ask instead of guessing. */
+      goal_restore: store.read().goalRestore || null,
     };
   };
 
@@ -389,6 +490,9 @@ export function createHeartBeat({ root, core, agents, goals = () => null, contro
     const missing = pendingOf(store.read().intent);
     const acks = ackedOf(store.read().intent);
     let prepared, helper;
+    /* What was running BEFORE the helper takes this process down. The new process cannot read it
+     * afterwards, so it is recorded here, next to the restart that will need it. */
+    const goalSnapshot = captureGoalSnapshot('barrier');
     try {
       prepared = await controller.prepare(installedVersion());
       helper = await controller.restart(prepared.ticket);
@@ -521,6 +625,7 @@ export function createHeartBeat({ root, core, agents, goals = () => null, contro
     state: status, schedule, stop() { stopped = true; },
     prepare: targetVersion => controller.prepare(targetVersion),
     async restart(ticket, update = false) {
+      const goalSnapshot = captureGoalSnapshot(update ? 'update' : 'immediate');
       const helper = await controller.restart(ticket);
       // kind:'update_report' tells NewMate this report was REQUESTED, so it is displayed instead of
     // being judged by the proactive-message format rule (240 chars, no lists) and dropped.
@@ -558,11 +663,77 @@ export function createHeartBeat({ root, core, agents, goals = () => null, contro
       if (running) throw Error('已有一个进行中的两阶段重启准备（intentId=' + running.id + '），请先提交或等它结束');
       const prepared = await controller.prepare(installedVersion()); return this.restart(prepared.ticket);
     },
+    /**
+     * Restore THIS conversation's goal, in any host turn, and do nothing else.
+     *
+     * WHY A PLUGIN TOOL EXISTS FOR THIS. The host's own update_goal{action:"resume"} requires a direct
+     * human turn (dsh-tool-goal requireDirectHuman), so an automatic continuation - which is exactly
+     * what a restart delivers - can never re-arm a goal through it: measured live, the resumed
+     * conversation hit "this goal operation requires a direct human turn on a top-level agent" every
+     * time. The goal SERVICE has no such guard (the guard lives in the tool), so this component -
+     * which already reads the service to leave paused conversations alone - can ask it directly.
+     *
+     * WHAT IT DELIBERATELY CANNOT DO. No objective, no round cap, no un-blocking, no other
+     * conversation: identity comes from the authenticated execution, and the tool's arguments object
+     * is empty and closed. blocked and complete are refused by name, because both are conclusions a
+     * human reached; reviving them here would turn a decision into a side effect. The only mutation
+     * this can cause is resume on a paused goal, or a re-arm of an active goal the host disarmed when
+     * the session resumed.
+     */
+    async restoreGoal(execution) {
+      const agent = execution?.agent ?? null;
+      if (!agent || !agent.session?.id) {
+        return { ok: false, code: 'agent_unavailable', action_taken: 'none', error: '没有可识别的调用方会话：本工具只恢复调用它的那个对话的目标。' };
+      }
+      const service = goals?.() ?? null;
+      if (!service || typeof service.get !== 'function' || typeof service.resume !== 'function') {
+        return { ok: false, code: 'goal_service_unavailable', action_taken: 'none', error: '宿主没有提供 goal 服务，无法恢复目标。' };
+      }
+      let current;
+      try { current = service.get(agent); } catch (error) {
+        return { ok: false, code: 'goal_read_failed', action_taken: 'none', error: String(error?.message || error) };
+      }
+      if (!current) return { ok: false, code: 'no_goal', action_taken: 'none', error: '这个对话没有目标，没有可恢复的东西。' };
+      const facts = { id: current.id, phase: current.phase, activation: current.activation, rounds_started: current.roundsStarted };
+      if (current.phase === 'blocked') {
+        return { ok: false, code: 'goal_blocked', action_taken: 'none', goal: facts, error: '目标已被阻断：阻断是一个结论，本工具不解除它，也不重启它。' };
+      }
+      if (current.phase === 'complete') {
+        return { ok: false, code: 'goal_complete', action_taken: 'none', goal: facts, error: '目标已经完成，没有可恢复的东西。' };
+      }
+      const paused = current.phase === 'paused';
+      const disarmed = current.phase === 'active' && current.activation === 'disarmed';
+      if (!paused && !disarmed) {
+        return { ok: true, code: 'not_restorable', changed: false, action_taken: 'none', goal: facts, note: '目标既没有暂停、也没有被解除武装，未做任何改动。' };
+      }
+      const ref = { id: current.id, revision: current.revision };
+      try { service.resume(agent, ref); } catch (error) {
+        return { ok: false, code: 'resume_failed', action_taken: 'resume', goal: facts, error: String(error?.message || error) };
+      }
+      let after = null;
+      try { after = service.get(agent); } catch { after = null; }
+      const verified = Boolean(after && after.id === current.id && after.phase === 'active');
+      return {
+        ok: verified,
+        code: verified ? (paused ? 'restored' : 'rearmed') : 'resume_unverified',
+        changed: true,
+        action_taken: 'resume',
+        mode: paused ? 'paused_goal_resumed' : 'disarmed_goal_rearmed',
+        before: facts,
+        after: after ? { id: after.id, phase: after.phase, activation: after.activation, rounds_started: after.roundsStarted } : null,
+        verified,
+        note: verified ? '目标已恢复运行；本工具没有改写目标，也没有解除任何阻断。' : 'resume 已调用，但读回的状态仍不是 active——如实报告，不当作成功。',
+      };
+    },
     activity,
     beginBarrier, commitBarrier, cancelBarrier, acknowledge, barrierState,
     async tick() {
       if (pumping || stopped) return; pumping = true;
       const delivered = [];
+      /* BEFORE delivering anything: re-arm the goals that were running when we went down. The
+       * continuation a conversation receives may tell it to work, but the host will not continue a
+       * goal round on its own until the goal is armed again, and no model turn can arm it. */
+      try { restoreGoalSnapshot(); } catch (error) { failures.record({ where: 'heartbeat/goal-restore', code: 'restore_failed', message: String(error?.message || error) }); }
       try {
         /* Adopted continuations have no restart helper behind them: this boot IS the new process.
          * Deliver once, then consume the record; a failure is counted like any other and the task is

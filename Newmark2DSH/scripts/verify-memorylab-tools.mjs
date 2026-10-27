@@ -92,7 +92,7 @@ try {
    * switches off ComputerUse and nothing else, so every other component's tools are expected
    * here: MemoryLab 9, agent-api 4, shortMemory 4, heartbeat 6, NewMate 12.
    */
-  const COMPOSED_TOOL_PARTITION = { memory_lab_: 9, agent_api_: 4, shortMemory_: 4, heartbeat_: 6, newmate_: 12 };
+  const COMPOSED_TOOL_PARTITION = { memory_lab_: 9, agent_api_: 4, shortMemory_: 4, heartbeat_: 6, newmate_: 12, goal_restore: 1 };
 
   /* ------------------------------------------------------------ the surface --- */
 

@@ -145,7 +145,7 @@ const MUTATIONS = [
     anchor: "          try { enqueue(CONTINUATION_PROMPT, entry.view.sessionId, entry.agent); continued.push(entry.view.sessionId); }",
     replacement: "          try { continued.push(entry.view.sessionId); }" },
   { id: 'M33', file: 'component', protects: 'case 15: the continuation bounds its goal advice to what the host actually allows',
-    anchor: '先读 get_goal 了解目标状态，但这一轮不要写目标',
+    anchor: '调用 goal_restore 补一次',
     replacement: '先了解目标状态' },
   { id: 'M34', file: 'component', protects: 'case 16: a paused conversation is never woken by a restart',
     anchor: "  const pausedByUser = agent => { try { return goals?.()?.get?.(agent)?.phase === 'paused'; } catch { return false; } };",

@@ -89,3 +89,37 @@ intent 写进 `~/.Newmark/heartBeat/state.json`（schema 3，新增 `intent` 与
 
 **为什么不去绕过**：插件直接调 `ctx.goals.resume()` 能成功，但那正是宿主这条守卫拦住的事——
 「只有人类能解除/恢复一个目标」是产品决定，不是实现细节。绕过去等于把守卫变成装饰。
+---
+
+## 0.3.54 重启后的 goal 恢复：改由组件硬性执行（附宿主语义实读）
+
+**宿主是怎么实现 goal「自动续跑」的**（解包 `app.asar` 读 `@deepseek-ai/dsh-goal/lib/index.js`）：
+
+- `goal` 的 **phase** 是持久的（`sessionProjections.stateOf(session,'goal')`），而 **activation** 是
+  **进程级** 的：`runtimeState(session)` 给每个 session 起一个 `{ activation:'disarmed' }`，
+  session-start 订阅再按事件把 activation 设成 `disarmed`（只有跟着某条 pendingActivation 边沿才可能是 armed）。
+- `dsh-goal-round-driver` 的判据是 `goal.phase === 'active' && goal.activation === 'armed'`；它自己会在
+  挂起时 `ctx.goals.disarm(agent)`。所以**重启后目标一定停摆**，直到有人调用 `goals.resume(agent, ref)`。
+- `resume(agent, ref)` 的可恢复集合是 **active / paused / blocked**，并且：`assertLive(agent)`（必须是 registry 里
+  同一个 agent 实例）、`expectCurrent` 要求 id+revision 精确匹配、active+armed 直接报错、轮次耗尽报错；成功后
+  把 phase 置 active、activation 置 armed（`commitCurrent(..., 'armed')`）。
+- 宿主工具 `update_goal` 的 `resume` 走 `requireDirectHuman()`：本轮 open turn 里必须有 `user/message` 且
+  `source.kind==='user'`。自动续跑轮不满足，所以**模型永远拿不到这条**。
+
+**因此恢复必须发生在组件里，且分两段：**
+
+1. **重启前**：`captureGoalSnapshot(reason)` 在 `restart()`（立即重启与更新路由）和屏障 `commitBarrier`（真正
+   `controller.restart` 之前）各调一次，记录每个 live 对话的 `sessionId / running / goalId / phase / activation /
+   revision / roundsStarted / maxGoalRounds`，写 `state.goalSnapshot`。**不记录 objective**：快照不是改写通道。
+2. **新进程第一个 tick**：`restoreGoalSnapshot()` 用 `agents.roots()` 按 sessionId 找回 live agent，只处理
+   「重启前 phase==='active'」的条目，`resume(agent, {id, revision})` 后读回校验，写 `state.goalRestore`
+   （`resumed[] / skipped[]` 逐条原因、`resumed_count / verified_count`）。`heartbeat_activity` 的返回里也能
+   读到这份回执。
+
+**明确不做的三件事**：paused 不动（用户按的暂停）；blocked 不动（虽然服务把 blocked 列为可 resume，但那是
+人的结论，不是重启该改的状态）；complete 不复活。另外轮次耗尽 / agent 未载入 / 目标被改过 / resume 抛错都
+记成具名跳过原因；服务不可用最多等 30 个 tick 后写 `gaveUp:'services_unavailable'`，不无限重试。
+
+**`goal_restore` 工具**保留为兜底：参数为空且 sealed，只能恢复当前对话的 paused 或 active+disarmed 目标；
+续跑提示词与全部 heartBeat 工具描述都写明「目标由组件自动恢复，只有失败时才用它，不要用原生
+`create_goal`/`update_goal`」。

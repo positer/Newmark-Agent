@@ -1,5 +1,17 @@
 # Newmark Agent Overview
 
+## 2026-10-28 01:3x 重启后由组件硬性恢复 goal（0.3.54 源码候选，未安装）
+
+**指令**：「采用这个方式：强制在heartBeat重启前读取所有非归档活动对话的goal状态和对话运行状态，然后在heartBeat重启后硬性直接恢复，而不是通过prompt提示工具调用」+「先仔细调研dsh的代码方面如何实现…暂不安装重启」+「在heartBeat工具层面主动提示使用恢复工具而非原生set goal工具」。
+
+- **先读宿主实现**（解包 `app.asar`）：goal 的 **phase 持久、activation 进程级**——`dsh-goal` 每个新进程从 `disarmed` 起，session-start 边沿再发一次 `disarmed`；`dsh-goal-round-driver` 只在 `phase==='active' && activation==='armed'` 时续跑。`resume(agent, ref)` 的可恢复集合是 active/paused/**blocked**，要求 agent 是 registry 里的同一实例、ref 精确匹配、轮次未耗尽。宿主工具 `update_goal` 的 resume 仍要直接人类轮次。
+- **实现**：`captureGoalSnapshot()` 在两条重启路径（`restart()` 与屏障 `commitBarrier`）真正拉起 helper 之前，记录每个 live 对话的 `sessionId / running / goalId / phase / activation / revision / rounds`（**不含 objective**）→ `state.goalSnapshot`；新进程第一个 tick 由 `restoreGoalSnapshot()` 按 sessionId 找回 live agent，**只对重启前是 active 的目标** `resume()` 并读回校验 → `state.goalRestore` 回执（resumed/skipped + 逐条原因）。
+- **边界（刻意）**：paused 是用户的暂停、blocked 是人的结论——即使服务把 blocked 列为可 resume 也一律不动；complete 不复活；轮次耗尽 / agent 未载入 / 目标被改过 / resume 抛错都具名跳过；服务不可用最多等 30 tick（约 60 s）后写 `gaveUp:'services_unavailable'`。
+- **工具与提示词**：新增 `goal_restore`（参数为空且 sealed，只恢复当前对话的 paused 或 active+disarmed，不改写、不解除阻断、不跨对话）；续跑提示词与**全部 heartBeat 工具描述**改成「目标由组件自动恢复，只有失败时才用 goal_restore，不要用原生 create_goal/update_goal」。
+- **门禁**：`verify-heartbeat-goal-autorestore` **16/16**（7 条快照；重启后只 resume 那 1 条 active；paused/blocked/complete 不动；轮次耗尽与 agent 未载入各具名；幂等；服务不可用给放弃回执）、`verify-goal-restore` **23/23**、barrier **103/103**、变异 **34/34**、memorylab 分区修正后 **182/182**。
+- **状态**：按你的要求**只改代码、未安装、未重启**；运行中的 DSH 仍是 0.3.53。
+
+归档：`archive/20261028-013000-heartbeat-goal-autorestore/`。
 ## 2026-10-28 00:4x–01:0x 活体验收：goal 接续修好了；隐藏桌面滚轮改成「发给光标下的窗口」（0.3.53）
 
 **指令**：「正好有一个正在使用虚拟桌面且在 goal running 的对话，安装最新插件、重启并校验 goal 能否正确接续」→ 随后「虚拟桌面似乎没办法提交/触发滚轮滚动指令」→ 再一条：截图显示 `更新目标 · Error: this goal operation requires a direct human turn on a top-level agent`「仍然无法」。

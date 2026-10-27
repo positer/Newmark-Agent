@@ -261,7 +261,10 @@ await section('case 3', async () => {
   helper.commit();
   check('3- the legacy path restarts immediately: one prepare and one restart', s.calls.prepare === 1 && s.calls.restart === 1 && s.calls.commits === 1, JSON.stringify(s.calls));
   check('3- the legacy path creates zero intents', s.state().intent === null && (s.state().intents ?? []).length === 0, JSON.stringify({ intent: s.state().intent, intents: s.state().intents }));
-  check('3- the legacy path never enumerates participants (zero broadcast calls)', s.rootsCalls.n === 0, 'roots() called ' + s.rootsCalls.n + ' time(s)');
+  /* Since 0.3.54 the immediate path DOES read roots() once - to snapshot every live conversation's goal
+ * state before the restart. That is a snapshot, not a barrier: what this must still prove is that
+ * nobody is asked for a receipt. */
+  check('3- the legacy path asks nobody for a receipt (the roots read is the goal snapshot)', s.rootsCalls.n <= 1 && (s.calls.acknowledge || 0) === 0, JSON.stringify({ roots: s.rootsCalls.n, acknowledge: (s.calls.acknowledge || 0) }));
 });
 await section('case 3 mounted', async () => {
   const mounted = await mountHeartbeatTools(fs.mkdtempSync(path.join(ROOT_BASE, 'mount-')));
@@ -269,12 +272,10 @@ await section('case 3 mounted', async () => {
   const properties = Object.keys(restartTool?.parameters?.properties ?? {});
   check('3- heartbeat_restart declares the opt-in barrier arguments', ['broadcast', 'ackMode', 'ackTimeoutMs', 'onTimeout', 'force', 'reason'].every(name => properties.includes(name)) && restartTool?.parameters?.properties?.broadcast?.type === 'boolean', properties.join(', '));
   check('3- the barrier modes and bounds are the frozen ones', restartTool?.parameters?.properties?.ackMode?.enum?.join(',') === 'auto,agent' && restartTool?.parameters?.properties?.onTimeout?.enum?.join(',') === 'abort,proceed' && restartTool?.parameters?.properties?.ackTimeoutMs?.minimum === 1000 && restartTool?.parameters?.properties?.ackTimeoutMs?.maximum === 600000);
-  /* Five tools since the cancel tail. The COUNT is the point, not the list: a sixth tool without a
-   * case for it fails here exactly as a missing one does. */
   /* Six tools since 0.3.49 added the read-only heartbeat_activity probe. The COUNT is the point,
    * not the list: a tool without a case here fails exactly as a missing one does - which is how
    * this number went stale in the first place (0.3.49 added the tool, this check still said 5). */
-  check('3- the heartBeat component registers exactly its six tools', ['heartbeat_activity', 'heartbeat_after_restart', 'heartbeat_restart', 'heartbeat_restart_commit', 'heartbeat_restart_cancel', 'heartbeat_restart_ack'].every(name => mounted.tools.has(name)) && mounted.tools.size === 6, [...mounted.tools.keys()].join(', '));
+  check('3- the heartBeat component registers exactly its seven tools', ['goal_restore', 'heartbeat_activity', 'heartbeat_after_restart', 'heartbeat_restart', 'heartbeat_restart_commit', 'heartbeat_restart_cancel', 'heartbeat_restart_ack'].every(name => mounted.tools.has(name)) && mounted.tools.size === 7, [...mounted.tools.keys()].join(', '));
   const cancelTool = mounted.tools.get('heartbeat_restart_cancel');
   check('3- heartbeat_restart_cancel declares the required intentId and nothing else', Object.keys(cancelTool?.parameters?.properties ?? {}).join(',') === 'intentId' && cancelTool?.parameters?.required?.join(',') === 'intentId' && cancelTool?.parameters?.additionalProperties === false && cancelTool?.parameters?.properties?.intentId?.type === 'string', JSON.stringify(cancelTool?.parameters));
   const wiredCancel = await cancelTool.execute({ intentId: 'no-such-intent' }, { agent: { session: { id: 'mounted-requester' } } });
@@ -720,9 +721,9 @@ await section('case 15', async () => {
   s.add('WORK', { title: '工作中的对话', running: true });
   await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
   const text = String(s.state().tasks.find(t => t.destination === 'WORK')?.prompt ?? '');
-  check('15- the broadcast continuation reads the goal but never instructs a goal write', text.includes('get_goal') && !text.includes('update_goal{action') && text.includes('不要写目标') && text.includes('直接的人类轮次') && text.includes('paused'), JSON.stringify(text).slice(0, 260));
-  check('15- it sends the re-arm back to the human turn instead of attempting it', text.includes('继续') && !/update_goal\{action/.test(text), JSON.stringify(text).slice(0, 260));
-  check('15- a disarmed active goal is reported as such, and a paused goal is left paused', text.includes('disarmed') && text.includes('paused') && text.includes('保持暂停'), JSON.stringify(text).slice(0, 260));
+  check('15- the broadcast continuation restores through goal_restore, not the host goal tools', text.includes('get_goal') && text.includes('调用 goal_restore 补一次') && text.includes('不要调用 create_goal') && !text.includes('update_goal{action'), JSON.stringify(text).slice(0, 260));
+  check('15- it names the two states goal_restore is for, and the host refusal it avoids', text.includes('paused') && text.includes('disarmed') && text.includes('requires a direct human turn'), JSON.stringify(text).slice(0, 260));
+  check('15- it warns that goal_restore rewrites nothing and un-blocks nothing', text.includes('不要改写目标或解除阻断'), JSON.stringify(text).slice(0, 260));
   const s2 = scenario();
   s2.add('WORK2', { title: '工作中的对话', running: true });
   const prepared = await s2.beat.prepare('0.3.17');

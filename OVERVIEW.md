@@ -1,5 +1,21 @@
 # Newmark Agent Overview
 
+## 2026-10-27 21:1x 独立校验「发文件到微信」（用户自写实现的复核）
+
+**指令**：「检查并校验clawbot发文件途径的实现，我自己做的」。
+
+- **范围**：`newmate_wechat_send_file`（0.3.50 源码候选，用户自写）：`lib/wechat-file.js`（新，纯校验）、`lib/wechat-ilink.js` 的 `uploadFile/sendItem/fileItem/losslessIds`、`lib/wechat-channel.js` 的 `sendFile()`、`index.js` 用 `ctx.tools.register` 注册、`component.js` 把名字加进 `NEWMATE_RUN_TOOLS`/`NEWMATE_REQUEST_TOOLS`。
+- **三项独立证据**（不是复述作者的门禁）：① `npm pack @tencent-weixin/openclaw-weixin@2.4.10` 解包后逐字段对照，11 项全等（padding 公式 `ceil((n+1)/16)*16`、CDN `/upload?encrypted_query_param=&filekey=`、成功判据 200+`x-encrypted-param`、4xx 不重试/最多 3 次、`media_type=3`、`item type=4`、`aes_key=base64(hex 字符串 ASCII)`、`len` 字符串、一次一个 item、`no_need_thumb:true`、消息外壳），三处差异（thumb_*、run_id、`messageId` 其实是 client_id）均已核对为无损；② 13 条种植变异全部 KILLED 且还原字节一致；③ 用真实 token 第三次活体发文件：8576 B → 密文 **8592**（8576 是 16 的整数倍，只可能是多补一整块），`messageId=7520840536736198920`（19 位字符串），caption `7520840522739816584`。
+- **修掉两个缺陷（都在校验层，发送路径一行未改）**：
+  1. `homeDirs()` 只归一化了 home、没归一化条目 ⇒ `HOME_DIRS` 12 条里 6 条永远匹配不上。**本机实测 `~/.Newmark/newMate/wechat.json`（自己的 token）与 Edge `User Data` 都判成「可以发」**；改为 `normalize(home + '/' + entry)`，并加 2 条门禁用例（修前 `.ssh` 是全小写，恰好是唯一不需要归一化就匹配的形态，所以原门禁全绿）。种回修复 → 115/118 红。
+  2. padding 用例只有一个 **47 字节**长度，而 47 恰好使 `ceil((47+1)/16)*16 == ceil(47/16)*16` ⇒ 去掉 `+1` 的变异体 **102/102 照样全绿**。补 12 条长度扫描（含 16/32/48/64 整数倍）+ 真发一个 48 字节对齐文件断言 `filesize=64`；同一变异体现在 111/116 红。
+- **门禁**：`verify-newmate-wechat-channel` 102 → **118 PASS**；回归 12 个门禁全绿（chat / conversations / reply-and-repeat / report-display / config-panel / heartbeat / core-package / version-discipline / agent-loop / settings / initiative / todo-activation）。`verify-tool-output-boundary` 退出 2 是环境缺 DSH 安装路径，与本轮无关。
+- **残留风险（未修，已写进 docs/16 §19.6）**：token 文件的**副本**发得出去（判据是目录与文件名，不是内容）；软链接在本机建不出来所以未实测；caption 先发、文件失败会留一条无附件的说明；没有发件去重；图片按文件发会渲染成附件且 EXIF 原样带出；20 MiB 仍是自设值；`~/.Newmark` 整目录被拒（连自己写的报告也发不出去）。
+- **改动范围**：`lib/wechat-file.js` 一处 + `scripts/verify-newmate-wechat-channel.mjs` 三处，共 30 行新增 / 1 行删除（`evidence/independent-edits.patch`）。
+- **状态**：仍为源码候选 0.3.50，未打包、未安装、未重启；运行中的 DSH 是 0.3.49，`newmate_wechat_send_file` 现在**不在任何对话的工具清单里**，所以活体验证走的是协议半部。
+
+归档：`archive/20261027-212500-wechat-send-file-verify/`。
+
 ## 2026-10-27 18:1x 源码仓库推送 + npm latest 监控 + 提醒投递活体验收
 
 **指令**：「推送git并监控npm latest」（本轮第二次）。

@@ -112,7 +112,9 @@ NewMate 是一位亲近、务实的私人秘书式 Agent。它拥有独立聊天
 
 待办复用静默、暂停、输入与阅读保护，陪伴关闭时等待开启，所以**到期表示最早可激活时间，不保证精确到秒送达**。稳定任务身份和消息回执用于防止重启后重复激活或提醒；失败和运行中崩溃不会自动重试，已有旧提醒保留原语义。
 
-主要工具：`newmate_chat`、`newmate_task_status`、`newmate_memory_context`、`newmate_state`、`newmate_message`、`newmate_todo_add`、`newmate_todo_list`、`newmate_todo_cancel`、`newmate_mcp_info`。有宿主绑定的原对话时，`newmate_task` 可把具体后续任务交回该对话；模型参数不能另选目标。`newmate_state` 与 `newmate_task_status` 都带 `agentLoop`（运行中或上一轮的循环快照）。`newmate_search` 是 NewMate 的原生搜索入口，供它在用户明确要求查资料时调用。
+主要工具：`newmate_chat`、`newmate_task_status`、`newmate_memory_context`、`newmate_state`、`newmate_message`、`newmate_todo_add`、`newmate_todo_list`、`newmate_todo_cancel`、`newmate_mcp_info`、`newmate_wechat_send_file`。有宿主绑定的原对话时，`newmate_task` 可把具体后续任务交回该对话；模型参数不能另选目标。`newmate_state` 与 `newmate_task_status` 都带 `agentLoop`（运行中或上一轮的循环快照）。`newmate_search` 是 NewMate 的原生搜索入口，供它在用户明确要求查资料时调用。
+
+**发文件到微信。** 微信 ClawBot 通道连上之后，`newmate_wechat_send_file` 把一个本机文件发到用户微信：入参 `path`（必填）、`caption`（可选，另发一条文字消息）、`receiver`（可选，默认当前绑定的接收者）。它是**共享工具注册表**里的工具，任意 DSH 对话与 NewMate 自己的对话轮都能调用；自动检查轮次拿不到它（发出去的文件收不回来）。校验：普通文件、非空、≤20 MiB（**自设**保护值，不是协议声明）、可执行/安装类型拒绝、凭据目录与凭据文件拒绝。回执给出文件名、字节数、服务端 `messageId` 与 accepted/未确认的区分——**没有 messageId 就不声称送达**。
 
 NewMate 可以读取、新建和增量更新可信记忆、整理标签、添加短期记忆，并在用户明确请求时使用完整的 ComputerUse 工具组（`computer_use` 与只读的 `screen_capture`）。仍然不开放记忆删除、任意 Shell 执行或递归 Agent API；桌面权限按用户请求授予，不因记忆内容或自主推测而扩大。
 

@@ -461,3 +461,259 @@ todo:6bb2e6c1-4c7d-441e-9e5e-a16de4b9d74f ->
 
 这条记录同时确认了三件事：① 0.3.48 的 peer 回退（`lastPeer` 至今是 `null`，但 `state.ilinkUserId=o9cq80…@im.wechat` 顶住了）真的生效；② 水印逻辑没有越界（`at` 远大于 `reminderWatermark=1793094572588`）；③ 提醒路径与回复路径共用同一张 `sent` 表却互不干扰（`reminder:true` 是提醒自己的标记）。结论以本机实测为准，**别人机器上的 0.3.48 仍未验证**。
 
+
+
+---
+
+## 18. 发文件到微信：`newmate_wechat_send_file`（0.3.50 源码候选，2026-10-27 20:4x）
+
+文本通道的验收停在 §17.5（纯文字提醒真的到了手机）。本节补的是**另一种下行**：把一个本机文件发到用户微信。
+
+### 18.1 结论先说
+
+| 问题 | 答案 | 级别 |
+|---|---|---|
+| ClawBot/iLink 有没有文件上传接口 | **有**：`POST /ilink/bot/getuploadurl`（`media_type=3` 为文件）+ 媒体 CDN `POST .../upload` + `sendmessage` 的 `type:4 file_item` | 【源码】官方包 `@tencent-weixin/openclaw-weixin@2.4.10` 的 `src/cdn/upload.ts`、`src/cdn/cdn-upload.ts`、`src/messaging/send.ts`（本轮 `npm pack` 解包实读） |
+| 真的能发到手机吗 | **服务端接受并分配了 message_id**（两次活体，见 §18.6）；手机侧可见性要用户确认，我不代答 | 【实测】服务端受理；【未验证】客户端渲染 |
+| 工具是不是全局的 | 是：`components/newmate/index.js` 用 **`ctx.tools.register`**（共享工具注册表），与 `newmate_todo_add`/`newmate_chat` 同一层 | 【源码】+ 门禁断言（§18.7） |
+
+### 18.2 契约
+
+```json
+{
+  "path":     "<必填> 绝对路径，或相对于调用方会话工作区的路径",
+  "caption":  "<可选> 一句话说明（≤500 字），作为独立 text 消息先发",
+  "receiver": "<可选> 微信接收者 id；缺省 = 最新入站 peer → 扫码登录用户"
+}
+```
+
+成功回执（每个字段都是可核验的事实，不是一个 ok:true）：
+
+```json
+{
+  "ok": true,
+  "file": { "name": "NewMate 发文件自测.txt", "bytes": 370, "path": "C:\\...\\NewMate 发文件自测.txt" },
+  "receiver": "o9cq80...@im.wechat",
+  "caption": "【自测】...", "captionMessageId": "7520828719079110280",
+  "messageId": "7520828729799831816",
+  "receipt": { "accepted": true, "serverMessageId": "7520828729799831816", "ret": null, "state": "accepted_with_message_id" },
+  "upload": { "filekey": "7e792da4...", "cipherBytes": 384, "attempts": 1 }
+}
+```
+
+**messageId 是字符串，不是数字。** 它线上是 uint64，而 JSON.parse 对超过 2^53 的整数会取整——第一次活体实测就撞上了：返回的 id 是 `7520828416397238000`，真实 id 的末几位永远拿不回来，等于"有一个 id 但核验不了这条消息"。修法是官方客户端 `parseWeixinApiJson` / `LOSSLESS_ID_FIELDS` 的同一意图（把 id 字段当字符串），这里收窄成"解析后按原始文本把 message_id / svr_id 的数字抠回来"，`sendText` 与 `sendItem` 两条路都走它。
+错误码（每个都是独立文案，不合并成"发不出去"）：
+
+| code | 含义 |
+|---|---|
+| `file_not_found` / `not_a_regular_file` / `file_empty` / `file_unreadable` / `file_changed` | 路径与文件本身的问题（目录、设备、0 字节、检查与读取之间被改写） |
+| `file_too_large` | 超过 **20 MiB**，回执同时给出 bytes 与 limitBytes |
+| `file_type_rejected` | 可执行/安装类型（exe msi msp msix appx com scr pif cpl dll sys drv bat cmd vbs vbe hta reg lnk url ps1 psm1 wsf wsh jar apk ipa） |
+| `path_forbidden` | 凭据目录（`~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.dsh`、`~/.Newmark`、浏览器配置目录…）或凭据文件（`.env*`、`*.pem`、`*.key`、`*.pfx`、`*.p12`、`*.ppk`、`id_rsa`、`Cookies`、`Login Data`、`mcp-token`…） |
+| `wechat_not_connected` / `wechat_session_paused` / `receiver_unavailable` | 通道侧：没扫码、errcode=-14 暂停、拿不到接收者 |
+| `upload_url_failed` / `upload_url_refused` / `upload_url_missing` / `upload_url_timeout` | getuploadurl 的三个失败面 |
+| `cdn_upload_rejected` / `cdn_upload_failed` | CDN 4xx（不重试）与重试 3 次后仍失败 |
+| `caption_failed` / `send_failed` / `send_refused` | 说明文字失败、sendmessage 传输失败、服务端 ret 非 0 |
+
+### 18.3 协议三步（字段级，本轮解包复核）
+
+1. `POST /ilink/bot/getuploadurl`（Bearer，15 s）
+
+   ```json
+   { "filekey": "<32 hex>", "media_type": 3, "to_user_id": "<接收者>",
+     "rawsize": 370, "rawfilemd5": "<明文 MD5>", "filesize": 384,
+     "no_need_thumb": true, "aeskey": "<32 hex>",
+     "base_info": { "channel_version": "2.4.10", "bot_agent": "..." } }
+   ```
+
+   → `{ ret, upload_param?, upload_full_url? }`；filesize 是**填充后**的密文字节数（`ceil((rawsize+1)/16)*16`）。
+
+2. `POST <upload_full_url 或 {cdn}/upload?encrypted_query_param=<upload_param>&filekey=<filekey>>`
+
+   `content-type: application/octet-stream`，正文 = AES-128-ECB+PKCS#7(明文, aeskey)；**200 且响应头带 x-encrypted-param 才算成功**，4xx 立即失败，5xx 重试（官方 3 次）。
+
+3. `POST /ilink/bot/sendmessage`（message_type 2、message_state 2、from_user_id 空串）：
+
+   ```json
+   { "type": 4, "file_item": { "media": { "encrypt_query_param": "<x-encrypted-param>",
+     "aes_key": "<base64(hex 字符串的 ASCII 字节)>", "encrypt_type": 1 },
+     "file_name": "NewMate 发文件自测.txt", "len": "370" } }
+   ```
+
+   aes_key 这里有个**必须照抄的怪点**：官方是 `Buffer.from(uploaded.aeskey).toString('base64')`，aeskey 是 hex **字符串**，所以 base64 的是那 32 个 ASCII 字符，不是 16 字节原始 key。
+
+**说明文字是另一条请求**：item_list 一次只装一个 item（官方 `send.ts` 的 sendMediaItems），所以 caption 先发一条纯 text，再发文件，两条各自一个 client_id。
+
+### 18.4 校验与那个 20 MiB
+
+**上限是自设的，不是协议声明的。** 官方客户端 2.4.10 全仓没有任何文件大小限制（maxFileSize / too large 命中 0 处），协议规格也没写；本项目文档里唯一有明确数值的文件上限来自**企业微信** webhook 的 20 MB（`docs/15` §3.1，那是另一条通道）。取这个数是因为：宁可本地先拒，也不要在传了一半之后让服务端说不。回执与错误文案都明确写"本工具自设的保护值"——**不要把它当成 iLink 的契约**。
+
+路径先 statSync 再 realpathSync，凭据目录按**真实路径**比对（软链接与 `~` 写法绕不过去），文件名规则独立一条。越权一律报 `path_forbidden`，不静默降级、不"只发个名字"。
+### 18.5 落点（改了哪几个文件）
+
+| 文件 | 改动 |
+|---|---|
+| `components/newmate/lib/wechat-file.js`（新） | 纯校验：路径解析、普通文件、大小、类型、凭据路径；不发任何东西，因此可以脱离网络测试 |
+| `components/newmate/lib/wechat-ilink.js` | `uploadFile`（getuploadurl + CDN 密文 + 3 次重试）、`sendItem`（一条消息一个 item）、`fileItem`（type-4 item 形状）、`losslessIds`（uint64 id 精度）；`createIlink` 增 `getCdnBaseUrl` |
+| `components/newmate/lib/wechat-channel.js` | `sendFile()`：接收者规则、先校验后读文件、caption 先发、回执与账本（stats.files / stats.fileFailed / lastFile）；stats 改为**合并**读取（旧状态文件缺 files 字段时不再返回 undefined） |
+| `components/newmate/index.js` | `ctx.tools.register` 注册 `newmate_wechat_send_file`（共享注册表） |
+| `components/newmate/component.js` | 名字进 `NEWMATE_RUN_TOOLS`，并进 `NEWMATE_REQUEST_TOOLS`（自动检查轮次拿不到） |
+| `scripts/verify-newmate-wechat-channel.mjs` | 假 iLink 加 getuploadurl + CDN /upload（真解密回环）、上传与字段断言 14 条、错误分支 11 条、注册层 6 条 |
+
+### 18.6 活体自测（两次，含一个被修掉的缺陷）
+
+用活体 `~/.Newmark/newMate/wechat.json` 的 token（phase=connected、botId=af330b8418f5@im.bot）直接驱动 `lib/wechat-ilink.js` 的协议半部；**脚本只读状态文件、不写**，避免与正在跑的接收循环抢 wechat.json。
+
+| # | 时间（本地） | 文件 | 字节 | 密文 | messageId | 结果 |
+|---|---|---|---|---|---|---|
+| 1 | 2026-10-27 20:46:55 | NewMate 发文件自测.txt | 370 | 384 | `7520828416397238000`（**取整后的**） | 服务端受理；同批暴露 message_id 精度缺陷 |
+| 2 | 2026-10-27 20:48:11 | NewMate 发文件自测.txt | 370 | 384 | `7520828729799831816` | 服务端受理，id 精确；caption `7520828719079110280` |
+
+- 两次的 sendmessage 响应都**没有 ret**（hasRet:false）——与 §13 的结论一致：没有 ret 不等于没发出去，也不等于送达。回执因此把 accepted 与 messageId 分开陈述，状态是 accepted_with_message_id。
+- 上传都是第 **1** 次尝试成功；getuploadurl 没有返回 upload_full_url，客户端按 `{cdn}/upload?...` 自己拼（这条分支门禁里也钉住了）。
+- 文件 sha256（第 2 次）：`BE23F8329291E8BD821E7822DE5EF09C1EBA269B358151859C0232CEFF9B7E0C`。
+- **手机侧是否能看到这个文件，要用户确认。** `docs/15` §2.6 记录过 2026-03 的二手实测"文件只进不出"，与协议里完整的 getUploadUrl + file_item 管线互相矛盾；本轮服务端明确受理并发了 id，这是目前能拿到的最强证据，但**不等于**用户看见。
+
+### 18.7 门禁 `verify-newmate-wechat-channel.mjs`：51 → **102 PASS**
+
+新增覆盖（离线，假 iLink + 假 mate）：
+
+- getuploadurl 请求体九个字段（media_type、to_user_id、rawsize、rawfilemd5、filesize 的填充公式、no_need_thumb、filekey/aeskey 形状、base_info）；
+- **CDN 回环**：把收到的密文用声明里的 aeskey 解回明文，比对字节数与 MD5——证明"声明的是这份文件、传上去的也是这份文件"；
+- file_item 五个字段（encrypt_query_param、aes_key 的 base64-of-hex、encrypt_type、file_name、len 字符串）、from_user_id 空串、message_state 2、沿用入站 context_token；
+- caption 是**独立消息且在文件之前**、两条各一个 client_id、每条只装一个 item；
+- 错误分支 11 条（含"凭据目录里的普通文件"——按目录拒绝而不是按文件名，用 USERPROFILE 指向临时 home 来测）；CDN 4xx 不重试；统计与 lastFile 落盘、状态文件不含正文与 aeskey；
+- **message_id 精度**：假服务端用原始 JSON 文本回一个 19 位 id，断言客户端返回的是**字符串原文**（把修复前的行为种回去就会红）；
+- 注册层 6 条：ctx.tools.register（不是 privateTools）、描述写明 20 MiB 与 messageId、execute 从会话 cwd 解析、进 NEWMATE_RUN_TOOLS、自动轮次没有、用户轮次有。
+- **挂载探针**（`scripts/lib/mount-newmark-core.mjs` 真实挂载核心行，输出 `archive/20261027-204541-wechat-send-file/evidence/mount-probe.log`）：注册表 **37 个工具**、`newmate_*` 12 个，`newmate_wechat_send_file` 与 `newmate_todo_add` **在同一张表里**；直接调用它的 execute 得到两条结构化拒绝（`file_not_found`、`wechat_not_connected`）。这证明的是「插件挂载后工具真的在共享注册表里、execute 是活函数」，**不等于**运行中的 DSH 已经加载它——那需要安装并重启。
+
+回归：verify-newmate-chat 25 / reply-and-repeat 15 / verify-newmark-core-package 54 / verify-version-discipline 12 / verify-newmate-settings 全绿（后者须在 `Newmark Agent/` 下跑，见 §18.9）。
+
+### 18.8 未验证与边界
+
+1. **手机侧可见性未由我确认**（需要用户看一眼微信）。
+2. **未打包、未安装、未重启**：当前运行中的 DSH 仍持有 0.3.49，所以这个工具**现在还不在任何对话的工具清单里**；要让它出现必须 npm pack → 插件安装 → 重启 DSH（会结束当前会话）。
+3. **服务端文件上限未知**：20 MiB 是本仓库自设的保护值，不是 iLink 声明；真要发大文件得先测一次服务端到底接多少，否则只是把失败提前到本地。
+4. 图片/视频/语音三种 item（type 2/3/5）**没有实现**：本轮只做"文件"；图片按文件发也能到，但手机侧渲染成附件而不是图片。
+5. 群聊不支持（官方只声明私聊）；一条入站约 10 条回复的上限没有重新标定，发文件同样消耗下行条数。
+6. 一个微信号 = 一个对话：receiver 只能覆盖到"这个 bot 认识的用户 id"，没有通讯录能力。
+
+### 18.9 备注：`verify-newmate-settings.mjs` 的 cwd 依赖
+
+它里面写的是 `path.resolve('Newmark2DSH/packages')`，所以只在 `Newmark Agent/` 下跑才通过；在 `Newmark2DSH/` 下跑会报一个 `Newmark2DSH/Newmark2DSH/...` 的路径错误。这是**既有问题**（本轮未改它），记在这里免得下次被当成新回归。
+
+---
+
+## 19. 独立校验：发文件这条路的第二轮（2026-10-27 21:0x–21:4x）
+
+§18 是作者写的。这一节是我按「不看作者的门禁，先自己造证据」做的第二轮：**重新 npm pack 官方包逐字段对照**、**对门禁做种植变异**、**用真实 token 再发一次文件**。结论：协议保真度没问题，**但校验层有两个缺陷**，都已修好并钉进门禁。
+
+### 19.1 改动范围
+
+只动两个文件，改动全文见归档 `archive/20261027-212500-wechat-send-file-verify/evidence/independent-edits.patch`（30 行新增 / 1 行删除）：
+
+| 文件 | 改了什么 | 为什么 |
+|---|---|---|
+| `lib/wechat-file.js` | `homeDirs()` 里对拼好的目录做 `normalize`（大小写归一） | 见 19.4-A，凭据目录 12 条里有 6 条是死的 |
+| `scripts/verify-newmate-wechat-channel.mjs` | 加 `aesEcbPaddedSize` 的 import、12 条长度扫描、一个 48 字节对齐文件的活路、2 条大小写用例 | 见 19.4-B 与 A 的门禁用例 |
+
+**发送路径本身（`wechat-ilink.js` / `wechat-channel.js` / `index.js` / `component.js`）一行未改。**
+
+### 19.2 协议保真度：与官方 2.4.10 解包逐字段对照
+
+`npm pack @tencent-weixin/openclaw-weixin@2.4.10` → 读 `dist/src/cdn/aes-ecb.js`、`cdn-url.js`、`cdn-upload.js`、`cdn/upload.js`、`api/types.js`、`api/api.js`、`messaging/send.js`、`auth/accounts.js`。摘录见归档 `evidence/official-2.4.10-excerpts.txt`。
+
+| 项目 | 官方 2.4.10 | 本实现 | 判定 |
+|---|---|---|---|
+| 密文长度（PKCS#7） | `Math.ceil((n + 1) / 16) * 16` | 同 | **全等** |
+| 加密 | `aes-128-ecb`，PKCS#7 | 同 | **全等** |
+| CDN 上传地址 | `{cdn}/upload?encrypted_query_param=<upload_param>&filekey=<filekey>` | 同 | **全等** |
+| 上传成功判据 | HTTP 200 且响应头有 `x-encrypted-param`；4xx 立即失败，最多 3 次 | 同 | **全等** |
+| CDN base | `https://novac2c.cdn.weixin.qq.com/c2c` | 同 | **全等** |
+| `UploadMediaType.FILE` | `3` | `3` | **全等** |
+| `MessageItemType.FILE` | `4` | `4` | **全等** |
+| file_item | `{media:{encrypt_query_param, aes_key: base64(hex 字符串的 ASCII), encrypt_type:1}, file_name, len: String(明文字节数)}` | 同 | **全等** |
+| 一次请求一个 item | 是（`sendMediaItems` 每个 item 一条请求） | 同 | **全等** |
+| `no_need_thumb` | `true`（FILE 不要缩略图） | 同 | **全等** |
+| 消息外壳 | `from_user_id: ''`、`message_type: 2`、`message_state: 2` | 同 | **全等** |
+
+三处**差异**，都不是缺陷，但要知道：
+
+1. 官方 `getUploadUrl` 的请求体还带 `thumb_rawsize / thumb_rawfilemd5 / thumb_filesize`，值为 undefined 时 `JSON.stringify` 会省略；本实现根本没有这三个键——**等价**。
+2. 官方 `sendMessageItemWeixin` 带 `run_id: opts.runId`，没有 run 时同样是 undefined 被省略；本实现不带——**等价**。
+3. 官方 `sendMessageItemWeixin` 返回的 `messageId` 其实是**客户端自己生成的 client_id**，服务端 id 另放 `serverMessageId`；本实现的 `messageId` 就是**服务端** `message_id`（另外在回执里给 `serverMessageId`）。语义更强，但两边的同名字段**来源不同**，读代码时不要按官方那套理解。
+
+### 19.3 活体第三次（本轮）：一个 16 对齐的文件
+
+只驱动协议半部（`uploadFile` / `sendText` / `sendItem`），**脚本只读状态文件、不写**——避免与正在跑的接收循环抢 `wechat.json`。
+
+| 时间（本地） | 文件 | 明文 | 密文 | 上传 | messageId | hasRet |
+|---|---|---|---|---|---|---|
+| 21:35 | `wechat-file.js` | 8 576 B | **8 592 B** | 7 484 ms，第 1 次成功 | `7520840536736198920`（19 位，字符串） | `false` |
+
+**8 576 正好是 16 的整数倍**，所以 8 592 只可能是「补满一整块」的结果：这一条在活体上把 padding 公式的边界钉住了（少加 1 的写法会声明 8 576）。说明文字先发一条（`7520840522739816584`），文件后发一条，两条各有 id。状态文件的 mtime 有推进是**运行中的接收循环自己在存**，不是这个脚本写的。
+
+### 19.4 校验层的两个缺陷（本轮发现，已修）
+
+**A. 凭据目录比对只归一化了 home，没归一化条目 ⇒ 12 条里 6 条永远匹配不上。**
+
+`normalize()` 会 lower，而 `HOME_DIRS` 是大小写混写的常量。于是 `.ssh`/`.gnupg`/`.aws`/`.azure`/`.dsh`/`.config/gcloud`（全小写）拦得住，**`.Newmark`、`AppData/Local/Google/Chrome/User Data`、`AppData/Local/Microsoft/Edge/User Data`、`AppData/Roaming/Mozilla/Firefox/Profiles`、`AppData/*/Microsoft/Credentials` 全部失效**。本机实测（修前）：
+
+| 探测 | 修前 | 修后 |
+|---|---|---|
+| `~/.Newmark/newMate/wechat.json`（**自己的 token**） | `OK`（可以发出去） | `path_forbidden` |
+| `AppData/Local/Microsoft/Edge/User Data/Default/Preferences` | `OK` | `path_forbidden` |
+| `C:\USERS\…\.NEWMARK\…`（大写写法） | `OK` | `path_forbidden` |
+| `~/.ssh/notes.txt`（全小写条目） | `file_not_found`（路径不存在，规则本身是好的） | 同 |
+
+判据顺序是「先按真实路径判目录、再按文件名判文件」，所以 `BLOCKED_NAMES` 只能挡住 `Cookies`/`Login Data`/`logins.json` 这类**点了名的**文件；`Local State`、`History`、profile 里的任意文件都挡不住——**这正是浏览器配置目录存在的意义**。
+
+修法一行：`normalize(home + '/' + entry)`。门禁加两条（`~/.Newmark` 里的 token 文件、Chrome `User Data` 里的文件），把修复种回去 → **115/118，红的正是这两条**。
+
+**原门禁为什么没抓到**：它的用例只有 `.ssh`——恰好是唯一「不需要归一化也能匹配」的形态。这与 19.4-B 是同一类错误：**用一个恰好处在敏感点之外的值去证明敏感点**。
+
+**B. padding 公式的门禁用例只有一个长度，而那个长度恰好是两种写法相等的情形。**
+
+用例写的是 47 字节：`ceil((47+1)/16)*16 = 48`，而 `ceil(47/16)*16 = 48`——**相等**。所以把 `+1` 去掉的变异体照样 **102 / 102 全绿**。
+
+修法：按长度扫 `1 15 16 17 31 32 33 47 48 63 64 1000` 十二条（**整数倍时两种写法必须不同**），并真的发一个 48 字节文件、断言 `filesize = 64` 且与实际上传的密文长度一致。修后同一个变异体 → **111 / 116 红**。
+
+### 19.5 变异清单（13 条，全部 KILLED，还原字节一致）
+
+| # | 变异 | 修前 | 修后 |
+|---|---|---|---|
+| 1 | `aesEcbPaddedSize` 少加 1 | **102/102 SURVIVED** | 111/116 KILLED |
+| 2 | `media_type` 3 → 1 | KILLED | KILLED |
+| 3 | `item type` 4 → 2 | KILLED | KILLED |
+| 4 | `aes_key` 改成 16 字节原始 key 的 base64 | KILLED | KILLED |
+| 5 | `len` 改成数字 | KILLED | KILLED |
+| 6 | `sendItem` 不做 uint64 无损解析 | KILLED | KILLED |
+| 7 | `encrypt_type` 1 → 2 | KILLED | KILLED |
+| 8 | `no_need_thumb` → false | KILLED | KILLED |
+| 9 | 凭据目录判据整段关掉 | KILLED | KILLED |
+| 10 | 可执行类型黑名单整段关掉 | KILLED | KILLED |
+| 11 | 工具名从 `NEWMATE_RUN_TOOLS` 拿掉 | KILLED（100/102） | KILLED |
+| 12 | `execute` 不再从会话 cwd 解析相对路径 | KILLED | KILLED |
+| 13 | `homeDirs` 条目不做归一化（即缺陷 A 原样） | — | **115/118 KILLED** |
+
+每次变异跑完都用 sha256 校验文件字节一致还原（5 个文件全部 `restored=true`）。证据：`evidence/mutation-suite.txt`、`mutation-run-group.txt`、`mutation-homedirs.txt`。
+
+### 19.6 残留风险（未修，写清楚）
+
+1. **副本不受保护**：把 `wechat.json` 复制到桌面，就能发出去——判据是目录与文件名，不是内容。真正的边界是「这台机器上任何不在黑名单里的文件都能发」，这一点应该在工具描述与用户预期里说清。
+2. **软链接未在本机实测**：这台机器建符号链接报 `EPERM`，所以「软链接绕过目录判据」这条只有代码路径（`realpathSync`）支撑，没有实测证据。
+3. **说明文字先于文件**：文件那一步失败时，用户会收到一条没有附件的说明，且没有针对文件的自动重试。
+4. **没有发件去重**：同一个工具调用调两次就发两次——这是刻意的（与「回复」不同，回复有幂等账本），但调用方要知道。
+5. **图片按文件发**会渲染成附件而不是图片（`type: 2 image_item` 未实现）；EXIF 等元数据原样带出。
+6. **20 MiB 仍是自设值**，服务端真实上限未知（§18.4）。
+7. **`~/.Newmark` 整目录被拒**：连 NewMate 自己写出的报告放在那里也发不出去——安全默认，但要知道。
+
+### 19.7 门禁与回归
+
+- `verify-newmate-wechat-channel`：**118 / 118 PASS**（作者交付时 102，本轮 +16：12 条长度扫描、2 条大小写、1 条对齐文件活路、1 条密文长度一致性）。
+- 回归全绿（exit 0）：`verify-newmate-chat`、`verify-newmate-conversations`、`verify-newmate-reply-and-repeat`、`verify-newmate-report-display`、`verify-config-panel`、`verify-newmate-heartbeat`、`verify-newmark-core-package`、`verify-version-discipline`、`verify-newmate-agent-loop`、`verify-newmate-settings`、`verify-newmate-initiative`、`verify-newmate-todo-activation`。
+- `verify-tool-output-boundary` 退出 2 是**环境缺 DSH 安装路径**（`PREMISE ABSENT`），与本轮无关。
+
+### 19.8 状态
+
+仍是**源码候选 0.3.50**：未打包、未安装、未重启。运行中的 DSH 持有 0.3.49，所以 `newmate_wechat_send_file` 现在仍不在任何对话的工具清单里；本节的活体验证走的是**协议半部**，不是那个工具本身。手机侧是否看得见那个文件，仍然要用户看一眼微信。

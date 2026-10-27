@@ -1,5 +1,14 @@
 # Newmark2DSH taste
 
+## 2026-10-27 外部协议、不可撤回动作与「自设阈值」的写法（0.3.50 发文件）
+
+- **协议字段以上游实现原文为准，不以二手文档为准。** 本轮 getuploadurl / CDN 上传 / file_item 的字段是从官方包 `@tencent-weixin/openclaw-weixin@2.4.10` 解包实读的（`src/cdn/upload.ts`、`src/cdn/cdn-upload.ts`、`src/messaging/send.ts`）。写文档时给到文件级出处，别写「据某篇文章」。
+- **别把另一条通道的数值当成这条通道的契约。** 20 MiB 是**自设**保护值（唯一有出处的 20 MB 属于企业微信 webhook），iLink 全仓没有任何文件大小限制。凡是阈值，三件套必须齐：数值、依据、「自设 / 协议声明」的标注；缺一项就当它没有依据。
+- **uint64 id 一律按字符串处理。** `message_id` 线上是 uint64，`JSON.parse` 对超过 2^53 的值会取整——实测回来的 id 末几位已经丢了，等于「有 id 但核验不了这条消息」。官方做法（`parseWeixinApiJson` / `LOSSLESS_ID_FIELDS`）是把这些字段当字符串；本仓库照此收窄实现，并在门禁里用原始 JSON 文本回一个 19 位 id 钉住它（种回旧行为必红）。
+- **不可撤回的动作，校验在发送之前，且校验模块不联网。** 发文件先过 `wechat-file.js`（普通文件、大小、类型、凭据路径），再读字节、再上传；「凭据目录」按 realpathSync 之后的路径比对而不是按文件名，否则软链接与 `~` 写法能绕过去。越权报独立错误码，不静默降级。
+- **回执只陈述能核验的事实。** 服务端可能不回 ret（实测两次都没有），所以 accepted 与 messageId 分开给，状态写成 accepted_with_message_id / accepted_without_message_id；没有 id 就不说「送达」。
+- **新的外部动作工具：注册层与授权层分开决定。** 工具用 `ctx.tools.register` 进共享注册表（任意对话可见），同时要明确它是否属于「用户必须明确要求」的类别（`NEWMATE_REQUEST_TOOLS`）——发文件进这一类，自动检查轮次拿不到；两条都要在门禁里有断言，否则「全局可用」和「不该自动可用」会同时失去约束。
+
 ## 2026-10-27 外部信道只复用既有面
 
 - 接外部渠道不改 `components/newmate/**`：入站用页面的 `chat` 动作（含同一 `threadId`），出站读 `messages[].plain`，steer/queue/授权语义天然一致。

@@ -1,5 +1,19 @@
 # Newmark Agent Overview
 
+## 2026-10-28 01:2x 活体验收：0.3.54 装盘重启后，组件自己把 goal 重新 arm 了
+
+**指令**：「装 0.3.54 → 重启一次 → 重启后直接读」。
+
+- **安装**：0.3.54（备份 0.3.53 到 `.newmark-install-backups/0.3.53-before-0.3.54-20261028-011611`）。
+- **重启 #1**（进程里仍是 0.3.53）：`goalSnapshot=<null>`、`goalRestore=<null>`——**预料之中**，快照由「重启前那个进程」写，而它还没有 capture 代码。这条也再次印证了「改重启前行为 → 必须在已装新版的进程里再重启一次」。
+- **重启 #2**（进程里是 0.3.54）：`heartbeat_activity.goal_restore` 直接读出回执——
+  `resumed[0] = { sessionId: c3a22d88…, goalId: goal-50a3f973…, before: {active, disarmed, round 8}, after: {active, **armed**, round 8}, verified: true }`，`attempts: 1`，`skipped: [{ 本会话, not_active_before_restart }]`。
+- **目标对话自己的读回**（重启后 `get_goal`）：`{ phase:"active", roundsStarted:8, maxGoalRounds:200 }`，`activation:"armed"`。
+- **调用面**：重启后 `update_goal` 派发 **0** 次（此前每次重启必撞一次拒绝），`goal_restore` **0** 次（不需要模型动手）。
+- **尚未观察到新的 `<goal_round>`**：arming 已完成，round 由 `dsh-goal-round-driver` 在 agent 空闲时 admit；采样时它还在接续轮里工作。这是驱动器的正常时序。
+- **结论**：重启前快照 + 重启后组件直接 `resume` 的两段式在真机成立，恢复过程没有任何模型轮次参与。
+
+归档：`archive/20261028-013000-heartbeat-goal-autorestore/`（含回执原文与两段会话证据）。
 ## 2026-10-28 01:3x 重启后由组件硬性恢复 goal（0.3.54 源码候选，未安装）
 
 **指令**：「采用这个方式：强制在heartBeat重启前读取所有非归档活动对话的goal状态和对话运行状态，然后在heartBeat重启后硬性直接恢复，而不是通过prompt提示工具调用」+「先仔细调研dsh的代码方面如何实现…暂不安装重启」+「在heartBeat工具层面主动提示使用恢复工具而非原生set goal工具」。

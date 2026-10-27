@@ -427,3 +427,37 @@ connect 出二维码（PNG 头校验）→ confirmed 落 token → 入站交给 
 **回归**：chat 25、settings、config-panel 37、client 123、reply-and-repeat 15、package 54、version-discipline 12 全绿。
 
 **状态**：**源码候选 0.3.44，未安装、未重启**——安装并重启会结束当前会话，需用户确认后再做。
+
+---
+
+## 17. 三个活体缺陷与修复（0.3.45–0.3.48，2026-10-27）
+
+这一节记的是信道**上线之后**由用户实测发现的三件事。共同点：三条都不是设计错，而是**接线的细节错**，而且两条的根因都是「改错了地方但没报错」。
+
+| # | 用户看到的现象 | 根因（落到具体行） | 修复 |
+|---|---|---|---|
+| 1 | 一次任务的回复被发到微信 **3 次**（内容完全相同） | `forwardReplies()` 在 `await ilink.sendText()` **之后**才 `delete awaiting[taskId]`；1 s 的定时器与约 1 s 的发送重叠，于是每个 tick 都认为「这个任务还没回」 | claim-before-await（发送前先摘出 awaiting）+ `sent[taskId]` 幂等表 + single-flight 标志，三层各挡一次 |
+| 2 | DSH 重启后连接**看起来在但收不到** | 0.3.45 给 `index.js` 打补丁时锚点不匹配，`String.replace` **静默无效**，`wechat.resume()` 从未接线（证据：`receiveSince=0`、`lastPollAt=0`）；另外接收循环 5 次传输失败就放弃 | 0.3.46 重新接线 + **4 条源码契约断言**（`index.js` 必须出现 `wechat.resume()` 等）；循环改无限重试、指数退避封顶 30 s、只有 `errcode=-14` 停手 |
+| 3 | 纯文字提醒**没有**发到微信 | 提醒的投递是 assistant 消息 `id='todo:<todoId>'`，**没有 task**，回复路径永远看不到它。0.3.47 连修两次都失败：`reminderWatermark` 的初始化锚点不存在；`lastPeer` 在升级后从未写入 ⇒ 每条提醒被永久标 `skipped:'no_peer'` | 0.3.48：`save()` **之后**初始化水印（读回复核）、peer 回退到 `state.ilinkUserId`（与 `lastPeer.to` 同一身份 `o9cq80…@im.wechat`）、无 peer 时**不标记**（留给下一轮）、30 分钟时效守卫、`status().forwarded` |
+
+**缺陷 1 的证据**（活体，0.3.44）：`wechat.json` 里 3 个 task、`stats.replies=8`，而 `sent` 只有 3 个 key——同一 taskId 被写了 3 次并不是覆盖，而是**3 次真实发送**（每次一个 messageId）。离线可复现：把假 iLink 的 `sendText` 拖到 1.3 s，修复前 `sends=2`、修复后 `sends=1`；活体修复后 `replies 8→9` 只多一个 `sent` key。门禁里这条被钉成断言（慢发送 + 重叠 tick ⇒ 仍只发一次）。
+
+**缺陷 2 的证据**：重启后 `GET /newmark-newmate` 的 `wechat` 块里 `receiveSince` 与 `lastPollAt` 都是 `0`，即状态文件在、循环没跑。这类「`String.replace` 打空」在本仓库已经造成**两次**出厂缺陷，因此现在的规矩是：补丁之后**必须 grep 回插入的符号**，并在门禁里加源码契约断言（`verify-newmate-wechat-channel.mjs` 4 条）。
+
+**缺陷 3 的证据**：`wechat.json` 的 `sent` 里没有**任何** `todo:` 前缀的真实发送记录，只有 4 条 `skipped:'no_peer'`；而 `newmate_todo_list` 显示那几条待办状态是 `delivered`（页面/气泡已投递），所以问题不在待办，而在「提醒不走回复路径」这个事实。
+
+**门禁**：`scripts/verify-newmate-wechat-channel.mjs` 30 → **51 PASS**（新增：慢发送去重、幂等表、重启只 `resume()`、`-14` 停手、升级复用密钥、断网容忍、4 条接线契约、提醒转发、无 `lastPeer` 时回退 `ilinkUserId`）。
+
+**活体状态（2026-10-27 18:15–18:17）**：`phase=connected`、`botId=af330b8418f5@im.bot`、`lastPollAt` 每秒推进（接收循环活着）、`sent` 里 7 条真实回复各自唯一 taskId；4 条 `todo:*` 全是 0.3.47 时期的 `skipped:no_peer`，时间（`1793093969044`…`1793094124179`）都**早于** `reminderWatermark=1793094572588`，即 0.3.48 之后还没有提醒到过点。为此新建一条 `mode=reminder` 待办 `6bb2e6c1-4c7d-441e-9e5e-a16de4b9d74f`（18:17:10 到期）做活体验收。
+
+### 17.5 活体结果：提醒真的到了微信（2026-10-27 18:18）
+
+```
+todo:6bb2e6c1-4c7d-441e-9e5e-a16de4b9d74f ->
+  { "at": 1793096236409, "messageId": 7520790708907987000, "chars": 52, "reminder": true }
+```
+
+同一条待办在 `newmate_todo_list` 里是 `status: "delivered"`、`deliveredAt: 1793096231477`、`deliveries: 1`，而微信侧的 `messageId` 出现在 4.9 s 之后——**两套账本对上了**：待办投递发生在本地（气泡/页面），微信发送是信道自己做的第二次动作，且只做了一次。
+
+这条记录同时确认了三件事：① 0.3.48 的 peer 回退（`lastPeer` 至今是 `null`，但 `state.ilinkUserId=o9cq80…@im.wechat` 顶住了）真的生效；② 水印逻辑没有越界（`at` 远大于 `reminderWatermark=1793094572588`）；③ 提醒路径与回复路径共用同一张 `sent` 表却互不干扰（`reminder:true` 是提醒自己的标记）。结论以本机实测为准，**别人机器上的 0.3.48 仍未验证**。
+

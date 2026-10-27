@@ -1,5 +1,20 @@
 # Newmark Agent Overview
 
+## 2026-10-27 18:1x 源码仓库推送 + npm latest 监控 + 提醒投递活体验收
+
+**指令**：「推送git并监控npm latest」（本轮第二次）。
+
+- **源码仓库已推送**：`master` `7c458e85…` → `7c36faff`（本地 `HEAD` == `origin/master` == `7c36faffacbc5bb226b6e659e63363002be208850`）。一个提交，**99 文件 / +13 899 / −115**，覆盖 0.3.27→0.3.49：微信 ClawBot 信道（研究 → demo → 桥 → 插件内 `lib/wechat-*.js` + vendored `qrcode-terminal`）、NewMate 三个对话级工具与快照差分监控、heartBeat 两阶段重启与 `heartbeat_activity`、`docs/00–16`、15 个门禁脚本、`SCRIPTS/restart-dsh.ps1`。
+- **入不了的目录（如实记录）**：`Newmark2DSH/evidence/cu-hidden-agent/…` 是**捕获的浏览器 profile 抓取件**，其中有路径超过 Windows 的 260 字符上限，`git add` 直接 `Filename too long` 失败。本轮用 pathspec 排除（`':(exclude)Newmark2DSH/evidence'`）绕过，**没有**删证据、**没有**改 `.gitignore`；该目录仍是工作区里的未跟踪内容，后续要么进 `archive/` 要么进忽略表，属于遗留项。同样未纳入本次提交的还有：`.tmp-*`、`_tmp-codex-log-probe.txt`、`%SystemDrive%/`、`android/`、`release-dev066/`、`release-auto-tendency-20260928/`、根 `.gitignore`/`VERSION` 的既有改动，以及 33 个与本次工作无关的 `DESKTOP/` 改动。
+- **npm latest 监控**：`npm view newmark2dsh dist-tags` 连采 4 次（18:13:44 / 18:14:08 / 18:14:32 / 18:14:56）都是 `latest=0.3.49`；`versions` 列表末尾 confirm `0.3.49` 是已发布的最新一版（`0.3.47`/`0.3.48` 本该缺席——它们只装过本机，从未打过 tag）。发布路径已闭环：release 仓 `f659ddb` == `origin/main`，`v0.3.49` 注解 tag（`f0c1d68`）已推送，publish run `40484407264` 成功，发布 tarball 与本地实现 `contentDiff 0`（117 vs 116 文件，多一个 README）。
+- **同时补的活体验收**：`~/.Newmark/newMate/wechat.json` 实测 `phase=connected`、`lastPollAt` 每秒推进（接收循环活着）、`sent` 里 7 条真实回复各唯一 taskId；4 条 `todo:*` 全是 0.3.47 时期的 `skipped:'no_peer'`，时间都早于 `reminderWatermark=1793094572588`。为此新建 `mode=reminder` 待办 `6bb2e6c1-4c7d-441e-9e5e-a16de4b9d74f`（18:17:10 到期）验证「提醒→微信」这条路径，结果见本节下方追加。
+- **发现的新事实**：`newmate_todo_add` 的 `activateAt` 只收**带时区的 ISO 时间**，传 epoch 毫秒被拒（`激活时间须为带时区的 ISO 时间`）；`newmate_todo_list` 返回的 `status` 是 `pending`/`delivered`/`completed`/`cancelled`，与 `wechat.json` 的 `skipped:no_peer` 是**两套独立账本**，排查时要同时看。
+- **写回**：`Newmark2DSH/docs/16` 新增 §17（0.3.45–0.3.48 三个活体缺陷的根因/修复/证据）；本节；`taste.md` 追加三条规矩（提交前用 pathspec 排除抓取件证据目录、`String.replace` 之后必须 grep 回符号、发布后按 ~20 s 采样 `dist-tags` 判定 latest）。
+
+- **追加 18:18（活体）**：提醒路径**实测通过**。待办 `6bb2e6c1…` 18:17:11 本地投递（`delivered`/`deliveries:1`），18:17:16 微信侧出现 `{messageId: 7520790708907987000, chars: 52, reminder: true}`。关键是 `lastPeer` 至今为 `null`——证明 0.3.48 的 peer 回退到 `state.ilinkUserId` 是这条路径**唯一**的支点；`reminderWatermark=1793094572588` 早于该条，水印没有吞掉它。两套账本（todo 状态 / `wechat.json: sent`）对得上，且只发一次。
+
+归档：`archive/20261027-182500-git-push-and-npm-monitor/`。
+
 ## 2026-10-27 微信 ClawBot → NewMate 信道（只读调研 + 接入设计）
 
 **指令**：「我想将微信clawbot接入newMate，用户通过clawbot向newMate发信=用户向newMate发信，newMate完成回复后通过clawbot发送纯文字的气泡版本」。

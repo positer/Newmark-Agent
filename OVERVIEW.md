@@ -1,5 +1,28 @@
 # Newmark Agent Overview
 
+## 2026-10-28 00:4x–01:0x 活体验收：goal 接续修好了；隐藏桌面滚轮改成「发给光标下的窗口」（0.3.53）
+
+**指令**：「正好有一个正在使用虚拟桌面且在 goal running 的对话，安装最新插件、重启并校验 goal 能否正确接续」→ 随后「虚拟桌面似乎没办法提交/触发滚轮滚动指令」→ 再一条：截图显示 `更新目标 · Error: this goal operation requires a direct human turn on a top-level agent`「仍然无法」。
+
+### 1. goal 接续：已修，已活体验收
+
+- 目标对话：`c3a22d88-be78-4ed9-9c09-cbd22ce7717d`（在 Edge 里刷 mooc 课程视频，隐藏/虚拟桌面）。
+- 第一次重启（装 0.3.52 后）**没能证明修复**：投递给它的接续仍是旧文案，因为接续由**重启前那个进程**（0.3.50）生成并入队。它在 00:45:51 又调了一次 `update_goal{action:"resume"}` 并被拒——用户截图那条错误就是这一次。
+- 第二次重启（进程里已是 0.3.52 代码）后：同一对话收到的接续是**新文案**（`NEW_PROMPT=true / OLD_PROMPT=false`），重启后 `update_goal` 派发 **0** 次，紧接着 `takeover_start` + `process_pull` 把隐藏桌面和 Edge 窗口重新拉起来继续任务。
+- 结论：提示词缺陷真的修掉了；**发布顺序的坑**记进 VERSION——续跑文本由重启前的进程决定，所以「改提示词→装盘→重启」只在**下一次**重启生效。
+
+### 2. 隐藏桌面滚轮：原因不是 delta，是目标窗口
+
+- 现场：那 46 次 `app_scroll` 回执全是 `posted=true`（`delivery: hidden-desktop-agent`），页面一格没动。
+- 根因：`WM_LBUTTONDOWN` 带客户区坐标、框架会命中测试转发给子窗口；`WM_MOUSEWHEEL` 带屏幕坐标、系统只交给光标下的窗口——隐藏桌面不是输入桌面，没有光标也没有前台窗口，发到框架的滚轮落到 `DefWindowProc`，Chromium 什么也不做。
+- 修法：agent 侧加 `WindowFromPoint`（作用域＝调用线程所在桌面）+ `ClassNameOf`；`scroll` 用 `ClientCenterOnScreen` 算屏幕点 → `WindowAtScreenPoint` 解出该点窗口 → 仅当 `IsChild(target, under)` 是后代才发到它 → 失效时显式回落框架，回执分开报 `wheel_target`/`wheel_target_class`/`wheel_target_is_child`/`posted`/`frame_fallback_posted`。
+- 新门禁 `verify-cu-hidden-wheel` **10/10**（形状）；门禁自己打印「页面是否真的滚动只有活体隐藏桌面能证明」。**页面动不动仍待活体确认**：目标对话已用 0.3.53 的 agent 重新 `takeover_start`，它下一次滚动的回执会带 `wheel_target_class`。
+
+### 3. 状态
+
+0.3.53 已安装、已重启；源码候选（未发布，npm latest 仍 0.3.50）。
+
+归档：`archive/20261027-010000-goal-continuation-live/`。
 ## 2026-10-27 23:5x–00:3x 两处组件修复（0.3.52 源码候选）：goal 接续不再越权 + CU 截图可选 png
 
 **指令**：「heartBeat的goal接续行为被工具拒绝…检查修复这个goal接续工具缺陷，对heartBeat的重启接续写白名单」（另一 Agent 反馈）与「优化CU截图可选格式，由调用的Agent可指定」；随后「完成所有组件修复后再push」。

@@ -1,5 +1,16 @@
 # Newmark Agent Overview
 
+## 2026-10-28 01:5x 硬性 goal 恢复终于成立（0.3.61 装盘重启，实测对话真的续了 round）
+
+**用户的两条批评都成立**：① 之前那份接续文案仍是旧的（持久队列里保留入队时的文本）；② 前几次重启的「恢复」没有一次是组件真正完成的。0.3.54→0.3.61 之间被实测推翻的判断有五个：装新版第一次重启无快照（0.3.54）、已消费快照被当证据（0.3.56）、空注册表被当成没有目标（0.3.57）、`observed armed` 被当终态导致看守提前关闭（0.3.59）、回执跨进程继承污染判断（0.3.60）。
+
+**最终实现**：重启前 `captureGoalSnapshot()` 记录每个 live 对话的最小字段（无 objective）→ 新进程 boot 起 **180 秒窗口**，按 `bootPid` 隔离记录、等 agent 真的载入、每 tick 检查候选（有快照用快照，没有就扫全部 live），读到 `active+disarmed` 立即 `resume` 并读回校验，`observed armed` **不算结束**；窗口到期或全部落定才写 `settled`。另在 boot 时把队列里两条**历史接续文案**改写为当前文案（`RETIRED_CONTINUATION_TEXTS`，调用方自己的 prompt 不动）。
+
+**最终实测（0.3.61，01:45–01:49）**：回执 `bootPid=19632`、窗口 01:45:29–01:48:29、`expected=2 loaded=2`、**`resumed: c3a22d88 {active,disarmed} → {active,armed} verified=true @01:45:29`**、`observed x88`、`closed=window_elapsed`；同一时间窗里目标对话 **`goal rounds` 1 次（01:47:43）**、`update_goal` 0 次、`goal_restore` 0 次、`get_goal` 显示 `active+armed`、已回到课程视频任务。
+
+**门禁** `verify-heartbeat-goal-autorestore` **27/27**（快照/扫描/就绪/窗口/翻转/旧回执/跨 boot 隔离逐条），`verify-goal-restore` 23/23、barrier 103/103 + 变异 34/34。
+
+归档：`archive/20261028-013000-heartbeat-goal-autorestore/`（含五次失败的回执与最终成功回执）。
 ## 2026-10-28 01:2x 活体验收：0.3.54 装盘重启后，组件自己把 goal 重新 arm 了
 
 **指令**：「装 0.3.54 → 重启一次 → 重启后直接读」。

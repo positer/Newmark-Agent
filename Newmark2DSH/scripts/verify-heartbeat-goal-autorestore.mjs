@@ -65,6 +65,7 @@ function fakeAgents(sessions) {
 }
 
 const ctors = [];
+let clock = { value: 1793120000000 };
 function beatOn(root, { agents, goals }) {
   const beat = createHeartBeat({
     root,
@@ -79,7 +80,7 @@ function beatOn(root, { agents, goals }) {
     pid: 1000 + ctors.length,
     version: '0.0.0-fixture',
     logger: { warn() {}, info() {}, error() {} },
-    now: () => 1793120000000,
+    now: () => clock.value,
   });
   ctors.push(beat);
   return beat;
@@ -142,21 +143,28 @@ await second.tick();
 const receipt = JSON.parse(fs.readFileSync(path.join(root, 'heartBeat', 'state.json'), 'utf8')).goalRestore;
 check('post-restart: the goal that was active is re-armed without any model turn', receipt?.resumed?.length === 1 && receipt.resumed[0].sessionId === 's-running' && receipt.resumed[0].verified === true, JSON.stringify(receipt?.resumed));
 check('post-restart: a resume is issued only for goals that were active, with their exact refs', afterGoals.calls.filter((entry) => entry.op === 'resume').length === 2 && afterGoals.calls.filter((entry) => entry.op === 'resume').every((entry) => ['run', 'exh'].includes(entry.ref.id)) && afterGoals.calls.filter((entry) => entry.op === 'resume').every((entry) => entry.ref.revision === 7), JSON.stringify(afterGoals.calls));
-check('post-restart: the paused goal is left paused, not resumed', afterGoals.seed.get('s-paused').phase === 'paused' && receipt.skipped.some((entry) => entry.sessionId === 's-paused' && entry.reason === 'not_active_before_restart'), JSON.stringify(receipt.skipped.filter((entry) => entry.sessionId === 's-paused')));
-check('post-restart: the blocked goal is left blocked even though the service would resume it', afterGoals.seed.get('s-blocked').phase === 'blocked' && receipt.skipped.some((entry) => entry.sessionId === 's-blocked' && entry.reason === 'not_active_before_restart'), JSON.stringify(receipt.skipped.filter((entry) => entry.sessionId === 's-blocked')));
-check('post-restart: a completed goal is not revived', afterGoals.seed.get('s-done').phase === 'complete' && receipt.skipped.some((entry) => entry.sessionId === 's-done'));
+check('post-restart: the paused goal is left paused, not resumed', afterGoals.seed.get('s-paused').phase === 'paused' && receipt.skipped.some((entry) => entry.sessionId === 's-paused' && entry.reason === 'paused_by_user'), JSON.stringify(receipt.skipped.filter((entry) => entry.sessionId === 's-paused')));
+check('post-restart: the blocked goal is left blocked even though the service would resume it', afterGoals.seed.get('s-blocked').phase === 'blocked' && receipt.skipped.some((entry) => entry.sessionId === 's-blocked' && entry.reason === 'goal_blocked'), JSON.stringify(receipt.skipped.filter((entry) => entry.sessionId === 's-blocked')));
+check('post-restart: a completed goal is not revived', afterGoals.seed.get('s-done').phase === 'complete' && !afterGoals.calls.some((entry) => entry.sessionId === 's-done'), JSON.stringify(afterGoals.calls.map((entry) => entry.sessionId)));
 check('post-restart: a goal that exhausted its rounds is reported, not silently dropped', receipt.skipped.some((entry) => entry.sessionId === 's-exhausted' && entry.reason === 'resume_refused' && String(entry.error).includes('exhausted')), JSON.stringify(receipt.skipped.filter((entry) => entry.sessionId === 's-exhausted')));
-check('post-restart: a conversation that never came back is named as such', receipt.skipped.some((entry) => entry.sessionId === 's-gone' && entry.reason === 'agent_not_loaded'), JSON.stringify(receipt.skipped));
+clock.value += 181000;
+await second.tick();
+const lateReceipt = JSON.parse(fs.readFileSync(path.join(root, 'heartBeat', 'state.json'), 'utf8')).goalRestore;
+check('post-restart: the watch closes when its window elapses and never resumes a late conversation', lateReceipt.closed_reason === 'window_elapsed' && !afterGoals.calls.some((entry) => entry.sessionId === 's-gone'), JSON.stringify({ closed: lateReceipt.closed_reason, calls: afterGoals.calls.map((entry) => entry.sessionId) }));
 check('post-restart: the receipt counts what it did', receipt.resumed_count === 1 && receipt.verified_count === 1 && receipt.skipped_count === receipt.skipped.length, JSON.stringify({ resumed: receipt.resumed_count, verified: receipt.verified_count, skipped: receipt.skipped_count }));
 check('post-restart: nothing but resume was ever called on the goal service', afterGoals.calls.every((entry) => entry.op === 'resume'), JSON.stringify(afterGoals.calls.map((entry) => entry.op)));
-check('post-restart: the snapshot is marked applied so a later tick cannot re-arm twice', receipt.attempts >= 1 && JSON.parse(fs.readFileSync(path.join(root, 'heartBeat', 'state.json'), 'utf8')).goalSnapshot.appliedAt !== undefined);
+check('post-restart: the receipt records how many agents were visible for this boot', lateReceipt.agents_loaded >= 1 && lateReceipt.agents_expected >= 1, JSON.stringify({ loaded: lateReceipt.agents_loaded, expected: lateReceipt.agents_expected }));
 
 /* ------------------------------------------------ it must not run twice -------------------- */
 const resumesAfterFirst = afterGoals.calls.length;
 await second.tick();
+check('idempotent: a further tick in the SAME boot resumes nothing again', afterGoals.calls.length === resumesAfterFirst, JSON.stringify({ before: resumesAfterFirst, after: afterGoals.calls.length }));
+/* A NEW boot is a new decision: it re-examines its own live set (that is the point of the boot
+ * sweep), so the receipt must be per-boot rather than inherited. */
 const third = beatOn(root, { agents: afterAgents, goals: afterGoals });
 await third.tick();
-check('idempotent: further ticks and a further process never resume again', afterGoals.calls.length === resumesAfterFirst, JSON.stringify({ before: resumesAfterFirst, after: afterGoals.calls.length }));
+const thirdState = JSON.parse(fs.readFileSync(path.join(root, 'heartBeat', 'state.json'), 'utf8'));
+check('a new boot starts its own watch instead of inheriting the previous receipt', thirdState.goalRestore?.bootPid !== undefined && thirdState.goalRestore.bootPid !== 1001, JSON.stringify({ bootPid: thirdState.goalRestore?.bootPid }));
 
 /* ------------------------------------------------ when the host is not ready yet ------------ */
 const waitingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-goal-autorestore-wait-'));
@@ -166,8 +174,87 @@ const noService = beatOn(waitingRoot, { agents: () => null, goals: () => null })
 let waited = { state: null };
 for (let i = 0; i < 30; i += 1) { await noService.tick(); }
 const waitState = JSON.parse(fs.readFileSync(path.join(waitingRoot, 'heartBeat', 'state.json'), 'utf8'));
-check('no services: it waits, then records that it gave up instead of retrying forever', waitState.goalRestore?.gaveUp === 'services_unavailable' && waitState.goalRestore.attempts >= 30, JSON.stringify({ gaveUp: waitState.goalRestore?.gaveUp, attempts: waitState.goalRestore?.attempts }));
+check('no services: it waits, then records that it gave up instead of retrying forever', waitState.goalRestore?.closed_reason === 'services_unavailable' && (waitState.goalRestore.attempts ?? 0) >= 30, JSON.stringify({ closed: waitState.goalRestore?.closed_reason, attempts: waitState.goalRestore?.attempts }));
 
+
+/* ------------------------------------------ no snapshot: boot sweep + prompt refresh -------- */
+/* This is the case the user hit: the FIRST restart after an upgrade is performed by the old
+ * process, which does not write a snapshot. The invariant must still hold on the new process. */
+const sweepRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-goal-bootsweep-'));
+/* Seed it with a queued continuation that carries a retina-era instruction, exactly as an upgrade
+ * would find in the durable queue. */
+fs.mkdirSync(path.join(sweepRoot, 'heartBeat'), { recursive: true });
+fs.writeFileSync(path.join(sweepRoot, 'heartBeat', 'state.json'), JSON.stringify({
+  schema: 3, tasks: [{ id: 'old-task', prompt: 'Newmark2DSH 已重启。先恢复这个对话的目标状态：读 get_goal；若 phase:"active" 且 activation:"disarmed"（会话恢复后宿主会把进行中的目标解除武装），调用 update_goal{action:"resume"} 重新武装；若 phase:"paused" 保持暂停，不要 resume；没有 goal 则跳过。然后从上一句用户消息继续；不要重复已经完成的动作，未完成的工作先说明状态。', destination: 's-sweep', status: 'armed', restartPid: null, folder: null, created: 1 }],
+  receipts: [], terminated: [], intent: null, intents: [], goalSnapshot: null, goalRestore: null,
+}), 'utf8');
+const sweepGoals = fakeGoals({
+  's-sweep': goal({ id: 'sweep', phase: 'active', activation: 'disarmed' }),
+  's-pause2': goal({ id: 'pause2', phase: 'paused', activation: 'disarmed' }),
+  's-block2': goal({ id: 'block2', phase: 'blocked', activation: 'disarmed' }),
+});
+const sweepAgents = fakeAgents([{ id: 's-sweep', running: true }, { id: 's-pause2', running: false }, { id: 's-block2', running: false }]);
+const sweepBeat = beatOn(sweepRoot, { agents: sweepAgents, goals: sweepGoals });
+await sweepBeat.tick();
+const sweepState = JSON.parse(fs.readFileSync(path.join(sweepRoot, 'heartBeat', 'state.json'), 'utf8'));
+check('no snapshot: the boot itself re-arms an active+disarmed goal', sweepState.goalRestore?.mode === 'boot_sweep' && sweepState.goalRestore.resumed_count === 1 && sweepState.goalRestore.resumed[0].sessionId === 's-sweep' && sweepState.goalRestore.resumed[0].verified === true, JSON.stringify(sweepState.goalRestore?.resumed));
+check('no snapshot: paused and blocked goals are still untouched by the sweep', sweepGoals.seed.get('s-pause2').phase === 'paused' && sweepGoals.seed.get('s-block2').phase === 'blocked' && sweepState.goalRestore.skipped.some((entry) => entry.sessionId === 's-pause2' && entry.reason === 'paused_by_user') && sweepState.goalRestore.skipped.some((entry) => entry.sessionId === 's-block2' && entry.reason === 'goal_blocked'), JSON.stringify(sweepState.goalRestore?.skipped));
+check('no snapshot: a queued continuation with a retired instruction is rewritten, not delivered', sweepState.goalRestore.refreshed_continuations === 1 && sweepState.tasks[0].prompt.includes('自动') && !sweepState.tasks[0].prompt.includes('update_goal{action') && sweepState.tasks[0].refreshedAt !== undefined, JSON.stringify({ refreshed: sweepState.goalRestore.refreshed_continuations, prompt: String(sweepState.tasks[0]?.prompt).slice(0, 80) }));
+check('no snapshot: the sweep runs once, not on every tick', (await (async () => { const before = sweepGoals.calls.length; await sweepBeat.tick(); return sweepGoals.calls.length === before; })()));
+
+/* A CONSUMED snapshot from an earlier restart must not be treated as this restart's evidence. */
+const staleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-goal-stale-'));
+fs.mkdirSync(path.join(staleRoot, 'heartBeat'), { recursive: true });
+fs.writeFileSync(path.join(staleRoot, 'heartBeat', 'state.json'), JSON.stringify({
+  schema: 3, tasks: [], receipts: [], terminated: [], intent: null, intents: [],
+  goalSnapshot: { schema: 1, at: 1, reason: 'update', appliedAt: 2, entries: [{ sessionId: 's-stale', running: true, phase: 'active', activation: 'disarmed', goalId: 'g-stale', revision: 3 }] },
+  goalRestore: null,
+}), 'utf8');
+const staleGoals = fakeGoals({ 's-stale': goal({ id: 'stale', phase: 'active', activation: 'disarmed', revision: 3 }) });
+const staleBeat = beatOn(staleRoot, { agents: fakeAgents([{ id: 's-stale', running: true }]), goals: staleGoals });
+await staleBeat.tick();
+const staleState = JSON.parse(fs.readFileSync(path.join(staleRoot, 'heartBeat', 'state.json'), 'utf8'));
+check('a consumed snapshot is not reused: an external relaunch falls back to the boot sweep', staleState.goalRestore?.mode === 'boot_sweep' && staleState.goalRestore.resumed_count === 1 && staleGoals.calls.some((entry) => entry.op === 'resume'), JSON.stringify({ mode: staleState.goalRestore?.mode, resumed: staleState.goalRestore?.resumed_count }));
+
+
+/* -------------------------------- an empty registry at the first tick is NOT "nothing to do" ---- */
+const lateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-goal-late-'));
+const lateGoals = fakeGoals({ 's-late': goal({ id: 'late', phase: 'active', activation: 'disarmed' }) });
+let lateSessions = [];
+/* A registry that is EMPTY on the first tick and populated later, the way the host loads sessions. */
+const lateService = { roots: () => lateSessions, byId: () => lateSessions };
+const lateBeat = beatOn(lateRoot, { agents: lateService, goals: lateGoals });
+await lateBeat.tick();
+const midway = JSON.parse(fs.readFileSync(path.join(lateRoot, 'heartBeat', 'state.json'), 'utf8'));
+check('readiness: an empty registry does not produce a done receipt', (midway.goalRestore ?? null) === null, JSON.stringify(midway.goalRestore));
+lateSessions = [{ id: 's-late', status: 'running', session: { id: 's-late', title: null } }];
+await lateBeat.tick();
+const lateState = JSON.parse(fs.readFileSync(path.join(lateRoot, 'heartBeat', 'state.json'), 'utf8'));
+check('readiness: once the agents are loaded the same boot restores the goal', lateState.goalRestore?.mode === 'boot_sweep' && lateState.goalRestore.resumed_count === 1 && lateState.goalRestore.agents_loaded === 1, JSON.stringify({ resumed: lateState.goalRestore?.resumed_count, loaded: lateState.goalRestore?.agents_loaded }));
+
+/* -------------------------------- a receipt from an older version is discarded, not reused ------- */
+const legacyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-goal-legacy-'));
+fs.mkdirSync(path.join(legacyRoot, 'heartBeat'), { recursive: true });
+fs.writeFileSync(path.join(legacyRoot, 'heartBeat', 'state.json'), JSON.stringify({
+  schema: 3, tasks: [], receipts: [], terminated: [], intent: null, intents: [], goalSnapshot: null,
+  goalRestore: { at: 1, bootDoneAt: 1, bootPid: 999, mode: 'snapshot', attempts: 1, resumed: [], skipped: [{ sessionId: 's-legacy', reason: 'not_active_before_restart' }] },
+}), 'utf8');
+const legacyGoals = fakeGoals({ 's-legacy': goal({ id: 'legacy', phase: 'active', activation: 'disarmed' }) });
+const legacyBeat = beatOn(legacyRoot, { agents: fakeAgents([{ id: 's-legacy', running: true }]), goals: legacyGoals });
+await legacyBeat.tick();
+const legacyState = JSON.parse(fs.readFileSync(path.join(legacyRoot, 'heartBeat', 'state.json'), 'utf8'));
+check('a legacy receipt is discarded: the watch starts fresh and still restores', legacyState.goalRestore?.mode === 'boot_sweep' && legacyState.goalRestore.resumed_count === 1 && Array.isArray(legacyState.goalRestore.events) && legacyGoals.calls.some((entry) => entry.op === 'resume'), JSON.stringify({ mode: legacyState.goalRestore?.mode, resumed: legacyState.goalRestore?.resumed_count }));
+
+/* --------------------------- a disarm that lands AFTER a resume is still caught ----------------- */
+const flipRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-goal-flip-'));
+const flipGoals = fakeGoals({ 's-flip': goal({ id: 'flip', phase: 'active', activation: 'disarmed' }) });
+const flipBeat = beatOn(flipRoot, { agents: fakeAgents([{ id: 's-flip', running: true }]), goals: flipGoals });
+await flipBeat.tick();
+check('flip: the first tick resumes it', flipGoals.seed.get('s-flip').activation === 'armed' && flipGoals.calls.filter((entry) => entry.op === 'resume').length === 1);
+/* The host disarms when the session really resumes - after our resume. */
+flipGoals.seed.set('s-flip', { ...flipGoals.seed.get('s-flip'), activation: 'disarmed' });
+await flipBeat.tick();
+check('flip: a disarm that lands after our own resume is caught on the next tick', flipGoals.seed.get('s-flip').activation === 'armed' && flipGoals.calls.filter((entry) => entry.op === 'resume').length === 2, JSON.stringify(flipGoals.calls));
 const failedChecks = checks.filter((entry) => entry.pass !== true);
 for (const entry of checks) console.log((entry.pass ? 'ok   ' : 'not ok ') + entry.name + (entry.pass ? '' : '  [' + entry.detail + ']'));
 console.log('');

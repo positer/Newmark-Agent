@@ -1749,4 +1749,9 @@ Newmark2DSH 后续 README 更新须遵循 [子项目 README 首页格式约束](
 - **这个 desktop profile 用 pnpm，`npm install` 一定失败。** 它的依赖里有 `link:` 协议（`newmark2dsh-computeruse`/`-memorylab` 直连源码目录），npm 会报 `EUNSUPPORTEDPROTOCOL`。装插件必须用 DSH 自带的 pnpm 与同目录 node：`~/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/pnpm/bin/pnpm.mjs`。装之前备份安装目录与 profile `package.json`，装之后逐文件 sha256 对齐 tarball。
 - **本机路由用 `curl.exe` 探，不要用 `Invoke-WebRequest`。** 后者对本机 `127.0.0.1:<port>` 会以 `HttpClient.Timeout`（5 s）失败，看起来像服务挂了；`curl.exe -s -m 20` 同一秒就返回。重启的 prepare/restart 也照此。
 - **「装好了」不等于「跑起来了」，判据必须只有新版本才有的东西。** 磁盘 `package.json` 版本 + 逐文件哈希只证明盘上是新包；证明新进程加载它，要用：新增的工具名（`agent_api_catalog` 里出现）、新增的状态字段（`stats.files`）、新增的行为（`wechat.files.last` 回执），再补一次真实调用。三者同时为真才写「已生效」。
+## 2026-10-27 发布成功的判据（三条，缺一不可）
+
+- **`dist-tags.latest` 是唯一口径。** `publish.yml` 的 `Publish` 步 ✓ 不代表 registry 里已经有它：Trusted Publishing 是 stage 之后异步可见，工作流自己也在 `Verify official latest without fallback` 里循环等（实测 0.3.50 等了 **19 分钟**）。只有采样到 `latest` 切过去、且 `npm view <pkg>@<ver> version` 能解析，才算发布完成。
+- **发布包要比「已安装并验证过」的那一份。** `npm pack <pkg>@<ver>` 解包后与安装目录逐文件比 sha256，并把 **CRLF/LF 差异单独归一类**：release 仓 checkout 会把换行归一化，0.3.49 与 0.3.50 都是 16 个 EOL-only、内容差异 0。把 EOL 差异算成「内容不一致」会让人以为发布了别的东西。
+- **两侧的预期差异都要能逐条解释。** 这次安装目录多出 12 个 `components/computeruse/.runtime/**`（运行时生成，不在 manifest 的 `files` 里），发布包多出 `README.md`（release 仓自有）。只报一个数字等于没核对。
 

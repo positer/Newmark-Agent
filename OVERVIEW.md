@@ -1,5 +1,19 @@
 # Newmark Agent Overview
 
+## 2026-10-27 23:5x 0.3.50 发布：npm latest 已切到 0.3.50
+
+**指令**：「确认收到，推送git，监控npm latest」。
+
+- **先查再动**：源码仓 `HEAD` == `origin/master` == `85f4e1a7`，**没有待推的提交**（剩下的 `M` 全是既有排除项）；release 仓还在 `f659ddb`（0.3.49）。所以「推送 git」的可做部分是**发布链路**。
+- **发布前门禁**：`verify-newmark-core-package` PASS、`verify-version-discipline` PASS、`verify-newmate-wechat-channel` **118/118 PASS**。
+- **同步与推送**：`sync-release-repo.mjs` → `copied 117, changed 11, removed 0`，stage 版本 0.3.50（五个组件同版本，`wechat-file.js` 就位）；release 仓 commit `5352ea7`（11 文件 / +485 / −17）→ `f659ddb..5352ea7 main -> main`；注解 tag `v0.3.50` → `b022185` → 推送成功（本地 == 远端）。
+- **工作流**：tag 触发 `publish.yml` run **40532122861**，18m44s 后 **✓ success**；期间 `Publish` 步很早就 ✓，之后一直停在 `Verify official latest without fallback` 循环——**staged 发布的预期形态**（publish 已受理，registry 可见性滞后）。
+- **监控结果**：每 ~45 s 采样，23:44→23:51 全部 `latest=0.3.49 / 0.3.50=E404`，**23:52:16 翻转**为 `latest=0.3.50` 且 `0.3.50` 可解析——距 tag 推送 **19 分钟**，与 0.3.45/0.3.49 的历史延迟同量级。
+- **发布包与已安装版本的对照**（`npm pack newmark2dsh@0.3.50` 解包逐文件比）：118 文件 = 117 包内文件 + release 仓 `README.md`；**101 字节相同、16 个仅 EOL 差异（归一化后内容相同）、内容差异 0**；安装目录多出的 12 个 `components/computeruse/.runtime/**` 是运行时生成，不属于发布包。`wechat-file.js` 在包里，`index.js` 里能搜到 `newmate_wechat_send_file`。
+- **状态**：0.3.50 已安装、已重启、已活体验证、**已发布为 npm latest**；四件事首次同时成立。
+
+归档：`archive/20261027-233000-release-0.3.50/`（release refs、workflow run JSON、npm 采样、发布包对照、MANIFEST）。
+
 ## 2026-10-27 23:2x 0.3.50 安装并重启（发文件工具真正上线）
 
 **指令**：「安装并重启」。

@@ -1,5 +1,29 @@
 # Newmark Agent Overview
 
+## 2026-10-27 23:2x 0.3.50 安装并重启（发文件工具真正上线）
+
+**指令**：「安装并重启」。
+
+- **装盘**：`npm pack` → `newmark2dsh-0.3.50.tgz`（1 271 576 B，117 条目，含 `components/newmate/lib/wechat-file.js`），按既有命名落为 `newmark2dsh-0.3.50-source-042252fa.tgz`；profile 依赖从 0.3.49 的 tgz 改指它，**用 DSH 自带 pnpm 安装**（`npm install` 直接 `EUNSUPPORTEDPROTOCOL: link:`——这个 profile 用的是 pnpm 的 `link:` 协议）。备份在 `.newmark-install-backups/0.3.49-before-0.3.50-20261027-230727`（128 文件，0.3.49）。
+- **安装核对**：磁盘版本 0.3.50；tarball 与安装目录 **117/117 sha256 相同**（0 差异/0 缺失/0 多余）；`wechat-file.js` 8 576 B、sha `16d756f2…`（与我独立校验、并活体发出去的那份字节一致）。
+- **重启**：走**更新路由** `POST /newmark-core/update`（`prepare(0.3.50)` → ticket `fb1ed454-…` → `restart`），不走挂载中的 `heartbeat_restart`。旧端口 54629 消失，新 GUI 端口 **63021**；本会话由更新的 `wokenByUpdate` 接续自动唤醒（接续消息到了）。
+- **「跑起来了」的判据（不看磁盘版本号）**：① `agent_api_catalog` → **71 工具**，`newmate_*` **12 个**，含 `newmate_wechat_send_file`（0.3.49 代码里没有这个名字）；② `wechat.json` 的 `stats` 出现 `files`/`fileFailed`（0.3.49 的 `emptyState` 没有）；③ 通道无感恢复（`phase=connected`、`receiveSince=23:25:09`、`lastPollAt` 推进）；④ 门禁 118/118。
+- **进程内第一次真实调用**：`newmate_wechat_send_file` 发 `archive/20261027-231500-install-0.3.50/OPERATION.md`（2454 B → 密文 2464），caption `7520868469861372424`、文件 `7520868484994385288`，`receipt.state=accepted_with_message_id`；随后 `stats.files=1`、`lastFile={name:OPERATION.md, bytes:2454, messageId:7520868484994385288, caption:true}`——**这条路径第一次可对账**（之前三次活体都绕过 channel，账本里没有记录）。
+- **两个工具坑**（已写进 `taste.md`）：这个 profile 的 `link:` 依赖让 `npm install` 报 `EUNSUPPORTEDPROTOCOL`，必须用 DSH 自带 pnpm；`Invoke-WebRequest` 打本机路由会 5 s 超时，改用 `curl.exe`。
+- **状态**：0.3.50 **已安装、已重启、已活体验证**；仍**未发布**到 npm（latest 仍是 0.3.49），发布需 sync-release-repo → tag `v0.3.50` → `publish.yml`。
+
+归档：`archive/20261027-231500-install-0.3.50/`（安装核对、重启后探针、进程内首次调用回执、MANIFEST）。
+
+## 2026-10-27 21:5x 推送 0.3.50 源码 + npm latest 监控
+
+**指令**：「推送git，监控npm latest」。
+
+- **推送**：`f23b8add` → **`d4136646`**（`HEAD` == `origin/master` == `d4136646c5123a5860e9529815a8f9d95acef41b`），一个提交 **18 文件 / +997 / −24**：新增 `lib/wechat-file.js`，改 `wechat-ilink.js`/`wechat-channel.js`/`index.js`/`component.js`，门禁 `verify-newmate-wechat-channel.mjs`（51 → 118 PASS），`VERSION.md` 0.3.50 行（含同日追加），`docs/16` §18/§19，`Newmark2DSH/README.md` 的工具清单与「发文件到微信」一段，六处 `package.json` 版本号，`OVERVIEW.md`/`taste.md`。
+- **npm latest 没变，这是对的**：连采 7 次（21:55–22:01，50 s 一次）`latest` 一直是 **0.3.49**，`npm view newmark2dsh@0.3.50` 一直 `absent`。原因不是延迟：**本轮只推源码，没有打包、没有同步 release 仓、没有打 tag**——release 仓仍在 `f659ddb`（0.3.49），远端 tag 到 `v0.3.49` 为止。要发 0.3.50 需要 `scripts/sync-release-repo.mjs` → 提交 → 打注解 tag `v0.3.50` → 推 tag 让 `publish.yml` 跑，**这一步要用户决定**（且 0.3.50 还没打包安装重启）。
+- **排除项（与上一轮同一套口径）**：`Newmark2DSH/evidence/` 的浏览器抓取件（超长路径会让 `git add` 整体失败）、`computeruse/.runtime/hidden-agent-ledger.jsonl`（运行时账本）、`DESKTOP/` 的 33 个改动与 19 个未跟踪脚本、根 `VERSION`（0.6.8→0.6.9，属 DESKTOP）、`.gitignore`（culab 忽略项）、`.tmp-*`、`release-dev066/`、`release-auto-tendency-20260928/`、`_tmp-codex-log-probe.txt`、`%SystemDrive%/`、`android/`、`install-task.xml`。
+- **一个容易踩的事实**：根 `.gitignore` 的 `archive/` 规则**也匹配 `Newmark2DSH/archive/`**，所以作者那轮写的 `Newmark2DSH/archive/20261027-204541-wechat-send-file/`（两次活体回执 + mount-probe）**不在版本库里**；`docs/16` §18.7 引用它是「本地归档」，别人克隆仓库看不到那些证据。
+- **写回**：`OVERVIEW.md` 本节；归档 `archive/20261027-215500-push-0.3.50/`（提交 stat/name-status、refs、7 次 npm 采样、OPERATION.md、MANIFEST）。
+
 ## 2026-10-27 21:1x 独立校验「发文件到微信」（用户自写实现的复核）
 
 **指令**：「检查并校验clawbot发文件途径的实现，我自己做的」。

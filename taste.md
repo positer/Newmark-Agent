@@ -1742,5 +1742,11 @@ Newmark2DSH 后续 README 更新须遵循 [子项目 README 首页格式约束](
 
 1. **`npm pack` 官方包，逐字段对照**（字段名、常量值、公式、成功判据、重试语义）。官方源码是唯一能判定「这是官方就这么写的」还是「这是作者以为官方这么写的」的东西。
 2. **对门禁做种植变异**，每条变异必须让门禁变红，并用 sha256 证明还原字节一致。只跑一遍门禁通过，证明的是门禁会跑，不是实现被覆盖。
-3. **用真实凭据走一次真实远端调用**，并把返回的服务端 id 记下来。自证的加解密回环（用同一份声明里的 key 解自己传的密文）只能证明自洽，不能证明服务端接受。
+3. **用真实凭据走一次真实远端调用**，并把返回的服务端 id 记下来。自证的加解密回环（用同一份声明里的 key 解自己传的密文）只能证明自洽，不能证明服务端接受。3. **用真实凭据走一次真实远端调用**，并把返回的服务端 id 记下来。自证的加解密回环（用同一份声明里的 key 解自己传的密文）只能证明自洽，不能证明服务端接受。
+
+## 2026-10-27 安装与「真的跑起来了」的判据（三条）
+
+- **这个 desktop profile 用 pnpm，`npm install` 一定失败。** 它的依赖里有 `link:` 协议（`newmark2dsh-computeruse`/`-memorylab` 直连源码目录），npm 会报 `EUNSUPPORTEDPROTOCOL`。装插件必须用 DSH 自带的 pnpm 与同目录 node：`~/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/pnpm/bin/pnpm.mjs`。装之前备份安装目录与 profile `package.json`，装之后逐文件 sha256 对齐 tarball。
+- **本机路由用 `curl.exe` 探，不要用 `Invoke-WebRequest`。** 后者对本机 `127.0.0.1:<port>` 会以 `HttpClient.Timeout`（5 s）失败，看起来像服务挂了；`curl.exe -s -m 20` 同一秒就返回。重启的 prepare/restart 也照此。
+- **「装好了」不等于「跑起来了」，判据必须只有新版本才有的东西。** 磁盘 `package.json` 版本 + 逐文件哈希只证明盘上是新包；证明新进程加载它，要用：新增的工具名（`agent_api_catalog` 里出现）、新增的状态字段（`stats.files`）、新增的行为（`wechat.files.last` 回执），再补一次真实调用。三者同时为真才写「已生效」。
 

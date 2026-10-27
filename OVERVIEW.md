@@ -1,5 +1,41 @@
 # Newmark Agent Overview
 
+## 2026-10-27 23:5x–00:3x 两处组件修复（0.3.52 源码候选）：goal 接续不再越权 + CU 截图可选 png
+
+**指令**：「heartBeat的goal接续行为被工具拒绝…检查修复这个goal接续工具缺陷，对heartBeat的重启接续写白名单」（另一 Agent 反馈）与「优化CU截图可选格式，由调用的Agent可指定」；随后「完成所有组件修复后再push」。
+
+### 1. goal 接续：那条指令**必然**被拒，因为权限不在这一轮
+
+- **现场**：重启后的自动续跑轮里按续跑提示词调用 `update_goal{action:"resume"}` → `this goal operation requires a direct human turn on a top-level agent`。
+- **根因（解包 `app.asar` 读宿主源码）**：`@deepseek-ai/dsh-tool-goal/lib/index.js` 的 `requireDirectHuman()` 要求本轮 open turn 里有 `user/message` 且 `source.kind==="user"`、且 agent 是 runtime root；`edit/pause/resume` 与 `create_goal` 都走它，`complete/blocked` 走 `completionAuthority()`（额外接受「本目标自己的那一轮」）。重启接续既不是 user 消息也不是 goal round，所以**四个写操作全部必被拒**。
+- **修复**：续跑提示词改成「只 `get_goal` 读、这一轮不写目标」，把重新武装交回人类那句；白名单做成数据 `CONTINUATION_GOAL_POLICY`（`allowed`/`refused`/`authority`/`resume_hint`），提示词由它拼，门禁断言两者一致。**没有**绕过守卫直接调 `ctx.goals.resume()`——那正是宿主拦住的事。
+- **门禁**：`verify-heartbeat-restart-barrier` case 15 重写（读得到、写不了、交回人类），**103/103 PASS**；变异 **34/34**，其中 M33 已改锚到新文案且仍 RED。
+
+### 2. CU 截图：`format: bmp|png`，由调用方指定，默认旧行为
+
+- 新增 `lib/image-format.js`（BMP→PNG，node zlib；24/32 位、上下朝向、四字节行对齐；其它布局按名字拒绝）。`observe` 与 `screen_capture` 新增 `format`；隐藏车道只有 `format:"png"` 时转一次，回执给 `image_format{requested,served,conversion_ms}`，失败保留 BMP 并给 `error_code`。
+- **新门禁** `verify-computeruse-image-format` **31/31 PASS**：BMP 夹具（32 位正立／24 位倒立）、PNG 解回像素逐字节比对、编码器与解码器互逆、四种拒绝码、文件与接线断言。
+
+### 3. 同批修掉三个陈旧门禁（0.3.49/0.3.50 之后没人跑过）
+
+| 门禁 | 陈旧点 | 现在 |
+|---|---|---|
+| `verify-memorylab-tools` | 工具总数写死 33（0.3.49/0.3.50 各加一个工具后是 35） | 命名空间分区求和，181/1 → **182/182** |
+| `verify-heartbeat-restart-barrier` | 「五个工具」（0.3.49 加了 `heartbeat_activity`）；「legacy 立即重启」的顺序断言（0.3.49 改成先确认后 force） | 六个工具 + 顺序断言，**103/103** |
+| `measure-heartbeat-restart-barrier-mutations` | M4 锚点是 0.3.30 之前的 `prepare(version)`；M33 锚点是旧提示词 | 两个锚点都更新，**34/34** |
+
+### 4. 未验证 / 环境限制（如实记录）
+
+- **CU 格式没有活体验证**：本机 takeover lease 被占用，`verify-computeruse-win32` 有 5 条 `takeover_lease_occupied` 失败（first takeover_start 拿不到租约），与本次改动无关，但因此没能在隐藏桌面上真跑一次 `format:"png"`。
+- `verify-computeruse-hidden-route` **4 条失败是改动前就有的**：用 `git stash` 把我的三个 CU 文件暂存后复跑，基线同样 4 条红（两条规则 + 三条「plant 没打到文件」的变异行），文件已原样弹回。
+- `verify-computeruse-output-boundary` 退出 2 是环境缺 `DSH Desktop\resources\app\node_modules\@deepseek-ai\cordis`，与本轮无关。
+- **面板与页面仍无浏览器实测**；本轮也没有打包安装。
+
+### 5. 状态
+
+0.3.52 **源码候选**：未打包、未安装、未重启、未发布（npm latest 仍是 0.3.50）。
+
+归档：`archive/20261027-235900-batch-goal-and-cu-format/`。
 ## 2026-10-27 23:5x 短期记忆列表：最新在最上（0.3.51 源码候选）
 
 **指令**：「将memoryLab的短期记忆呈现列表顺序反过来…改为最上为最新」。

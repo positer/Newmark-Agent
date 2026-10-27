@@ -67,3 +67,25 @@ intent 写进 `~/.Newmark/heartBeat/state.json`（schema 3，新增 `intent` 与
 专项脚本 `verify-newmate-heartbeat.mjs` 覆盖视觉请求、只读权限、持久任务、真实宿主 followup 形状、flush、消费后多次启动、独立开关；可通过 NEWMARK_HOST_WALKER 指定已安装 DSH 的纯 JSON walker 验证官方输出边界。`verify-short-memory-mcp.mjs` 覆盖七天过期、完整列表、原生缓存、原对话唤起、实际 HTTP MCP。客户端执行真实组件函数核对三标签、全部短记忆和灰显；不是实机截图。
 
 总门禁与最终打包收据见本次 archive/REPORT.md。仍须已安装 DSH 的 UI、真实视觉提供商与实际全局重启黑盒验证；本轮未修改运行安装和未执行用户会话重启。多进程共享同一用户根目录尚无跨进程锁，使用单 DSH 写入实例；同步原子写提供单进程组件重载安全，不承诺跨进程事务。
+
+---
+
+## 0.3.52 追加：重启接续**不能**替用户重新武装 goal（宿主权限边界，实测）
+
+**现场**：重启后的自动续跑轮里，模型按照续跑提示词调用 `update_goal{action:"resume"}`，被宿主拒绝：
+
+> `this goal operation requires a direct human turn on a top-level agent`
+
+**根因（读宿主源码，不是猜）**：`@deepseek-ai/dsh-tool-goal/lib/index.js`（从 `app.asar` 解包）里，
+`update_goal` 的 `edit`/`pause`/`resume` 与 `create_goal` 都先走 `requireDirectHuman()`，而它要求
+`hasDirectHumanInput()` 为真：本轮的 open turn 里必须有一条 `user/message` 且 `data.source.kind === "user"`，
+且该 agent 必须是 runtime root。`complete`/`blocked` 走 `completionAuthority()`，额外允许「本目标自己的那一轮」
+（`source.kind === "goal"` 且 goalId/revision/round 都对得上）。**重启接续两者都不是**——它的来源不是 `user`，
+也不是 goal round——所以那四个动作在这一轮里**必然被拒**，写多少遍提示词都一样。
+
+**修法**：续跑提示词不再要求写目标；只 `get_goal` 读状态，把「重新武装」交回人类那一句（用户回一句「继续」即可）。
+白名单做成数据而不是散文：`CONTINUATION_GOAL_POLICY`（`allowed: ['get_goal']`、`refused` 列全六个写操作、
+`authority` 一句说清两种授权来源、`resume_hint` 是给用户的那句话），提示词由它拼出来，门禁断言两者一致。
+
+**为什么不去绕过**：插件直接调 `ctx.goals.resume()` 能成功，但那正是宿主这条守卫拦住的事——
+「只有人类能解除/恢复一个目标」是产品决定，不是实现细节。绕过去等于把守卫变成装饰。

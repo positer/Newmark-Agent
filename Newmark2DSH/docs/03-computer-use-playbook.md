@@ -467,3 +467,16 @@ scope. The button-held path was measured on this desktop's own probe; its except
 release is covered by the script's `finally` and the lane-level release guard, not by a
 separately injected failure.
 
+
+---
+
+## 0.3.52 追加：截图格式由调用方指定（`format: "png"`）
+
+- **默认仍是旧行为**：Windows 隐藏桌面上的 `observe`/`app_observe`/`screen_capture` 返回 `image_mime: "image/bmp"`，
+  因为那条车道的 agent 用 Add-Type 编译、没有 System.Drawing，只能自己写 BMP 头（`lib/hidden-agent.js` 的 `WriteBmp`）。
+- **要视觉可直接读，就传 `format: "png"`**：插件在本地转一次（`lib/image-format.js`，node 自带 zlib，24/32 位、
+  上下两种朝向、四字节行对齐），回执给 `image_format: {requested, served, converted, conversion_ms, bmp_path?}`；
+  转换失败时**保留 BMP** 并给 `error_code`，不会返回一个不存在的路径。
+- **别的车道本来就是 PNG**（真实桌面、窗口捕获、macOS、Linux）：它们照旧给 PNG，`image_format` 会显示 requested/served 的差别。
+- **实测边界**：门禁 `verify-computeruse-image-format` 31/31 覆盖编解码与回执；**隐藏桌面的活体截图本轮没做**
+  （本机 takeover lease 被占用，`verify-computeruse-win32` 因此有 5 条 `takeover_lease_occupied`）。

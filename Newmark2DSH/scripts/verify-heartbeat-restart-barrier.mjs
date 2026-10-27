@@ -271,7 +271,10 @@ await section('case 3 mounted', async () => {
   check('3- the barrier modes and bounds are the frozen ones', restartTool?.parameters?.properties?.ackMode?.enum?.join(',') === 'auto,agent' && restartTool?.parameters?.properties?.onTimeout?.enum?.join(',') === 'abort,proceed' && restartTool?.parameters?.properties?.ackTimeoutMs?.minimum === 1000 && restartTool?.parameters?.properties?.ackTimeoutMs?.maximum === 600000);
   /* Five tools since the cancel tail. The COUNT is the point, not the list: a sixth tool without a
    * case for it fails here exactly as a missing one does. */
-  check('3- the heartBeat component registers exactly its five tools', ['heartbeat_after_restart', 'heartbeat_restart', 'heartbeat_restart_commit', 'heartbeat_restart_cancel', 'heartbeat_restart_ack'].every(name => mounted.tools.has(name)) && mounted.tools.size === 5, [...mounted.tools.keys()].join(', '));
+  /* Six tools since 0.3.49 added the read-only heartbeat_activity probe. The COUNT is the point,
+   * not the list: a tool without a case here fails exactly as a missing one does - which is how
+   * this number went stale in the first place (0.3.49 added the tool, this check still said 5). */
+  check('3- the heartBeat component registers exactly its six tools', ['heartbeat_activity', 'heartbeat_after_restart', 'heartbeat_restart', 'heartbeat_restart_commit', 'heartbeat_restart_cancel', 'heartbeat_restart_ack'].every(name => mounted.tools.has(name)) && mounted.tools.size === 6, [...mounted.tools.keys()].join(', '));
   const cancelTool = mounted.tools.get('heartbeat_restart_cancel');
   check('3- heartbeat_restart_cancel declares the required intentId and nothing else', Object.keys(cancelTool?.parameters?.properties ?? {}).join(',') === 'intentId' && cancelTool?.parameters?.required?.join(',') === 'intentId' && cancelTool?.parameters?.additionalProperties === false && cancelTool?.parameters?.properties?.intentId?.type === 'string', JSON.stringify(cancelTool?.parameters));
   const wiredCancel = await cancelTool.execute({ intentId: 'no-such-intent' }, { agent: { session: { id: 'mounted-requester' } } });
@@ -279,9 +282,14 @@ await section('case 3 mounted', async () => {
   const indexSource = fs.readFileSync(HEARTBEAT_INDEX, 'utf8');
   const legacyAt = indexSource.indexOf('if (a.broadcast !== true) {');
   const globalAt = indexSource.indexOf('beat.globalRestart()');
-  const immediateAt = indexSource.indexOf('return { ok: true, restarting: true };');
-  const legacyIntact = legacyAt !== -1 && globalAt !== -1 && immediateAt !== -1 && legacyAt < globalAt && globalAt < immediateAt;
-  check('3- broadcast=false stays on the legacy immediate path in the wrapper', legacyIntact, JSON.stringify({ legacyAt, globalAt, immediateAt }));
+  const immediateAt = indexSource.indexOf('return { ok: true, restarting: true, forced: true };');
+  /* Since 0.3.49 a plain restart is TWO steps: the wrapper probes who else is running and refuses
+   * with confirmation_required unless force:true, and only the forced branch reaches the controller.
+   * The order is the contract, so it is asserted by position rather than by presence. */
+  const confirmAt = indexSource.indexOf('if (a.force !== true) {');
+  const forcedReturnAt = indexSource.indexOf('forced: true');
+  const legacyIntact = legacyAt !== -1 && confirmAt !== -1 && globalAt !== -1 && forcedReturnAt !== -1 && legacyAt < confirmAt && confirmAt < globalAt && globalAt < forcedReturnAt;
+  check('3- a plain restart answers confirmation_required before it can reach the restart controller', legacyIntact, JSON.stringify({ legacyAt, confirmAt, globalAt, forcedReturnAt }));
   check('3- broadcast=true is the ONLY wrapper branch that opens the barrier', indexSource.includes('return beat.beginBarrier(a, execution);'));
   /* Executing this branch would reach the REAL controller if the wrapper contract were broken (the
    * mounted beat uses the live restart controller, which spawns the helper), so it is executed only
@@ -697,24 +705,30 @@ await section('case 14', async () => {
 });
 
 /* ================================================================= case 15 =====
- * A continuation restores the GOAL state, it does not assume it. A resumed session has its active
- * goal DISARMED by the host, so an agent that simply carries on stops being continued by its own
- * goal; a paused goal must stay paused. Both routes that enqueue a conversation continuation are
- * asserted against the same text, so neither can drift away from the other. */
+ * A continuation may READ the goal and must not ask the model to WRITE it. The host's own rules
+ * (dsh-tool-goal/lib/index.js: requireDirectHuman / hasDirectHumanInput / completionAuthority)
+ * grant update_goal edit/pause/resume and create_goal only to a turn that carries a
+ * user/message with source.kind "user", and complete/blocked only to that OR to the goal's own
+ * admitted round. A restart continuation is neither, so the instruction this prompt used to
+ * carry - update_goal{action:"resume"} - was refused every time it was obeyed: measured as
+ * "this goal operation requires a direct human turn on a top-level agent". The contract is now:
+ * read with get_goal, say why this round may not write, and let the human turn re-arm. Both
+ * routes that enqueue a continuation are asserted against the same text. */
 await section('case 15', async () => {
   const s = scenario();
   s.add('R', { title: 'requester 对话' });
   s.add('WORK', { title: '工作中的对话', running: true });
   await s.beat.beginBarrier({ ackMode: 'auto' }, s.exec('R'));
   const text = String(s.state().tasks.find(t => t.destination === 'WORK')?.prompt ?? '');
-  check('15- the broadcast continuation tells the resumed conversation to restore its goal', text.includes('get_goal') && text.includes('update_goal') && text.includes('resume') && text.includes('paused') && text.includes('disarmed'), JSON.stringify(text));
-  check('15- it re-arms an active goal and leaves a paused one paused', text.includes('phase:"active"') && text.includes('phase:"paused"') && text.includes('不要 resume'), JSON.stringify(text));
+  check('15- the broadcast continuation reads the goal but never instructs a goal write', text.includes('get_goal') && !text.includes('update_goal{action') && text.includes('不要写目标') && text.includes('直接的人类轮次') && text.includes('paused'), JSON.stringify(text).slice(0, 260));
+  check('15- it sends the re-arm back to the human turn instead of attempting it', text.includes('继续') && !/update_goal\{action/.test(text), JSON.stringify(text).slice(0, 260));
+  check('15- a disarmed active goal is reported as such, and a paused goal is left paused', text.includes('disarmed') && text.includes('paused') && text.includes('保持暂停'), JSON.stringify(text).slice(0, 260));
   const s2 = scenario();
   s2.add('WORK2', { title: '工作中的对话', running: true });
   const prepared = await s2.beat.prepare('0.3.17');
   await s2.beat.restart(prepared.ticket, true);
   const updateText = String(s2.state().tasks.find(t => t.destination === 'WORK2')?.prompt ?? '');
-  check('15- the update-path continuation carries the same goal-restore instruction', updateText === text && updateText !== '', JSON.stringify(updateText));
+  check('15- the update-path continuation carries the same goal text', updateText === text && updateText !== '', JSON.stringify(updateText));
 });
 
 /* ================================================================= case 16 =====

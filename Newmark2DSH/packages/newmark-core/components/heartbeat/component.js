@@ -11,9 +11,38 @@ import { createErrorLog } from '../../lib/errors.js';
  * so the wording must not pretend to know what that conversation was doing. */
 // The restart itself does not touch a conversation's goal, but a RESUMED session has its goal
 // DISARMED by the host: an active goal stops being continued automatically until it is re-armed.
-// So the continuation has to restore the goal's own state rather than assume it — read it, then
-// re-arm exactly the ones that were active, and leave a paused goal paused.
-const CONTINUATION_PROMPT = 'Newmark2DSH 已重启。先恢复这个对话的目标状态：读 get_goal；若 phase:"active" 且 activation:"disarmed"（会话恢复后宿主会把进行中的目标解除武装），调用 update_goal{action:"resume"} 重新武装；若 phase:"paused" 保持暂停，不要 resume；没有 goal 则跳过。然后从上一句用户消息继续；不要重复已经完成的动作，未完成的工作先说明状态。';
+// What this continuation may therefore SAY about the goal is bounded by the host's own authority
+// rules, read from the installed tool (dsh-tool-goal/lib/index.js):
+//   - update_goal edit / pause / resume and create_goal call requireDirectHuman(), which needs a
+//     user/message with source.kind === 'user' in the open turn of a runtime root;
+//   - update_goal complete / blocked accept that OR the goal's own admitted round (a user/message
+//     with source.kind === 'goal' matching goalId+revision+round).
+// A restart continuation is neither: its source is not 'user' and it is not a goal round. So the
+// re-arm instruction this prompt used to carry (update_goal{action:"resume"}) was refused every
+// single time it was obeyed - measured by the harness as "this goal operation requires a direct
+// human turn on a top-level agent". The continuation now reads the goal, states the boundary, and
+// leaves the re-arm to the human turn that can actually authorise it.
+/*
+ * The goal operations this continuation is allowed to ask for, as data rather than prose.
+ *
+ * The list is the host's rule, not ours: `get_goal` is a read and is always answered, while every
+ * write needs authority this round does not carry. Keeping it here means the prompt below is
+ * generated from the same facts a gate can assert, so the two cannot drift apart again.
+ */
+export const CONTINUATION_GOAL_POLICY = Object.freeze({
+  allowed: Object.freeze(['get_goal']),
+  refused: Object.freeze([
+    'create_goal',
+    'update_goal:edit',
+    'update_goal:pause',
+    'update_goal:resume',
+    'update_goal:complete',
+    'update_goal:blocked',
+  ]),
+  authority: 'update_goal pause/resume/edit and create_goal need a direct human message in this turn; complete/blocked are also legal on the goal\'s own admitted round; a restart continuation is neither.',
+  resume_hint: '若目标仍是 active/disarmed：这一轮不要调用 update_goal，用一句话请用户回复“继续”，那一句人类输入才是重新武装它的授权。',
+});
+const CONTINUATION_PROMPT = 'Newmark2DSH 已重启。先读 get_goal 了解目标状态，但这一轮不要写目标：create_goal 与 update_goal 的 edit/pause/resume 需要直接的人类轮次，complete/blocked 只在本目标自己的轮次里被接受，而重启接续两者都不是，调用它们必定被拒（"requires a direct human turn on a top-level agent"）。若目标是 active 且 disarmed，说明宿主在会话恢复时解除了武装——' + CONTINUATION_GOAL_POLICY.resume_hint + '若 phase 是 paused 就保持暂停；没有 goal 则跳过。然后从上一句用户消息继续；不要重复已经完成的动作，未完成的工作先说明状态。';
 /* Agent-mode broadcast. It names the two tools by their exact parameters because the session's own
  * agent is the only party that can give a receipt for that session, and it must be able to do it
  * without guessing which call shape counts. */

@@ -1729,6 +1729,7 @@ Newmark2DSH 后续 README 更新须遵循 [子项目 README 首页格式约束](
 - **提交前先分清「证据」和「抓取件」。** 给目录打补丁之前先看一眼未跟踪项：捕获的浏览器 profile（`evidence/**/scratch/`）里有超 260 字符的路径，`git add` 会以 `Filename too long` 整体失败，而失败前可能已暂存一半。用 pathspec 排除（`':(exclude)<dir>'`）保住证据本体，不要为了推上去而删证据或临时放宽忽略表；被排除的目录要在归档里点名，写成遗留项。
 - **`String.replace` 打空不报错，所以要 grep 回来。** 补丁脚本插入的符号必须当场读回确认（`index.js` 里真的出现 `wechat.resume()`），并在门禁里留一条源码契约断言。本仓库已经因此出厂两次缺陷（0.3.45 的接线、0.3.47 的水印初始化锚点）。
 - **「npm 已发布」要用采样判定，不要用 exit code。** Trusted Publishing 现在是 stage 之后异步可见：`npm publish` 退 0 时 registry 里可能仍然没有。判据是 `npm view <pkg> dist-tags` 在若干次 ~20 s 采样里稳定返回目标版本，且 `versions` 末尾出现它；`409 Cannot publish over previously staged version` 是预期现象，不是账号问题。
+- **`archive/` 这条忽略规则是仓库级的，也会命中子目录。** 根 `.gitignore` 的 `archive/` 不只忽略 `archive/`，也忽略 `Newmark2DSH/archive/`——写进归档的证据跟着克隆走了，别人看不到。所以文档里引用归档时必须写明「本地归档」，关键证据要么复制进 `docs/` 或被测代码旁边，要么在归档里留 sha256 让第三方能比对；不要用 `<sub>/archive/...` 的路径去支撑一个可复现的结论。
 
 ## 2026-10-27 隔离性用例的两条取样规则（补在校验层缺陷之后）
 

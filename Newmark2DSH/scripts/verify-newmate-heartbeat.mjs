@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mountCore } from './lib/mount-newmark-core.mjs';
 import { inflateSync } from 'node:zlib';
-import { createNewMate } from '../packages/newmark-core/components/newmate/component.js';
+import { createNewMate, NEWMATE_RUN_TOOLS } from '../packages/newmark-core/components/newmate/component.js';
 import { createHeartBeat } from '../packages/newmark-core/components/heartbeat/component.js';
 import { currentConversation, deliverConversation } from '../packages/newmark-core/lib/conversation-delivery.js';
 import { admitImages, bmpToPng, visualToolContent } from '../packages/newmark-core/components/agent-api/lib/visual.js';
@@ -49,7 +49,12 @@ const calls=[];const tools={execute:async call=>{calls.push(call);return {isErro
 const mate=createNewMate({root,tools,agents:()=>null});const task=mate.chat('Hello');check('task is durable before inference',createNewMate({root,tools,agents:()=>null}).state().tasks[0].id===task.id);
 await mate.tick();check('companion completes durable task',mate.state().tasks[0].status==='completed');check('companion response persisted',mate.state().messages.at(-1).text==='Remembered preference');
 check('native memory is available before inference without a recall tool',calls.length===1 && calls[0].name==='agent_api_send' && Array.isArray(mate.memoryContext().shortMemory));
-check('companion inference permits bounded memory, reminder and the two ComputerUse tools',calls[0].arguments.tools.allow.every(n=>['memory_lab_read','memory_lab_query','memory_lab_root_tags','memory_lab_subtag_tree','memory_lab_update','memory_lab_reindex','memory_lab_tag_review','memory_lab_tag_apply','shortMemory_add','shortMemory_recall','shortMemory_where','shortMemory_size','newmate_todo_add','newmate_todo_list','newmate_todo_cancel','computer_use','screen_capture','newmate_search','newmate_ask'].includes(n)));
+// The allow list is checked by FAMILY, not by a frozen snapshot: 0.3.25 added compact_context to the
+// group and a hardcoded copy of the list turned this gate red for a change that was correct. What
+// must stay true is the contract - the required families are offered, nothing outside the group is,
+// and an unbound companion run is not offered newmate_task.
+const companionAllow=calls[0].arguments.tools.allow;
+check('companion inference permits bounded memory, reminder and the two ComputerUse tools',['memory_lab_read','memory_lab_query','shortMemory_recall','newmate_todo_add','computer_use','screen_capture'].every(n=>companionAllow.includes(n))&&companionAllow.every(n=>NEWMATE_RUN_TOOLS.includes(n)));
 check('no shell, deletion, recursive Agent API or out-of-group tool in companion tool set',!calls[0].arguments.tools.allow.some(n=>/delete|shell|agent_api/.test(n))&&!calls[0].arguments.tools.allow.includes('run_code'));
 await mate.configure({companion:true});
 const file=path.join(root,'work.txt');fs.writeFileSync(file,'a');check('file metadata change measured',mate.measure(root,'work.txt').path===file);check('unchanged measurement is silent',mate.measure(root,'work.txt')===undefined);check('traversal filename refused',mate.measure(root,'../work.txt')===undefined);
@@ -58,7 +63,8 @@ await quiet.configure({companion:true});quiet.measure(root,'work.txt');fs.writeF
 const failing=createNewMate({root:path.join(root,'failed'),tools:{execute:async()=>{throw Error('offline');}},agents:()=>null});const retry=failing.chat('retry');await failing.tick();check('failure retained for explicit retry',failing.state().tasks[0].status==='failed');failing.retry(retry.id);check('explicit retry queues existing task',failing.state().tasks[0].status==='pending');
 const folder=path.join(root,'restart');fs.mkdirSync(folder);fs.writeFileSync(path.join(folder,'job.json'),JSON.stringify({owner:{path:'DSH',created:'old'}}));fs.writeFileSync(path.join(folder,'status.json'),JSON.stringify({state:'ready'}));
 let commits=0;const controller={prepare:async()=>({ticket:'ticket'}),restart:async()=>({folder,commit:()=>commits++,cancel(){}})};
-const options={root,core:()=>({newMate:mate}),agents:()=>null,controller,probe:async()=>({path:'DSH',created:'new'}),version:'0.3.0'};
+const preparedVersions=[];
+const options={root,core:()=>({newMate:mate}),agents:()=>null,controller:{...controller,prepare:async v=>{preparedVersions.push(v);return{ticket:'ticket'};}},probe:async()=>({path:'DSH',created:'new'}),version:'0.3.0'};
 const beat=createHeartBeat({...options,pid:100});const restartTaskId=beat.schedule('Follow up','own-session',execution).id;const helper=await beat.restart('ticket',true);
 check('restart has no effect before response commits',commits===0);helper.commit();helper.commit();check('restart commit is idempotent',commits===1);check('tasks armed before global restart',beat.state().tasks.every(t=>t.status==='armed'));
 const delivered=[];let flushes=0;const agent={options:{provider:'fixture-provider',model:'fixture-model'},ctx:{get:()=>({flush:async()=>{flushes++;return true;}})},session:{snapshotEvents:()=>delivered.map(message=>({type:'agent/inbox/spliced',data:{inserted:[message]}}))},followup:async message=>delivered.push(message)};
@@ -70,6 +76,57 @@ fs.writeFileSync(path.join(root,'heartBeat','state.json'),preConsumption);await 
 await deliverConversation({get:()=>agent},'own-session',{id:restartTaskId,prompt:'Follow up'});check('stable task message identity deduplicates retries',delivered.length===1);
 check('conversation delivery crosses host durability barrier',flushes===3);
 await refused('missing durability listener cannot report delivery',()=>deliverConversation({get:()=>({...agent,ctx:null})},'own-session',{id:restartTaskId,prompt:'Follow up'}));
+// A restart performed OUTSIDE this component (manual relaunch / operator script) never runs the
+// barrier's commit, so registered continuations stayed status:"waiting" forever and the user was told
+// "已重启" while nothing continued — the measured 2026-10-26 complaint. The next boot adopts them.
+// The barrier's auto registration and the update route both queue the SAME continuation for the same
+// session. Measured 2026-10-26: two identical continuation messages woke one conversation twice.
+const duplicateRoot=path.join(root,'duplicate-continuation');
+const duplicateBeat=createHeartBeat({root:duplicateRoot,core:()=>({newMate:mate}),agents:()=>null,controller:{prepare:async()=>({ticket:'t'}),restart:async()=>({folder,commit(){},cancel(){}})},probe:async()=>({path:'DSH',created:'new'}),version:'0.3.0',pid:400});
+const firstContinuation=duplicateBeat.schedule('同一条接续','own-session');
+const secondContinuation=duplicateBeat.schedule('同一条接续','own-session');
+const otherContinuation=duplicateBeat.schedule('另一条接续','own-session');
+check('the same continuation is queued once per session, not once per registration',firstContinuation.id===secondContinuation.id&&duplicateBeat.state().tasks.length===2&&otherContinuation.id!==firstContinuation.id);
+
+// A restart after "install the new package" must prepare the version ON DISK, not the one this
+// process was built from; preparing the running version made the controller refuse every time
+// (measured 2026-10-26 20:04: "安装版本未通过核验，不执行重启").
+const diskVersion=JSON.parse(fs.readFileSync(new URL('../packages/newmark-core/package.json',import.meta.url),'utf8')).version;
+const globalPrepared=[];
+const globalBeat=createHeartBeat({root:path.join(root,'global-restart'),core:()=>({newMate:mate}),agents:()=>null,controller:{prepare:async v=>{globalPrepared.push(v);return{ticket:'global-ticket'};},restart:async()=>({folder,commit(){},cancel(){}})},probe:async()=>({path:'DSH',created:'new'}),version:'0.3.0',pid:300});
+await globalBeat.globalRestart();
+check('a restart prepares the installed version, not the version of the running process',globalPrepared.length===1&&globalPrepared[0]===diskVersion&&globalPrepared[0]!=='0.3.0');
+
+const adoptRoot=path.join(root,'adopt');
+fs.mkdirSync(path.join(adoptRoot,'heartBeat'),{recursive:true});
+fs.writeFileSync(path.join(adoptRoot,'heartBeat','state.json'),JSON.stringify({schema:3,tasks:[{id:'stale-continuation',prompt:'继续刚才的工作',destination:'own-session',status:'waiting',created:Date.now()-120000,creatorPid:999}],receipts:[],terminated:[],intent:null,intents:[]}));
+const adoptDelivered=[];
+const adoptAgent={options:{provider:'fixture-provider',model:'fixture-model'},ctx:{get:()=>({flush:async()=>true})},session:{snapshotEvents:()=>adoptDelivered.map(message=>({type:'agent/inbox/spliced',data:{inserted:[message]}}))},followup:async message=>adoptDelivered.push(message)};
+const adoptController={prepare:async()=>({ticket:'t'}),restart:async()=>({folder:'x',commit(){},cancel(){}})};
+const adopted=createHeartBeat({root:adoptRoot,core:()=>({newMate:mate}),agents:()=>({get:()=>adoptAgent}),controller:adoptController,probe:async()=>({path:'DSH',created:'new'}),version:'0.3.0',pid:200});
+check('a continuation registered by an earlier process is adopted on boot',adopted.state().tasks.length===1&&adopted.state().tasks[0].status==='armed'&&adopted.state().tasks[0].folder===null);
+await adopted.tick();
+check('the adopted continuation is delivered exactly once',adoptDelivered.length===1&&adoptDelivered[0].content[0].text==='继续刚才的工作'&&adopted.state().tasks.length===0&&adopted.state().receipts.some(receipt=>receipt.id==='stale-continuation'&&receipt.adopted===true));
+const freshRoot=path.join(root,'adopt-fresh');
+fs.mkdirSync(path.join(freshRoot,'heartBeat'),{recursive:true});
+fs.writeFileSync(path.join(freshRoot,'heartBeat','state.json'),JSON.stringify({schema:3,tasks:[{id:'fresh',prompt:'x',destination:'own-session',status:'waiting',created:Date.now(),creatorPid:200}],receipts:[],terminated:[],intent:null,intents:[]}));
+const fresh=createHeartBeat({root:freshRoot,core:()=>({newMate:mate}),agents:()=>({get:()=>adoptAgent}),controller:adoptController,probe:async()=>({path:'DSH',created:'new'}),version:'0.3.0',pid:200});
+check('a continuation created by this same process is not stolen by adoption',fresh.state().tasks[0].status==='waiting');
+// A wake (newmate_task) hands work back into a DSH conversation, and the host runs a turn there.
+// That turn is the user's, so a conversation the user PAUSED must not be woken - the same rule
+// heartbeat enforces for restart participants. The task stays pending with a marker instead of
+// being delivered or failed, so resuming the goal releases it without a second request.
+const woken=[];let paused=true;
+const wakeTarget={options:{provider:'fixture-provider',model:'fixture-model'},ctx:{get:()=>({flush:async()=>true})},session:{snapshotEvents:()=>[]},followup:async message=>woken.push(message)};
+const wakeMate=createNewMate({root:path.join(root,'wake-pause'),tools:{execute:async()=>({isError:false,value:{ok:true}})},agents:()=>({get:id=>id==='paused-session'?wakeTarget:undefined}),goals:()=>({get:()=>paused?{phase:'paused'}:{phase:'active'}})});
+const wokenTask=wakeMate.wake('Hand the work back',{agent:{session:{id:'paused-session'}}}).id;
+await wakeMate.tick();
+check('a wake does not start a turn in a conversation the user paused',woken.length===0&&wakeMate.state().tasks[0].status==='pending'&&wakeMate.state().tasks[0].deferred==='target_paused');
+paused=false;await wakeMate.tick();
+check('resuming the goal releases the deferred wake exactly once',woken.length===1&&woken[0].id==='newmark-task:'+wokenTask&&wakeMate.state().tasks[0].status==='completed'&&wakeMate.state().tasks[0].deferred===undefined);
+const openMate=createNewMate({root:path.join(root,'wake-open'),tools:{execute:async()=>({isError:false,value:{ok:true}})},agents:()=>({get:()=>wakeTarget})});
+openMate.wake('No goal service anywhere',{agent:{session:{id:'paused-session'}}});await openMate.tick();
+check('an absent goal service does not block a delivery the user asked for',woken.length===2&&openMate.state().tasks[0].status==='completed');
 const legacyRoot=path.join(root,'legacy');fs.mkdirSync(path.join(legacyRoot,'heartBeat'),{recursive:true});fs.writeFileSync(path.join(legacyRoot,'heartBeat','state.json'),JSON.stringify({schema:1,tasks:[{id:'legacy',prompt:'Must not replay',status:'delivered',destination:'own-session'}]}));const legacy=createHeartBeat({...options,root:legacyRoot,pid:700});check('legacy delivered payload is truly retired on migration',legacy.state().tasks.length===0&&legacy.state().receipts[0].id==='legacy'&&!JSON.stringify(legacy.state()).includes('Must not replay'));legacy.stop();
 const mounted=await mountCore({packagesDir:fileURLToPath(new URL('../packages/',import.meta.url)),root:path.join(root,'mount')});
 check('both independent subcomponents are mounted',mounted.composed.includes('newMate')&&mounted.composed.includes('heartBeat'));
@@ -84,5 +141,30 @@ await mounted.switch('heartBeat',false);check('heartBeat switch disposes restart
 check('heartBeat switch leaves companion active',mounted.tools.has('newmate_task'));
 await mounted.switch('heartBeat',true);check('restart queue survives independent switch',mounted.provided.get('newmarkComponents').heartBeat.state().tasks[0].id===registered.id);
 if(process.env.NEWMARK_HOST_WALKER){const {snapshotJsonValue}=await import(pathToFileURL(process.env.NEWMARK_HOST_WALKER).href);for(const definition of mounted.tools.values()){snapshotJsonValue(definition.parameters);snapshotJsonValue(definition.output?.schema);}snapshotJsonValue(mate.state());snapshotJsonValue(resumed.state());snapshotJsonValue(delivered[0]);snapshotJsonValue(await admitImages([image],view,selection));check('official installed DSH walker accepts tool schemas, tasks, followup and image blocks',true);}
+/* --- pre-restart activity probe: 重启前必须先报告「还有谁在跑」 --- */
+const ownAgent = { id: 'own-session', status: 'running', session: { id: 'own-session', title: 'here', lastActivityAt: 1 } };
+const busyOther = { id: 'other', status: 'running', session: { id: 'other', title: 'other chat', lastActivityAt: 2 } };
+const pausedOther = { id: 'paused', status: 'running', session: { id: 'paused', title: 'paused chat' } };
+const idleOther = { id: 'idle', status: 'idle', session: { id: 'idle', title: 'idle chat' } };
+const probeAgents = () => ({ roots: () => [ownAgent, busyOther, pausedOther, idleOther] });
+const probeBeat = createHeartBeat({ ...options, root: path.join(root, 'probe-a'), agents: probeAgents, goals: () => ({ get: agent => (agent.id === 'paused' ? { phase: 'paused' } : null) }) });
+const probe = probeBeat.activity(execution);
+check('pre-restart probe counts only running, unpaused OTHER conversations', probe.ok === true && probe.count === 1 && probe.running.length === 1 && probe.running[0].sessionId === 'other', JSON.stringify(probe));
+check('pre-restart probe reports the requester separately, never as a stranger', Boolean(probe.self) && probe.self.sessionId === 'own-session' && !probe.running.some(entry => entry.sessionId === 'own-session'));
+check('pre-restart probe ignores a conversation the user paused', !probe.running.some(entry => entry.sessionId === 'paused'));
+const blindBeat = createHeartBeat({ ...options, root: path.join(root, 'probe-b'), agents: () => null });
+const blind = blindBeat.activity(execution);
+check('probe without the agents service refuses to pretend nobody is running', blind.ok === false && blind.code === 'agents_unavailable');
+check('heartbeat exposes a read-only activity tool', mounted.tools.has('heartbeat_activity'));
+const probeTool = await mounted.tools.get('heartbeat_activity').execute({}, execution);
+check('the activity tool answers with a report, or names why it cannot', Boolean(probeTool) && (Object.prototype.hasOwnProperty.call(probeTool, 'running') || probeTool.code === 'agents_unavailable'), JSON.stringify(probeTool).slice(0, 160));
+const firstRestart = await mounted.tools.get('heartbeat_restart').execute({ reason: 'gate: probe first' }, execution);
+check('a restart request without force does NOT restart, it reports activity first', firstRestart.ok === false && firstRestart.restarted === false && (firstRestart.code === 'confirmation_required' || firstRestart.code === 'activity_unavailable'), JSON.stringify(firstRestart).slice(0, 240));
+const bothSteps = Array.isArray(firstRestart.next) && firstRestart.next.length === 2 && firstRestart.next.some(step => step.arguments && step.arguments.force === true) && firstRestart.next.some(step => step.arguments && step.arguments.broadcast === true);
+check('the refusal names both next steps so the Agent can decide', firstRestart.code === 'activity_unavailable' ? /force/.test(String(firstRestart.guidance)) : bothSteps, JSON.stringify({ code: firstRestart.code, next: firstRestart.next, guidance: firstRestart.guidance }).slice(0, 240));
+const heartbeatIndex = fs.readFileSync(new URL('../packages/newmark-core/components/heartbeat/index.js', import.meta.url), 'utf8');
+check('the force path is explicit in the tool, not implied', heartbeatIndex.includes('a.force !== true') && heartbeatIndex.includes('forced: true'));
+check('the restart tool description teaches the two-step protocol', /first call does NOT restart/i.test(heartbeatIndex));
+
 await mounted.dispose();check('component teardown leaves no registrations',mounted.tools.size===0);
 console.log(`PASS ${passed} companion, restart and visual assertions. Isolated fixtures: ${root}`);

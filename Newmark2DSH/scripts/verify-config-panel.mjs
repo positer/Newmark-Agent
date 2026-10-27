@@ -68,6 +68,28 @@ check(
   client.includes("fetch('/newmark-core/components')"),
 );
 
+/* The workspace monitor is configured on the NewMate settings page, not in the plugin config
+ * fields: the page saves immediately and the config values are only first-mount defaults. Pin the
+ * four controls and the form styling so a later refactor cannot silently drop one. */
+check('the settings page exposes only the interval; depth and the DSH weight moved to defaults',
+  client.includes("'nm-watch-interval'") && !client.includes("'nm-watch-depth'") && !client.includes("'nm-watch-dsh'") && client.includes('高级项保留默认值'),
+);
+check('the threshold is no longer its own control: it follows the initiative level',
+  !client.includes("'nm-watch-threshold'") && client.includes('主动性同时决定触发阈值'),
+);
+check('companion and monitor are one card, not two settings sections',
+  client.includes('陪伴与工作区监控') && !client.includes("h('h2',null,'工作区文件监控')"),
+);
+check('the level options no longer state per-day message counts',
+  client.includes('低 · 更少打扰') && !client.includes('每天最多 1 条') && !client.includes('每天最多 2 条') && !client.includes('每天最多 3 条'),
+);
+check('number inputs are styled like the selects instead of the browser default',
+  client.includes('.nm-settings-view .nm-initiative-settings input[type=number]') && client.includes('font-variant-numeric:tabular-nums'),
+);
+check('the advanced values are documented as defaults instead of controls',
+  client.includes('3 层 / 0.1 倍') && client.includes('可在插件配置里调整'),
+);
+
 /* ------------------------------------------------- the suppression, and its premise --- */
 
 console.log('');

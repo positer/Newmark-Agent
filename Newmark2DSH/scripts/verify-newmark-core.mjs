@@ -1471,6 +1471,19 @@ for (const [label, script] of [
    * check-in does not), the lease owner and the release it must not skip, and the live event
    * channel from agent-api's receipt view out to the page, the state tool and the MCP status. */
   ['NewMate ComputerUse + live loop gate', 'verify-newmate-agent-loop.mjs'],
+  /* The three conversation tools are the bundle's only actions on someone else's conversation:
+   * creating one costs the user a real model turn, delivering into one wakes it, and reading one
+   * touches data that belongs to another session. The gate drives the bridge with recorded fake
+   * services, so the refusals (relative/missing workspace, paused target, self target, unknown
+   * conversation, over-cap creation) and the bounds (newest-first, dropped counts, text-only
+   * extraction) are asserted against the code that runs. */
+  ['NewMate conversation tools gate', 'verify-newmate-conversations.mjs'],
+  /* The workspace monitor, as the user specified it: a snapshot at start-up and on an interval, a
+   * diff of file COUNT / NAMES / NEWEST MTIME, a weighted score that accumulates and fires ONE
+   * proactive response, and the knobs in the settings. The gate exercises the pure functions
+   * directly (scan, diff, score, settle) and the companion half against a real temp workspace, so
+   * "compares against the previous run" is measured rather than asserted in prose. */
+  ['NewMate workspace monitor gate', 'verify-newmate-workspace-diff.mjs'],
   /* EVERY TOOL THIS BUNDLE REGISTERS, against the boundary that has silently discarded two of its
    * real runs. `memory_lab_reindex` (0.2.2) and `agent_api_send` (0.2.8) both DID their work and
    * were then reported to their caller as failures, because DSH rejects a tool value that is not

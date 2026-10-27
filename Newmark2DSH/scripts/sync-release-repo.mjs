@@ -18,9 +18,33 @@ const pkgDir = path.join(workspace, 'packages', 'newmark-core');
 const stage = process.argv[3];
 
 const manifest = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
-const patterns = manifest.files.map(
-  (p) => new RegExp('^' + p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*') + '$'),
-);
+  /**
+   * Turn one manifest `files` glob into a RegExp.
+   *
+   * `**` is handled first and explicitly. The naive "every * becomes [^/]*" translation turns
+   * a two-star pattern into two separated segment wildcards, which silently matches nothing at the
+   * depth the vendored files actually live — a release that ships without a directory the
+   * package needs. That is the failure this function exists to prevent.
+   */
+  const globToRegExp = (glob) => {
+    // One left-to-right pass. Chained String.replace calls corrupt each other here: replacing
+    // '**/' with '(?:[^/]+/)*' and then every '*' with '[^/]*' rewrites the asterisk the first
+    // replacement just inserted, and the pattern silently stops matching nested files.
+    const specials = '.+^${}()|[]';
+    let out = '';
+    for (let i = 0; i < glob.length; i += 1) {
+      const ch = glob[i];
+      if (ch === '*') {
+        if (glob[i + 1] === '*' && glob[i + 2] === '/') { out += '(?:[^/]+/)*'; i += 2; continue; }
+        if (glob[i + 1] === '*') { out += '.*'; i += 1; continue; }
+        out += '[^/]*';
+        continue;
+      }
+      out += specials.includes(ch) || ch === '\\' ? '\\' + ch : ch;
+    }
+    return new RegExp('^' + out + '$');
+  };
+  const patterns = manifest.files.map(globToRegExp);
 const covered = (relative) => relative === 'package.json' || patterns.some((rx) => rx.test(relative));
 
 const collected = [];

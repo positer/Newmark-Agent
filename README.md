@@ -1,5 +1,227 @@
 # Newmark Agent
 
+## 2026-10-27 微信 ClawBot → NewMate 信道：只读调研与接入设计（未改代码）
+
+目标是把"用户通过微信 ClawBot 给 NewMate 发信"做成"用户在页面上发信"，NewMate 答完再把**纯文本气泡版**发回微信。本轮只产出设计与证据：**未改任何源码、未打包、未安装、未重启**。
+
+- **入站只有一个内核**：`newmate/component.js:598 chat(text, execution, threadId)`。页面（`index.js:196`）与 MCP `newmate_chat`（`mcp.js:11`）都汇到它；待办/自主/会话唤醒各自在进入前构造 `kind/origin/threadId`。
+- **出站只有一个出口**：`:338 readReply` → `:356 messages[{text, plain}]` → `:358 notify`。`plain` 就是气泡/外部渠道版，0.3.43 已写入持久状态（本机实测可读）。
+- **`notify()` 不是消息出口**，而是"要不要弹桌宠"：陪伴开关、静默时段、snooze、冷却四道门，桌宠没起来还会抛错。外部渠道若挂在这里，会继承全部四道门。
+- **本机实测（0.3.43）**：`GET /newmark-newmate` 200 / 120 KB（含 `plain`）；`POST /newmark-newmate {action:'chat'}` 需 `x-newmark-newmate: 1`（无头 400，有头进入分发）；MCP initialize/tools/list 200（7 工具；`serverInfo.version` 仍硬编码 `0.3.14`）；宿主只监听 `127.0.0.1`。
+- **推荐两步走**：先用零插件改动的独立桥验证微信侧准入（是否灰度到、扫码会不会被拦、一条入站能回几条），确认后再把桥收进插件，并补 `source`／入站幂等／授权与线程的显式决定。
+- **微信侧硬边界**：官方客户端**没有入站去重、没有节流**（`dedupe`/`throttle` 在源码里 0 命中）；**工具进度消息默认开启**，一个多工具回合就能烧光约 10 条下行额度 → 渠道只发最终 `plain`；`errcode=-14` = 整账号停 1 小时且不自动重登；`sendmessage` 响应缺 `ret` 不报错，"没报错"≠"已发送"。
+
+### 2026-10-27 14:2x 步骤 0 落地：独立双向探测 demo（`SCRIPTS/clawbot-demo`）
+
+「扫码能不能连上、发信能不能双向收到」现在有一条可执行的判据，**不碰插件、不改发布物**：
+
+```sh
+node SCRIPTS/clawbot-demo/clawbot-demo.mjs selftest   # 离线自检：28 / 28 PASS
+node SCRIPTS/clawbot-demo/clawbot-demo.mjs login      # 打印终端二维码，等手机扫码
+node SCRIPTS/clawbot-demo/clawbot-demo.mjs run        # 收消息 + 自动回一条纯文本回执
+```
+
+- **判定方式**：手机收到回执 = 发送方向通；终端打印 ⬇ 行 = 接收方向通；退出时打印"双向连通 / 只收不发 / 没有收到消息"三选一的判定句。
+- **本轮实测**：离线自检 28/28（登录落盘、去重、游标续传、超时不算错、`ret=-2`、`-14` 停手、请求体与头、uint64 精度、token 不外泄）；种植变异后 27/28 且唯一失败项正确，证明自检能变红；生产端点 `get_bot_qrcode` 992 ms 返回、`qrcode_img_content` 是 http(s) 链接、`get_qrcode_status` 长轮询到客户端超时→`wait`。
+- **仍未验证**：真机扫码与双向收发（需要手机扫码，本轮没有绑定任何账号）；demo 目前回的是固定回执，**尚未把入站接到 NewMate**（那是步骤 0 的后半段）。
+- **2026-10-27 15:24–15:26 真机实测（双向已连通）**：扫码 → `confirmed`；微信发 `test` 被收到（19 位 uint64 id 无损）；回执被服务端接受并分配 `message_id`；用户随后**把回执原文发回**，独立证明那条回执真的到了手机。两次 `sendmessage` 响应都**没有 `ret`、只有 `message_id`** —— 官方判据因此不抛错，「没报错 ≠ 已送达」从源码结论升级为实测样本。
+- **跨重启已测（15:31–15:35）**：`cross-restart-test.mjs` **19/19 PASS**（新进程只读磁盘，无需重新扫码；首轮带旧游标；重启前那条被去重；用磁盘凭据直接发信成功）；活体同样成立——新进程打出「从游标 … 继续 / 已去重 2 条」，不重新扫码直接发出并送达，重启后也收到了用户回复。
+- 二维码渲染用 vendored `qrcode-terminal`（Apache-2.0，未改动），因此 demo 零安装依赖。
+
+### 2026-10-27 接入落地：`SCRIPTS/clawbot-newmate`（不改核心代码）
+
+微信现在是 NewMate 的**同一条输入**：桥把微信文本用**页面同款请求**交给 `chat()`（运行中同线程即插入引导），
+只把该任务**最终回复的 `plain`（通知气泡纯文字版）**发回微信，**永不使用 `text`**（页面渲染版）；
+NewMate 一旦确认接收，该 `message_id` 就在账本里标成已读取，重启或 iLink 重放都不会再交给 NewMate。
+**接收确认不发微信**——微信只收到最后那一条气泡。
+
+- 离线自检 **22 / 22 PASS**；**种植变异**（把转发内容从 `plain` 改成 `text`）→ 20/22、exit 1，失败项正是"纯文字气泡版"。
+- 未改动 `Newmark2DSH/packages/newmark-core/**`；只用既存的 `chat` 动作与 MCP `newmate_task_status`。
+- 用法：`node SCRIPTS/clawbot-newmate/bridge.mjs run`（`--limit 1` 验收，`status` 看账本，`selftest` 离线）。
+
+### 2026-10-27 0.3.49：重启前必须先报告「还有谁在跑」
+
+heartBeat 的重启原来是「直接重启」：`heartbeat_restart {broadcast:false}` 立刻 `globalRestart()`，调用方可以在完全不知道别人回合正在进行时打断它。现在分成两步：
+
+- 新增只读工具 **`heartbeat_activity`**：返回 `self`、`running[]`（只算宿主 `agent.status==='running'` 且**未被用户暂停**的**其他**对话）、`count`、`idleOthers`、`intent`。
+- **`heartbeat_restart` 在 `force!==true` 时不重启**，返回 `{ok:false, code:'confirmation_required', activity, next:[force, broadcast], guidance}`；`force:true` 才立即重启（回执带 `forced:true`），`broadcast:true` 走两阶段屏障等每个对话登记接续。`agents` 服务不可用时返回 `activity_unavailable` 且不重启。
+- 工具描述改写成两步协议（模型读的是描述，不改描述等于没改协议）。
+
+活体（0.3.49）：`heartbeat_restart {reason:'verify probe'}` 返回 `confirmation_required` 且**进程没有重启**；`next` 里两条下一步原样返回。门禁 `verify-newmate-heartbeat` **75 PASS**。
+### 2026-10-27 0.3.46：修「一条回复发三次」与「重启后收了不回」
+
+实测暴露出两个真缺陷，都已修并给了活体证据：
+
+- **同一条回复发了 3 次微信**：`forwardReplies()` 在 `await sendText()` **之后**才删除 `awaiting[taskId]`，而回复定时器 1 s 一次、一次发送 1 s 上下 → 两次 tick 各发一条。状态文件曾出现 `3 个 task / stats.replies=8 / sent 只有 3 个键`。修法：**先占位再等网络**（同步删除 + 落盘，失败再放回）、`sent[taskId]` 幂等、定时器单飞。离线复现（假服务端把发送拖慢到 1.3 s）：修前 `sends=2`，修后 `sends=1`；活体：`replies` 只 +1。
+- **重启后「看着已连接，其实什么都不收」**：0.3.45 的 `index.js` 补丁按一段不匹配的锚点做替换，静默失败 → 通道对象建了、`wechat` 状态也暴露了，但**从没调用 `resume()`**，所以 `receiveSince`/`lastPollAt` 恒为 0。修法：按真实锚点补上 `resume()`/`stop()`；接收循环改成无限重试 + 指数退避（仅 `errcode=-14` 停手）；补 90 s 看门狗。门禁加 **4 条宿主接线断言**（模块级门禁看不见「模块对、接线漏」），总计 **43 PASS**。
+- **更新无感（实测）**：0.3.46 重启后同一 `botId`、同一 `connectedAt`、`qr=null`、`cursor` 保留，`receiveSince>0` 且 `lastPollAt` 每 `20 s 前进；用户再发一条 → `inbound 3→4`、`replies 8→9`。登录信息在 ``/.Newmark/newMate/wechat.json`（插件目录之外），安装更新不会碰它。
+
+发布：main `573d3a9` + tag `v0.3.46`，工作流 [run 40477083559](https://github.com/positer/newmark2dsh/actions/runs/40477083559) **success**；npm `latest` 于 **17:22:21** 从 0.3.45 切到 **0.3.46**（tag 推送后约 14 分钟，staged 延迟）。回拉对拍：117 vs 116 文件（多 `README.md`）、**内容差异 0**、16 个文件仅 CRLF/LF；发布物含接线修复 `wechat.resume()` 与看门狗，`dist` 带 2 个签名 + attestation。**注意 npm 现在走 staged 发布**：0.3.45 曾在 `in-process` 约 20 分钟后才出现在 registry，期间 `npm publish` 报 `409 Cannot publish over previously staged version`、`/-/stage` 列表为空。
+### 2026-10-27 0.3.44 已安装、已发布（npm latest）
+
+- **本机**：0.3.44 已打包装进 DSH profile（tarball sha256 `1AA1DEEB…`，116 文件与安装目录**逐文件零差异**）并真实重启；活体验收：`GET /newmark-newmate` 含 `wechat` 字段、设置页源码含按钮与 DSH `Modal`、`wechat-connect` 返回可显示的 PNG 二维码（1,757 B data URL）、`wechat-logout` 清空登录。
+- **发布**：仓库 [positer/newmark2dsh](https://github.com/positer/newmark2dsh) main `0e9fc1c` + tag `v0.3.44`；tag 触发发布工作流 [run 40472928592](https://github.com/positer/newmark2dsh/actions/runs/40472928592) **success**，npm `latest` 0.3.43 → **0.3.44**。回拉对拍：发布物 117 文件 vs 本地 116（多 `README.md`），**内容差异 0**、16 个文件仅 CRLF/LF 不同；发布物内含 `lib/wechat-*.js` 与 `vendor/qrcode-terminal/`。
+- **顺带修掉** `sync-release-repo.mjs` 的 glob 翻译缺陷：`**` 被两次 replace 互相覆盖，`vendor/**/*` 会**静默漏掉**嵌套文件（那样发布的包会缺二维码编码器）。改为单次扫描的翻译器，重跑后 13 个 vendor 文件全部到位。
+### 2026-10-27 设置页入口（0.3.44，源码候选未安装）
+
+「陪伴与工作区监控」里多一行 **微信 ClawBot**：未连接显示「发起连接」，已连接显示「重新连接」（点它会清除登录信息并重新扫码）；
+二维码用 **DSH 原生弹窗**（`@deepseek-ai/dsh-client-ui-primitives` 的 `Modal`，与「更新 NewMark Core」同一个）显示，白底 260px。
+通道逻辑搬进插件（`lib/wechat-channel.js` + `lib/wechat-ilink.js` + `lib/wechat-qr.js`），语义与桥一致：入站 `mate.chat()`、出站只发 `plain`、确认写账本不发微信。
+门禁 `verify-newmate-wechat-channel` **30/30**；变异（`plain`→`text`）28/30 且失败项正确。**`component.js` 未改一行；未安装、未重启。**
+
+[信道说明](SCRIPTS/clawbot-newmate/README.md) · [用法、判据与边界](SCRIPTS/clawbot-demo/README.md)
+
+[接入设计（接口契约 / 必须一起改的语义 / 门禁清单 / 失败面 / 未验证清单）](Newmark2DSH/docs/16-wechat-clawbot-newmate-channel.md)
+
+## 2026-10-26 Newmark2DSH 0.3.28：NewMate 真实监控 DSH 工作区（稀疏测量 + 适时一次交流）
+
+监控根不再是手填的 `watchRoot`，而是宿主 `workspaceRegistry.list()` 里的工作区（`watchRoot` 降级为额外目录），每 5 分钟重扫，GUI 新加的工作区无需重启。稀疏性四条硬约束：**只读 `size:mtime`（从不读内容）**、深度默认 3、忽略依赖树/版本库/构建产物、目录与待处理集都有上限且**如实上报省略数**。
+
+实测踩到一个真 bug 并修掉：真 `fs.watch` 探针显示 `src/a.txt` 的变动被归到**工作区根**，于是去 lstat 一个不存在的路径、变动被静默丢弃（第二次探针确认已按真实目录测量）。触发链沿用原设计、没有新增机制：`measure` → signals → 每分钟 `initiativeGate` → `self_activation(reason='file-change')` → 模型可回 `notify=false`（默认沉默）——**监控永不直接说话**。`GET /newmark-newmate` 与 `newmate_state` 增 `watch` 状态；解析不到工作区时写告警而不是假装在量。
+
+门禁 `verify-newmate-workspace-watch` **26 PASS**；同轮 agent-loop 73、heartbeat 60、chat 23、short-memory-mcp 44、conversations 30、activation 57、version 12 全绿。**源码候选 0.3.28：未打包、未安装、未重启**——宿主是否在该行作用域暴露 `workspaceRegistry` 仍未活体验证。
+
+[实现与证据](Newmark2DSH/archive/20261026-193849-newmate-workspace-watch/OPERATION.md) · [完整写回](Newmark2DSH/OVERVIEW.md)
+
+## 2026-10-26（追加，同一 0.3.28）NewMate 工作区监控按规格重做：快照差分 + 加权阈值 + DSH 归因
+
+启动对比一次、之后每 30 分钟一次（可配）；比较**文件数量、名称、最新修改时间**；`0.3·数量 + 0.5·名称 + 0.2·时间` 各自归一化后加权，累计达阈值（默认 0.6）触发**一次**主动响应并归零。**DSH 与用户的变动分开计**：mtime 落在「该工作区有 DSH 回合在跑」的窗口（±90 s）内按 `watchDshWeight`（默认 0.1）折算——十次 agent 写入算一次用户写入。设置页新增开关/间隔/阈值/深度/DSH 权重五项与状态行。
+
+取代上一版的事件监视（`workspace-watch.js` 与其门禁已删除，历史归档标注被取代）：事件与差分同时计分会把同一批写入算两次。门禁 `verify-newmate-workspace-diff` **47 PASS**；真实扫描本仓库 3646 文件、采样 2048、省略目录 437，一次 1.49 s；回归 chat 23、heartbeat 60、agent-loop 73、conversations 30、initiative 57、client、config-panel、activation、version 12 全绿。源码未打包/未安装/未重启；归因是启发式（只能证明写入时刻落在窗口内，不能证明谁写的），`agents.list()` 的 cwd/status 未活体验证。
+
+[实现与证据](Newmark2DSH/archive/20261026-195306-newmate-workspace-monitor/OPERATION.md)
+
+## 2026-10-26 晚（已生效）0.3.28 安装、重启并活体验证；发现并修掉嵌套工作区缺陷
+
+0.3.28 已按仓库既有方式（tarball + pnpm）装进本机 profile 并**真实重启**（新宿主 20:12，端口 54879→50256）。活体证据：启动对比执行（`watch.runs=1`）、**6 个真实工作区根**（`workspaceRegistry` 在插件行作用域可达）、6 份快照落盘、NewMate 工具组 **24 条含三个对话工具**、`dshWindows` 记录到真实 DSH 活动窗。
+
+活体同时暴露两个缺陷：① **嵌套工作区**（`Files/Code` 与 `Files/Code/Newmark Agent` 同时注册）会让同一文件被扫两次，且子目录里的 agent 回合把父目录也标成 DSH 活动、降权用户的真实改动 —— 已在源码修掉（`dedupeRoots` + 采样取最长匹配根），门禁 47 → **50 PASS**；② 更新路由在客户端超时取消后**不复位 `state.starting`**，锁死进程内重启通道（未修，下次安装前应处理）。
+
+**注意**：①的修复只在源码，安装态仍是修复前 0.3.28，需再装一次。广播两阶段重启在当前安装方式下结构性不可用（prepare 的是运行版本而非目标版本），实际生效走的是分离 launcher。
+
+[重启尝试与诊断](Newmark2DSH/archive/20261026-200445-install-0.3.28-restart-attempt/OPERATION.md) · [活体验证](Newmark2DSH/archive/20261026-201340-install-0.3.28-live-verify/OPERATION.md)
+
+### 2026-10-26 20:08 重启事故与修复（补）
+
+这次重启暴露了我自己的临时 launcher 的四个缺陷：按镜像名杀进程、只等 6 秒、启动不带工作目录与 stdout、没有重试与就绪判据 —— 结果应用停了 4 分钟才被手动拉起。产品自带的 `core-restart.ps1` 反而是对的（等宿主打印 `dsh web: http://127.0.0.1:` 才判定成功）。
+
+修了两处：① 仓库新增 `SCRIPTS/restart-dsh.ps1`（身份停树 → 等退出 → 带工作目录启动 → 等就绪 90 s → 重试 3 次，失败明说"请手动启动"；`-DryRun` 已通过）；② 更新路由的取消回调改到 `await` 之前登记，客户端超时不再把控制器锁死在 `starting`（源码已修、未安装）。
+
+当前应用运行中（pid 68332，端口 50256，0.3.28，`watch.runs=1`、6 个工作区）。[事故记录](Newmark2DSH/archive/20261026-2008-restart-relaunch-failure/OPERATION.md)
+
+### 2026-10-26 20:19 第二次重启失败与真因（补）
+
+这次不是脚本逻辑问题：DSH 的工具子进程在 kill-on-close 的 Windows **Job 对象**里，`Start-Process` 的"分离"不脱离 Job，helper 杀死宿主树时被连带杀死，应用直到 47 秒后才被手动拉起。
+修复：重启脚本改为**两段式**——前台用 WMI（`Win32_Process.Create`）创建 worker 后返回，worker 的父进程是 `WmiPrvSE.exe`、在 Job 之外，能活过自己杀死的树（实测 pid 88528，父进程 WmiPrvSE）。
+当前 0.3.29 已在跑（端口 56695，`watch.runs=2`、`acc=0.354`、工作区根从 6 个收敛到 3 个——嵌套去重确实生效）。[事故记录](Newmark2DSH/archive/20261026-2019-restart-job-object-failure/OPERATION.md)
+
+### 2026-10-26 20:32 heartBeat 已修：重启后真的接续
+
+两个缺陷都在 heartBeat 里：① 重启准备用的是**运行版本**，而控制器比对**磁盘版本**——"装新版再重启"每次被拒；改为读取磁盘版本。② 由 heartBeat 之外完成的重启不 arm 接续，任务永远 `waiting`；改为启动时**认领**其它进程遗留的接续（>60 s、上限 8、只投一次）。
+门禁 60 → **64 PASS**；0.3.30 已安装，经更新路由重启（helper 自报 `DSH host ready; new main PID 57828`），新端口 52521。**本轮这条消息就是被投递的接续**，heartBeat `tasks:0 / receipts:94`。
+[实现与证据](Newmark2DSH/archive/20261026-2032-heartbeat-continuation-fix/OPERATION.md)
+
+### 2026-10-26 20:34 接续机制已被自己证明（一条过期任务）
+
+20:00 登记的「装 0.3.28」接续，在 0.3.30 重启时被正常投递——**接续真的工作了**；但任务已过期，所以没有回装 0.3.28，而是按当前状态对账：watch 30 分钟/0.6/0.1、**roots=3 / runs=4 / acc=0.41**、24 工具含三个对话工具；真实差分把本轮 2 个改动文件**全部归因 DSH**（user 0 / dsh 2），有效分 **0.0811**。
+两个新写下的边界：文件采样上限 2048 意味着大仓库未采样区的新文件名称看不到（数量会动）；改监控间隔要等当前轮结束才生效。[对账记录](Newmark2DSH/archive/20261026-2034-stale-continuation-verify/OPERATION.md)
+
+### 2026-10-26 20:38 接续去重：一条重启通知，只叫一次
+
+上一次重启的 8 条投递里，同一会话收到两条**一模一样的**接续（屏障自动登记 + 更新路由各一条），对话被叫醒两轮。0.3.31 在 `enqueue` 处按 `(destination, prompt)` 去重（仅限未投递的 `waiting/armed`），第二次登记返回既有 id。
+实测：0.3.31 安装 + 更新路由重启（helper 报 `new main PID 90132`，端口 53250），启动仅 **2 条**投递——本会话接续（本轮）+ 更新后任务；门禁 heartbeat **65 PASS**。[证据](Newmark2DSH/archive/20261026-2038-heartbeat-single-continuation/OPERATION.md)
+
+### 2026-10-26 20:44 设置页整合（0.3.32，已生效）
+
+工作区监控的四项参数改成与陪伴偏好**同一套控件**：统一高度/边框/底色/圆角、数字等宽对齐、聚焦与禁用态；标签只留名字，单位（分钟/层/倍）独立显示，每项下一行写明范围与行为（如"越高越安静""设 0 完全忽略 agent 写入"）；状态行补"下次约几点对比"；并写清"这里即时保存，插件配置里的同名项只在首次挂载时作为默认"。
+门禁 config-panel 34 / client 123 通过；已安装 0.3.32 并经更新路由重启（新端口 55325）。[实现与证据](Newmark2DSH/archive/20261026-2044-settings-page-integration/OPERATION.md)
+
+### 2026-10-26 20:58 监控并入陪伴：主动性决定阈值，时间也参与判断
+
+设置页现在只有一张「陪伴与工作区监控」卡和一个「主动性」选择（低/中/高），阈值自动映射为 **0.85 / 0.6 / 0.4**，**不再有「每天最多 N 条」**——频率由间隔与冷却决定，不由配额决定。
+阈值分数 = **文件证据 + 时间证据**：文件侧仍是数量/名称/最新修改时间（DSH 自建改动按 0.1 降权），时间侧是"已安静多久 / 主动性间隔 × 权重"（低 .15 / 中 .25 / 高 .35），两者累计到阈值才发起一次。安静本身也会积累，文件变动会加速。
+每轮对话（不论用户发起还是 NewMate 主动）都会带上「工作区最近变动」这行浅层事实；主动消息被要求用具体文件事实说明，否则沉默。
+门禁 diff 51 / initiative 57 / config-panel 37 / client 123 通过；0.3.34 已安装并重启（端口 56149，pace=active→阈值 0.4；旧阈值字段已从状态里清除）。[实现与证据](Newmark2DSH/archive/20261026-2058-merge-monitor-pace-time/OPERATION.md)
+
+### 2026-10-26 21:20 设置页删减（0.3.35）
+
+按你的划线：删掉「扫描深度」「DSH 自建改动权重」两个输入及其说明、两条状态行和页脚说明；保留陪伴开关、主动性（→阈值 0.85/0.6/0.4）、静默时段、暂停、监控开关、对比间隔。深度与权重仍是算法里的默认值（3 层 / 0.1 倍），可在插件配置里调整，只是不再占页面。[证据](Newmark2DSH/archive/20261026-2120-trim-settings-block/OPERATION.md)
+
+###### 2026-10-27 12:00 0.3.38 已推送独立仓库并发布到 npm
+
+- **仓库** [positer/newmark2dsh](https://github.com/positer/newmark2dsh)：main **8cdc8e5**，标签 **v0.3.38**，`sync-release-repo` 同步 99 个包内文件（11 个变更，新增 `shortcuts.js`），仓库自带 bundle 守卫通过。
+- **发布**：推 tag 触发仓库工作流（trusted publishing，无 token）→ [run 40447320099](https://github.com/positer/newmark2dsh/actions/runs/40447320099) **success**，npm `latest` 从 0.3.35 切到 **0.3.38**（12:02:46），产物带 **SLSA provenance**。
+- **对拍**：发布物 100 文件 vs 本地 99，唯一多出的是 `README.md`；16 个文件二进制不同但**全部只是 CRLF/LF**，真实内容差异 **0**；发布物 `shortcuts.js` 31 条、含 `ctrl+space`。
+
+####### 2026-10-27 13:24 README 去版本化，并把 0.3.43 真正发布出去
+
+- **README**（独立仓库）：删掉三处版本痕迹——安装命令不再钉 `@0.3.14`、Windows 验证行不再以版本号开头、末尾「当前版本与更新」改为「更新与版本」（版本历史只指向 GitHub Releases）。仓库内 `0.\d+.\d+` 匹配数 **0**。
+- **推送时发现**：npm `latest` 还是 **0.3.41**，0.3.42/0.3.43 只在本机安装过、从未发布，仓库 `package.json` 也停在 0.3.41。于是同步 0.3.43 → 推 main `774a5bb` → 标签 `v0.3.43` → 可信发布。
+- **结果**：`latest` 0.3.41 → **0.3.43**（13:25:49），[run 40455094828](https://github.com/positer/newmark2dsh/actions/runs/40455094828) success；对拍 101 vs 100 文件（多 `README.md`）、16 个差异全是 CRLF/LF、真实内容差异 0；**发布物里的 README 版本号也是 0 处**，两个新功能文件都在包里。
+
+## 2026-10-27 13:17 双版本回复 + 待办重复规则（0.3.43）
+
+- **一条回复，两种渲染**：每轮都要求 JSON 信封 `{text, plain}`——`text` 是页面渲染版（可用 Markdown），`plain` 是气泡与外部渠道（微信 clawbot）用的纯文本 ≤80 字。页面存 `text`，气泡通知发 `plain`；模型不守协议时本地降级，协议 JSON **不会**再变成消息正文。活体：一条 372 字符的渲染版 + 81 字符纯文本版，零 JSON 泄漏。
+- **待办可重复**：`newmate_todo_add` 新增 `repeat`——`{every, unit:'min'|'h'|'d', weekdays:[1-7], at:'HH:MM'}` 或规则串（`every 2 d on mon,wed,fri at 09:00`）。重复待办投递后自动回到 pending 并写下一次激活；活体：8 秒后到期那条投递一次后，下一次排到 2 小时后。面板加了「重复 / 每隔 / 周几」控件，列表显示「每 1 天 · 周一、三、五 · 09:00」。
+- 顺带修掉上一轮残留：重启报告不再被主动格式/能力抱怨闸门吞掉。[证据](Newmark2DSH/archive/20261027-1317-dual-reply-and-repeat/OPERATION.md)
+
+## 2026-10-27 12:46 0.3.41 已推送独立仓库并发布到 npm
+
+- **仓库** [positer/newmark2dsh](https://github.com/positer/newmark2dsh)：main **8e21019**（9 files, +55/−19），标签 **v0.3.41**。
+- **发布**：推 tag 触发可信发布 → [run 40451512519](https://github.com/positer/newmark2dsh/actions/runs/40451512519) **success**，npm `latest` 0.3.38 → **0.3.41**（12:47:42），产物带 **SLSA provenance**。
+- **对拍**：发布物 100 文件 vs 本地 99（多 `README.md`），16 个文件二进制不同但**全部只是 CRLF/LF**，真实内容差异 **0**；发布物内确认 `-WindowStyle Normal` 与 `space: ' '` 都在。
+
+## 2026-10-27 12:43 CU 能自主改输入法吗：能，且有实测证据
+
+- **能切换**：`computer_use({action:"app_key", key:"ctrl+space"})` → 任务栏输入指示器 **英→中**（截图），再按一次恢复 **英**。这条路径在 0.3.39 之前是坏的（SendKeys 没有 `{SPACE}` 关键字），修成字面空格后走通。
+- **能绕过输入法打中文**：`app_type "你好，…"` 以 `unicode-key-events` 直接注入，IME 是中是英都不影响。
+- **不能做的**：`ctrl+shift`（切换输入法/键盘）真实模式返回 `key_unsupported`；`win+space` 因本机不接受合成 Win 键而不可用；没有专门的 IME 状态动作，只有按键与文本两条腿。[证据](Newmark2DSH/archive/20261027-1243-cu-ime-control/OPERATION.md)
+
+## 2026-10-27 12:38 重启必须带回窗口（0.3.40 + 0.3.41）
+
+用户报「进程错误的停止了且没有自行再启动」。查下来是两段问题：辅助在旧进程尚未释放 Electron user-data 锁时就启动替换实例（`status.json` 写 `DSH exited during startup`，stderr 是缓存目录占用），以及修完后**进程回来了但没有窗口**——辅助用 `-WindowStyle Hidden` 启动应用本身，这个构建把首个窗口建成了隐藏。现在：杀树后等同路径进程全部消失（≤20s）→ 启动（`-WindowStyle Normal`）→ **必须有可见主窗口才算就绪**，失败重试 3 次并记录尝试次数。实测 12:37:48 重启：进程 34084、窗口「调试newMate唤起与微信接口」、stderr 0 B。[证据](Newmark2DSH/archive/20261027-1235-restart-window-regression/OPERATION.md)
+
+### 2026-10-27 12:20 亲自调用 CU 验证真实/虚拟模式与快捷键（0.3.39）
+
+真实模式（Notepad）逐条验证：输入、Ctrl+A/C/V/Z、Ctrl+Home/End/Delete、Ctrl+F/EsC 都有可见效果；虚拟模式的收据同样返回 `ok` 但文本没有插入——Windows 11 现代 Notepad 忽略 posted 键盘消息，收据里的 `action_completed:false` 才是线索。由此修掉两处「白名单里写着、实际发不出」：`ctrl+space`（SendKeys 没有 SPACE 关键字，改为字面空格）与 `ctrl+shift`（纯修饰键无 SendKeys 表达，白名单注明真实模式暂不支持）。[证据](Newmark2DSH/archive/20261027-1220-cu-live-shortcut-test/OPERATION.md)
+
+## 2026-10-27 08:25 CU 快捷键白名单（0.3.38）
+
+Computer Use 现在带着一份 **31 条快捷键白名单**：截图里的整套（复制/粘贴/撤销/保存、Win+↑↓、Alt+F4、Alt+Tab、Ctrl+Alt+Del、Ctrl+Shift+Esc、Win+E/Tab/R/I、Ctrl++/-、Ctrl+↑↓、Ctrl+Tab、Print Screen、Delete、Shift+Delete、Ctrl+N/W 等）**外加 Ctrl+Space 中英切换**。三个出口同一来源：工具描述里的表格、只读动作 `action:"shortcuts"` 的 JSON、以及门禁逐条用真实解析器验证。Print Screen 与缩放键补齐了 VK 映射，否则"列了却发不出"。新门禁 `verify-cu-shortcuts` 9 PASS；活体返回 31 条、含 `ctrl+space`。[证据](Newmark2DSH/archive/20261027-0825-cu-shortcut-whitelist/OPERATION.md)
+
+## 2026-10-27 08:10 虚拟桌面预览不再纯黑（0.3.37）
+
+桌宠的虚拟桌面预览曾整屏纯黑：`frame.png` 逐像素 **100% 黑**，而 `capture.json` 报 `captured 12, failed 0`。原因是三块置顶全屏透明浮层（CEF-OSC-WIDGET、两个 Windows.UI.Core.CoreWindow、IslandWindow）被 PrintWindow 渲染成不透明黑矩形，最后绘制盖住了一切；DSH 与任务栏其实都抓到了（lum 31 / 42）。现在对"覆盖 ≥ 屏幕 1/4 且纯黑"的窗口跳过绘制并计入 `transparent`：活体 `captured 8 / transparent 3 / failed 0`，成帧非黑比例 0.561，预览可见真实桌面。新门禁 `verify-desktop-pet-capture` 6 PASS。[证据](Newmark2DSH/archive/20261027-0810-virtual-desktop-black-fix/OPERATION.md)
+
+### 2026-10-27 07:55 NewMate 的时间戳改为本机时间并锚到用户消息（0.3.36）
+
+实测：用户 07:55 发消息，NewMate 回「现在 23:55」——prompt 首行给的是 UTC 的 `Z` 时间却标着「本机时区」。现在首行给两段带偏移的本机时间：`当前时间`（本次运行）与 `最后一条用户消息发送于`（该线程最近一条 user 消息），并明说不要换算。`verify-newmate-chat` 25 PASS。[证据](Newmark2DSH/archive/20261027-0755-newmate-local-time/OPERATION.md)
+
+## 2026-10-26 21:39 npm 已发布 0.3.35（latest 已切换）
+
+`npm publish newmark2dsh-0.3.35.tgz --tag latest` 由 **positer** 账号发布；发布后约 40 秒 `dist-tags.latest` 从 0.3.26 切到 **0.3.35**。回拉校验：从 registry `npm pack` 取回后与本地 tarball **逐文件 sha256 零差异**（98 文件），`dist.integrity` 与本地 sha512 一致（`LMq5V307…`），`dist.shasum 72370951…`。
+注意：仓库里的 `publish.yml` 发布的是桌面应用 `newmark-agent`，不是本插件包；本次插件包是直接发布已验证 tarball。0.3.27–0.3.34 为本地候选，未单独发布。
+
+## 2026-10-25 Newmark2DSH 0.3.27：NewMate 获得三个「对话级」工具（新建 / 发信 / 读取）
+
+NewMate 现在能自己把工作落到对话里：`newmate_conversation_new` 在工作区**新建**一个真实 DSH 对话并给它第一条消息（`ctx.agents.create({sessionId, meta:{cwd, agentPreset}, setup})`，setup 里挂 preset，首条消息走 `followup` + `sessions.flush` 屏障，落盘后才 `workspaceRegistry.attachSession`）；`newmate_conversation_send` 向**已有对话**投递一条消息（复用 `newmark-task:<id>` 身份与「用户暂停的对话不唤醒」判据）；`newmate_conversation_read` **读取指定对话**的近期正文（只取 user/assistant 文本，不含思考与工具调用，最新优先 + 60 条/6000 字符上限并自报 dropped）。
+
+三个工具是 NewMate 的**私有工具**（DSH agent catalog 不出现），身份（origin / cwd / preset / model）由运行上下文 ALS 提供，**模型不能用参数改目标**；每进程最多保留 16 个自建会话，`stop()` 只 dispose 自己建的那些；拒绝项全部具名：相对/不存在工作区、空消息、无 agents 服务、发信给当前对话自己、目标被用户暂停、目标不可 resume、未知会话。
+
+门禁 `verify-newmate-conversations` **30 PASS**（fake services 记录调用顺序：create→setup 挂 preset→followup→flush→attach，读取只出文本、裁剪自报）；同轮复跑 agent-loop 73、heartbeat 60、chat 23、short-memory-mcp 44、activation 57、memorylab 182、version 12 全绿。**源码候选 0.3.27：未打包、未安装、未重启**——因此 `agents.create` 的真实宿主行为仍未活体验证（安装+重启会打断当前会话，留给用户决定）。
+
+[实现与证据](Newmark2DSH/archive/20261025-153555-newmate-conversation-tools/OPERATION.md) · [完整写回](Newmark2DSH/OVERVIEW.md)
+
+## 2026-10-25 NewMate 的 DSH 对话唤起：三个真实对话跑通，并修掉两处缺陷
+
+`newmate_task` 把任务投回调用它的 DSH 对话（`destination`=会话 id，`agent.followup` + `sessions.flush`，消息身份 `newmark-task:<id>`，来源 `cordis-host-runner`，进 next-turn 队列，回合边界落地后另起一轮）。修复前本机 `state.json` 的 88 条任务里这条链路**一次都没跑过**；本轮用三个真实对话跑通：返回 `{"ok":true,"id":…}`、476 / 963 / 2720 ms 完成投递、目标对话各自回 `WAKE-PROBE-OK` / `WAKE-IDLE-OK` / `WAKE-ORIGIN-OK`，会话日志逐行可查。第三个探针走的是设计主动线：DSH 对话调 `newmate_chat` → NewMate run 绑定 origin → 该 run 内调 `newmate_task` → 唤起回同一个会话。
+
+两处真缺陷：① `verify-newmate-heartbeat.mjs` 第 23 条是 19 个工具名的**快照**，0.3.25 把 `compact_context` 加进组后恒红，**并在第 23 条中断**——后面的投递与 flush 断言一直没执行；改成按族断言 + 成员必须属于组后 **22 → 60 PASS**。② 唤起路径不检查用户是否暂停了目标对话，被暂停的对话会被后台唤起跑一轮（0.3.17 已为重启通道立过同一条规则）：新增 `conversationPaused()`，暂停时任务留 `pending` 并标 `deferred:'target_paused'`，恢复 goal 后下一次 tick 自动投递，没有 goals 服务时 fail-open。
+
+同轮复跑 chat 23、agent-loop 73、ask 20、short-memory-mcp 44、activation 57、memorylab 182 全绿；**未跑 umbrella**（CU 类门禁依赖活桌面）。源码改动**未安装、未重启**（本机仍是 0.3.26 的旧内容，4 个文件不同），版本号未提升。微信 clawbot 调研另见 `Newmark2DSH/docs/15-wechat-clawbot-research.md`。
+
+[实现与证据](Newmark2DSH/archive/20261025-151619-newmate-wake-debug/OPERATION.md) · [完整写回](Newmark2DSH/OVERVIEW.md)
+
 ## 2026-10-21 Newmark2DSH 0.3.21 候选：NewMate 获得完整 CU 权限，并暴露实时 Agent 循环
 
 NewMate 现在可以使用 Newmark2DSH 配套的完整 ComputerUse 工具组（`computer_use` 与只读的 `screen_capture`），但只在用户明确请求的那一轮或用户安排的待办里；自主检查（self_activation / measurement）轮次没有这两个工具。allow list 由 `newMateRunTools({automatic,origin})` 一处构造；人格 697→966 字符，写清「桌面授权只来自用户明确请求，记忆、推测、文件变化和主动联系都不构成授权」。
@@ -14,7 +236,7 @@ NewMate 现在可以使用 Newmark2DSH 配套的完整 ComputerUse 工具组（`
 
 ## 2026-10-21（追加⑥）Newmark2DSH 0.3.26：实时工况刷新与计时解耦（已安装）
 
-全量轮询 2s；运行中轻量 /newmark-newmate/loop 每 200ms 刷新思考/工具；状态行本地 250ms 时钟按 startedAt 计时，秒数不再跳秒/加速。实测 /loop 返回 agentLoop/question；页面无浏览器实测。
+全量轮询 2s；运行中轻量 /newmark-newmate/loop 每 200ms 刷新思考/工具；状态行本地 250ms 时钟按 startedAt 计时，秒数不再跳秒/加速。实测 /loop 返回 agentLoop/question；页面无浏览器实测。 npm 0.3.26 已发布（latest，shasum 119a3ea6...）。
 
 ## 2026-10-21（追加⑤）Newmark2DSH 0.3.25：私有工具通道 + 自主压缩（已安装）
 

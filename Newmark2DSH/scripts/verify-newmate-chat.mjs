@@ -16,6 +16,21 @@ check('companion defaults off',mate.state().settings.companion===false);
 await assert.rejects(mate.message('主动提醒'));checks++;
 check('disabled measurement spends nothing',mate.measure(root,'test.txt')===undefined&&mate.state().tasks.length===0);
 const first=mate.createThread().id;mate.chat('第一段对话');await mate.tick();
+// A prompt that hands the model a UTC instant next to the words "本机时区" is a prompt the model will
+// misquote: measured 2026-10-27, NewMate said "现在 23:55" to a user whose clock read 07:55.
+check('the prompt states the run time and the user message time as LOCAL stamps with an offset',
+  /当前时间：\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}/.test(prompts[0]) &&
+  /最后一条用户消息发送于：\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}/.test(prompts[0]) &&
+  !/当前时间：\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z/.test(prompts[0]));
+// The send time is the anchor even when the run starts later (a queued or steered turn).
+const late=createNewMate({root:path.join(root,'late'),now:()=>time,agents:()=>null,tools:{execute:async call=>{latePrompt=call.arguments.prompt;return{isError:false,value:{ok:true,result:{output:'好'}}}}}});
+let latePrompt='';
+late.chat('五分钟后才轮到我');time+=5*60000;await late.tick();
+check('a delayed run quotes the user message time, not the run time, for "你发消息时"',
+  /当前时间：(\d{4}-\d{2}-\d{2} \d{2}:\d{2})/.test(latePrompt) &&
+  /最后一条用户消息发送于：(\d{4}-\d{2}-\d{2} \d{2}:\d{2})/.test(latePrompt) &&
+  RegExp.$1 !== '');
+
 const second=mate.createThread().id;mate.chat('第二段对话');await mate.tick();
 check('automatic title derives from first message',mate.state().threads.find(t=>t.id===first).title==='第一段对话');
 check('each reply is bound to its original thread',mate.state().messages.filter(m=>m.threadId===first).length===2&&mate.state().messages.filter(m=>m.threadId===second).length===2);

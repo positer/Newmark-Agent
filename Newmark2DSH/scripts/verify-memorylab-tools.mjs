@@ -87,6 +87,13 @@ try {
   const remove = tool('memory_lab_delete');
   const reindex = tool('memory_lab_reindex');
 
+  /*
+   * What the composed bundle must carry, by namespace. `components: { computerUse: false }`
+   * switches off ComputerUse and nothing else, so every other component's tools are expected
+   * here: MemoryLab 9, agent-api 4, shortMemory 4, heartbeat 6, NewMate 12.
+   */
+  const COMPOSED_TOOL_PARTITION = { memory_lab_: 9, agent_api_: 4, shortMemory_: 4, heartbeat_: 6, newmate_: 12 };
+
   /* ------------------------------------------------------------ the surface --- */
 
   check(
@@ -100,10 +107,15 @@ try {
     // — `components: { computerUse: false }` switches off ComputerUse and nothing else. Asserted
     // as a partition rather than as one number: a count alone cannot tell "MemoryLab is complete"
     // from "something new arrived and MemoryLab lost a tool to make room for it".
-    mount.tools.size === 33 && ['shortMemory_add','shortMemory_recall','shortMemory_where','shortMemory_size','heartbeat_restart_cancel'].every(name=>mount.tools.has(name)) &&
-      mount.tools.has('newmate_task') && mount.tools.has('newmate_state') && mount.tools.has('newmate_ask') && mount.tools.has('heartbeat_after_restart') && mount.tools.has('heartbeat_restart') &&
-      [...mount.tools.keys()].filter((name) => name.startsWith('memory_lab_')).length === 9 &&
-      [...mount.tools.keys()].filter((name) => name.startsWith('agent_api_')).length === 4,
+    // The count used to be the literal 33, which is exactly the kind of number this comment
+    // argues against: it went stale twice without anyone noticing (0.3.49 added heartbeat_activity,
+    // 0.3.50 added newmate_wechat_send_file), and a stale count reads as "MemoryLab lost a tool".
+    // The expectation is now a namespace partition, so a tool that arrives has to be placed in one
+    // of these buckets instead of silently moving the total.
+    mount.tools.size === Object.values(COMPOSED_TOOL_PARTITION).reduce((sum, n) => sum + n, 0) &&
+      Object.entries(COMPOSED_TOOL_PARTITION).every(([prefix, count]) => [...mount.tools.keys()].filter((name) => name.startsWith(prefix)).length === count) &&
+      ['shortMemory_add','shortMemory_recall','shortMemory_where','shortMemory_size','heartbeat_restart_cancel'].every(name=>mount.tools.has(name)) &&
+      mount.tools.has('newmate_task') && mount.tools.has('newmate_state') && mount.tools.has('newmate_ask') && mount.tools.has('newmate_wechat_send_file') && mount.tools.has('heartbeat_after_restart') && mount.tools.has('heartbeat_restart') && mount.tools.has('heartbeat_activity') &&
     `${mount.tools.size}: ${[...mount.tools.keys()].sort().join(', ')}`,
   );
   check(

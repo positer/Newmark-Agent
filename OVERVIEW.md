@@ -1,5 +1,17 @@
 # Newmark Agent Overview
 
+## 2026-10-27 23:5x 短期记忆列表：最新在最上（0.3.51 源码候选）
+
+**指令**：「将memoryLab的短期记忆呈现列表顺序反过来…改为最上为最新」。
+
+- **改法**：`client.js` 的 `ShortMemoryView` 新增 `shortNewestFirst()`——按 `createdAt` 倒序、同时间戳按 `seq` 倒序兜底，**显式排序而不是 reverse**；副标题补「最新在最上」。
+- **没有动接口顺序**：`GET /newmark-memorylab/short-memory` 仍按 `seq` 升序（活体 30 行，`#1` = 10-12 的旧记录在最前），因为 `lib/memory-context.js` 把这批行当**时间史**注入 NewMate 的初始化上下文，反了会改模型输入语义。呈现层归呈现层。
+- **门禁**：`verify-newmark-core-client` 123 → **124 PASS**。夹具原来两条 `createdAt` 相同（那种数据下「排序」与「不排序」只差一个 tiebreak，测不出意图），改成两个不同日期；新增 `ok 22 - the short memory list presents the newest entry first`；过期灰显断言移到 `rows[1]`。变异（去掉排序）→ **122/124**，红的正是这两条，还原 sha256 一致。
+- **顺带修掉一个陈旧门禁**：`verify-memorylab-tools` 把组合后的工具总数写死 `33`，而 0.3.49 的 `heartbeat_activity` 与 0.3.50 的 `newmate_wechat_send_file` 之后实际是 **35** —— 跑它必红。改成命名空间分区（memory_lab 9 / agent_api 4 / shortMemory 4 / heartbeat 6 / newmate 12，总数由分区求和），**181/1 → 182/182**。
+- **一次 flake**：客户端门禁首跑 `ABORT: the live store changed during the run`（exit 2）——运行中的 0.3.50 在快照期间写了 live 存储；重试即 PASS。记下来免得下次误判成回归。
+- **版本**：0.3.51（六个 manifest + `VERSION.md`）。**源码候选，未打包未安装未重启**，所以现在打开面板看到的仍是旧顺序。
+
+归档：`archive/20261027-235900-short-memory-newest-first/`（两份门禁补丁、改动 diff、变异跑、活体接口顺序、MANIFEST）。
 ## 2026-10-27 23:5x 0.3.50 发布：npm latest 已切到 0.3.50
 
 **指令**：「确认收到，推送git，监控npm latest」。

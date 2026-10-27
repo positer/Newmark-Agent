@@ -366,10 +366,11 @@ try {
   const shortTab=findAll(panelTree,n=>n.type==='button'&&textOf(n)==='短期')[0];
   shortTab.props.onClick();
   const shortElement=findAll(hooks.render(panelSeat.Component,{}),n=>typeof n.type==='function'&&n.type.name==='ShortMemoryView')[0];
-  hooks.render(shortElement.type,{});hooks.lastSetters()[0]({loading:false,error:'',path:'fixture/short-memory.json',items:[{seq:1,createdAt:'2026-01-01T00:00:00Z',expiresAt:'2026-01-08T00:00:00Z',content:'旧记忆'},{seq:2,createdAt:'2026-01-01T00:00:00Z',expiresAt:'2099-01-08T00:00:00Z',content:'当前记忆'}]});
+  hooks.render(shortElement.type,{});hooks.lastSetters()[0]({loading:false,error:'',path:'fixture/short-memory.json',items:[{seq:1,createdAt:'2026-01-01T00:00:00Z',expiresAt:'2026-01-08T00:00:00Z',content:'旧记忆'},{seq:2,createdAt:'2026-02-01T00:00:00Z',expiresAt:'2099-01-08T00:00:00Z',content:'当前记忆'}]});
   const shortTree=hooks.render(shortElement.type,{}),shortRows=findAll(shortTree,n=>n.type==='li');
   check('short memory renders all entries with sequence and timestamps',shortRows.length===2&&textOf(shortTree).includes('#1')&&textOf(shortTree).includes('旧记忆')&&textOf(shortTree).includes('当前记忆'));
-  check('expired short memory is visibly gray and retained',shortRows[0].props['data-expired']===true&&shortRows[0].props.style.opacity===0.55&&shortRows[0].props.style.color==='var(--dsw-alias-label-tertiary)'&&shortRows[1].props.style.opacity===1);
+  check('the short memory list presents the newest entry first',textOf(shortRows[0]).includes('#2')&&textOf(shortRows[0]).includes('当前记忆')&&textOf(shortRows[1]).includes('#1')&&textOf(shortRows[1]).includes('旧记忆'),textOf(shortRows[0]).slice(0,120));
+  check('expired short memory is visibly gray and retained',shortRows[1].props['data-expired']===true&&shortRows[1].props.style.opacity===0.55&&shortRows[1].props.style.color==='var(--dsw-alias-label-tertiary)'&&shortRows[0].props.style.opacity===1);
   findAll(hooks.render(panelSeat.Component,{}),n=>n.type==='button'&&textOf(n)==='总览')[0].props.onClick();
   check('the panel renders the reindex control', panelText.includes('重建索引'));
   check('the panel renders a search field', findAll(panelTree, (n) => n.type === 'input').length > 0);

@@ -1,5 +1,14 @@
 # Newmark Agent Overview
 
+## 2026-10-28 09:0x 0.3.61 已发布为 npm latest（含 goal 硬恢复与隐藏桌面滚轮修复）
+
+- **release 仓**：main `5352ea7..47d0975`，注解 tag `v0.3.61` → `ebac70a`，本地 == 远端；`sync-release-repo` 报 `copied 118, changed 13, removed 0`，stage 版本 0.3.61。
+- **workflow**：run 40610924863 **success（20m36s）**；`Publish` 步早于可见性就完成，之后一直在工作流自己的 `Verify official latest without fallback` 里等——staged 发布的常态。
+- **npm**：`dist-tags.latest` 在 **09:07:13** 切到 **0.3.61**（距 tag 推送 20 分钟）。
+- **发布包 vs 已安装副本**：119 文件（118 + release 仓 README）、105 字节相同、13 仅 EOL 差异、**内容差异 0**、安装目录无多余文件；发布包里 `components/heartbeat/component.js` 带 `bootPid`，即本轮 goal 硬恢复的代码确实在 `latest` 里。
+- **源码仓**：`HEAD == origin/master == 30a594fe`，本轮无待推提交。
+
+归档：`archive/20261028-014600-release-0.3.61/`（refs、20 分钟采样、发布包比对）。
 ## 2026-10-28 01:5x 硬性 goal 恢复终于成立（0.3.61 装盘重启，实测对话真的续了 round）
 
 **用户的两条批评都成立**：① 之前那份接续文案仍是旧的（持久队列里保留入队时的文本）；② 前几次重启的「恢复」没有一次是组件真正完成的。0.3.54→0.3.61 之间被实测推翻的判断有五个：装新版第一次重启无快照（0.3.54）、已消费快照被当证据（0.3.56）、空注册表被当成没有目标（0.3.57）、`observed armed` 被当终态导致看守提前关闭（0.3.59）、回执跨进程继承污染判断（0.3.60）。

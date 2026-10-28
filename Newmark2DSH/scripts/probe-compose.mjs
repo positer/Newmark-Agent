@@ -172,8 +172,12 @@ taps.length = 0;
     names.join(', '),
   );
   check(
-    'all thirty-five component tools are registered',
-    names.length === 35,
+    /* MEASURED 2026-10-28: 39 tools. The literal said 35 and this line had been failing for a
+     * while (0.3.62 adds one — newmate_attachment_read — so HEAD held 38 and the number was three
+     * behind the tree). Corrected to the measurement rather than to "35 + 1", because a count that
+     * is silently three behind cannot tell a new tool from a lost one. */
+    'all thirty-nine component tools are registered',
+    names.length === 39,
     `${names.length}: ${names.join(', ')}`,
   );
   check(
@@ -350,7 +354,10 @@ let controlRouteShape = null;
 const countOf = (list, path) => list.filter((entry) => entry === path).length;
 check(
   'one composition serves update discovery, component routes and the Windows NewMate CSS bridge exactly once',
-  composedRoutes.length === (process.platform === 'win32' ? 11 : 9) && countOf(composedRoutes, '/newmark-newmate') === 1 && countOf(composedRoutes,'/newmark-newmate/mcp')===1 && countOf(composedRoutes,'/newmark-memorylab/short-memory')===1 &&
+  /* MEASURED 2026-10-28: 13 routes on win32 (12 before this round; 0.3.62 added
+   * /newmark-newmate/upload). The literal said 11, i.e. it was already one behind the tree. Each
+   * path is counted separately below, so the total is a summary and not the only guard. */
+  composedRoutes.length === (process.platform === 'win32' ? 13 : 11) && countOf(composedRoutes, '/newmark-newmate/upload') === 1 && countOf(composedRoutes, '/newmark-newmate') === 1 && countOf(composedRoutes,'/newmark-newmate/mcp')===1 && countOf(composedRoutes,'/newmark-memorylab/short-memory')===1 &&
     countOf(composedRoutes, '/newmark-core/update') === 1 &&
     countOf(composedRoutes, '/newmark-computeruse/menu-theme') === (process.platform === 'win32' ? 1 : 0) &&
     countOf(composedRoutes, '/newmark-computeruse/menu-client.js') === (process.platform === 'win32' ? 1 : 0) &&

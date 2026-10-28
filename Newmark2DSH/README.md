@@ -114,6 +114,14 @@ NewMate 是一位亲近、务实的私人秘书式 Agent。它拥有独立聊天
 
 主要工具：`newmate_chat`、`newmate_task_status`、`newmate_memory_context`、`newmate_state`、`newmate_message`、`newmate_todo_add`、`newmate_todo_list`、`newmate_todo_cancel`、`newmate_mcp_info`、`newmate_wechat_send_file`。有宿主绑定的原对话时，`newmate_task` 可把具体后续任务交回该对话；模型参数不能另选目标。`newmate_state` 与 `newmate_task_status` 都带 `agentLoop`（运行中或上一轮的循环快照）。`newmate_search` 是 NewMate 的原生搜索入口，供它在用户明确要求查资料时调用。
 
+**收文件：页面上传与微信入站。** 用户可以直接把文件交给 NewMate，两条入口共用一套存储（`~/.Newmark/newMate/uploads/<id>/<名字>`）：
+
+- **页面**：输入框旁的「📎 上传文件」把文件字节流式上传到专用路由（body 即字节、名字在 header、上限 20 MiB——**本机自设值**，不是协议声明），发送时附件随消息一起提交，用户消息里显示附件标签。
+- **微信**：微信 ClawBot 通道可以接收用户发来的图片、视频与文件：频道从媒体 CDN 取回密文，按官方协议用 **AES-128-ECB** 解密后存进同一个目录。一条微信消息只取一个媒体（图片 > 视频 > 文件）；语音在有服务端转写时按文字处理，没有转写则明确计为不支持（本机没有 SILK 解码器）。文件取回失败会重试，仍失败时把「本机没能取回 / 原因」如实交回 NewMate 告知用户，不会静默丢弃。
+- **已验证到什么程度（2026-10-28）**：0.3.62 已装进本机 DSH profile 并重启，页面字节上传、读取工具（含越界拒绝）与真实一轮对话对文件内容的引用都实测通过；**微信侧发文件也已真机验证**（用户手机发来 7.6 MB 的 .pptx，解密后是真 PPTX，NewMate 如实说明"看不到里面版式"）。
+
+- **能读到什么**：文本文件在提示里带一段有预算的内容片段；需要更多时用 `newmate_attachment_read` 按行读取——该工具**只能读上传目录**（解析后的路径前缀判定），2 MiB / 2000 行上限。**图片、PDF、Office、压缩包与音视频只按名称与字节数转述，内容不会被读取**，本机不解码这些格式，模型也不会假装看过。
+
 **发文件到微信。** 微信 ClawBot 通道连上之后，`newmate_wechat_send_file` 把一个本机文件发到用户微信：入参 `path`（必填）、`caption`（可选，另发一条文字消息）、`receiver`（可选，默认当前绑定的接收者）。它是**共享工具注册表**里的工具，任意 DSH 对话与 NewMate 自己的对话轮都能调用；自动检查轮次拿不到它（发出去的文件收不回来）。校验：普通文件、非空、≤20 MiB（**自设**保护值，不是协议声明）、可执行/安装类型拒绝、凭据目录与凭据文件拒绝。回执给出文件名、字节数、服务端 `messageId` 与 accepted/未确认的区分——**没有 messageId 就不声称送达**。
 
 NewMate 可以读取、新建和增量更新可信记忆、整理标签、添加短期记忆，并在用户明确请求时使用完整的 ComputerUse 工具组（`computer_use` 与只读的 `screen_capture`）。仍然不开放记忆删除、任意 Shell 执行或递归 Agent API；桌面权限按用户请求授予，不因记忆内容或自主推测而扩大。

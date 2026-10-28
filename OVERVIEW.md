@@ -1,5 +1,34 @@
 # Newmark Agent Overview
 
+## 2026-10-28 11:5x NewMate 收文件：页面上传与微信入站媒体（0.3.62 源码候选，未安装未重启）
+
+**用户要求**：「为 newmark2dsh 的 newMate 添加文件上传能力，以及通过 clawbot 接受用户从微信发来的文件」。
+
+**起点（实测）**：已安装并运行的是 **0.3.61**（宿主 PID 19632，端口 55277，01:44:45 装、01:45:13 启动）；`GET /newmark-newmate` 200 / 233 069 B，`wechat.connected=true`，`stats={inbound:19,acked:19,skipped:1,replies:24,sendFailed:1,files:1,fileFailed:0}`；`.Newmark/newMate/` 里没有 `uploads/`，入站媒体计数为 0 —— 也就是说**用户发来的图片/文件此前被 `queue()` 的 `message_type!==1` / 纯文本判定直接跳过**。
+
+**改动**
+- **新增** `packages/newmark-core/components/newmate/lib/upload-store.js`：`uploadsRoot`、`sanitizeUploadName`、`mediaKind`、`inspectUpload`、`saveUpload`、`pruneUploads`、`resolveUploadPath`（realpath 前缀判定）、`readUploadContent`（按行 + 字节双上限）、`textExcerpt`、`normalizeAttachments`、`attachmentBlock`。常量：20 MiB / 8 个 / 4000 字 / 2 MiB / 2000 行 / 保留 200 个目录。
+- **改** `components/newmate/component.js`：`withAttachments()`（预算 = 15000 − 原话 − 240×附件数，装不下先丢片段再拒绝）；`chat(text, execution, threadId, attachments)`；任务记录带 `attachments`；用户消息保留原话并另存附件；新增 `saveAttachment()` / `readAttachment()`；`NEWMATE_RUN_TOOLS` 加 `newmate_attachment_read`（**不进** `NEWMATE_REQUEST_TOOLS`）。
+- **改** `components/newmate/index.js`：新路由 `POST /newmark-newmate/upload`（流式 20 MiB，超过 413 且不落盘；`x-newmark-newmate` 头与 `sec-fetch-site` 与既有动作同规）；注册 `newmate_attachment_read`（`ctx.tools.register`，共享注册表）；`case 'chat'` 透传 `input.attachments`。
+- **改** `components/newmate/lib/wechat-ilink.js`：`decryptAesEcb`、`parseAesKey`（16 原始字节 / 32 位 hex ASCII 两种编码）、`cdnDownloadUrl`、`downloadMedia`（GET 流式、Content-Length 与实读双判上限、失败码分开）。
+- **改** `components/newmate/lib/wechat-channel.js`：`describeMedia`（官方优先级 image > video > file > voice）、`imageFileName`（字节魔数嗅探扩展名）、`deliverOne`（先取回再 `chat()`）、`queue()/drain()` 重写、`stats.media/mediaBytes/mediaFailed/voiceUnsupported`、`status().media`、回执 `attachment{name,bytes,kind,sha256}` 与 `mediaFailure`。
+- **改** `client.js`：输入框旁「📎 上传文件」（隐藏 `input[type=file]`，`POST /newmark-newmate/upload`）+ 待发附件标签（可移除）+ 用户消息里的附件标签 + `.nm-attach*` 样式；`send()` 提交 `attachments` 后清空。
+- **文档**：新增 `docs/17-newmate-attachments.md`（契约、协议出处、错误码、门禁、未验证清单）。
+- **门禁**：新增 `scripts/verify-newmate-attachment.mjs`（87 断言），并登记进`verify-newmark-core.mjs`；六个 manifest 与 `VERSION.md` → **0.3.62**（`sub-component change`，patch +1）。
+
+**实测（本机，可复现）**
+- `verify-newmate-attachment` **87 / 87 PASS**；变异（`resolveUploadPath` 容器判定改恒假）→ **2 / 87 FAIL**，失败的正是两条容器断言，恢复后 87 / 87。
+- `verify-newmate-wechat-channel` **118 / 118**、`verify-newmate-chat` 25、`verify-newmate-file-navigation` 14、`verify-newmark-core-client` 124、`verify-newmark-core-package` 54、`verify-version-discipline` 12 全绿。
+- 真实挂载（`mount-newmark-core.mjs`）里 `newmate_attachment_read` 在共享注册表、`/newmark-newmate/upload` 在路由表；用真实字节驱动该路由 → 200 + 回执 sha256 与落盘一致；用 `state.json` 路径调读取工具 → `file_not_in_upload_store`。
+
+**边界**：未打包/未安装/未重启（运行中是 0.3.61）；真机微信发文件未测；图片未送进模型（授权模型无已核验图片输入能力）；无 PDF/Office 解析与 OCR；`verify-tool-output-boundary` 本轮 **PREMISE ABSENT（exit 2）**——它要的 DSH 安装路径（`DSH_APP_ROOT` 下的 `dsh-util-values`）在这台机器上找不到，不是代码失败，故新工具的「lossless JSON 边界」本轮只有挂载层证据。
+
+**umbrella 最终读数（12:0x 复跑）**：`verify-newmark-core` **206 passed / 4 failed / 2 skipped（212）**，其中 `ok 204 - NewMate attachment gate passes`；剩下 4 条与本轮无关且改动前同样如此（heartbeat 五工具计数早已落后、两个门禁只打印 `SUMMARY` 没有判定词、win32 的 `whole_desktop_capture_is_its_own_scope`）。本轮因新功能而改变的计数已按实测修正：工具 39、路由 13、`newmate_` 13、页面 `fetch` 通道 8（HEAD 实测分别是 38 / 12 / 12 / 7，三处硬编码数字早就落后，已一并改正并逐条写明依据）。
+
+**已安装并重启（12:02–12:05）**：`newmark2dsh-0.3.62-source-live.tgz`（sha256 `D60A0E0E…`）装进 DSH profile，安装目录 **119/119 文件与 tarball 逐字节相同**，经更新路由重启（**55277 → 62829**）。活体验收：工具数 **72 → 73**（新增 `newmate_attachment_read`）、`wechat.media` 字段出现、99 B 文本经 `POST /newmark-newmate/upload` 落盘且 sha256 一致、注册表读回原文、越界路径被拒、NewMate 在真实一轮里答出文件第一行并**自己调用**了读取工具。**真机微信发文件已验证（12:05）**：手机发来 7,658,239 B 的 pptx → 解密落盘为真 PPTX（PKZIP + 70 条目）、`mediaBytes=7,658,239/mediaFailed=0`、回执 sha256 与磁盘一致；NewMate 在微信里如实说「本机不解析 pptx」。用户随后**确认手机上收到了那条回复**，所以「入站文件 → 回答 → 回复回到手机」整圈闭环成立（进程侧 `replies 24→25` + `sent` 新键，用户侧复述确认）。
+
+归档：`archive/` 下本轮目录（before/after + OPERATION.md + evidence）。
+
 ## 2026-10-28 09:0x 0.3.61 已发布为 npm latest（含 goal 硬恢复与隐藏桌面滚轮修复）
 
 - **release 仓**：main `5352ea7..47d0975`，注解 tag `v0.3.61` → `ebac70a`，本地 == 远端；`sync-release-repo` 报 `copied 118, changed 13, removed 0`，stage 版本 0.3.61。

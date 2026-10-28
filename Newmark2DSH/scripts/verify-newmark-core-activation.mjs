@@ -126,8 +126,10 @@ try {
     both.rows.map((row) => `${row.key}:${row.origin}`).join(', '),
   );
   check(
-    'the five components register all thirty-five tools',
-    both.tools.size === 35,
+    /* MEASURED 2026-10-28: 39 tools (38 at HEAD, +1 for newmate_attachment_read in 0.3.62).
+     * The literal said 35, so it had been three behind the tree before this round. */
+    'the five components register all thirty-nine tools',
+    both.tools.size === 39,
     `registered: ${[...both.tools.keys()].join(', ')}`,
   );
   for (const name of TOOL_NAMES.memoryLab) check(`MemoryLab registers ${name}`, both.tools.has(name));

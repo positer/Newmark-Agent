@@ -712,7 +712,12 @@ check(
   (() => {
     const channels = [...client.matchAll(/fetch\(\s*'([^']*)'/g)].map((match) => match[1]);
     const distinct = new Set(channels);
-    return distinct.size === 6 && distinct.has('/newmark-newmate/events') && distinct.has('/newmark-core/components') && distinct.has('/newmark-memorylab/short-memory') && distinct.has('/newmark-newmate') && distinct.has('/newmark-computeruse/menu-theme') && distinct.has('/newmark-core/update') &&
+    /* MEASURED 2026-10-28: 8 distinct same-origin paths. The literal said 6 while the tree already
+     * held 7 before this round (the '/newmark-newmate/loop' poll is not in the list below, so the
+     * count and the named set had drifted apart from each other); 0.3.62 adds
+     * '/newmark-newmate/upload' for the page's byte route. Both halves are now stated so the next
+     * addition cannot pass by making the count agree with itself. */
+    return distinct.size === 8 && distinct.has('/newmark-newmate/upload') && distinct.has('/newmark-newmate/loop') && distinct.has('/newmark-newmate/events') && distinct.has('/newmark-core/components') && distinct.has('/newmark-memorylab/short-memory') && distinct.has('/newmark-newmate') && distinct.has('/newmark-computeruse/menu-theme') && distinct.has('/newmark-core/update') &&
       [...distinct].every((url) => url.startsWith('/') && !url.startsWith('//')) &&
       channels.length >= 1 &&
       !client.includes('EventSource') &&
@@ -1484,6 +1489,14 @@ for (const [label, script] of [
    * directly (scan, diff, score, settle) and the companion half against a real temp workspace, so
    * "compares against the previous run" is measured rather than asserted in prose. */
   ['NewMate workspace monitor gate', 'verify-newmate-workspace-diff.mjs'],
+  /* The two entrances a FILE can use to reach NewMate: the page's byte route and the WeChat
+   * ClawBot channel's inbound media. One store, one chat() argument, one reader - and the reader
+   * can only see what the store wrote. The gate drives the real channel against a fake media CDN
+   * that serves AES-128-ECB ciphertext (so the decrypt is measured, not mocked), drives the real
+   * mounted plugin's upload route with real bytes, and holds the properties that must not rot:
+   * containment on the resolved path, an excerpt that never pretends to be the whole file, and a
+   * failed download that reaches the user as an honest notice instead of silence. */
+  ['NewMate attachment gate', 'verify-newmate-attachment.mjs'],
   /* EVERY TOOL THIS BUNDLE REGISTERS, against the boundary that has silently discarded two of its
    * real runs. `memory_lab_reindex` (0.2.2) and `agent_api_send` (0.2.8) both DID their work and
    * were then reported to their caller as failures, because DSH rejects a tool value that is not

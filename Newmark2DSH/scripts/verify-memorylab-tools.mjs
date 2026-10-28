@@ -92,7 +92,9 @@ try {
    * switches off ComputerUse and nothing else, so every other component's tools are expected
    * here: MemoryLab 9, agent-api 4, shortMemory 4, heartbeat 6, NewMate 12.
    */
-  const COMPOSED_TOOL_PARTITION = { memory_lab_: 9, agent_api_: 4, shortMemory_: 4, heartbeat_: 6, newmate_: 12, goal_restore: 1 };
+  // 0.3.62 placed the attachment reader in the newmate_ bucket: 12 -> 13. A new tool has to be put
+  // in a bucket here (that is the point of the partition), and the TOTAL is derived from them.
+  const COMPOSED_TOOL_PARTITION = { memory_lab_: 9, agent_api_: 4, shortMemory_: 4, heartbeat_: 6, newmate_: 13, goal_restore: 1 };
 
   /* ------------------------------------------------------------ the surface --- */
 

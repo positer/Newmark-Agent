@@ -123,7 +123,7 @@ NewMate 是一位亲近、务实的私人秘书式 Agent。它拥有独立聊天
 
 **到期了还不动时，面板会说出原因**：被拦下的第一条条件写进 `todo.deferred={code,at,reason}`（同一个原因不重复落盘），界面显示「已到期 · 等宿主有会话在运行」这样的短语，而不是笼统的「等待合适时机」。升级前就已在 `pending` 的旧记录没有这个字段，会先显示旧文案，下一次 tick 写入原因后才改成具体说明。
 
-> 版本现状：**0.3.64 已安装并在本机运行**（实测 `GET /newmark-core/update` → `current:"0.3.64"`；安装目录与源码 118 个文件逐字节一致）。0.3.63 是本规则的实现，0.3.64 只把模型可见的工具说明补齐——两个 tarball 逐文件比对 119 个文件仅 7 处不同：6 个清单的版本号 + `components/newmate/lib/mcp.js`，行为代码逐字节相同。成对验收（0.3.63 活体）：同一到期时刻的 `reminder` 0.26 s 到账、`conversation` 停在 `host_busy` 并写明原因。npm 尚未发布（`latest` 仍是 0.3.62）。代码：`components/newmate/component.js` 的 `deliverDueTodo()` / `activationBlocker()` / `reminderReady()`，界面字串在 `client.js`。
+> 版本现状：**0.3.64 已安装、运行并发布到 npm**（`oidc` 发布，workflow run 40666442814 success；tag `v0.3.64` → `latest` 翻转用了 2 分 26 秒）。运行态实测 `GET /newmark-core/update` → `current:"0.3.64"`；发布的 tarball（sha256 `6DC1E99C…`）与本机安装副本相比：106 个文件逐字节相同，12 个仅行尾不同（CI 在 Linux 打包为 LF），`package.json` 差一个结尾换行，发布包另带公开 README。成对验收（0.3.63 活体）：同一到期时刻的 `reminder` 0.26 s 到账、`conversation` 停在 `host_busy` 并写明原因。
 
 陪伴关闭时两种模式都等待，并同样记录原因（`companion_off`「陪伴未开启」）。稳定任务身份和消息回执用于防止重启后重复激活或提醒；失败和运行中崩溃不会自动重试。
 

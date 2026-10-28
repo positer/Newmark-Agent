@@ -110,7 +110,22 @@ NewMate 是一位亲近、务实的私人秘书式 Agent。它拥有独立聊天
 | `conversation`（新待办默认） | 在关注保护允许时，以原生记忆和已有上下文运行一轮 NewMate | “明天九点，结合已有计划帮我梳理今天要推进的事情” |
 | `reminder` | 投递保存的原文，不额外调用模型 | “明天九点提醒我提交材料” |
 
-待办复用静默、暂停、输入与阅读保护，陪伴关闭时等待开启，所以**到期表示最早可激活时间，不保证精确到秒送达**。稳定任务身份和消息回执用于防止重启后重复激活或提醒；失败和运行中崩溃不会自动重试，已有旧提醒保留原语义。
+**两种到期方式的闸门不同，这是刻意的**（0.3.63 起）：
+
+| | 需要满足 | 不需要满足 |
+| --- | --- | --- |
+| `reminder` | 陪伴开关开启 + **NewMate 自己空闲**（没有正在运行或排队的 `chat` 轮次） | 宿主有没有别的会话在跑、桌宠、阅读、键鼠输入、草稿、静默时段、暂停 |
+| `conversation` | 上面两条 **加上**完整注意力闸：非静默、非暂停、桌宠就绪（`statusAgeMs < 2000`）、**宿主无会话运行**、页面未在阅读、本进程无活跃阅读窗口、无草稿、键鼠空闲 ≥ 60 秒 | — |
+
+**提醒不等宿主**：投递一条提醒不花模型、不打断任何人的回合，所以「别的会话正在跑」不再能让用户的提醒迟到。历史上（≤0.3.62）两种模式共用 `env.busy`，于是另一处工作区的会话能把用户预约的提醒压住——实测 2026-10-28 14:00 那条被覆盖 767 秒后取消，这正是 0.3.63 改掉的东西（证据在 `archive/20261028-1447-todo-deferral-diagnosis/`）。
+
+**静默时段与暂停只静音气泡，不延迟消息**：消息与回执照常落盘，`notify()` 决定要不要弹出来。这样「它到了」和「它打扰你了」是两件可以分开说的事。
+
+**到期了还不动时，面板会说出原因**：被拦下的第一条条件写进 `todo.deferred={code,at,reason}`（同一个原因不重复落盘），界面显示「已到期 · 等宿主有会话在运行」这样的短语，而不是笼统的「等待合适时机」。升级前就已在 `pending` 的旧记录没有这个字段，会先显示旧文案，下一次 tick 写入原因后才改成具体说明。
+
+> 版本现状：**0.3.64 已安装并在本机运行**（实测 `GET /newmark-core/update` → `current:"0.3.64"`；安装目录与源码 118 个文件逐字节一致）。0.3.63 是本规则的实现，0.3.64 只把模型可见的工具说明补齐——两个 tarball 逐文件比对 119 个文件仅 7 处不同：6 个清单的版本号 + `components/newmate/lib/mcp.js`，行为代码逐字节相同。成对验收（0.3.63 活体）：同一到期时刻的 `reminder` 0.26 s 到账、`conversation` 停在 `host_busy` 并写明原因。npm 尚未发布（`latest` 仍是 0.3.62）。代码：`components/newmate/component.js` 的 `deliverDueTodo()` / `activationBlocker()` / `reminderReady()`，界面字串在 `client.js`。
+
+陪伴关闭时两种模式都等待，并同样记录原因（`companion_off`「陪伴未开启」）。稳定任务身份和消息回执用于防止重启后重复激活或提醒；失败和运行中崩溃不会自动重试。
 
 主要工具：`newmate_chat`、`newmate_task_status`、`newmate_memory_context`、`newmate_state`、`newmate_message`、`newmate_todo_add`、`newmate_todo_list`、`newmate_todo_cancel`、`newmate_mcp_info`、`newmate_wechat_send_file`。有宿主绑定的原对话时，`newmate_task` 可把具体后续任务交回该对话；模型参数不能另选目标。`newmate_state` 与 `newmate_task_status` 都带 `agentLoop`（运行中或上一轮的循环快照）。`newmate_search` 是 NewMate 的原生搜索入口，供它在用户明确要求查资料时调用。
 

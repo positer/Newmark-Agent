@@ -27,6 +27,8 @@
 
 **已安装并重启（12:02–12:05）**：`newmark2dsh-0.3.62-source-live.tgz`（sha256 `D60A0E0E…`）装进 DSH profile，安装目录 **119/119 文件与 tarball 逐字节相同**，经更新路由重启（**55277 → 62829**）。活体验收：工具数 **72 → 73**（新增 `newmate_attachment_read`）、`wechat.media` 字段出现、99 B 文本经 `POST /newmark-newmate/upload` 落盘且 sha256 一致、注册表读回原文、越界路径被拒、NewMate 在真实一轮里答出文件第一行并**自己调用**了读取工具。**真机微信发文件已验证（12:05）**：手机发来 7,658,239 B 的 pptx → 解密落盘为真 PPTX（PKZIP + 70 条目）、`mediaBytes=7,658,239/mediaFailed=0`、回执 sha256 与磁盘一致；NewMate 在微信里如实说「本机不解析 pptx」。用户随后**确认手机上收到了那条回复**，所以「入站文件 → 回答 → 回复回到手机」整圈闭环成立（进程侧 `replies 24→25` + `sent` 新键，用户侧复述确认）。
 
+**已发布（12:30:38）**：源码仓 `9c7f6e33`、release 仓 `841966b` + 注解 tag `v0.3.62` 均推送；工作流 run **40630850759** success；`dist-tags.latest` 从 0.3.61 切到 **0.3.62**（tag 后 19m54s）。发布物与本机已装并验收过的那一份逐文件对拍：120 文件 / 106 字节相同 / 13 仅换行 / **内容差异 0**；registry tarball sha256 `29A2D252…`，sha512 与 `dist.integrity` 一致。
+
 归档：`archive/` 下本轮目录（before/after + OPERATION.md + evidence）。
 
 ## 2026-10-28 09:0x 0.3.61 已发布为 npm latest（含 goal 硬恢复与隐藏桌面滚轮修复）

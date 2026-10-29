@@ -1,5 +1,45 @@
 # Newmark Agent
 
+## 2026-10-29 10:2x 0.3.66：独立复核逼出四处「投递到了、却没激活」，已全部修掉
+
+0.3.65 的闸门改动本身通过了独立审计（`deliveryBlocker` 只读陪伴开关 + NewMate 空闲；`env.busy` 已离开 `todos` 路径；面板不再产出「等宿主有会话在运行」；7 条变异全红）。但审计同时构造出**四条「投递成功了、用户仍然没收到」的路径**，每条都直接违背用户那句「只需要投递给 newMate 并激活 newMate 的对话即可」：
+
+| # | 缺陷（实测） | 修法 |
+| --- | --- | --- |
+| A | `unsolicited=task.kind!==`+`chat`+`&&!report` 让**待办激活**也进了主动消息闸：241 字符回答 → `failed`、240 字符 → 完成、带项目符号 → `failed`（模型跑了，用户什么都没收到） | 加上 `&&!delegated`：用户预约的回合是**被请求的** |
+| B | 用户那条 07:30 监考激活在 09:04 只跑 204 ms 就死于 `model_not_selected`（agent-api exit 3），待办被写成 `failed` 且不重试 | 识别 exit 3 语义 → 待办回 `pending` + `retryAfter=+5 min` + `deferred={code:model_unavailable}`，空尝试的 task 记录删除（下次以同一确定性 id 重建） |
+| C | 一条 pending wake 指向**被暂停的宿主会话**时，`tick()` 直接 `return`，排在后面的 `todo_activation` 永远轮不到（实测停在 `activated`、modelCalls=0、跨重启仍卡） | 候选列表改为「chat 优先、其余按序」，遇到 paused 目标**跳过并记 `target_paused`**，继续选下一条 |
+| D | 队列满时 `conversation` 分支静默 `return`（面板只剩「已到期 · 等待合适时机」），且把后面的 `reminder` 一起堵住 | `defer(item,queue_full)`，到期项改为**逐个判定**，第一个能跑的就跑 |
+
+**门禁**：`verify-newmate-todo` **34**；`verify-newmate-todo-activation` **20→31**（新增 4 组共 11 条：暂停剥夺 / 队列满与队首 / 241 字回答 / 空尝试退回）；`measure-newmate-todo-gate-mutations` **11 条全红、源码逐字节还原**（新增 4 条正好对应上面四处）。回归全绿：chat 25 / agent-loop 73 / initiative 57 / reply 15 / report 5 / attachment 87 / conversations 30 / settings / version 12。
+
+**既有失败（与本次无关，有实测为证）**：`verify-newmark-core` 4 条红——两条子门禁自身全绿（conversations 30/30、workspace-diff 51/51）却被包装层判「exited 0 without printing a verdict」（它找 `PASS`，子门禁打 `SUMMARY`）；`heartBeat ... exactly its five tools` 的数量断言写死 5，而 0.3.16/0.3.17 起已注册 6 个；`win32 gate` 的 `whole_desktop_capture` 断言。`verify-newmate-presentation` 亦既有红。
+
+**版本**：0.3.65 是同一轮的中间态（只装了本机 profile，未发布、未重启），0.3.66 取代它。打包 `newmark2dsh-0.3.66.tgz` 1,305,730 B / 119 条目 / sha256 `64DB60D1…`；装进 `~/.dsh/profiles/desktop`，安装态 118/119 与源码 sha256 全等，`package.json` canonical 相等。
+
+## 2026-10-29 09:0x 0.3.65：定时待办的两种到期方式共用一道闸，DSH 会话不再参与
+
+**用户的要求（原话）**：「代办的带 newMate 激活的投递应该和 dsh 本体的会话没有任何关系，只需要投递给 newMate 并激活 newMate 的对话即可」。上一版（0.3.63）把「提醒不再等 DSH」做了，却让**激活**继续走完整注意力梯——面板于是写着「已到期 · 等宿主有会话在运行」，用户读到的正是「你把条件改反了」。
+
+**实测到的现象**（`~/.Newmark/newMate/state.json`，0.3.64 运行态）：待办 `78b46752`，`mode=conversation`，到期 `2026-10-29 07:30 +08:00`，`status=pending`，`deferred={code:'host_busy', reason:'宿主有会话在运行', at:'08:00:01'}`。即：07:30 到期后被**静默时段**挡到 08:00，08:00:01 起被**宿主有会话在运行**一直挡到 08:49 仍未投递。
+
+**根因两处，落在同一段代码**
+- `deliverDueTodo()` 的 `conversation` 分支走 `activationBlocker()`，其中 `if(env.busy)return 'host_busy'`；`env.busy`（`index.js:43`）= 任意 DSH 会话 running / 有排队 turn / 有 job，或桌宠 CU 占用。`reminder` 在 0.3.63 已只等两道闸，`conversation` 留着静默/暂停/桌宠/宿主/阅读/键鼠/草稿七条。
+- 面板文案 `'已到期 · 等'+reason` 把**状态**当**等待目标**念：`reason` 本意是「宿主在忙所以在等」，拼出来成了「等宿主有会话在运行」。
+
+**改后**
+- 新增 `deliveryBlocker()` = 陪伴开关 + `newmateBusyReason()`（`newmate_running`/`newmate_busy`），两种到期方式**共用**；`deliverDueTodo()` 在分支之前只调一次，`tick()` 挑 `todo_activation` 时用 `deliveryReady()`。
+- `env.busy`、`agents.list()`、桌宠就绪、静默、暂停、阅读、键鼠、草稿全部退出 `todos` 投递路径；静默/暂停继续只由 `notify()` 静音气泡，消息照常落盘。
+- `DEFERRAL` 只留 3 个可达码；面板改「已到期 · <状态>」；待办面板提示与 `newmate_todo_add` 描述同步改述新规则（模型读到的契约）。
+
+**门禁**：`verify-newmate-todo` **33→34**；`verify-newmate-todo-activation` **21→20**（注意力断言合并为一条「都不拦」，失败/重试/崩溃/换话题保留）；`measure-newmate-todo-gate-mutations` **7 条全红、源码逐字节还原**（含「把 host 检查塞回闸门」）。回归 initiative 57 / chat 25 / agent-loop 73 / reply 15 / report 5 / attachment 87 / settings / version 12 全绿。
+
+**已发现但未修**：`verify-newmate-presentation` 在 HEAD（0.3.64）代码下同样红——该断言取的 chat prompt（1003 字符）不含三段人格文字；与本改动无关，本轮不夹带。
+
+**打包安装**：`newmark2dsh-0.3.65.tgz` 1,304,556 B / 119 条目 / sha256 `E148FE0D…`；装进 `~/.dsh/profiles/desktop`，安装态 119 文件里 **118 与源码 sha256 全等**，唯一不同的 `package.json` canonical JSON 相等。
+
+归档：`Newmark2DSH/archive/20261029-085759-newmate-todo-gate-no-dsh/`。
+
 ## 2026-10-28 17:48 0.3.64 推送 git 并发布 npm（latest 已翻转）
 
 - **主仓库** `positer/Newmark-Agent`：`087328a1`（14 文件，+302/−19）→ push `master`（`83efd901..087328a1`）。只显式暂存本次动过的路径，未并入他人的 `DESKTOP/` 改动。

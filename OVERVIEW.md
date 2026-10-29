@@ -1,5 +1,138 @@
 # Newmark Agent Overview
 
+## 2026-10-29 10:2x 0.3.66：审计逼出的四处「投递到了却没激活」
+
+独立只读审计（新起一个 teammate，读源码 + 真跑三份门禁 + 自建探针）的结论分两半：**闸门解耦 PASS**，**端到端语义 FAIL**。四条失败路径与修法见 `README.md` 同日条目；本条记实现落点。
+
+- `component.js`：`unsolicited` 排除 `delegated`；`tick()` 的候选改为「chat → 其余」并跳过 paused 目标（不再 `return`）；`deliverDueTodo()` 到期项逐个判定 + `queue_full` 不再静默；catch 里新增 `nothingAttempted` 分支（exit 3 → `pending` + `retryAfter` + `model_unavailable`）；`DEFERRAL` 增 `queue_full`/`model_unavailable`；新增 `NOTHING_ATTEMPTED` 正则与 `NOTHING_ATTEMPTED_RETRY_MS=5min`。
+- 0.3.65 的 `deliveryBlocker()`/`deliveryReady()` 保持不变——审计确认这部分是对的，本轮只补它下游的消费路径。
+- `verify-newmate-todo-activation.mjs` 20→31；`measure-newmate-todo-gate-mutations.mjs` 7→11 条变异，并改为**同时**跑两份门禁（`red` 判定覆盖 activation 的端到端行为）。
+- 版本：0.3.65 → 0.3.66（中间态不发布）；打包/安装数字见 README 同日条目与归档 `evidence/`。
+
+**教训（也写进 taste.md）**：闸门对了只等于「放行」对了；用户说的「投递」在 NewMate 里是「策划 → 运行 → 落盘 → 气泡」四段，任何一段读宿主事实、或被别的任务的格式规则判死，用户看到的都还是「没来」。
+
+## 2026-10-29 09:0x 0.3.65：到期投递与 DSH 会话彻底解耦（两种模式共用一道闸）
+
+**要求**：用户指出 0.3.63 的修法错向——「上个版本要求没有活动对话，我让你修的是不要求 dsh 的会话全空闲，结果你给我修成了需要 dsh 有活动会话」；并给出规则原话：「代办的带 newMate 激活的投递应该和 dsh 本体的会话没有任何关系，只需要投递给 newMate 并激活 newMate 的对话即可」。
+
+**改动（`components/newmate/component.js`，净 −19 行）**
+- 删 `activationBlocker()`（九条注意力梯）与 `todoActivationReady()`、`reminderReady()`，改为 `deliveryBlocker()`（陪伴开关 → `newmateBusyReason()`）与 `deliveryReady()`；`deliverDueTodo()` 在按 mode 分支**之前**只调一次，`conversation` 分支不再自己复查；`tick()` 挑 `todo_activation` 任务改用 `deliveryReady()`。
+- `DEFERRAL` 由 10 码缩到 3 码（`companion_off` / `newmate_running` / `newmate_busy`）；导出由 `activationBlocker/newmateIdle/reminderReady` 改为 `deliveryBlocker/deliveryReady/newmateIdle`。
+- `env.busy`（DSH 会话/队列/job/CU）与桌宠就绪、静默、暂停、阅读、键鼠、草稿**全部**退出 `todos` 投递路径。它们仍在 `environment()` 里，但消费方只剩 `initiativeGate`（主动陪伴）与 `rotateForMessage`、`lateGate`（主动消息），那是「不请自来的打扰」，与本条规则不是一回事。
+- `client.js`：`'已到期 · 等'+reason` → `'已到期 · '+reason`（状态不是等待目标）；`nm-todo-hint` 由「激活对话会等待阅读、草稿、输入及静默结束…」改为「两种到期方式都只等「陪伴开启 + NewMate 自己空闲」，与 DSH 工作区会话无关…静默时段只静音气泡，不推迟到账」。
+- `lib/mcp.js`：`newmate_todo_add` 的描述改为「BOTH modes wait for exactly two things … DSH host sessions, quiet hours, snooze, the desktop, reading, typing and drafts never hold an item」。
+
+**为什么这是「回到用户要的那条」，而不是又一次扩大**：两个模式在结构上做的是同一件事——把一条到期内容交给 NewMate；差别只在 end-of-line（落一条原文 / 跑一轮模型）。旧代码把「跑一轮」当成「要占用用户的注意力」，于是拿宿主会话与键鼠状态当代理；而打扰的裁决点本来就在 `notify()`（静默/暂停只静音气泡）。用户 07:30 的监考激活被挡到 08:49，正是这条代理的成本。
+
+**证据**
+- 运行态取证（`archive/20261029-085759-newmate-todo-gate-no-dsh/evidence/live-state-before.json`）：待办 `78b46752` `mode=conversation`，`activateAt=2026-10-28T23:30:00.000Z`，`deferred={code:host_busy, at:2026-10-29T00:00:01.131Z}`；同机 `quietStart=23/quietEnd=8`。08:00:01 这个写入时刻说明：静默解除后的第一 tick 把码从（静默）改成 `host_busy`，之后一直没变。
+- 门禁：`verify-newmate-todo` PASS 34（新增 4 条断言覆盖「宿主/阅读/键鼠/桌宠都不拦激活」「激活落到 NewMate 并跑一轮」「NewMate 自己的回合仍拦，码为 `newmate_busy`」）；`verify-newmate-todo-activation` PASS 20；变异门禁 7 条全红、源码逐字节还原。
+- 回归：initiative 57、chat 25、agent-loop 73、reply-and-repeat 15、report-display 5、attachment 87、settings PASS、version-discipline 12 全绿。`verify-newmate-todo-web` 需要 `NEWMARK_WEB_DEPS`/`NEWMARK_EVIDENCE_DIR` 未提供，本轮未跑；`verify-newmate-menu` 需要 webview2 vendor 目录的独立装配，本轮未跑。
+
+**边界**：`verify-newmate-presentation` 红，且已实测在 HEAD 代码下同样红（chat prompt 1003 字符，不含人格三段），属既有失败，本轮未修。面板文案只在数据层验证到表达式改动（见归档），浏览器渲染实测在重启后补。
+## 2026-10-28 17:48 0.3.64 已推送 git 并发布到 npm（latest 已翻转）
+
+**要求**：「打包安装并重启验证，推送git，监控npm latest」。
+
+**打包/安装/重启**：复核而不是重做——安装态与源码 118 个可比文件 sha256 全等，唯一「不同」的 `package.json` 差异只是序列化（canonical JSON 相等），重装是空操作。运行态实测 `current:"0.3.64"`、`GET /newmark-newmate` 200 / 251,560 B、工具描述为新文案。
+
+**推送 git（两个仓库）**
+- 主仓库 `positer/Newmark-Agent` `master`：`087328a1`（14 文件、+302/−19），显式路径暂存，未并入他人的 `DESKTOP/` 改动；`83efd901..087328a1` push 成功。
+- 发布仓库 `positer/newmark2dsh` `main`：`sync-release-repo.mjs` 同步（copied 119 / changed 9 / removed 0，六个清单 0.3.64）→ 改公开 README → `7193473` → tag `v0.3.64`（`76f038c5…`）→ push 成功。
+- 公开 README 第 104 行原是**改动前**的全局描述（「到期表示最早可激活时间，不保证精确到秒送达」），已换成两模式对照表 + 「提醒不等宿主」「静默只静音气泡」。
+
+**npm**：tag 推送触发 `publish.yml`（OIDC），run `40666442814` 09:43:16Z → **09:45:18Z success**；轮询 `latest` 于 **09:45:42Z 从 0.3.62 翻到 0.3.64**（tag→latest = 2 分 26 秒；历史上 0.3.61/0.3.62 约 20 分钟，本轮只记录这个观测）。
+
+**发布字节 vs 本机字节**（`evidence/COMPARE.json`，发布 tarball sha256 `6DC1E99C…`，120 文件）：raw 全等 106；**12 个仅行尾不同**（发布侧 LF，本机 Windows 侧 CRLF——`.gitattributes` 的 `eol=lf` 让 CI 按 LF pack）；`package.json` 仅多一个结尾换行（canonical 相等）；`README.md` 只在发布包里（发布仓库根自带的公开 README）。
+
+**边界**：本轮没有从干净状态重走 uninstall→install→restart；`computeruse/.runtime/` 三个文件仍是进场前的 modified（未提交）；其他 dist-tag（`next` 等）未查；macOS/Linux 未验；面板浏览器实测仍缺。
+
+## 2026-10-28 17:40 0.3.64：工具说明与 0.3.63 行为对齐，已安装并重启
+
+**为什么有 0.3.64**：0.3.63 验收时读 `newmate_todo_add` 的描述，发现它仍是旧契约（「At due time current attention is protected … companion off postpones delivery」）。**模型看到的是旧说明，行为却是新规则**——同一个改动没做完。0.3.64 只改这一句。
+
+**两 tarball 逐文件证据**（`TARBALL-DIFF-063-064.txt`，解包后 119 个文件逐个 sha256）：**differing=7** = 6 个清单的 `version` 字段 + `components/newmate/lib/mcp.js`。`component.js` 与 `client.js` **不在差异里**，所以「行为逐字节相同」是测出来的。
+
+**安装**：`newmark2dsh-0.3.64.tgz` 1,304,666 B / sha256 `7B830CC5…`；装进 `~/.dsh/profiles/desktop`（同一套 tarball + 依赖指向 + `pnpm install`），`0.3.63 → 0.3.64` EXIT=0；安装态与源码 **118 个可比文件 sha256 全等**。
+
+**重启**：这次走**两阶段广播屏障**而非更新路由——`heartbeat_restart {broadcast:true, ackMode:'auto'}` 让三个运行中会话全部 `registered`（auto 覆盖，不花模型调用），`heartbeat_restart_commit` → `committed`。GUI 端口 `57647 → 62684`。
+
+**重启后实测**：安装态 `package.json` = 0.3.64；`GET /newmark-core/update` → `current:"0.3.64"`；`GET /newmark-newmate` 200 / 251,568 B，`pet.running=true`、`statusAgeMs=131`、`wechat.connected=true`、`pending todos=0`；**工具描述读回**（`agent_api_catalog detail=full`，取自运行中的注册表）：`hasNewText=true / hasOldText=false`。
+
+**边界**：面板「已到期 · 等<原因>」仍未做浏览器实测；npm 未发布（`latest` 仍 0.3.62）；0.3.64 只改说明文字，未新增行为断言。
+
+## 2026-10-28 17:16 0.3.63 已打包、已安装、已重启，并完成成对行为验收
+
+**做了什么**：`pnpm pack` → `newmark2dsh-0.3.63.tgz`（1,304,570 B / 119 条目 / sha256 `77A7D592…`）→ 按仓库既有做法装进 `~/.dsh/profiles/desktop`（tarball 进 profile + 依赖指向 `*-source-live.tgz` + `pnpm install`）→ 登记 `heartbeat_after_restart` → 更新路由重启。
+
+**安装核对**：安装目录 vs `packages/newmark-core` 共 118 个可比文件，**sha256 全部相同，0 处不一致**；源码侧多出的 11 项都是不进包的一次性/运行期文件（`.runtime/payload/*.cs|ps1`、`__pycache__`、`archive/`、old tarball），与 `files` 白名单吻合。
+
+**重启后实测**：GUI 端口 `62829 → 57647`；`GET /newmark-core/update` → `current:"0.3.63"`（`latest:"0.3.62"`，npm 未发布，预期不同）；`GET /newmark-newmate` 200 / 249,266 B，`pet.running=true`、`statusAgeMs=268`、`wechat.connected=true`。
+
+**成对行为验收（同一到期时刻 17:13:39.808）**
+
+| id | mode | 结果 |
+|---|---|---|
+| `debaf575` | `reminder` | **delivered，延迟 0.26 s**；消息入会话；微信回执 `messageId=7521137104588755592` |
+| `50ae8bdf` | `conversation` | **pending + `deferred.code=host_busy`**；面板文案算出「已到期 · 等宿主有会话在运行」 |
+
+到期瞬间宿主确实忙：`watch.dshWindows` 记录 `17:10:26→17:14:56` 有会话覆盖该时刻。**这正是 0.3.62 会拦住提醒的条件，现在它只拦对话激活。**
+
+**未做/边界**：面板文案只在**数据层**验证（用安装态 `client.js` 原表达式对实时行求值），**未做浏览器实测**；对照组因我自己这一轮一直 running 而始终 `host_busy`，「忙解除即激活」只有离线门禁覆盖；「0.3.62 会拦」是上一轮实测归因 + 本轮源码核对的推论，**未做跨版本 A/B**；验证结束后该对照组已取消且 `deferred` 被清空。npm 未发布（`latest` 仍 0.3.62）。
+
+**归档**：`archive/20261028-1540-install-0.3.63/`（tarball、前后 profile 配置、两次实时采样、`ACCEPTANCE.json`、`panel-probe.json`、`MANIFEST.sha256.txt`）。
+
+## 2026-10-28 15:10 0.3.63：提醒投递只受「陪伴启用 + NewMate 空闲」约束
+
+**要求（用户原话）**：「取消消息投递的dsh无会话限制，只限制陪伴启用以及newMate空闲」。
+
+**改前**（`archive/20261028-1447-todo-deferral-diagnosis/` 已确诊）：`deliverDueTodo()` 让 `reminder` 与 `conversation` 共用 `env.busy`，而 `env.busy` = 任意 DSH 会话 running；14:00 的用户提醒被另一工作区的会话压了 767.5 秒，且 `todos[]` 不记录原因。
+
+**改后**：`components/newmate/component.js`
+- 新增 `newmateBusyReason()`（`newmate_running` / `newmate_busy` / null，**只看 NewMate 自己**）、`newmateIdle()`、`reminderReady() = companion && newmateIdle()`。
+- 新增 `activationBlocker()`：对话激活的完整注意力闸，改为**逐条返回首个**不满足条件；`todoActivationReady() = activationBlocker()===null`（行为等价、可解释）。
+- 新增 `DEFERRAL` 码表与 `defer(item,code)`：只在 code 变化时写 `todo.deferred={code,at,reason}`（tick 1.5 s，不重复落盘）。
+- `deliverDueTodo()` 分流：`conversation` = newmate 忙 → 注意力闸；`reminder` = 仅 `reminderReady()`。两分支各自 `defer` 原因。
+- `tick()` 的到期判断不再因 `companion` 提前短路（否则 `companion_off` 永远算不出来）。
+- `todoCancel()` 清掉 `deferred`；导出 `activationBlocker/newmateIdle/reminderReady` 供门禁直接断言。
+
+**提醒不再看的条件**：宿主会话在跑、桌宠就绪、页面阅读、本进程阅读窗口、键鼠空闲、草稿、静默时段、暂停。**静默/暂停仍只静音气泡**（`notify()` 未改），消息与回照常落盘——「到了」与「打扰了」分开记。
+
+**仍保留的**：陪伴关闭 → 两种模式都不投递并记 `companion_off`；NewMate 自己的 `chat` 队列 pending/running → 两种模式都让路（这就是「NewMate 空闲」）；对话激活保留 `host_busy` 等全部条件。
+
+**界面**：`client.js` 那句改为 `t.deferred?.reason ? '已到期 · 等'+reason : '已到期 · 等待合适时机'`；升级前的旧 pending 记录无 `deferred`，继续显示旧文案直到下一次 tick 写入。
+
+**门禁**：`verify-newmate-todo` **20 → 33**；新增 `scripts/measure-newmate-todo-gate-mutations.mjs` **7 条变异全红、源码逐字节还原**；`verify-newmate-todo-activation` 21、`verify-newmate-initiative` 57、`verify-newmate-chat` 25、`verify-newmate-agent-loop` 73、`verify-newmate-reply-and-repeat` 15、`verify-newmate-report-display` 5、`verify-newmate-attachment` 87、`verify-version-discipline` 12 全绿。
+
+**一处由门禁逼出来的设计修正**：初版在 `deliverDueTodo()` 开头留了 `if(!settings.companion) return` 早退，「陪伴开关不再被提醒读取」这条变异因此**变不红**——冗余守卫替被删条件兜了底。删掉早退、让两分支各自给原因后变异才红。（已写进 `taste.md`。）
+
+**版本**：六个 manifest + `VERSION.md` → **0.3.63**（`sub-component change`）。**未打包、未安装、未重启**，本机仍是 0.3.62。
+
+## 2026-10-28 14:47 诊断：定时待办到期不投递，面板显示「已到期 · 等待合适时机」
+
+**用户报告**：设定时 NewMate 激活，到点没投递，面板写着「已到期 · 等待合适时机」。
+
+**结论（实测，非推测）**：闸门按设计工作，但**把原因丢掉了**。本次那条 `4b87642b` 是 `mode='conversation'`，到期时刻（14:00:00）到被手动取消（14:12:47）之间，`watch.dshWindows` 显示受监控根 `…\Files\Code` 下**始终有会话在运行，100% 覆盖**这 767.5 秒，于是 `env.busy` 恒真，`todoActivationReady()` 从未放行。该字段只记根不记会话 id，所以本记录**不指认**是哪一个会话。
+
+**代码事实**
+- 面板字串唯一含义 = `status==='pending' && activateAt<=now`（`client.js:2403`），不携带原因；对比 `tasks[]` 会写 `deferred:'target_paused'`，`todos[]` 什么都不写。
+- `deliverDueTodo()` 对两模式分流：`reminder` 直接投递（:193-199），`conversation` 先过 `todoActivationReady()`（:186-187）。
+- `todoActivationReady()`（:182）九个条件：companion / 非静默 / 非 snooze / `env.ready` / `!env.busy` / `!env.readerFocused` / `readingUntil<=now` / `idleMs>=60s` / 无草稿。
+- 另有对两模式都生效的一条（:184）：NewMate 自己有 `chat` 任务 pending/running 时整体 return。
+- `env.busy`（`index.js:43`）= 任意 DSH 会话 running 或 inbox 有货 或 jobs 在跑 或 桌宠 CU 占用；不区分是哪个会话。
+
+**反证（同样来自 state.json）**：四条 `mode='reminder'` 已投递记录的延迟为 0.1 / 0.5 / 1.3 / 1.5 秒，其中三条投递瞬间 `dshWindows` 显示有会话在跑——证明「等」只属于 `conversation`。
+
+**产物**（`archive/20261028-1447-todo-deferral-diagnosis/`，本轮**未改任何源码**）
+- `evidence/reconstruct-1400-deferral.mjs` → 区间覆盖率 767.5/767.5 s = **100.0%**；截至取消时刻当日 15 段活跃窗口、189.5 / 327.5 分钟（**57.9%**，固定端点）。
+- `evidence/gate-is-busy-only.mjs` → 8 断言全绿，离线证明「忙即延后、忙一解除下一 tick 就投递」，且 `reminder` 不受此约束。
+- `evidence/diagnose-todo-deferral.mjs` → 实时九条件表（14:49:58：`ready=true, busy=false, idleMs=278953, dueCount=0`）。
+- 既有门禁 `scripts/verify-newmate-todo-activation.mjs` **PASS 21** 未受影响。
+
+**边界**：`dshWindows` 是区间级证据，无法反查 14:00 那一刻具体是哪个会话的哪个 turn；`readingUntil` 在内存，不可回放。取消来自面板/MCP 的人工动作（`component.js:591 todoCancel` 是唯一取消路径，当日 14:12 前后无 NewMate 任务记录）。
+
+**建议（未实施，待确认）**：把被拦下的第一个假条件写进 `todo.deferred={reason,at}`；面板那句按 reason 显示；加「现在激活」按 `reminder` 立刻投递。三条都不改闸门语义。
+
 ## 2026-10-28 11:5x NewMate 收文件：页面上传与微信入站媒体（0.3.62 源码候选，未安装未重启）
 
 **用户要求**：「为 newmark2dsh 的 newMate 添加文件上传能力，以及通过 clawbot 接受用户从微信发来的文件」。

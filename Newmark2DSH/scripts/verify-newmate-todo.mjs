@@ -59,21 +59,28 @@ isoCheck('quiet hours do not delay the message itself',quietRow.status==='delive
 isoCheck('quiet hours still suppress the bubble',isoNotices.filter(m=>m.text==='静默时段照样到账').length===0);
 await iso.configure({quietStart:0,quietEnd:0});
 
-// 4) the conversation mode keeps the full attention gate and names the blocker
+// 4) the same rule, in the user's own words (2026-10-29): an item that activates a NewMate
+// conversation "应该和 dsh 本体的会话没有任何关系，只需要投递给 newMate 并激活 newMate 的对话即可".
 iso.stop();const convRoot=fs.mkdtempSync(path.join(os.tmpdir(),'newmate-todo-conv-'));
-const convEnv={ready:true,readerFocused:false,busy:false,idleMs:120000};
+const convEnv={ready:false,readerFocused:true,busy:true,idleMs:0};
 const conv=createNewMate({root:convRoot,now:()=>isoTime,agents:()=>()=>({}),environment:()=>convEnv,onNotify:async()=>{},tools:{execute:async()=>({isError:false,value:{ok:true,result:{output:'ok'}}})}});
 await conv.configure({companion:true,initiative:false,quietStart:0,quietEnd:0});
 const convTodo=conv.todoAdd({content:'激活一轮对话',activateAt:new Date(isoTime+1000).toISOString()}).todo;
-isoTime+=2000;convEnv.busy=true;await conv.tick();
-isolateConvBlocker: {
-  const row=conv.state().todos.find(t=>t.id===convTodo.id);
-  isoCheck('an activation still waits for the host (unchanged)',row.status==='pending'&&row.deferred?.code==='host_busy'&&row.deferred.reason==='宿主有会话在运行');
-}
-convEnv.busy=false;convEnv.readerFocused=true;await conv.tick();
-isoCheck('the activation reports reading next',conv.state().todos.find(t=>t.id===convTodo.id).deferred?.code==='reading');
-convEnv.readerFocused=false;await conv.tick();
-isoCheck('and activates once nothing blocks it',conv.state().todos.find(t=>t.id===convTodo.id).status!=='pending');
+isoTime+=2000;await conv.tick();
+const convRow=conv.state().todos.find(t=>t.id===convTodo.id);
+isoCheck('a host session, a reader, the keyboard and the desktop do not hold an activation',convRow.status!=='pending'&&!convRow.deferred);
+isoCheck('the activation is delivered into NewMate and runs one turn',convRow.status==='completed'&&conv.state().messages.some(m=>m.todoId===convTodo.id));
+// the ONE thing that still holds it is NewMate's own turn, and the record names it
+const convQueued=conv.todoAdd({content:'队列占着时激活',activateAt:new Date(isoTime+1000).toISOString()}).todo;
+const convFile=path.join(convRoot,'newMate/state.json');
+const convChange=fn=>{const s=JSON.parse(fs.readFileSync(convFile));fn(s);fs.writeFileSync(convFile,JSON.stringify(s));};
+convChange(s=>{s.tasks.push({id:'conv-chat',kind:'chat',status:'running',threadId:s.activeThreadId,destination:'newmate',prompt:'fixture'});});
+isoTime+=2000;await conv.tick();
+const convParked=conv.state().todos.find(t=>t.id===convQueued.id);
+isoCheck('NewMate own turn in flight still holds an activation, and says so',convParked.status==='pending'&&convParked.deferred?.code==='newmate_busy'&&convParked.deferred.reason==='NewMate 队列未空');
+convChange(s=>{s.tasks.find(t=>t.id==='conv-chat').status='completed';});
+await conv.tick();
+isoCheck('the activation runs the moment NewMate is idle again',conv.state().todos.find(t=>t.id===convQueued.id).status==='completed');
 conv.stop();
 mate=make();
 

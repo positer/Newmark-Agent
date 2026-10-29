@@ -711,13 +711,20 @@ check(
   'the client limits explicit channels to same-origin controls, update discovery and NewMate theme',
   (() => {
     const channels = [...client.matchAll(/fetch\(\s*'([^']*)'/g)].map((match) => match[1]);
-    const distinct = new Set(channels);
+    /* A QUERY IS NOT A SECOND ENDPOINT. '/newmark-core/components?view=newMate' asks the same
+     * route a narrower question — one component's size, without enumerating the model catalogue
+     * on a poll that runs every second — so paths are compared without their query string. A new
+     * PATH still fails here; the tree's only query is named in the comment above and re-measured
+     * below, so a second one cannot arrive unnoticed. */
+    const distinct = new Set(channels.map((url) => url.split('?')[0]));
+    const queries = new Set(channels.filter((url) => url.includes('?')).map((url) => url.slice(url.indexOf('?'))));
     /* MEASURED 2026-10-28: 8 distinct same-origin paths. The literal said 6 while the tree already
      * held 7 before this round (the '/newmark-newmate/loop' poll is not in the list below, so the
      * count and the named set had drifted apart from each other); 0.3.62 adds
      * '/newmark-newmate/upload' for the page's byte route. Both halves are now stated so the next
      * addition cannot pass by making the count agree with itself. */
-    return distinct.size === 8 && distinct.has('/newmark-newmate/upload') && distinct.has('/newmark-newmate/loop') && distinct.has('/newmark-newmate/events') && distinct.has('/newmark-core/components') && distinct.has('/newmark-memorylab/short-memory') && distinct.has('/newmark-newmate') && distinct.has('/newmark-computeruse/menu-theme') && distinct.has('/newmark-core/update') &&
+    return queries.size === 1 && queries.has('?view=newMate') &&
+      distinct.size === 8 && distinct.has('/newmark-newmate/upload') && distinct.has('/newmark-newmate/loop') && distinct.has('/newmark-newmate/events') && distinct.has('/newmark-core/components') && distinct.has('/newmark-memorylab/short-memory') && distinct.has('/newmark-newmate') && distinct.has('/newmark-computeruse/menu-theme') && distinct.has('/newmark-core/update') &&
       [...distinct].every((url) => url.startsWith('/') && !url.startsWith('//')) &&
       channels.length >= 1 &&
       !client.includes('EventSource') &&
@@ -1517,6 +1524,12 @@ for (const [label, script] of [
    * shell that no plugin API can express. Its gate reads the shell at its install path on
    * purpose, and fails loudly, naming the premise, when a DSH release changes one. */
   ['config panel', 'verify-config-panel.mjs'],
+  /* The panel gate reads the source; this one RUNS it. The client half is loaded into a VM with
+   * a minimal React and browser, `apply(ctx)` is driven with a stub context so the panel is
+   * registered the way the shell registers it, and both mounts are rendered — the plugin seat
+   * and the NewMate settings view. That is what proves the two pages hold one catalogue, which
+   * no source grep can: a page that grew its own markup back would still match every string. */
+  ['config format', 'verify-config-format.mjs'],
   /* The preset switch that wrote the `agent-preset-registry` entry's `selectedDefault` in the
    * profile patch is GONE — the user removed it rather than repaired it, because the default
    * preset belongs to the patch layers and not to a plugin's config page. Its gate now guards

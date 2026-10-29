@@ -61,7 +61,9 @@ check(
 check('Newmark Core is not offered as a switch', client.includes('switchable: false'));
 check(
   'the panel shows the Host answer rather than the click',
-  client.includes('const answer = applied[row.key]') && client.includes('failed ? '),
+  client.includes('const answer = model.applied[entry.key]') &&
+    client.includes('const on = answered ? answer.mounted :'),
+  'the row state is the receipt of the last switch, read back from the route',
 );
 check(
   'the panel reads the real state on mount',
@@ -72,7 +74,9 @@ check(
  * fields: the page saves immediately and the config values are only first-mount defaults. Pin the
  * four controls and the form styling so a later refactor cannot silently drop one. */
 check('the settings page exposes only the interval; depth and the DSH weight moved to defaults',
-  client.includes("'nm-watch-interval'") && !client.includes("'nm-watch-depth'") && !client.includes("'nm-watch-dsh'") && client.includes('高级项保留默认值'),
+  client.includes("id: 'nmc-watch-interval'") && !client.includes("'nm-watch-depth'") && !client.includes("'nm-watch-dsh'") &&
+    client.includes('保留默认值') && client.includes('可在插件配置里调整'),
+  'the sentence must stay true: depth is a plugin Config row, the DSH weight is a fixed default',
 );
 check('the threshold is no longer its own control: it follows the initiative level',
   !client.includes("'nm-watch-threshold'") && client.includes('主动性同时决定触发阈值'),
@@ -84,7 +88,8 @@ check('the level options no longer state per-day message counts',
   client.includes('低 · 更少打扰') && !client.includes('每天最多 1 条') && !client.includes('每天最多 2 条') && !client.includes('每天最多 3 条'),
 );
 check('number inputs are styled like the selects instead of the browser default',
-  client.includes('.nm-settings-view .nm-initiative-settings input[type=number]') && client.includes('font-variant-numeric:tabular-nums'),
+  client.includes('.nmc-number{') && client.includes('font-variant-numeric:tabular-nums'),
+  'the format owns one number control, and it carries the tabular figure set the selects use',
 );
 check('the advanced values are documented as defaults instead of controls',
   client.includes('3 层 / 0.1 倍') && client.includes('可在插件配置里调整'),
@@ -99,9 +104,11 @@ check(
   client.includes('[data-plugin-rows] { display: none; }'),
 );
 check(
-  'the scope comes from the style tag living inside the panel',
-  client.includes('h(\'style\', null, CONFIG_CSS+NEWMATE_SLIDER_CSS)') && /function NewmarkConfigPanel\(\)[\s\S]*CONFIG_CSS/.test(client),
-  'the rule is unscoped on purpose: it is only in the DOM while this panel renders',
+  'the suppression is gated on the mount, so the rule is in the DOM only where it is needed',
+  client.includes("const PLUGIN_ROWS_CSS = '[data-plugin-rows] { display: none; }';") &&
+    client.includes("h('style', null, CONFIG_CSS + NEWMATE_SLIDER_CSS + (suppressRows ? PLUGIN_ROWS_CSS : ''))") &&
+    /suppressRows: true,/.test(client) && /suppressRows: false,/.test(client),
+  'the plugin mount renders the rule; the NewMate mount renders the same sheets without it',
 );
 check(
   'the code records why an adjacent-sibling rule was abandoned',
@@ -125,10 +132,19 @@ check(
  * cannot be namespaced — what can be asserted is that it is the only one, and that the reason the
  * rule is safe is written down next to it (checked by the two assertions above).
  */
-const cardCss = (() => {
-  const match = /const CONFIG_CSS = `([\s\S]*?)`;/.exec(client);
-  return match ? match[1] : '';
-})();
+/** One stylesheet constant, read as written: quoted or templated. */
+const TICK = String.fromCharCode(96);
+const sheetOf = (name) => {
+  const at = client.indexOf('const ' + name + ' =');
+  if (at < 0) return '';
+  const quoted = client.indexOf(TICK, at), plain = client.indexOf("'", at);
+  const single = plain >= 0 && (quoted < 0 || plain < quoted);
+  const from = single ? plain : quoted;
+  if (from < 0) return '';
+  const to = client.indexOf((single ? "'" : TICK) + ';', from + 1);
+  return to < 0 ? '' : client.slice(from + 1, to);
+};
+const cardCss = sheetOf('CONFIG_CSS') + String.fromCharCode(10) + sheetOf('PLUGIN_ROWS_CSS');
 const cardCode = cardCss.replace(/\/\*[\s\S]*?\*\//g, '');
 const cardSelectors = [];
 for (const match of cardCode.matchAll(/([^{}]+)\{/g)) {
@@ -192,6 +208,135 @@ if (!fs.existsSync(pluginManager)) {
   );
 }
 
+/* ------------------------------------------------------ the two pages, locked --- */
+
+/**
+ * THE LOCK.
+ *
+ * The plugin page and the NewMate settings view are two mounts of ONE catalogue. What can
+ * be asserted without a browser is exactly that structure: one ordered list of sections,
+ * one renderer per section, both mounts walking the same list, and no second hand-written
+ * copy of a control on either side. Each assertion below fails if a page grows its own
+ * markup again — which is what the two pages had before this catalogue existed.
+ */
+console.log('');
+console.log('# the two pages, locked to one catalogue');
+check(
+  'one ordered list of sections, and both mounts walk it',
+  /const CONFIG_SECTION_ORDER = \[([^\]]+)\]/.test(client) &&
+    (() => {
+      const order = /const CONFIG_SECTION_ORDER = \[([^\]]+)\]/.exec(client)[1];
+      const ids = [...order.matchAll(/'([^']+)'/g)].map((match) => match[1]);
+      return ids.length >= 4 &&
+        ids.every((id) => new RegExp('\\s+' + id + ': \\{', 'm').test(client)) &&
+        client.includes('sections: CONFIG_SECTION_ORDER.map');
+    })(),
+  'a section missing from the order is rendered by nobody; one in it, by both mounts',
+);
+check(
+  'the NewMate settings view is a mount of that catalogue, not its own page',
+  /function NewMateSettingsView\(\{ state, act, busy, error, onBack \}\)/.test(client) &&
+    /mount: 'newmate'/.test(client) &&
+    /mount: 'plugin'/.test(client),
+  'the view calls ConfigSurface with mount newmate; the plugin seat calls it with mount plugin',
+);
+check(
+  'the companion card has exactly one definition, rendered by the catalogue',
+  (client.match(/function ConfigCompanionCard\(/g) || []).length === 1 &&
+    (client.match(/ConfigCompanionCard, \{ model: model\.companion \}/g) || []).length === 1,
+  'a second definition, or a hand-written copy at a call site, is the drift this prevents',
+);
+check(
+  'the plugin page can open the same settings inside NewMate',
+  client.includes('openNewMateSeat = () => {') &&
+    client.includes("layout?.selectPanel?.('newmate')") &&
+    client.includes("new CustomEvent('newmark-newmate-open-chat', { detail: { settings: true } })"),
+  'the one direction a page can act on: from the plugin seat into NewMate own settings view',
+);
+
+/* ------------------------------------------------------------- the format --- */
+
+console.log('');
+console.log('# the format');
+for (const part of ['ConfigPage', 'ConfigSection', 'ConfigCard', 'ConfigRow', 'ConfigField', 'ConfigNote', 'ConfigSwitch', 'ConfigSelect', 'ConfigNumber', 'ConfigButton']) {
+  check(
+    'the format defines ' + part + ' exactly once',
+    (client.match(new RegExp('function ' + part + '\\(', 'g')) || []).length === 1,
+  );
+}
+check(
+  'the format stylesheet is one generation: no selector is defined twice',
+  (() => {
+    // A media-query override is the one sanctioned repetition: same rule, different
+    // viewport. Any other second definition is an accretion like the two generations this
+    // stylesheet replaced, where the later block silently overrode the earlier one.
+    const strip = (css) => {
+      let out = '', index = 0;
+      while (index < css.length) {
+        const at = css.indexOf('@media', index);
+        if (at < 0) { out += css.slice(index); break; }
+        out += css.slice(index, at);
+        let depth = 1, cursor = css.indexOf('{', at) + 1;
+        while (cursor < css.length && depth > 0) {
+          if (css[cursor] === '{') depth += 1;
+          else if (css[cursor] === '}') depth -= 1;
+          cursor += 1;
+        }
+        index = cursor;
+      }
+      return out;
+    };
+    const counts = new Map();
+    for (const match of strip(cardCode).matchAll(/([^{}]+)\{/g)) {
+      const head = match[1].trim();
+      if (!head || head.startsWith('@')) continue;
+      counts.set(head, (counts.get(head) || 0) + 1);
+    }
+    return [...counts.values()].every((count) => count === 1);
+  })(),
+  'the stylesheet this replaced carried two generations of the same rules, the second overriding the first',
+);
+check(
+  'the format writes no literal colour, so both themes follow the shell',
+  !/#[0-9a-fA-F]{3,8}\b/.test(cardCode) && !/\brgba?\(/.test(cardCode) && !/\bhsla?\(/.test(cardCode),
+  'colours come from --dsw-* tokens only',
+);
+check(
+  'the format sizes type from the theme scale instead of its own numbers',
+  (cardCode.match(/font:var\(--dsw-font-/g) || []).length >= 6,
+  'the scale runs --dsw-font-xxxs-11 to --dsw-font-l-20; a bare px font-size is a second type system',
+);
+check(
+  'a component whose state has not been read says so instead of 已禁用',
+  client.includes('return payload ? false : null') &&
+    client.includes("unknown ? '读取中…'") &&
+    client.includes('nmc-dot-pending') &&
+    client.includes('disabled: model.pending === entry.key || unknown'),
+  'the measured defect: the page opened on 已禁用 / not loaded for five mounted components, then',
+  // (the sentence continues on the next line so the detail stays one string)
+);
+check(
+  'the list column count is the format decision, not the container width',
+  (() => {
+    const rule = (/\.nmc-list\{([^}]*)\}/.exec(cardCode) || [])[1] || '';
+    // The single-card sections (.nmc-grid) may size themselves to the container: one card
+    // always spans the row. It is the six-row component list that must not.
+    return /grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/.test(rule) && !/auto-fit|auto-fill/.test(rule);
+  })(),
+  'the plugin seat is ~905 CSS px wide and the NewMate panel ~1040; an auto-fit list rendered two',
+  // (the sentence continues here so the detail stays one string)
+);
+check(
+  'the state label and its action share one line in every row',
+  /\.nmc-row-state\{[^}]*align-self:start/.test(cardCode) &&
+    !/\.nmc-row-state\{[^}]*align-self:center/.test(cardCode),
+  'a centred label measured 26 px below its own button, at every row height',
+);
+check(
+  'the dead settings stylesheet is gone with the markup it styled',
+  !/nm-settings-view|nm-settings-bar|nm-initiative-settings|nm-preference-row|nm-toggle-row/.test(client),
+  'one page, one set of rules: the chat stylesheet no longer carries a second one for settings',
+);
 /* ------------------------------------------------------------------ the switches --- */
 
 console.log('');
@@ -262,9 +407,9 @@ check(
 );
 check(
   'the components the panel does switch are all still offered, and still switchable',
-  ["key: 'memoryLab'", "key: 'computerUse'", "key: 'agentApi'"].every((needle) => client.includes(needle)) &&
-    (client.match(/switchable: true/g) || []).length === 3,
-  `switchable rows: ${(client.match(/switchable: true/g) || []).length}`,
+  ['core', 'memoryLab', 'computerUse', 'agentApi', 'newMate', 'heartBeat'].every((key) => client.includes("key: '" + key + "'")) &&
+    (client.match(/switchable: true/g) || []).length === 5,
+  'switchable rows: ' + (client.match(/switchable: true/g) || []).length + ' (Newmark Core is the sixth row, and not a switch)',
 );
 // The root rule exists once. A component that restates it works until the rule changes and
 // then reads a different store than the core row — a failure no test run would show.

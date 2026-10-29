@@ -1,5 +1,27 @@
 # Newmark2DSH taste
 
+## 2026-10-29 配置页的三值状态与自给自足的页面壳（0.3.70）
+
+- `useCoreSurface().on(key)` 返回 `true/false/null`；`null` 只在「页面无快照且控制路由未答」时出现，渲染为「读取中…」+ `.nmc-dot-pending` + 禁用按钮。**任何把 `null` 折成 `false` 的写法都会复现 0.3.70 的缺陷。**
+- `.nmc-page` 自带 `width:100%;min-width:0;max-width:1060px`；NewMate 挂载点由 `.nmc-mount`（`height:100%;overflow-y:auto;padding:24px`）提供滚动与内边距。**新增挂载点时先给它一个壳，再谈内容。**
+- 浏览器探针要同时看 `page` 与 `pane` 的宽度以及 `documentElement.scrollWidth`，只测列数会漏掉「被裁掉”。
+
+## 2026-10-29 排版由格式说了算：固定两列 + 同排对齐（0.3.69）
+
+- **两个挂载点的宽度从来不同**（实测插件座位 ≈905 CSS px、NewMate 面板 ≈1040）。任何「按容器自适应」的规则都会让两页长得不一样；`.nmc-list` 用 `repeat(2,minmax(0,1fr))`，`≤640px` 才断一列。
+- **单卡区可以自适应**：`.nmc-grid` 用 `auto-fit`/300px 没问题，因为它恒为一张卡、占满整行。判据是「这一格会不会因为宽度变成别的形状」。
+- **行内状态与动作同排**：`.nmc-row` 是 `align-items:start`，任何格子都不要 `align-self:center`——量出来会低 26 px。
+- **布局证据靠浏览器，不靠读源码**：`NEWMARK_CONFIG_HTML=<dir>` 出文档 → `archive/.../evidence/probe-config-layout.mjs` 用 Edge 量列数与矩形。探针依赖本机环境，所以留在归档；它证明的契约写进 `verify-config-panel` 的字符串断言。
+
+## 2026-10-29 配置页收成目录之后，两页才有「锁定」可言（0.3.68）
+
+- **判断「两个页面要锁在一起」时，先数它现在有几处定义。** 改前陪伴/监控控件在 NewMate 设置页里手写一遍，插件页另有一个只有两行的「NewMate」卡；同一批设置因此有两个写入口径、两句互相矛盾的说明。锁定不是把两处改得一样，是把内容收进 `CONFIG_SECTION_ORDER`，让两页都只是它的渲染。
+- **挂载点差异要收成一个字段。** `CONFIG_MOUNTS` 的 plugin / newmate 只差 `suppressRows`（壳的组件行只存在于插件页）与标题/副标题；多一个 if 就多一处会漂的地方。
+- **陪伴面在两页用不同源是允许的，因为源本来就不同。** 插件页 `useCompanionSurface()` 自己读写 `/newmark-newmate`（读一次 + 写后重读，不轮询）；NewMate 设置页用页面已经在跑的 2 秒实时 `state`。**锁的是 schema 与渲染，不是数据源。** 反过来说，若两页各存一份 settings，就会有第三个「谁的 settings 是真的」问题。
+- **QR 窗口在共享卡里自带 1.5 s 轮询**，因为二维码是 connect 调用返回之后才到的；NewMate 挂载点不需要（页面已在轮询），靠 `refresh` 可选实现区分。
+- **壳组件行规则的渲染位置比规则本身更重要。** 把 `[data-plugin-rows]` 从共享表挪进只由插件挂载发出的 `PLUGIN_ROWS_CSS`，作用域就从「面板在 DOM 里就隐藏」收紧成「这一页才隐藏」——`verify-config-format` 直接断言 NewMate 挂载点的 style 里没有它。
+- **渲染型门禁的最小实现就够用**：`createElement` 返回 `{type,props,children}`、`useState` 返回初值、`useEffect` 空转、`useSyncExternalStore` 直接求快照，然后 pre-order 走树、遇函数组件就调用。它替掉的是「装进 profile 重启看一眼」的一整轮，且能断言顺序与集合。
+
 ## 2026-10-29 定时投递在微信侧只有两个入口，`mode` 不是判据（0.3.67）
 
 - `forwardReplies()`（微信入站 task 的回复）与 `forwardScheduled()`（定时投递）是两条独立入口；新增「用户预约」形态时必须显式加进第二条，否则它会「页面有、手机没有」。

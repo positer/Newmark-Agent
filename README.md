@@ -1,5 +1,65 @@
 # Newmark Agent
 
+## 2026-10-29 0.3.70：CU 截图复查——第一帧把「没读到」画成「已禁用」，NewMate 页右缘被裁
+
+**你的指令**：「没有正确同步对齐，自行 cu 截图查找原因」。这次不读源码猜，用 ComputerUse 打开真实 GUI 逐页截图。
+
+**截到的两件事**：
+
+1. **插件页第一帧**：五个**已挂载**组件全部显示「已禁用 · not loaded」，几秒后同一页变成「已启用 · store mounted / interface mounted / …」。根因：行状态在控制路由回答前回退到页面快照，而这页的 `payload` 为空（Newmark Core 行自己写着 `no snapshot on this page`），于是每行取到 `false`。**「未知」被渲染成了「关闭」。**
+2. **NewMate 设置页**：两列正确，但**页面比窗格宽**——第二列卡片与右上角 `N` 被窗口右缘裁掉。根因：`.nmc-page` 是面板里的 auto 尺寸子元素，被六行网格的固有宽度撑爆；旧设置页本来是 `height:100%;overflow:auto;padding:24px` 的滚动壳，重构时被一起拿掉了。插件页没这问题，因为它的外壳自带滚动与宽度约束。
+
+**改法**：`on()` 现在返回 `true/false/**null**`，`null` = 还没读到 → 行显示 **读取中…** + 琥珀点 + 按钮禁用，路由回执一到即覆盖；`.nmc-page` 加 `width:100%;min-width:0`，NewMate 挂载点补回 `.nmc-mount{height:100%;overflow-y:auto;padding:24px}` 滚动壳。
+
+**验证**：浏览器探针复测——插件页 `page=pane`、NewMate 页 `page=pane−48`、四宽全部 2 列、无横向溢出；真实 GUI 复看 NewMate 页第二列完整落在窗格内。门禁 `verify-config-panel` 57 → **58**（把「未读必须显示读取中」钉住），`verify-config-format` 18。
+
+**已装并重启**：`newmark2dsh-0.3.70.tgz` 1,308,012 B / 119 条目 / sha256 `F5F27C98…`；备份 `0.3.69-before-0.3.70-20261029-194615`；安装态 **119/119 与源码全等**；`count:0` 时 `force:true` 重启 → 端口 **59241**，`current:"0.3.70"`、五组件全 `mounted`。
+
+**CU 的两个操作教训**：AX 通道 `app_click` 返回 `ok:true` 页面却没动，视觉通道（窗口相对坐标）才落地；**收据 `action_applied` 缺失时必须从外面截图复核**。
+
+## 2026-10-29 0.3.69：两页差在三列对两列——列数跟着容器宽度走，不是跟着格式走
+
+**你的报障**：「不一致，以插件配置为标准，排查 newMate 入口的配置出了什么问题」，两张截图：NewMate 设置页组件区 **3 列**，插件配置页 **2 列**。
+
+**先量后改。** 把 0.3.68 加的 `NEWMARK_CONFIG_HTML=<dir>` 序列化出的两个挂载点文档（真实元素树 + 真实 `CONFIG_CSS`）放进真实浏览器（Edge via playwright）量 `grid-template-columns` 与每行状态标签/按钮的矩形。结论和猜测相反：**同一宽度下两页逐像素相同**（@975：卡片 481、行高 118、`state.top=204`、`action.top=178` 两页一致）。差异只来自**容器宽度**——插件座位约 905 CSS px、NewMate 面板约 1040——而 `.nmc-list` 写的是 `repeat(auto-fit,minmax(min(100%,320px),1fr))`：975 排 2 列、1100 起排 3 列。同一份目录，宽的那页就变形。
+
+**改法（以插件页的两列为标准）**：`.nmc-list` → `repeat(2,minmax(0,1fr))`，只有 `≤640px` 断到 1 列；列数是格式的决定，不是容器的。同一轮量出第二个缺陷：状态标签 `align-self:center` 在 3 行跨度里居中，比同一行的按钮**低 26 px**（两页都有），改 `align-self:start`，六行全部对齐到名字行（差 0–1 px）。`.nmc-grid` 的单卡区保留自适应——它恒为一张整行卡。
+
+**读数**：修复前 `@1100/@1280` 两页都是 3 列；修复后 905 / 975 / 1100 / 1280 **四宽两页全部 2 列**。
+
+**门禁**：`verify-config-panel` 55 → **57**（新增：列表规则必须是 `repeat(2,…)` 且不得出现 `auto-fit`/`auto-fill`；`.nmc-row-state` 必须 `align-self:start`）；`verify-config-format` 18（新增 `NEWMARK_CONFIG_HTML` 出口）；`verify-version-discipline` 12。
+
+**已装并重启**：`newmark2dsh-0.3.69.tgz` 1,307,429 B / 119 条目 / sha256 `F29DB6EE…`；备份 `0.3.68-before-0.3.69-20261029-193152`；安装态 **119/119 与源码 sha256 全等**；`broadcast` 屏障重启（`count:1`）→ 端口 **58868**，`current:"0.3.69"`，六组件全 `mounted`，`/newmark-newmate` 200 / 272,006 B。
+
+## 2026-10-29 0.3.68：两个配置页锁成一份目录，按 DSH 自己的格式与 CSS 重写
+
+**你的要求**：「将 newMate 的配置页面与插件配置页面的内容相互锁定定向，然后整体重构配置页面，采用格式化的可复用格式，并原生使用 dsh 的 css」。
+
+**改前是两块手写标记。** NewMate 设置页内嵌整个插件面板、又自带一份陪伴/监控控件；插件配置页只有准用模型与桌宠大小。同一批字段两边各写一遍，句子还会互相矛盾——设置页写着「扫描深度、DSH 自建改动权重等高级项……可在插件配置里调整」，插件页却没有这两项（实测：`watchDepth` 确实在 NewMate 行的 cordis `Config` 里，`watchDshWeight` 是固定默认值，两处都不存在控件）。
+
+**改后：一条目录，两个挂载点。** `CONFIG_SECTION_ORDER`（组件 / 智能体 / 陪伴 / 桌面助手 / 版本管理）→ 每节一个 `render(model)`；`mount:'plugin'`（`plugins.bundle.config` 座位）与 `mount:'newmate'`（NewMate 设置视图）走同一个列表。加一个控件两页同现，删一个控件两页同失；陪伴卡 `ConfigCompanionCard` 只有一处定义。方向也可操作：插件页眉的「NewMate 设置」真的调 `layout.selectPanel('newmate')` 并派发 `newmark-newmate-open-chat` 打开对侧视图。
+
+**格式化的可复用格式**：`ConfigPage` / `ConfigSection` / `ConfigCard` / `ConfigRow` / `ConfigField` / `ConfigNote` / `ConfigSwitch` / `ConfigSelect` / `ConfigNumber` / `ConfigButton`，每个只定义一次（门禁逐个数）。
+
+**原生 DSH CSS**：单代 `--dsw-*` 令牌表，字号走 `--dsw-font-*` 阶（`xxxs-11` … `l-20`），动效走 `--ds-transition-duration-fast` / `--ds-ease-in-out`；按钮优先用壳自带的 `Button`（`@deepseek-ai/dsh-client-ui-primitives`，没有则回退到同令牌等价物）；零字面色值、零 `!important`、所有选择器 `nmc-` 命名空间。顺带删掉聊天表里 **27 条已成孤儿**的 `.nm-settings-*` 规则——它们读的 `--dsw-alias-border-secondary`、`--dsw-alias-bg-hover`、`--dsw-alias-bg-elevated`、`--dsw-alias-border-primary` 在主题里**并不存在**，一直靠字面 fallback 显示。壳组件行的隐藏规则从共享表移出，单独由插件挂载渲染：作用域从「面板在就隐藏」收紧成「这一页才隐藏」。
+
+**门禁（实跑）**
+
+| 门禁 | 结果 | 关键断言 |
+| --- | --- | --- |
+| `verify-config-panel` | 37 → **55 PASS** | 删掉 6 条手写标记的 pinning，换成目录/格式/锁的新契约 |
+| `verify-config-format`（新） | **18 PASS** | client 装进 VM + 最小 React/浏览器，真跑 `apply(ctx)` 拿座位，再渲染两个挂载点：两页节名与顺序逐字相同、陪伴卡两页都在、隐藏规则只在插件页；`CONFIG_CSS` 用到的每个令牌拿去主题源核对 |
+| `verify-newmark-core-client` | **124 PASS** | 顺带修好它的 `expand`：此前不把 children 合进 props，任何「由子节点组合」的组件在门禁里都是空的 |
+| `verify-version-discipline` | 12 PASS | 0.3.68 = `core`，六个清单同步 |
+
+**顺带修正一条门禁的度量口径**：`verify-newmark-core` 的「same-origin 通道」把 `'/newmark-core/components?view=newMate'` 当成第二个端点（8 → 9，红）。查询串不是端点——那条 1 秒轮询正是靠 `view` 少枚举一次模型目录——所以断言改成「路径集合 = 8、树里唯一查询是 `?view=newMate`」，比按字符串计数更贴契约。
+
+**已装到本机并重启（同一轮，17:4x–18:5x +08）**：`npm pack` → `newmark2dsh-0.3.68.tgz` **1,307,128 B / 119 条目 / sha256 `18811520E293…`**；备份 `~/.dsh/profiles/desktop/.newmark-install-backups/0.3.67-before-0.3.68-20261029-184339`；tarball 进 profile 并把依赖改指它，`pnpm install` 2.2 s、`Packages: +1`、`installed: 0.3.68`。**安装态 119/119 与源码 sha256 全等**（`differ=0 missing=0`）。重启走 `broadcast` 屏障（`heartbeat_activity` 报 `count:1`，两个参与方 `ack:registered`、`ackSource:auto`、`missing:[]`）。
+
+**重启后活体（端口 60367 → 62781）**：`GET /newmark-core/update` → `current:"0.3.68"`（`latest:"0.3.67"`，npm 未发，预期）；`GET /newmark-core/components` → `compose:true`，memoryLab / computerUse / agentApi / newMate / heartBeat **全部 `mounted:true`**，准用模型 `dsh-opencode-go / deepseek-v4.1-flash`（`selectedListed:true`）；`GET /newmark-newmate` → **200 / 271,580 B**。
+
+**没做的事**：没有发布 npm；**没有在浏览器里打开配置页**——`GET /` 从 PowerShell 是 401（桌面浏览器的访问策略，不是故障），客户端 artifact 也不在可猜的 URL 上，所以「页面长什么样」这一格只有传递证据（安装态文件与门禁跑过的源码逐字节相同），按未验证记。
+
 ## 2026-10-29 11:31 0.3.67：待办激活的回答走 ClawBot 文字通道（此前只到页面和桌宠）
 
 **你的问题**：「由代办投递的 newMate 消息能否正确激活 newMate 对话并经由 newMate 的 clawbot 文字消息投递通道投递消息」。

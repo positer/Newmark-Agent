@@ -1,5 +1,58 @@
 # Newmark Agent Overview
 
+## 2026-10-29 0.3.70 CU 复查：未读状态被画成「已禁用」，NewMate 页被内容撑宽后裁切
+
+- **方法**：ComputerUse 打开真实 GUI（插件页 / NewMate 设置页）逐页截图，不再只读源码。
+- **缺陷 A**：插件页第一帧五个已挂载组件显示「已禁用 · not loaded」，几秒后才变「已启用」。根因：`ConfigComponents` 在路由回答前回退页面快照，本页 `payload` 为空 → 每行 `false`。修：`on()` 返回 `true/false/null`，`null` → 读取中… + `.nmc-dot-pending` + 按钮禁用。
+- **缺陷 B**：NewMate 页比窗格宽，第二列与 `N` 被裁。根因：`.nmc-page` 是 auto 尺寸子元素，被网格固有宽度撑爆；旧设置页的滚动壳在重构中丢了。修：`.nmc-page{width:100%;min-width:0}` + 新增 `.nmc-mount{height:100%;overflow-y:auto;padding:24px}`。
+- **验证**：探针 —— 插件页 `page=pane`、NewMate `page=pane−48`、905/975/1100/1280 四宽两页全 2 列、`docScroll=clientWidth`（无横向溢出）；真实 GUI —— NewMate 页第二列完整。
+- **门禁**：`verify-config-panel` 57 → **58**；`verify-config-format` 18；`verify-version-discipline` 12。
+- **安装/重启**：0.3.70 tarball 1,308,012 B / 119 条目 / sha256 `F5F27C98…`；备份 `0.3.69-before-0.3.70-20261029-194615`；119/119 与源码全等；`count:0` → `force:true`；端口 59241；`current:"0.3.70"`。
+- **归档**：`Newmark2DSH/archive/20261029-195000-config-sync-and-clip/`（before/after client.js + 三张 CU 截图 + REPORT）。
+
+## 2026-10-29 0.3.69 两页排版不一致：列数由容器宽度决定（auto-fit），改为固定两列
+
+- **报障**：用户对比截图——NewMate 设置页组件区 3 列、插件配置页 2 列，「以插件配置为标准」排查 NewMate 入口。
+- **测量**（浏览器探针，Edge + playwright，见归档 `evidence/probe-config-layout.mjs`）：两页**同宽逐像素相同**（@975 card=481 / rowH=118 / state.top=204）；差异只来自容器宽度（插件座位 ≈905 CSS px、NewMate 面板 ≈1040）与 `.nmc-list` 的 `auto-fit`：975→2 列、1100→3 列。
+- **改动**（`packages/newmark-core/client.js`，CSS 两条）：`.nmc-list` → `repeat(2,minmax(0,1fr))`（`≤640px` 断 1 列）；`.nmc-row-state` 的 `align-self:center` → `start`（原先比同排按钮低 26 px）。`.nmc-grid` 不动（单卡区恒占满整行）。
+- **读数**：修复后 905/975/1100/1280 四宽 × 两页，列数全 2；状态标签与按钮 top 差 0–1 px。
+- **门禁**：`verify-config-panel` 55 → **57**（两条新断言钉住列数与对齐）；`verify-config-format` 18（新增 `NEWMARK_CONFIG_HTML=<dir>` 把两页写成可打开的独立文档）；`verify-version-discipline` 12。
+- **安装/重启**：`newmark2dsh-0.3.69.tgz` 1,307,429 B / 119 条目 / sha256 `F29DB6EE…`；备份 `0.3.68-before-0.3.69-20261029-193152`；119/119 与源码 sha256 全等；`broadcast` 屏障（`count:1`，两方 auto ack）；端口 → **58868**；`current:"0.3.69"`、六组件 `mounted`、`/newmark-newmate` 200 / 272,006 B。
+- **未验证**：真实 GUI 页面外观（探针跑的是本仓库序列化文档，同 CSS 同树但不经过 DSH 外壳的容器）。
+- **重启后复盘（19:37:40 +08，端口 58868）**：`current:"0.3.69"`、`compose=true` 且五组件全 `mounted`、模型 `dsh-opencode-go/deepseek-v4.1-flash`、`/newmark-newmate` 200 / 271,997 B；门禁 57 / 18 / 12 全绿。逐条读数见包 `OVERVIEW.md` 与归档 `REPORT.md` §6e。
+
+## 2026-10-29 0.3.68 配置页重构：一条目录两个挂载点，格式化的可复用组件，原生 DSH 令牌
+
+- **要求**：「将 newMate 的配置页面与插件配置页面的内容相互锁定定向，然后整体重构配置页面，采用格式化的可复用格式，并原生使用 dsh 的 css」。
+- **代码**（唯一的产品文件是 `Newmark2DSH/packages/newmark-core/client.js`，净 +881 −691）：
+  - 新的格式块取代 `CONFIG_CSS` + 600 行 `NewmarkConfigPanel`：`CONFIG_CSS`（单代，全部 `nmc-` 选择器）、`PLUGIN_ROWS_CSS`（唯一非命名空间规则，只由插件挂载渲染）、十个部件 `ConfigPage/ConfigSection/ConfigCard/ConfigRow/ConfigField/ConfigNote/ConfigSwitch/ConfigSelect/ConfigNumber/ConfigButton`。
+  - `CONFIG_COMPONENTS`（六个组件的一处声明）、`CONFIG_SECTION_ORDER` + `CONFIG_SECTIONS`（五节的目录）、`CONFIG_MOUNTS`（plugin / newmate 两个挂载点，唯一差异是 `suppressRows`）、`ConfigSurface`（目录 → 页面）。
+  - 数据：`useCoreSurface()`（组件/模型/桌宠大小/更新，两个挂载点共用）与 `useCompanionSurface()`（陪伴设置，读写 `/newmark-newmate`）；NewMate 挂载点用页面自己的实时 `state` 作陪伴面，不再二次读同一条路由。
+  - 方向：`openNewMateSeat`（apply 内定义）→ `layout.selectPanel('newmate')` + `newmark-newmate-open-chat{settings:true}`；插件页眉由此多一个「NewMate 设置」按钮。
+  - 删：`NEWMATE_SLIDER_CSS` 里三条 `nmc-config-*` 残留与不存在的 `--dsw-alias-border-secondary`；聊天表里 27 条孤儿 `.nm-settings-*` 规则；`wechatStatusLine`（升级为工厂作用域的 `wechatPhaseText`，两页共用）。
+- **门禁**：`scripts/verify-config-panel.mjs` 37 → 55；**新增** `scripts/verify-config-format.mjs`（18 条，VM + 最小 React/浏览器 + stub ctx，真跑 `apply` 并渲染两个挂载点）；`verify-newmark-core-client.mjs` 124（并修 `expand` 的 children 合并）；`verify-newmark-core.mjs` 的 same-origin 通道断言改为按路径比较 + 命名唯一查询；`verify-version-discipline` 12。
+- **独立跑绿的子门禁**：package / memorylab-tools / agent-api / newmate-chat / newmate-initiative / newmate-conversations / newmate-workspace-diff / newmate-attachment / failure-log / newmark-core-client / config-panel / config-format / version-discipline（13 份）。
+- **既有红（本轮未碰其判据）**：`verify-newmark-core-activation` 4 条（工具数与注入计数）、`verify-preset-patch` 2 条（活动 profile 的 preset-dev 行）——两者读的都是 host 半边与 profile，本轮 `git diff` 不含那些文件。`verify-newmark-core` 的 25 条红里 21 条是包装层判词（子门禁打 `SUMMARY`、包装层找 `PASS`），与本轮无关。
+- **安装与重启（同轮完成）**：`npm pack` → `newmark2dsh-0.3.68.tgz` 1,307,128 B / 119 条目 / sha256 `18811520E293…`；备份 `.newmark-install-backups/0.3.67-before-0.3.68-20261029-184339`；依赖改指 `newmark2dsh-0.3.68-source-live.tgz`，`pnpm install` 2.2 s / `Packages: +1`；**安装态 119/119 与源码 sha256 全等**。重启走 `broadcast` 屏障（另一对话在跑，2 个参与方 `ack:registered`、`ackSource:auto`、`missing:[]`）。
+- **重启后活体**（端口 60367 → 62781）：`current:"0.3.68"`（`latest:"0.3.67"`，npm 未发）；`compose:true` 且五个组件全 `mounted:true`；准用模型 `dsh-opencode-go / deepseek-v4.1-flash`（`selectedListed:true`）；`GET /newmark-newmate` 200 / 271,580 B。
+- **重启后复核（18:52:30 +08，端口 62781）**：`current:"0.3.68"`；`/newmark-newmate` 200 / 271,572 B（`ok=true`、35 线程 / 188 消息 / 26 待办 / 微信已连接、settings 11 键齐全）；`/newmark-core/components` 200 / 8,219 B、`compose=true`、五个组件全 `mounted=true`、模型 `dsh-opencode-go/deepseek-v4.1-flash`（`selectedListed:true`、`editable:true`）；`verify-config-format` 18 PASS。逐条读数见包 `OVERVIEW.md` 与归档 `REPORT.md` §6c。
+- **没做**：没有 `npm publish`；没有在浏览器里打开配置页（`GET /` 从 PowerShell 401，客户端 artifact 不可猜 URL），所以页面外观只有「安装态文件与门禁跑过的源码逐字节相同」这条传递证据，按未验证记。
+- **归档**：`Newmark2DSH/archive/20261029-174242-config-page-lock/`（含 `evidence/install-*`、`live-*.json`）。
+
+## 2026-10-29 14:52 只读调研：登录式（Gmail/QQ）与 POP3/IMAP 协议式邮件的读取与发送接口
+
+- **要求**：「只读调研 git 以及其他已有开源实现：主流登录式邮件（gmail、qq）与 pop3/imap 协议式邮件读取与发送接口」。
+- **产出**：`docs/research/mail-transport-interfaces.md`（308 行）。仓库此前没有 `docs/research/` 目录，本轮新建；该目录放「调研报告」，与 `docs/` 根下的实现契约文档分开。
+- **git 这一半的结论**：`git log --all -i --grep=mail` 只命中两条与邮件无关的提交（DSH 的 mailbox/会话隔离）；无历史分支可捡。仓库里**没有**邮件实现。
+- **本机唯一的现成实现**：`~/.dsh/skills/imap-smtp-email`（author NetEase、MIT、`imap@0.8.19` + `imap-simple` + `mailparser` + `nodemailer`）。命令面 `check/fetch/download/search/mark-read/mark-unread/list-mailboxes/list-accounts`（IMAP）与 `send/test/list-accounts`（SMTP）；已带 RFC 2971 `ID`（网易必需）与附件写盘白名单；短板是底层 node-imap 2023 年停更、无 OAuth、无增量游标、无推送。
+- **实测底座（未认证、只读）**：7 个 IMAP/POP3 端点与 3 个 SMTP 端点的问候 + `CAPABILITY`/`EHLO`，能力串逐字存档。要点：`imap.gmail.com:993` 有 `IDLE`/`ID`/`X-GM-EXT-1`/`AUTH=XOAUTH2` 但**无 MOVE**；`imap.qq.com:993` 有 `IDLE`/`MOVE`/`UIDPLUS`/`ID`；`imap.163.com:993`（Coremail）**无 IDLE**、`APPENDLIMIT=71680000`；`smtp.qq.com:465` `SIZE 73400320` + `SMTPUTF8`；`outlook.office365.com:993` **`LOGINDISABLED`**。`smtp.gmail.com:587/465` 两次都没收到 greeting（同机 993/995 正常），记为未测到、不猜原因。
+- **文档事实（附 URL 与抓取时间）**：Gmail 已不支持「账号密码」，只剩 OAuth2 或 16 位应用专用密码（需 2 步验证）；自助 OAuth 项目 testing 状态 **refresh token 7 天过期、测试用户上限 100**；单日 500 收件人/500 封；`gmail.send` 是 **sensitive**、`gmail.readonly`/`gmail.modify`/`mail.google.com/` 是 **restricted**。QQ：第三方客户端**必须** 16 位授权码（默认关闭、短信密保），未见公众 OAuth API。网易：LOGIN 后**必须先发 RFC 2971 ID**，否则 `SELECT ... Unsafe Login`（官方帮助 + nanobot #1123 + hermes-agent `3fd4ccbd` + 本机 skill 四处独立证据）。
+- **环境事实（不是邮件问题）**：pwsh 的 `SslStream` 对这些服务器一律失败（`安全包中没有可用的凭证`），换 Node OpenSSL 成功；本机 TCP 443 直连 gmail/oauth2/googleapis/qq **5 s 内未握手**，而 993/995/465/587 全通，环境里 `HTTP_PROXY=127.0.0.1:7890` → 走 Gmail REST/Graph 的程序必须支持代理。
+- **开源盘点（取数 2026-10-29）**：nodemailer 17,696★ / 周下载 29,465,944；mailparser 1,673★ / 6,421,683；imapflow 578★ / 3,275,501（最新 2.9.1）；node-imap 2,222★ / 531,470（最近提交 2023-11-10、194 open issue）；himalaya 7,553★（Rust CLI）；email-oauth2-proxy 1,494★；MailKit 6,865★；imap_tools 848★。MCP 侧：Wh1isper/mcp-email-server 372★、codefuturist/email-mcp 142★；Google 官方 Workspace MCP 服务器（preview，含 Gmail，动作到「建草稿」为止）。
+- **建议（写进报告 §7，尚未落地成代码）**：IMAP 用 imapflow、SMTP 用 nodemailer；Gmail 优先 REST + OAuth，失败再退回应用专用密码；网易走轮询而非 IDLE；12 条必须写进代码的坑逐条带出处。
+- **文件树**：新增 `docs/research/mail-transport-interfaces.md` 与 `archive/20261029-144039-mail-transport-research/`（REPORT + evidence 4 份 + probes 5 份 + 清单）。**无源码改动、无依赖变更、无版本变更、README 未改**（它对外的能力描述没有变化）。
+- **归档**：`archive/20261029-144039-mail-transport-research/`。
+
 ## 2026-10-29 11:31 0.3.67：定时待办的激活回答经 ClawBot 投递
 
 - 代码：`components/newmate/lib/wechat-channel.js`（`forwardReminders` → `forwardScheduled`，两种到期方式都转发；水位 `<=` → `<`；日志措辞）、`components/newmate/index.js`（通道契约注释）、`components/newmate/lib/wechat-channel.js` 头部注释。
@@ -5934,3 +5987,14 @@ Newmark2DSH/README.md 重写为五组件完整介绍，Newmark2DSH/taste.md 固�
 ## 2026-10-14 Newmark2DSH CHANGELOG 归档
 
 18 份历史 CHANGELOG 逐字节归档，公开目录改用 Releases；archive/ 已有忽略规则保持有效。证据与子文件职责见 Newmark2DSH/archive/20261014-104450-changelog-archive/ 与子项目 OVERVIEW。本轮不改运行代码、版本或安装。
+
+
+## 2026-10-29 15:20 「code 工作区」对话卡死排查：记忆组件与超大文件被排除，问题在 run_code 没有开始执行
+
+- **触发**：用户在 `C:\Users\12252\Desktop\Files\Code`（Code 根，168 个顶层项目 + 一个根 `.git`）让 DSH 处理「学代会通知 PDF + 附件 zip + 按用户画像判断」的 prompt，会话 `session-47c4ed77` 卡死；切走再回来始终不加载、无报错、UI 正常。
+- **结论**：记忆组件（`memory_lab_*`/`shortMemory_*`）整场**一次都没被调用**；上下文 39,791 tokens / 1,000,000 窗口（system 22,184 / tools 628 / messages 15,807）说明 prompt 不大；第三次 run_code 只剩 5 行、只读 README 前 60 行仍然卡死 —— 两条怀疑都不成立。
+- **真正的现象**：三次 run_code 全都没有执行证据（`tool/ptc-dispatch-start` = 0、`sessionStats.toolMs` = 0、`pendingCalls` = `{}`），三条 `tool/result` 都是会话修复合成的 `TOOL_OUTCOME_UNKNOWN`，时间戳被回填成调用时刻（所以日志里显示 0 ms）。
+- **排除工作区/预设**：同一 Code 根 + 同一 `rdev` 预设，10-27/10-28 两次会话共 **108 次 run_code 全部成功**（ptc dispatch 117 条，首次冷启动 23,483 / 52,617 ms，之后 0.6–5 s）；今天 14:00 的 Minecraft 会话 296 次成功。工作区与预设本身无罪。
+- **【推断·未隔离】** 阻塞发生在 `ptc-runtime.execute()` 之前（120 s 墙钟定时器没触发、没有 timeout/worker-exit 结果），最像进程内 PTC 调用闸/运行态被占死；`14:50:05` 重启后同一工作区完全恢复（本诊断会话 62 次 run_code、首次 64.7 s 冷启动）。
+- **落盘**：`archive/20261029-152000-dsh-run-code-freeze/`（REPORT.md + evidence/ + probes/read-dsh-session.mjs + before/after + MANIFEST）。产品代码零改动；`README.md` 未改（对外能力无变化）。
+- **顺带记下**：`run_code` 首次调用在本机实测 23.5 / 26.1 / 52.6 / 64.7 s —— 「秒级没反应」不等于卡死，判据是超过 120 s 仍无回音。

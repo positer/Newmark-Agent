@@ -218,7 +218,13 @@ function expand(node, hooks) {
   if (typeof node === 'string' || typeof node === 'number') return node;
   if (Array.isArray(node)) return node.map((child) => expand(child, hooks));
   if (typeof node !== 'object' || !('type' in node)) return node;
-  if (typeof node.type === 'function') return expand(hooks.render(node.type, node.props), hooks);
+  // React hands a component its children as props.children; createElement above keeps them
+  // on the node instead, so they are merged back here. A component that renders a slot it was
+  // given is then reachable, which is what the format's section/card composition needs.
+  if (typeof node.type === 'function') {
+    const props = node.props?.children === undefined && node.children?.length ? { ...node.props, children: node.children } : node.props;
+    return expand(hooks.render(node.type, props), hooks);
+  }
   return { type: node.type, props: node.props, children: expand(node.children, hooks) };
 }
 
@@ -296,19 +302,19 @@ try {
   configSetters[1]({ memoryLab: { ok: true, mounted: false }, computerUse: { ok: true, mounted: false }, agentApi: { ok: true, mounted: false }, newMate:{ok:true,mounted:false}, heartBeat:{ok:true,mounted:false} });
   configSetters[3](true);
   const disabledConfig = expand(hooks.render(configSeat.Component, {}), hooks);
-  const disabledRows = findAll(disabledConfig, (n) => n.props?.className === 'nmc-config-row');
+  const disabledRows = findAll(disabledConfig, (n) => n.props?.className === 'nmc-row');
   check('host mount receipts keep disabled component notes consistent with their states',
     disabledRows.slice(1).every((row) => textOf(row).includes('已禁用') && textOf(row).includes('not loaded')),
     disabledRows.map(textOf).join(' | '));
   configSetters[1]({ memoryLab: { ok: true, mounted: true }, computerUse: { ok: true, mounted: true }, agentApi: { ok: true, mounted: true }, newMate:{ok:true,mounted:true}, heartBeat:{ok:true,mounted:true} });
   const enabledConfig = expand(hooks.render(configSeat.Component, {}), hooks);
   check('host mount receipts report every enabled interface without stale not-loaded notes',
-    findAll(enabledConfig, (n) => n.props?.className === 'nmc-config-row').slice(1).every((row) => textOf(row).includes('已启用') && !textOf(row).includes('not loaded')),
+    findAll(enabledConfig, (n) => n.props?.className === 'nmc-row').slice(1).every((row) => textOf(row).includes('已启用') && !textOf(row).includes('not loaded')),
     textOf(enabledConfig));
   configSetters[1]({});
   configSetters[3](null);
-  const agentApiRow = findAll(configTree, (n) => (n.props?.className || '') === 'nmc-config-row')
-    .find((row) => findAll(row, (n) => (n.props?.className || '') === 'nmc-config-name').some((n) => textOf(n) === 'Agent API'));
+  const agentApiRow = findAll(configTree, (n) => (n.props?.className || '') === 'nmc-row')
+    .find((row) => findAll(row, (n) => (n.props?.className || '') === 'nmc-row-name').some((n) => textOf(n) === 'Agent API'));
   check('the mounted Agent API row reports interface mounted from its page snapshot',
     textOf(agentApiRow).includes('interface mounted') && !textOf(agentApiRow).includes('not loaded'),
     textOf(agentApiRow));
@@ -327,11 +333,13 @@ try {
     !configText.includes('Dev preset') && !configText.includes('rDev'),
     configText.slice(0, 240),
   );
-  const configRows = findAll(configTree, (n) => (n.props?.className || '').includes('nmc-config-row')).map((row) => {
-    const label = findAll(row, (n) => (n.props?.className || '') === 'nmc-config-name')[0];
+  const configRows = findAll(configTree, (n) => (n.props?.className || '') === 'nmc-row').map((row) => {
+    const label = findAll(row, (n) => (n.props?.className || '') === 'nmc-row-name')[0];
     return {
       name: label ? textOf(label) : '',
-      switchable: findAll(row, (n) => (n.props?.className || '').includes('nmc-config-switch')).length === 1,
+      // The row's one action is a button — DSH's own when the shell carries it, the
+      // format's token-styled equivalent otherwise. Either way it is the only one.
+      switchable: findAll(row, (n) => n.type === 'button').length === 1,
     };
   });
   check(

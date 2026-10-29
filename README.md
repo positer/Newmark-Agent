@@ -15,6 +15,10 @@
 
 **已装并重启**：`newmark2dsh-0.3.70.tgz` 1,308,012 B / 119 条目 / sha256 `F5F27C98…`；备份 `0.3.69-before-0.3.70-20261029-194615`；安装态 **119/119 与源码全等**；`count:0` 时 `force:true` 重启 → 端口 **59241**，`current:"0.3.70"`、五组件全 `mounted`。
 
+**已推送并发布**：源仓库 `positer/Newmark-Agent` 提交 **`56ff0f99`**（17 文件，+1720/−691），`ls-remote` 复核 `master` = 同 sha。发布仓库 `positer/newmark2dsh` 同步 **119 copied / 53 changed / 0 removed**，tag **`v0.3.70` → `6741b41`**，`main` = **`dd461c0`**（rebased 到 `origin/main` 之上，两棵提交树相同）。npm 工作流 run `40872002909`：Publish 步骤 11 秒返回成功、`+ newmark2dsh@0.3.70`、签名 provenance 上透明日志；**`latest` 在 `12:42:46Z` 翻到 0.3.70**（`fileCount 120` / `unpackedSize 3,743,046` / `shasum 6862bf40…`），Verify 步骤 `12:42:52Z` 打印 `Verified official latest: 0.3.70`，run `success`。
+
+**两个过程性坑**：① 本地发布仓库的 `main` 停在 0.3.20 时代的 `76674f4`、落后 15 个提交，第一笔发布提交因此落在陈旧基线上被拒；tag 已经推上去并触发了工作流，所以没有改写 tag，而是把 `main` rebase 到 `origin/main` 之上重提（树相同）。**下次先 `git fetch` 再 sync**。② `npm publish` 12:17:28 就返回 0，而 `registry.npmjs.org/newmark2dsh/0.3.70` 一直 404 到 12:42——npm 自己的日志写着「正在处理，需要几分钟」。**「已发布但未可见」不是「失败」。**
+
 **CU 的两个操作教训**：AX 通道 `app_click` 返回 `ok:true` 页面却没动，视觉通道（窗口相对坐标）才落地；**收据 `action_applied` 缺失时必须从外面截图复核**。
 
 ## 2026-10-29 0.3.69：两页差在三列对两列——列数跟着容器宽度走，不是跟着格式走

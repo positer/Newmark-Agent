@@ -9,6 +9,8 @@
 - **门禁**：`verify-config-panel` 57 → **58**；`verify-config-format` 18；`verify-version-discipline` 12。
 - **安装/重启**：0.3.70 tarball 1,308,012 B / 119 条目 / sha256 `F5F27C98…`；备份 `0.3.69-before-0.3.70-20261029-194615`；119/119 与源码全等；`count:0` → `force:true`；端口 59241；`current:"0.3.70"`。
 - **归档**：`Newmark2DSH/archive/20261029-195000-config-sync-and-clip/`（before/after client.js + 三张 CU 截图 + REPORT）。
+- **推送与发布**：源仓库 `56ff0f99`（`ls-remote` 复核）；发布仓库 119 copied / 53 changed / 0 removed，tag `v0.3.70`=`6741b41`、`main`=`dd461c0`（rebase 到 `origin/main`，树相同）；npm 工作流 `40872002909` Publish 11 s 成功、`latest` 于 **`12:42:46Z`** 翻到 0.3.70（`fileCount 120`、`unpackedSize 3,743,046`、`shasum 6862bf40…`），Verify 于 `12:42:52Z` 确认，run `success`。
+- **两个过程性坑**：本地发布仓库 `main` 落后 15 个提交（先 fetch 再 sync）；`npm publish` 返回 0 到注册表可见相隔 25 分钟（npm 日志写明「正在处理」）——「已发布未可见」≠「失败」。
 
 ## 2026-10-29 0.3.69 两页排版不一致：列数由容器宽度决定（auto-fit），改为固定两列
 

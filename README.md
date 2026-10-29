@@ -16,6 +16,8 @@
 **既有失败（与本次无关，有实测为证）**：`verify-newmark-core` 4 条红——两条子门禁自身全绿（conversations 30/30、workspace-diff 51/51）却被包装层判「exited 0 without printing a verdict」（它找 `PASS`，子门禁打 `SUMMARY`）；`heartBeat ... exactly its five tools` 的数量断言写死 5，而 0.3.16/0.3.17 起已注册 6 个；`win32 gate` 的 `whole_desktop_capture` 断言。`verify-newmate-presentation` 亦既有红。
 
 **版本**：0.3.65 是同一轮的中间态（只装了本机 profile，未发布、未重启），0.3.66 取代它。
+
+**准用模型之后的完整链路验收（11:12 +08）**：`agent_api_state` → `model.ok=true`（`dsh-opencode-go / deepseek-v4.1-flash`）。同一到期时刻放两条，**本会话全程 running（宿主必然 busy）**：`conversation` **到期后 739 ms 发起激活**、那一轮跑 8,262 ms、回答 206 字符落盘、无 `deferred`/`error`/`suppressed`；`reminder` **delivered，延迟 9,809 ms**——正好是激活整轮跑完之后 **0.81 s**，即它等的是 NewMate 自己那一轮（`newmate_busy`），不是宿主。至此「投递 → 激活 → 落盘」三段都在活体上跑通。
 **发布（同日）**：发布仓库提交 `805fce9` + tag `v0.3.66`（`10:12:29 +08`）→ `latest` 在 `02:15:57Z` 从 0.3.64 翻到 **0.3.66**（tag→latest **3 分 28 秒**，采样见归档 `evidence/npm-latest.jsonl`）。回拉对拍：发布 tarball 1,313,594 B / sha256 `E3A0E3FF…`，120 个文件里 **107 逐字节相同、12 仅行尾不同**（CI 在 Linux 打包 LF）、1 个只在发布包内（公开 README）——**逐条差异都有成因**。
 
 **重启后的活体验收（0.3.66 已装入并重启，端口 62684 → 61806）**

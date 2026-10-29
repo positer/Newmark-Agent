@@ -9,6 +9,12 @@
 - `verify-newmate-todo-activation.mjs` 20→31；`measure-newmate-todo-gate-mutations.mjs` 7→11 条变异，并改为**同时**跑两份门禁（`red` 判定覆盖 activation 的端到端行为）。
 - 版本：0.3.65 → 0.3.66（中间态不发布）；打包/安装数字见 README 同日条目与归档 `evidence/`。
 
+
+**重启后活体验收（0.3.66）**：`current:"0.3.66"`、NewMate 200/175,157 B、`pet.running=true`；活注册表描述 `hasNewText=true/hasOldText=false`；同一到期时刻成对验收——`reminder` 延迟 **1.783 s** 投递，`conversation` **到期后 1.223 s 发起激活**（`activatedAt=02:05:36.480`），随后两次尝试都止于 `model_not_selected`，状态为 `pending` + `deferred={code:model_unavailable}` 并在 5 分钟后自动重试（**不是** `failed`）。面板实时行求值：对话行「已到期 · 模型尚未就绪」、提醒行「已投递」。
+
+
+**发布（同日）**：发布仓库提交 `805fce9` + tag `v0.3.66`（`10:12:29 +08`）→ `latest` 在 `02:15:57Z` 从 0.3.64 翻到 **0.3.66**（tag→latest **3 分 28 秒**，采样见归档 `evidence/npm-latest.jsonl`）。回拉对拍：发布 tarball 1,313,594 B / sha256 `E3A0E3FF…`，120 个文件里 **107 逐字节相同、12 仅行尾不同**（CI 在 Linux 打包 LF）、1 个只在发布包内（公开 README）——**逐条差异都有成因**。
+**环境事实（不是本轮引入）**：profile `cordis.patch.yml` 在 09:47:42 被整体替换成 `[]`（备份 `.bak-1793238461030` 仍带 `modelProvider: dsh-opencode-go` / `model: deepseek-v4.1-flash`），因此当前 bundle 没有准用模型，`agent_api_state` 报 `model_not_selected`。本轮未写该文件。
 **教训（也写进 taste.md）**：闸门对了只等于「放行」对了；用户说的「投递」在 NewMate 里是「策划 → 运行 → 落盘 → 气泡」四段，任何一段读宿主事实、或被别的任务的格式规则判死，用户看到的都还是「没来」。
 
 ## 2026-10-29 09:0x 0.3.65：到期投递与 DSH 会话彻底解耦（两种模式共用一道闸）

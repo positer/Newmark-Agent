@@ -15,7 +15,20 @@
 
 **既有失败（与本次无关，有实测为证）**：`verify-newmark-core` 4 条红——两条子门禁自身全绿（conversations 30/30、workspace-diff 51/51）却被包装层判「exited 0 without printing a verdict」（它找 `PASS`，子门禁打 `SUMMARY`）；`heartBeat ... exactly its five tools` 的数量断言写死 5，而 0.3.16/0.3.17 起已注册 6 个；`win32 gate` 的 `whole_desktop_capture` 断言。`verify-newmate-presentation` 亦既有红。
 
-**版本**：0.3.65 是同一轮的中间态（只装了本机 profile，未发布、未重启），0.3.66 取代它。打包 `newmark2dsh-0.3.66.tgz` 1,305,730 B / 119 条目 / sha256 `64DB60D1…`；装进 `~/.dsh/profiles/desktop`，安装态 118/119 与源码 sha256 全等，`package.json` canonical 相等。
+**版本**：0.3.65 是同一轮的中间态（只装了本机 profile，未发布、未重启），0.3.66 取代它。
+**发布（同日）**：发布仓库提交 `805fce9` + tag `v0.3.66`（`10:12:29 +08`）→ `latest` 在 `02:15:57Z` 从 0.3.64 翻到 **0.3.66**（tag→latest **3 分 28 秒**，采样见归档 `evidence/npm-latest.jsonl`）。回拉对拍：发布 tarball 1,313,594 B / sha256 `E3A0E3FF…`，120 个文件里 **107 逐字节相同、12 仅行尾不同**（CI 在 Linux 打包 LF）、1 个只在发布包内（公开 README）——**逐条差异都有成因**。
+
+**重启后的活体验收（0.3.66 已装入并重启，端口 62684 → 61806）**
+
+- 运行态：`GET /newmark-core/update` → `current:"0.3.66"`；`GET /newmark-newmate` 200 / 175,157 B，`pet.running=true`（pid 86500）。
+- 活注册表（不是磁盘）：`newmate_todo_add` 描述 `hasNewText=true`（`BOTH modes wait for exactly two things`）、`hasOldText=false`（`no DSH turn running` 已消失）。
+- **成对活体验收**（同一到期时刻 `2026-10-29T02:05:36.257Z`，本会话正在运行、宿主必然 busy）：
+  - `reminder`（`922148a3`）：**delivered，延迟 1.783 s**，消息落盘，无 `deferred`。
+  - `conversation`（`de564416`）：**到期后 1.223 s 就发起激活**（`activatedAt=02:05:36.480`）——没有再等宿主，也没有等静默；这一次和 5 分钟后的自动重试都止于 `model_not_selected`，因此状态是 `pending` + `deferred={code:model_unavailable, reason:模型尚未就绪}`，**不是** `failed`（旧代码会把它烧成失败且永不重试）。
+  - 面板形态（用安装态 `client.js` 的原表达式对实时行求值）：对话激活行 = 「已到期 · 模型尚未就绪」；提醒行 = 「已投递」。**带「等」前缀的旧形态已不可产生。**
+
+**必须说清的一件事**：这台机器现在**没有为本 bundle 准用模型**（`agent_api_state` → `model_not_selected`），所以激活的「模型回合」这一半今天跑不出内容——这也是用户 07:30 那条最终 `failed` 的死因，而不是投递闸门。证据：profile 的 `cordis.patch.yml` 在 **09:47:42 被整体替换成 `[]`**（备份 `.bak-1793238461030` 15,001 B 里仍有 `modelProvider: dsh-opencode-go` / `model: deepseek-v4.1-flash`）；本轮**没有写过这个文件**（我写的是 tarball、profile `package.json` 的依赖行和仓库源码，均在提交 `4dae85d4` 里可查）。恢复只需在插件配置页给 Newmark Core 选一次模型——**不替用户默认一个模型**正是 agent-api 的设计，所以这里不擅自写入。
+打包 `newmark2dsh-0.3.66.tgz` 1,305,730 B / 119 条目 / sha256 `64DB60D1…`；装进 `~/.dsh/profiles/desktop`，安装态 118/119 与源码 sha256 全等，`package.json` canonical 相等。
 
 ## 2026-10-29 09:0x 0.3.65：定时待办的两种到期方式共用一道闸，DSH 会话不再参与
 

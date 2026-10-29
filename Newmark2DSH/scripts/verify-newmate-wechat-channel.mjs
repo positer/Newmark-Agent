@@ -347,23 +347,33 @@ try {
   check('errcode=-14: 通道停在错误状态', paused.phase === 'error' && paused.error === 'session_paused', JSON.stringify({ phase: paused.phase, error: paused.error }));
   check('全程日志里没有 token', !logs.some((line) => line.includes(TOKEN)));
 
-  // ---- 8.5 纯文字提醒（mode=reminder）必须发到微信，且只发一次 ----
+  // ---- 8.5 两种到期方式都要发到微信，且各只发一次（0.3.67）----
+  // The user's words: "由代办投递的 newMate 消息… 经由 newMate 的 clawbot 文字消息投递通道投递".
+  // A scheduled item is the same promise in both modes - he set a time and it is now due - so an
+  // activation's model reply goes out exactly like a reminder's saved text. Measured before the
+  // change (2026-10-29 11:20): an activation due 03:20:18.425 was delivered to the page and the
+  // bubble in 1.4 s and never reached WeChat (stats.replies unchanged, no sent receipt).
   const reminderId = 'rem-1';
   const conversationTodoId = 'conv-1';
   todos.push({ id: reminderId, mode: 'reminder' }, { id: conversationTodoId, mode: 'conversation' });
   const future = Date.now() + 5;
+  const ACTIVATION_TEXT = '这条是会话型待办的模型回复，必须转发到微信';
   messages.push({ id: 'todo:' + reminderId, todoId: reminderId, threadId: 'thread-A', role: 'assistant', text: '该准备上课了（10 分钟提醒）。收拾要带的东西，出发吧。', proactive: true, at: future });
-  messages.push({ id: 'todo:' + conversationTodoId, todoId: conversationTodoId, threadId: 'thread-A', role: 'assistant', text: '这条是会话型待办的模型回复，不该转发', proactive: true, at: future });
+  messages.push({ id: 'todo:' + conversationTodoId, todoId: conversationTodoId, threadId: 'thread-A', role: 'assistant', text: ACTIVATION_TEXT, proactive: true, at: future });
   const sendsBefore = calls.sends.length;
   await sleep(2600);
   const reminderSends = calls.sends.slice(sendsBefore).filter((entry) => JSON.stringify(entry).includes('该准备上课了'));
   check('reminder: 纯文字提醒被发到微信', reminderSends.length === 1, 'sends=' + reminderSends.length);
   check('reminder: 正文是用户原文（未被 80 字截断）', String(reminderSends[0]?.msg?.item_list?.[0]?.text_item?.text || '') === '该准备上课了（10 分钟提醒）。收拾要带的东西，出发吧。', String(reminderSends[0]?.msg?.item_list?.[0]?.text_item?.text || ''));
-  check('reminder: 会话型待办的回复不转发', !calls.sends.some((entry) => JSON.stringify(entry).includes('不该转发')));
+  const activationSends = calls.sends.slice(sendsBefore).filter((entry) => JSON.stringify(entry).includes('必须转发到微信'));
+  check('activation: 待办激活的模型回复被发到微信', activationSends.length === 1, 'sends=' + activationSends.length);
+  check('activation: 正文是完整回复（没被截成 80 字气泡）', String(activationSends[0]?.msg?.item_list?.[0]?.text_item?.text || '') === ACTIVATION_TEXT, String(activationSends[0]?.msg?.item_list?.[0]?.text_item?.text || ''));
   await sleep(1500);
   check('reminder: 只发一次（不重复）', calls.sends.slice(sendsBefore).filter((entry) => JSON.stringify(entry).includes('该准备上课了')).length === 1);
+  check('activation: 只发一次（不重复）', calls.sends.slice(sendsBefore).filter((entry) => JSON.stringify(entry).includes('必须转发到微信')).length === 1);
   const reminderState = JSON.parse(fs.readFileSync(channel.statePath, 'utf8'));
   check('reminder: 账本记下这条 message id', Boolean(reminderState.sent['todo:' + reminderId]), JSON.stringify(Object.keys(reminderState.sent)));
+  check('activation: 账本记下这条 message id', Boolean(reminderState.sent['todo:' + conversationTodoId]), JSON.stringify(Object.keys(reminderState.sent)));
 
   // ---- 8.6 没有 lastPeer 时用登录用户 id 兜底；连它都没有则不要标记已发 ----
   // The first channel shares this mate double, so stop it first: otherwise two channels both

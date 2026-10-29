@@ -1,5 +1,13 @@
 # Newmark2DSH taste
 
+## 2026-10-29 定时投递在微信侧只有两个入口，`mode` 不是判据（0.3.67）
+
+- `forwardReplies()`（微信入站 task 的回复）与 `forwardScheduled()`（定时投递）是两条独立入口；新增「用户预约」形态时必须显式加进第二条，否则它会「页面有、手机没有」。
+- 判据用「用户自己排的交付」而不是 `mode` 枚举：本轮把 `reminder` 扩到 `reminder + conversation`，护栏（只发一次 / 启动水位 / 30 分钟）与 mode 无关。
+- 游标比较用严格 `<`，去重用 `sent[id]`：同一毫秒的两条不能互相吞。
+- 验收证据三件套：`wechat.json` 的 `sent["todo:<id>"]`（含 messageId）+ `stats.replies` 增量 + 真机截图。
+- 重启前必须 `heartbeat_activity`；有其他对话在跑就走 `broadcast`，`force:true` 会打断别人（本轮犯过，已记录）。
+
 ## 2026-10-29 用户说「投递」时，指的是整条链（0.3.66）
 
 - **一处「放行」修好之后，要顺着他那句话把下游也走一遍。** 独立审计在闸门已正确的前提下又找出四处「投递到了却没激活」：`delegated` 走主动消息格式闸、exit 3 被写成 `failed`、paused wake 饿死队列、队列满静默 + 队首阻塞。这四条都被落成门禁断言（activation 20→31）与变异（7→11，全红）。

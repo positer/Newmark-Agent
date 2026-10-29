@@ -1,5 +1,14 @@
 # Newmark Agent Overview
 
+## 2026-10-29 11:31 0.3.67：定时待办的激活回答经 ClawBot 投递
+
+- 代码：`components/newmate/lib/wechat-channel.js`（`forwardReminders` → `forwardScheduled`，两种到期方式都转发；水位 `<=` → `<`；日志措辞）、`components/newmate/index.js`（通道契约注释）、`components/newmate/lib/wechat-channel.js` 头部注释。
+- 门禁：`verify-newmate-wechat-channel` 117 → **121**；改回旧过滤器时新增 4 条全红（实测 `sends=0`）。版本纪律 12 PASS。
+- 活体：`conversation` 激活 **+1,427 ms**、回答 99 字符、微信 `messageId 7521413036687844744`；`reminder` 投递 **+7,495 ms**、`messageId 7521413041557356808`；`replies` 33 → 35。
+- 旧待办 `78b46752`（07:30 监考）在准用模型后由 0.3.66 的重试自动补做成功（11:17，246 字符），并随这次重启补发到微信（`7521412651621339016`）——**不需要重建**。
+- 版本 0.3.67：tarball 1,306,551 B / 119 条目 / sha256 `37A9F06A…`；安装态 118/119 与源码 sha256 全等；发布仓库 `79845c7` + tag `v0.3.67`（首次 push tag 报 Internal Server Error，重试成功，`ls-remote` 确认 `38499eac…`）。
+- 失误记录：重启用了 `force:true` 而当时有 1 个其他对话在运行；应先 `broadcast`。
+
 ## 2026-10-29 10:2x 0.3.66：审计逼出的四处「投递到了却没激活」
 
 独立只读审计（新起一个 teammate，读源码 + 真跑三份门禁 + 自建探针）的结论分两半：**闸门解耦 PASS**，**端到端语义 FAIL**。四条失败路径与修法见 `README.md` 同日条目；本条记实现落点。

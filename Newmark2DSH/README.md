@@ -124,6 +124,8 @@ NewMate 是一位亲近、务实的私人秘书式 Agent。它拥有独立聊天
 
 主要工具：`newmate_chat`、`newmate_task_status`、`newmate_memory_context`、`newmate_state`、`newmate_message`、`newmate_todo_add`、`newmate_todo_list`、`newmate_todo_cancel`、`newmate_mcp_info`、`newmate_wechat_send_file`。有宿主绑定的原对话时，`newmate_task` 可把具体后续任务交回该对话；模型参数不能另选目标。`newmate_state` 与 `newmate_task_status` 都带 `agentLoop`（运行中或上一轮的循环快照）。`newmate_search` 是 NewMate 的原生搜索入口，供它在用户明确要求查资料时调用。
 
+**找到「哪个对话」再读它。** NewMate 有四个对话级工具：`newmate_conversation_list`（0.3.71 起）只读列出宿主看得见的 DSH 对话——id、标题、工作区、创建时间，最新在前，分页并报告省略了多少条，`self:true` 标出它自己所在的那个（那个不能发信）；`newmate_conversation_read` 读某个对话的近期正文（只有用户与助手文本）；`newmate_conversation_send` 往已有对话投递一条消息；`newmate_conversation_new` 在工作区新建对话并给它第一条消息。清单里的 id 全部来自宿主——`sessionQuery` 的统一语料，老宿主上退回活会话注册表并把来源写在回执里（`source: corpus` / `live`）——所以模型不需要记住或猜 id，重启后旧对话也仍然读得到。标题缺失就是 `null`，不编造；不加全文检索、不删对话、不遍历会话目录。
+
 **收文件：页面上传与微信入站。** 用户可以直接把文件交给 NewMate，两条入口共用一套存储（`~/.Newmark/newMate/uploads/<id>/<名字>`）：
 
 - **页面**：输入框旁的「📎 上传文件」把文件字节流式上传到专用路由（body 即字节、名字在 header、上限 20 MiB——**本机自设值**，不是协议声明），发送时附件随消息一起提交，用户消息里显示附件标签。
@@ -135,6 +137,7 @@ NewMate 是一位亲近、务实的私人秘书式 Agent。它拥有独立聊天
 
 
 **定时待办会走到手机上。** 微信 ClawBot 连上之后，两类「用户自己约了时间」的东西都会发到微信，各只发一次：`reminder` 的原文，以及 `conversation` 激活那一轮模型给出的回答（0.3.67 起；此前激活的回复只落在页面与桌宠气泡，永远到不了手机——实测 2026-10-29 11:20 那条到期激活 1.4 秒就送到了页面，`wechat.stats.replies` 一次没动）。不请自来的主动关怀仍然**不会**发到微信。
+**有事汇报，主动发一条。** 0.3.73 起 NewMate 自己也能发微信：定时项跑完、交给某个对话的工作有了结论、确认的真实问题、某个任务失败——它用 `newmate_wechat_send_text` 发一条 ≤800 字的汇报（「发生了什么 + 需要你做什么」），一小时最多 6 条，十分钟内同一内容不重复；未连接 / 会话暂停 / 没有收件人各有具名拒绝。**主动性寒暄仍然不进微信**：这条通道只承载报告，不是第四个社交入口。
 **发文件到微信。** 微信 ClawBot 通道连上之后，`newmate_wechat_send_file` 把一个本机文件发到用户微信：入参 `path`（必填）、`caption`（可选，另发一条文字消息）、`receiver`（可选，默认当前绑定的接收者）。它是**共享工具注册表**里的工具，任意 DSH 对话与 NewMate 自己的对话轮都能调用；自动检查轮次拿不到它（发出去的文件收不回来）。校验：普通文件、非空、≤20 MiB（**自设**保护值，不是协议声明）、可执行/安装类型拒绝、凭据目录与凭据文件拒绝。回执给出文件名、字节数、服务端 `messageId` 与 accepted/未确认的区分——**没有 messageId 就不声称送达**。
 
 NewMate 可以读取、新建和增量更新可信记忆、整理标签、添加短期记忆，并在用户明确请求时使用完整的 ComputerUse 工具组（`computer_use` 与只读的 `screen_capture`）。仍然不开放记忆删除、任意 Shell 执行或递归 Agent API；桌面权限按用户请求授予，不因记忆内容或自主推测而扩大。

@@ -514,6 +514,59 @@ check('tool: 名字进入 NewMate 运行工具组', NEWMATE_RUN_TOOLS.includes('
 check('tool: 自动检查轮次拿不到它（要用户明确要求）', newMateRunTools({ automatic: true }).includes('newmate_wechat_send_file') === false);
 check('tool: 用户发起的轮次拿得到它', newMateRunTools({ automatic: false, origin: 'session-1' }).includes('newmate_wechat_send_file'));
 
+// ---- 12. 汇报通道：NewMate 自己能主动发一条微信（先占位再等网络、按条去重、按时限流） ----
+//
+// 这是用户 2026-10-30 的要求：「有事汇报时积极发信 clawbot 让用户了解」。它和前面两条出口的区别
+// 是发起者：reply 由用户的微信消息触发，scheduled 由用户预约的时间触发，report 由 NewMate 自己
+// 在跑完一轮之后发起。所以下面的断言关心三件事：真的发得出去；重复/超量/超长都被具名拒绝；
+// 这个工具在**自动检查轮**里也拿得到（否则「积极汇报」在自主轮次就失效）。
+{
+  // 这一节跑在共享 fixture 的服务器关闭之后，所以它自带一个只认 sendmessage 的假服务器：
+  // 记录每次请求体，并回一个 message id。
+  const sentBodies = [];
+  const reportServer = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const raw = Buffer.concat(chunks).toString('utf8');
+    let body = {};
+    try { body = JSON.parse(raw); } catch { body = {}; }
+    sentBodies.push(body);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ret: 0, message_id: '88000000000000000' + sentBodies.length }));
+  });
+  await new Promise((resolve) => reportServer.listen(0, '127.0.0.1', resolve));
+  const reportBase = 'http://127.0.0.1:' + reportServer.address().port;
+  const reportRoot = makeStateRoot('newmate-wechat-gate7-', { baseUrl: reportBase, lastPeer: { to: USER, contextToken: 'gate-context' } });
+  const reporter = createWechatChannel({ root: reportRoot, mate, baseUrl: reportBase, cdnBaseUrl: reportBase, log: () => {} });
+  try {
+    const first = await reporter.sendText({ text: '定时项跑完了：\n\n今天的实验记录已归档，需要你确认周末的排期。' });
+    check('report: 一轮跑完后的汇报真的发出，并带回服务端 messageId', first.ok === true && typeof first.messageId === 'string' && sentBodies.length === 1, JSON.stringify(first).slice(0, 220));
+    const sentText = String(sentBodies[0]?.msg?.item_list?.[0]?.text_item?.text ?? '');
+    check('report: 多行汇报压成单段（微信气泡不为排版服务）', sentText.length > 0 && !sentText.includes('\n'), JSON.stringify(sentText).slice(0, 160));
+    const dup = await reporter.sendText({ text: '定时项跑完了：\n\n今天的实验记录已归档，需要你确认周末的排期。' });
+    check('report: 十分钟内一模一样的内容被拒（重复不是新闻）', dup.ok === false && dup.code === 'duplicate_report' && sentBodies.length === 1);
+    const tooLong = await reporter.sendText({ text: '长'.repeat(900) });
+    check('report: 超过 800 字被具名拒绝，并说明细节该留在页面', tooLong.ok === false && tooLong.code === 'text_too_long' && tooLong.limit === 800);
+    const empty = await reporter.sendText({ text: '   ' });
+    check('report: 空内容被拒', empty.ok === false && empty.code === 'empty_text');
+    const flooded = createWechatChannel({ root: makeStateRoot('newmate-wechat-gate8-', { baseUrl: reportBase, lastPeer: { to: USER, contextToken: 'gate-context' }, reports: Array.from({ length: 6 }, (_, i) => ({ at: Date.now() - 1000 * i, chars: 10, text: 't' + i, messageId: null })) }), mate, baseUrl: reportBase, cdnBaseUrl: reportBase, log: () => {} });
+    const limited = await flooded.sendText({ text: '第七件事' });
+    check('report: 一小时的第 7 条被限流，并给出 retryAfterMs 而不是静默丢弃', limited.ok === false && limited.code === 'report_rate_limited' && limited.retryAfterMs > 0, JSON.stringify(limited).slice(0, 200));
+    check('report: 未连接 → wechat_not_connected', (await offline.sendText({ text: '汇报' })).code === 'wechat_not_connected');
+    check('report: 没有接收者 → receiver_unavailable', (await noPeer.sendText({ text: '汇报' })).code === 'receiver_unavailable');
+    check('report: -14 暂停 → wechat_session_paused', (await pausedForFile.sendText({ text: '汇报' })).code === 'wechat_session_paused');
+  } finally {
+    await reporter.stop().catch(() => {});
+    await new Promise((resolve) => reportServer.close(resolve));
+  }
+
+  check('report: 名字进入 NewMate 运行工具组', NEWMATE_RUN_TOOLS.includes('newmate_wechat_send_text'));
+  check('report: 自动检查轮次也拿得到它（用户要求「积极汇报」，自主轮次不能失效）', newMateRunTools({ automatic: true }).includes('newmate_wechat_send_text'));
+  const personaSource = fs.readFileSync(new URL('../packages/newmark-core/components/newmate/lib/persona.js', import.meta.url), 'utf8');
+  check('persona: 明确写出什么时候汇报、以及没有事就不要发', personaSource.includes('newmate_wechat_send_text') && personaSource.includes('没有事就不要发'));
+  check('tool: 作为私有工具注册（NewMate 的声音说 NewMate 的事），不进共享注册表', indexSource.includes("name: 'newmate_wechat_send_text'") && !indexSource.includes('ctx.tools.register({ name: \'newmate_wechat_send_text\''));
+}
+
 const passed = checks.filter((entry) => entry.pass).length;
 for (const entry of checks) console.log((entry.pass ? 'PASS  ' : 'FAIL  ') + entry.name + (entry.pass || !entry.detail ? '' : '  [' + entry.detail + ']'));
 console.log('');

@@ -1,5 +1,40 @@
 # Newmark2DSH taste
 
+## 2026-10-30 主动外发的默认边界：报告 ≠ 关怀（0.3.73）
+
+- **三条出口按「谁发起」区分**：reply（用户发微信）/ scheduled（用户约的时间）/ report（NewMate 自己）。要加第四条出口，先把「谁发起、什么条件下允许」写清楚，再谈实现；否则「主动」会变成「随时」。
+- **报告必须能被拒绝**：超长、重复、超量各有具名 code（`text_too_long` / `duplicate_report` / `report_rate_limited` 带 `retryAfterMs`）。静默丢弃会让模型以为没发出去，然后继续循环。
+- **「积极」要写进 persona，不能只写在工具描述里**：说清什么时候报（定时项完成、交回对话的结论、确认的问题、失败原因）、怎么写（发生了什么 + 需要用户做什么），以及**没有事就不要发**。
+- **需要在自主轮次也生效的工具，绝不能进 `NEWMATE_REQUEST_TOOLS`**：那是「人类必须开口」的分组；汇报恰恰相反，自主检查轮发现的问题最该报出来。
+- **门禁里不要复用已关闭的 fixture 服务器**：这一节在共享 fixture `server.close()` 之后运行，第一版直接拿 `fakeBase` 发，红在 `send_failed ret=undefined`——被测代码是对的、夹具关着的典型案例。
+
+## 2026-10-30 大文件只能 edit，不能整份重写（0.3.72）
+
+- 用「读全文 → 改一处 → 写全文」的方式改 `client.js`（238,283 B）时，落盘被截断成**正好 51,200 B**（50 KiB）：文件当场坏掉，`git diff --stat` 会把「改一个 CSS 类」显示成整份重写。
+- 规则：**大文件只用 `edit` 做锚点替换**；确需整份替换，就先在临时路径拼好、`Get-FileHash` 与安装目录同版本对比，再 `Copy-Item` 落位。
+- 恢复路径要写进记录：这次靠的是**安装目录里同版本的 `client.js`**（sha256 `7F939AE4…` 全等），不是靠编辑器撤销。
+- 每次改完先看 `git diff --stat` 的行数；行数与意图不符就是写坏了。
+
+## 2026-10-30 安装新版本用「解包到别处 + rename 互换」（0.3.72）
+
+- `Remove-Item` 后 `Copy-Item` 会在中途留下一个**空目录窗口**，宿主 HMR 正好在那时重载 bundle，于是整包卸载（0.3.71 那轮实测 Newmark 工具消失约 6 分钟、`/newmark-core/update` 404）。
+- 现在：`tar -xzf` 到 `node_modules/.stage-<stamp>` → 备份旧目录 → `Move-Item` 旧→`.prev-<stamp>` → `Move-Item` 新→到位 → 119/119 校验 → 删旧。空窗只有两次 rename 之间。
+- 装完仍要做逐文件 sha256，并且回读新符号（如 `nm-composer-hint{margin-left:auto`）证明「装上的是新字节」，而不是相信 tarball 名字。
+
+## 2026-10-30 门禁的 fixture 不能替宿主「发明」方法（0.3.71）
+
+- **fixture 是契约的样本，不是契约本身。** `verify-newmate-conversations` 30 条全绿，而 `newmate_conversation_read` 在真实宿主上对每个冷对话都返回 `unknown_conversation`：fixture 里 `persistence.inspect` / `load` 是假服务自己写出来的两个方法，宿主 `sessionPersistence` 的声明只有 `create/open/flush/stat/list`。**假实现能证明「调用顺序与拒绝逻辑」，不能证明「宿主有这个方法」。**
+- **拿运行中的宿主核对契约，而不是拿文档或记忆核对。** cordis 的 `Service.listService` 探针直接给出活宿主的服务合同（含 `access` 表达式与 referencedTypes），它是这类判断的唯一权威；写完代码先问一句「我调的每个方法，宿主真的声明了吗」。
+- **「没有入口」和「入口坏了」是两条缺陷，必须分开写。** 本轮用户报的是一句话（拿不到 id），背后是两件事：缺一个发现工具，以及冷读调错了方法。只修前者，用户下次拿到的 id 依然读不了。
+- **新增能力时把「不做什么」写进注释和回执。** 清单工具不加全文检索、不删、不写、不遍历会话目录、不跨 profile；来源（`corpus` / `live`）与省略条数（`truncated`）在回执里说清楚，模型才不会把「我只看到活会话」读成「磁盘上没有对话」。
+- **陈旧门禁要当场修，并写明它是陈旧的。** 聚合门禁里 heartBeat「exactly its five tools」自 0.3.49 起就是错的（实为 6 个），长期把一条与本次无关的红混进结果；修计数时连同注释写清哪一版起变的，别让下一个人以为是新缺陷。
+
+## 2026-10-29 发布顺序：fetch → sync → commit → push 分支 → 最后推 tag（0.3.70）
+
+- `dist/newmark2dsh-repo` 的本地克隆可能落后很多（本轮落后 15 个提交）；`sync-release-repo.mjs` 只同步文件，不动历史。
+- 推 tag 之前先把 `main` 推成快进；tag 是发布触发器，推错基线时它已经把工作流点着了。
+- `npm publish` 成功后 `dist-tags` 可能几十分钟不动；核对 `registry.npmjs.org/-/package/newmark2dsh/dist-tags` 与 `time['<version>']`，并绕过本机代理（`curl --noproxy '*'`）。
+
 ## 2026-10-29 配置页的三值状态与自给自足的页面壳（0.3.70）
 
 - `useCoreSurface().on(key)` 返回 `true/false/null`；`null` 只在「页面无快照且控制路由未答」时出现，渲染为「读取中…」+ `.nmc-dot-pending` + 禁用按钮。**任何把 `null` 折成 `false` 的写法都会复现 0.3.70 的缺陷。**

@@ -1,5 +1,67 @@
 # Newmark Agent
 
+## 2026-10-30 0.3.73：有事汇报，NewMate 主动发一条微信
+
+**你的指令**：「添加提示在有事汇报时积极发信 clawbot 让用户了解」。
+
+**改之前的口径**：微信只有两条出口，且都由你触发——回你发的消息、你约的待办到点。主动消息一律不出这个通道，所以「主动汇报」只到页面和桌宠气泡。
+
+**现在第三条出口**：`newmate_wechat_send_text`（私有工具，只在 NewMate 自己的 run 里），能力落在 `wechat.sendText()`：单条 ≤800 字、换行压成单段、先判接收者再发。它**刻意不进**「需要用户请求」那一组，所以自主检查轮也拿得到——否则「积极汇报」恰好会在最需要它的轮次失效。
+
+**防刷三条**（都是具名拒绝，不静默丢）：同一内容 10 分钟内重复 → `duplicate_report`；一小时超过 6 条 → `report_rate_limited`（带 `retryAfterMs`）；未连接 / 会话暂停 / 无接收者各有 code。
+
+**persona 写明边界**：报什么（跑完的定时项、交回对话的结论、确认的真实问题、失败原因）、写成「发生了什么 + 需要你做什么」、不寒暄不邀功不罗列权限；**没有事就不要发**。
+
+**门禁**：`verify-newmate-wechat-channel` 121 → **134**（13 条新增：发出并带回 messageId、多行压单段、重复/超长/空/限流/未连接/无接收者/暂停、进入 run 组、自主轮次可用、persona 文案、私有注册）；把重复判定禁用 → 133/134 变红，还原后全绿。回归 chat 25 / agent-loop 73 / memorylab-tools 182 / conversations 48 / heartbeat 75 全绿。
+
+**状态**：0.3.73 已打包（`newmark2dsh-0.3.73.tgz`，1,312,526 B / 119 条目 / sha256 `B9911A43…`）→ 已安装（rename 互换，119/119 与源码全等，备份 `0.3.72-before-0.3.73-20261030-234450`）→ 重新挂载后工具组里就有它 → **真的发出去了一条**：`{ok:true, chars:56, messageId:"7521960525169980936", remainingThisHour:5}`，账本 `stats.reports=1`、`reports[0].messageId` 与回执一致。
+
+## 2026-10-30 0.3.72：输入提示回到发送按钮旁边（一行 CSS + 三条门禁）
+
+**你的指令**：「输入提示没有正确保持在发送按钮旁边」（附截图）。
+
+**根因**：`.nm-composer-row` 只有 `justify-content:space-between`，三个子元素（上传 / 提示 / 发送）把剩余空间平均分掉，`Enter 发送 · Shift + Enter 换行` 正好落在中点。
+
+**改法（只有 CSS）**：`.nm-composer-hint` 加 `margin-left:auto;margin-right:2px`，自动外边距吃掉全部剩余空间，把提示推到发送按钮旁；再加 `min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right`，窄窗时提示自己省略，而不是把发送挤出这一行。
+
+**门禁**：`verify-newmark-core-client` 124 → **127**（行是 flex + space-between；提示 `margin-left:auto` 且右对齐；窄窗三属性齐全）。把 `margin-left:auto` 种回去 → **124 立刻 RED**，还原后 127 全绿。
+
+**状态**：0.3.72 已打包（`newmark2dsh-0.3.72.tgz`，1,310,141 B / 119 条目 / sha256 `B14CA703…`）并安装（rename 互换，119/119 与源码 sha256 全等，备份 `0.3.71-before-0.3.72-20261030-224249`）；**client half 由宿主按安装字节提供，刷新页面即生效，不需要重启**。
+
+**过程中修好的一处自伤（写进 taste.md）**：为改这一行 CSS 用了「读全文→写全文」，238,283 B 的 `client.js` 被落盘截断成正好 51,200 B。已用安装目录里同版本副本恢复并 `Get-FileHash` 校验全等（`7F939AE4…`）；规则改为：大文件只用 `edit` 做锚点替换。
+
+## 2026-10-30 0.3.71：NewMate 能自己列出对话——顺带发现它的「冷读」一直在调用宿主不存在的方法
+
+**你的指令**：「newMate反馈其缺乏获取对话 id 的能力，为其添加，但注意不要越界添加」。
+
+**现场（微信通道原话，2026-10-30 19:32）**：你问「看一下最新的 dsh 对话，这两天干了啥」，NewMate 答「没有列举会话的工具，重启后又无会话持久化，旧 id 一律 unknown_conversation」。两句话都成立，第二句是一条真缺陷：
+
+- **没有发现入口**：`components/newmate/lib/conversations.js` 只有 `new/send/read` 三个工具，模型要拿一个 id 只能靠用户给或自己的记忆；而重启后记忆里的 id 全是冷的，没有清单就永远找不到新的。
+- **冷读调的是不存在的方法**：读分支写的是 `sessionPersistence.inspect` / `load`。用 cordis Service 探针读**正在运行的宿主**，`sessionPersistence` 声明的方法只有 `create/open/flush/stat/list` —— 这两个方法从来不存在，于是每个非 live 对话的读取都落进 `catch`，被报成 `unknown_conversation`（不是「真的没有这个对话」，而是「我调错了方法」）。旧门禁 30 条全绿，因为 fixture 自己把这两个方法造了出来：**门禁与宿主契约之间没有共同锚点**。
+
+**改了什么**
+
+- 新工具 `newmate_conversation_list`（只读）：`sessionQuery.listSessions()` 统一语料（live + persisted），最新创建在前，每行给 `sessionId`、标题、工作区、创建时间、`live`/`persisted`，并用 `self:true` 标出**你自己所在的那个对话**（这个不能发信）；页内标题用一次 `readTitleSnapshots` 折叠，没有折叠就是 `null`，不编造。
+- 两个来源分开命名：有 `sessionQuery` 就是 `source:'corpus'`；老宿主退回 `agents.list()` 的活会话并明说 `source:'live'`，**不会**把「我只看到活会话」画成「磁盘上没有对话」。
+- 拒绝项全部具名：`agents_unavailable`（两个来源都没有）、`list_unavailable`（语料列举抛错）。分页 `limit` 1–50（默认 20），超限夹取、非整数回默认，回执带 `total/returned/truncated`。
+- 冷读改成宿主真正声明的 `sessionQuery.readSession(sessionId)`（live 优先、replay 校验、不取写所有权、不构造 Agent）+ `readTitle` 取标题；老宿主保留 `inspect`/`load` 分支，`inspect` 仍优先。
+
+**没有越界**：不加全文检索（`searchSessions` 不用）、不删任何对话、不写、不遍历 `~/.dsh/sessions` 磁盘、不跨 profile、不读别的用户。它只回答「有哪些对话、id 是什么」，读正文仍走原来的 `newmate_conversation_read`。
+
+**门禁**：`verify-newmate-conversations` 30 → **48**（新增列表 13 条、冷读 3 条、legacy 与无持久化 2 条；含「列清单不打开任何正文」这一条，证明只读）。4 条种植变异全部 RED 且源码逐字节还原（sha256 `ef18ba683fa8314a…`）：去掉 `self` 标记、去掉排序、冷读跳过语料、隐藏 truncated —— 每条都精确打红对应的那一条。回归 chat 25 / agent-loop 73 / memorylab-tools 182 / version 12 / heartbeat 75 / package 54 全绿。
+
+**顺手修掉一处陈旧门禁**：`verify-newmark-core.mjs` 仍断言 heartBeat「exactly its five tools」，而 0.3.49 起实际是 6 个（多了 `heartbeat_activity`），聚合门禁因此长期带着 1 条与本次改动无关的红 —— 现在数的是真实的 6，并把 `heartbeat_activity` 加进逐个在列的名单。
+
+**已安装、已重启、已活体验收（2026-10-30 22:10–22:20）**
+
+- 安装进 `~/.dsh/profiles/desktop`（依赖指向 `newmark2dsh-0.3.71-source-live.tgz`），备份 `0.3.70-before-0.3.71-20261030-220317`；安装后 **119/119 与源码逐文件 sha256 全等**。
+- 重启走两阶段屏障：`heartbeat_restart{broadcast:true, ackMode:auto}` → 本会话 auto 登记续跑、`missing: []` → `commit` 返回 `committed`；新进程起于 22:10:57，GUI 端口 **62061 → 55255**。
+- 冷启动后 `newmate_memory_context` 的 `toolsMissing: []`，工具组含 `newmate_conversation_list`。
+- **NewMate 真的调用了它**：`newmate_conversation_list {limit:10}` → `total:324, returned:10, truncated:true, source:corpus`，与磁盘 324 个会话目录数一致；它自己认出第 1 条 `self:true` 就是本对话。
+- **冷读也真的通了**：`newmate_conversation_read {sessionId: session-86562a46…, limit:3}` → `from:"persisted"`、`title:"强化五部分大纲细化"`、`total:44`、丢弃 41 条/6.25 万字符如实上报。**修复前这条就是 `unknown_conversation`。**
+- 过程中两个必须记住的坑：**①** 替换正在运行的 bundle 目录会让 HMR 重载它，22:03 提权通道挂起时 `node_modules/newmark2dsh` 为空了约 6 分钟，Newmark 工具整块消失（`/newmark-core/update` 404），用已解包目录补齐并校验；**②** 重启后第一轮 NewMate 直接 `failed`（`no model has been authorised for this bundle yet`，errors.jsonl 里 2026-10-29 起已有同类）——profile 的 `cordis.patch.yml` 里根本没有 `newmark-core` 行，补 `{modelProvider: dsh-opencode-go, model: deepseek-v4.1-flash}` 后热生效。
+- 聚合门禁余下 24 条 `spawnSync ... EPERM` 是沙箱禁止管道 stdio 的环境边界，同一批脚本单独跑全绿。
+
 ## 2026-10-29 0.3.70：CU 截图复查——第一帧把「没读到」画成「已禁用」，NewMate 页右缘被裁
 
 **你的指令**：「没有正确同步对齐，自行 cu 截图查找原因」。这次不读源码猜，用 ComputerUse 打开真实 GUI 逐页截图。

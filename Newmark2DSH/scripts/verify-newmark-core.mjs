@@ -185,9 +185,14 @@ for (const name of ['computer_use', 'screen_capture']) {
  * slip past the one file that inventories every shipped tool. */
 const heartbeat = readPackage('newmark-core/components/heartbeat/index.js');
 const heartbeatTools = [...heartbeat.matchAll(/name: '(heartbeat_[a-z_]+)'/g)].map((match) => match[1]);
+/* 2026-10-29: the count was written when the component carried five tools and went stale when
+ * `heartbeat_activity` joined in 0.3.49 — the inventory said five, the component shipped six, and the
+ * aggregate gate was red for a reason that was nobody's bug. The count is kept because it is the
+ * property that matters (a tool added without a gate line must be visible), and it is now the real
+ * number with the sixth name asserted below alongside the other five. */
 check(
-  'the heartBeat component bundles exactly its five tools',
-  heartbeatTools.length === 5 && new Set(heartbeatTools).size === 5,
+  'the heartBeat component bundles exactly its six tools',
+  heartbeatTools.length === 6 && new Set(heartbeatTools).size === 6,
   heartbeatTools.join(', ') || 'none found',
 );
 for (const name of [
@@ -200,6 +205,8 @@ for (const name of [
    * so a sixth cannot arrive without this line going red. */
   'heartbeat_restart_cancel',
   'heartbeat_restart_ack',
+  /* 0.3.49: the read-only half of the restart protocol — who else is running right now. */
+  'heartbeat_activity',
 ]) {
   check(`the heartBeat component bundles ${name}`, heartbeat.includes(`name: '${name}'`));
 }

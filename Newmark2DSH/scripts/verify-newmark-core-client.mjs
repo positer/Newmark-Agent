@@ -1430,6 +1430,34 @@ console.log('# the rebuild light bar is bound to the rebuild');
   );
 }
 
+// The composer's keyboard hint must sit next to the send button, not float in the middle of the row.
+//
+// The row is `attach … hint … send`. With `justify-content: space-between` and nothing else, the
+// hint lands exactly halfway across, which the user reported as 输入提示没有正确保持在发送按钮旁边.
+// An auto margin eats the free space and pins the hint to the button it describes; the nowrap +
+// ellipsis trio is what keeps a long hint from shoving the send button off the row on a narrow
+// window. All three properties are asserted because each one alone leaves a different wrong look.
+{
+  const source = fs.readFileSync(clientHalf, 'utf8');
+  const row = /\.nm-composer-row\{([^}]*)\}/.exec(source)?.[1] ?? '';
+  const hint = /\.nm-composer-hint\{([^}]*)\}/.exec(source)?.[1] ?? '';
+  check(
+    'the composer row keeps attach and send on one line',
+    /display:flex/.test(row) && /justify-content:space-between/.test(row),
+    'that row is the only thing that can place the two controls at opposite ends',
+  );
+  check(
+    'the keyboard hint is pinned to the right, next to the send button',
+    /margin-left:auto/.test(hint) && /text-align:right/.test(hint),
+    'a hint centred in the row reads as a caption for the textarea, not as help for the button it belongs to',
+  );
+  check(
+    'a narrow composer truncates the hint instead of pushing send out of the row',
+    /min-width:0/.test(hint) && /text-overflow:ellipsis/.test(hint) && /white-space:nowrap/.test(hint),
+    'a flex child refuses to shrink below its text unless it is told to',
+  );
+}
+
 // Electron's dsh-app page can omit tapIndex globals. Mount from the host's canonical name field.
 {
   for(const mounted of [true,false]){

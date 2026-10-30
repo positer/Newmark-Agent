@@ -1,5 +1,41 @@
 # Newmark Agent Overview
 
+## 2026-10-30 0.3.73 汇报出口：`newmate_wechat_send_text`
+
+- **用户要求**：「有事汇报时积极发信 clawbot 让用户了解」。此前主动消息不出微信，只到页面/桌宠。
+- **改动**：`lib/wechat-channel.js` 新增 `sendText()`（≤800 字、换行压单段、先判接收者；重复 10 分钟内拒、一小时 ≤6 条、未连接/暂停/无接收者各自具名，拒绝结果写 `stats.reportFailed`，成功写 `reports[]` 与 `stats.reports`）；`components/newmate/index.js` 注册私有工具 `newmate_wechat_send_text`；`component.js` 的 `NEWMATE_RUN_TOOLS` +1 且**不进** `NEWMATE_REQUEST_TOOLS`；`lib/persona.js` 增加汇报边界（报什么、怎么写、没有事就不要发）。
+- **状态设计**：`emptyState()` 增加 `reports: []` 与 `stats.reports/reportFailed`；`read()` 的合并保留 `reports`，旧状态文件（无该键）不会报错。
+- **门禁**：`verify-newmate-wechat-channel` 121 → **134**（自带 sendmessage-only 假服务器，不依赖前面关闭的 fixture）；变异禁用重复判定 → 133/134 RED。回归 chat 25 / agent-loop 73 / memorylab-tools 182 / conversations 48 / heartbeat 75。
+- **安装与实测**：0.3.73（1,312,526 B / sha256 `B9911A43…`）rename 互换装好，119/119 全等；重新挂载后工具组含该工具，真实发送回执 `messageId 7521960525169980936 / chars 56 / remainingThisHour 5`，账本 `stats.reports=1` 一致。
+
+## 2026-10-30 0.3.72 输入提示贴回发送按钮（一行 CSS，三条门禁）
+
+- **现场**：用户截图，`Enter 发送 · Shift + Enter 换行` 漂在输入框正中。根因 `.nm-composer-row` 的 `justify-content:space-between` 把剩余空间在三个子元素间平分。
+- **改动**：`packages/newmark-core/client.js` 里 `.nm-composer-hint` 加 `margin-left:auto;margin-right:2px` + `min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right`。无行为改动。
+- **门禁**：`verify-newmark-core-client` 124 → **127**；`margin-left:auto` 种回后 124 RED、还原后 127 绿。
+- **安装**：0.3.72（1,310,141 B / 119 条目 / sha256 `B14CA703…`）用 rename 互换装好，119/119 与源码全等；备份 `0.3.71-before-0.3.72-20261030-224249`。刷新页面即生效（client half 按安装字节提供），未重启。
+- **自伤与修复**：整份重写 `client.js` 时被截断成 51,200 B，用安装目录同版本副本恢复（sha256 `7F939AE4…` 全等）；规则进 `taste.md`。
+
+## 2026-10-30 0.3.71 NewMate 的对话发现：新增只读清单工具，冷读换成宿主真正声明的 `sessionQuery`
+
+- **触发（用户原话）**：「newMate反馈其缺乏获取对话 id 的能力，为其添加，但注意不要越界添加」。现场（19:32 微信通道）：NewMate 说「没有列举会话的工具，重启后又无会话持久化，旧 id 一律 unknown_conversation」。
+- **两处事实**：① `lib/conversations.js` 只有 new/send/read，没有发现入口；② 冷读分支调 `sessionPersistence.inspect`/`load`，而**活宿主**的 `sessionPersistence` 只声明 `create/open/flush/stat/list`（cordis Service 探针实测），两个方法都不存在 → 非 live 对话的每次读取都 `unknown_conversation`。旧门禁 30 条全绿是因为 fixture 自造了这两个方法。
+- **改动的文件**
+  - `components/newmate/lib/conversations.js`：`CONVERSATION_TOOLS` 由 3 变 4（`newmate_conversation_list` 在最前）；新增 `MAX_LIST_SESSIONS=50 / DEFAULT_LIST_SESSIONS=20 / MAX_TITLE_CHARS=120`；新增 `sessionQuery()` 惰性取用、`titlesOf()`（页内一次批量折叠）、`list()`（语料/活会话两源，具名拒绝，`total/returned/truncated`，`self` 标记）；`read()` 冷路径改为 `sessionQuery.readSession` + `readTitle`，legacy `inspect/load` 分支保留在 else。
+  - `components/newmate/component.js`：`NEWMATE_RUN_TOOLS` +1 名（仍需 `NEWMATE_REQUEST_TOOLS` 之外，因此自主检查轮也有它 —— 只读发现不该被闸住）。
+  - `components/newmate/index.js`：`createConversationBridge` 的 services 里增加 `sessionQuery:()=>ctx.get?.('sessionQuery')`。
+  - `components/newmate/lib/persona.js`：第 23 段改为「先 `newmate_conversation_list` 看清单…标题缺失就是 null，不要自己编造对话或 id」。
+  - `scripts/verify-newmate-conversations.mjs`：重写为 48 条，fixture 换上真实契约（`listSessions/readSession/readTitleSnapshots/readTitle`）+ 计数器证明 list 不打开正文。
+  - `scripts/verify-newmark-core.mjs`：heartBeat 工具计数 5 → 6 并补 `heartbeat_activity`（0.3.49 起就陈旧，与本次改动无关）。
+  - 六个 manifest → 0.3.71；`VERSION.md` 新增一行。
+- **契约锚点（这份改动的证据来自运行中的宿主，不是文档）**：`sessionPersistence.methods = create/open/flush/stat/list`；`sessionQuery.listSessions(): Promise<SessionRecord[]>`（`SessionRecord{header,live,persisted}`）、`readSession(id): Promise<SessionLogSnapshot>`（`{session,inheritedEventCount,events}`）、`readTitle(id)`、`readTitleSnapshots(ids)`（`SessionTitleObservation{ session, title?: SessionTitleSnapshot{title,...} }`）。
+- **边界**：只读；分页有界；两个来源都不可用时 `agents_unavailable`，列举抛错时 `list_unavailable`；不加全文检索、不删对话、不写、不遍历 `~/.dsh/sessions`、不跨 profile。
+- **门禁**：`verify-newmate-conversations` **48 PASS**；4 条种植变异全 RED 且源码逐字节还原（sha256 `ef18ba683fa8314a…`）；chat 25 / agent-loop 73 / memorylab-tools 182 / version 12 / heartbeat 75 / package 54 全绿。
+- **状态**：**0.3.71 已打包 → 已安装 → 已重启 → 已活体验收（2026-10-30 22:10–22:20）**。安装目录 `~/.dsh/profiles/desktop/node_modules/newmark2dsh`（119/119 与源码 sha256 全等），备份 `0.3.70-before-0.3.71-20261030-220317`；重启回执 `phase:committed`（intentId `623de934…`），GUI 端口 62061 → 55255。
+- **活体结果**：NewMate 真实调用 `newmate_conversation_list{limit:10}` → `total:324 / returned:10 / truncated:true / source:corpus`（与磁盘 324 个会话目录一致），并正确标出 `self:true` 为本对话、3 条 subagent 行；`newmate_conversation_read{sessionId:session-86562a46…,limit:3}` → `from:persisted`、`title:强化五部分大纲细化`、`total:44`、丢弃 41 条如实上报 —— 这条在修复前是 `unknown_conversation`。
+- **两个必须记住的坑**：① 替换正在运行的 bundle 目录会触发 HMR 重载，提权通道挂起时目录为空约 6 分钟、Newmark 工具整块消失（`/newmark-core/update` 404），已用解包目录补齐并 119/119 校验；② 重启后第一轮 NewMate `failed`（`no model has been authorised for this bundle yet`，errors.jsonl 自 2026-10-29 起有同类），原因就是 profile `cordis.patch.yml` 缺 `newmark-core` 行，补 `modelProvider/model` 后热生效。
+- **取代关系**：本条取代 2026-10-25 条目中「`newmate_conversation_read` …否则 `sessionPersistence.load`」的说法；旧句已在原处标注。
+
 ## 2026-10-29 0.3.70 CU 复查：未读状态被画成「已禁用」，NewMate 页被内容撑宽后裁切
 
 - **方法**：ComputerUse 打开真实 GUI（插件页 / NewMate 设置页）逐页截图，不再只读源码。
@@ -622,7 +658,7 @@ positer 账号直接发布已验证 tarball（98 文件，sha256 DAB9F57E…）�
 - 新 `components/newmate/lib/conversations.js`：`createConversationBridge`，三方法 + 三定义 + `stop()`。
   - `newmate_conversation_new`：`agents.create({sessionId, meta:{cwd, agentPreset}, setup: mount})` → `deliverConversation` 投首条消息（`newmark-task:<id>` + flush）→ 落盘后 `workspaceRegistry.attachSession`；cwd 省略时继承本次运行对话的工作区，否则用最新注册工作区，都没有就拒绝（不拿 process.cwd() 猜）。
   - `newmate_conversation_send`：复用 `deliverConversation`；拒绝 `self_target` / `target_paused` / `delivery_failed`。
-  - `newmate_conversation_read`：活会话 `snapshotEvents`，否则 `sessionPersistence.load`；只取 user/assistant 文本，最新优先，60 条 / 6000 字符 / 单条 800 字符上限，自报 dropped 与每条 source。
+  - `newmate_conversation_read`：活会话 `snapshotEvents`，否则 `sessionPersistence.load`；只取 user/assistant 文本，最新优先，60 条 / 6000 字符 / 单条 800 字符上限，自报 dropped 与每条 source。（**已被 2026-10-30 0.3.71 条目取代**：宿主从未提供 `load`/`inspect`，现在走 `sessionQuery.readSession` + `readTitle`，legacy 分支保留。）
 - 改 `components/newmate/component.js`（组 +3、`conversationOf(task)` 写入 ALS）、`components/newmate/index.js`（懒闭包建 bridge、并入私有映射、teardown 调 `conversations.stop()`）、`components/newmate/lib/persona.js`（授权边界）、`scripts/verify-newmark-core.mjs`（umbrella 注册）、六个 manifest（0.3.27）、`VERSION.md`（新增一行）。
 - 新门禁 `scripts/verify-newmate-conversations.mjs`：**26 PASS**。
 

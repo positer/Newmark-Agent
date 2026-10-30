@@ -13,7 +13,7 @@ let checks = 0;
 const check = (label, value) => { assert.ok(value, label); checks += 1; console.log('ok ' + checks + ' - ' + label); };
 const refused = (result, code) => result && result.ok === false && result.code === code;
 
-// ---- fakes: the three services the bridge reads, recorded so ordering is measurable ----
+// ---- fakes: the services the bridge reads, recorded so ordering is measurable ----
 const order = [];
 const makeAgent = (id, { events = [], cwd = workspace, noFlush = false } = {}) => ({
   session: { header: { id, cwd }, requestHeader: () => ({}), snapshotEvents: () => events },
@@ -37,6 +37,7 @@ const agents = {
     return { agent, dispose: async () => { order.push('dispose:' + options.sessionId); live.delete(options.sessionId); } };
   },
   get: (id) => live.get(id),
+  list: () => [...live.values()],
 };
 const mounted = [];
 const presets = { defaultId: 'dev', mount: async (ctx, id) => { mounted.push(id); return { id }; } };
@@ -50,29 +51,80 @@ const persistence = {
   inspect: async (id) => { const entry = persisted.get(id); if (!entry) throw Error('missing session ' + id); return entry; },
   load: async (id) => { loads += 1; const entry = persisted.get(id); if (!entry) throw Error('missing session ' + id); return entry; },
 };
+
+/**
+ * The host's unified session query, modelled on the contract DSH actually declares -
+ * sessionQuery.listSessions / readSession / readTitleSnapshots / readTitle - rather than on
+ * anything the bridge wishes existed. The counters prove a listing reads no transcript.
+ */
+const corpus = new Map();
+let listSessionsCalls = 0;
+let readSessionCalls = 0;
+const titleFolds = new Map();
+const sessionQuery = {
+  listSessions: async () => { listSessionsCalls += 1; return [...corpus.values()].map((entry) => ({ header: entry.session, live: false, persisted: true })); },
+  readSession: async (id) => { readSessionCalls += 1; const entry = corpus.get(id); if (!entry) throw Error('missing session ' + id); return { session: entry.session, inheritedEventCount: 0, events: entry.events }; },
+  readTitle: async (id) => titleFolds.has(id) ? { title: titleFolds.get(id), messageSeqs: [], source: 'user', eventSeq: 1, updatedAt: 1 } : undefined,
+  readTitleSnapshots: async (ids) => ids.map((id) => titleFolds.has(id) ? { sessionId: id, status: 'fulfilled', value: { session: { id }, title: { title: titleFolds.get(id), messageSeqs: [], source: 'auto', eventSeq: 1, updatedAt: 1 } } } : { sessionId: id, status: 'fulfilled', value: { session: { id } } }),
+};
 let paused = false;
 const goals = { get: () => ({ phase: paused ? 'paused' : 'active' }) };
 
 // The bridge reads every service through a getter: a host that lacks one must be a refusal, not a
 // mount failure, so the closures are the contract (index.js passes ctx.get lookups the same way).
 let bundledModel = { provider: 'fixture', model: 'fixture' };
-const build = (extra = {}) => createConversationBridge({ services: { agents: () => agents, presets: () => presets, workspaces: () => workspaces, persistence: () => persistence, goals: () => goals, model: () => bundledModel, ...extra } });
+const build = (extra = {}) => createConversationBridge({ services: { agents: () => agents, presets: () => presets, workspaces: () => workspaces, persistence: () => persistence, sessionQuery: () => sessionQuery, goals: () => goals, model: () => bundledModel, ...extra } });
 const bridge = build();
 
 // ---- the group and the exposure --------------------------------------------------------
-check('the three conversation tools are declared once, as NewMate run tools', CONVERSATION_TOOLS.every((name) => NEWMATE_RUN_TOOLS.includes(name)) && CONVERSATION_TOOLS.length === 3);
-check('they are not request-bound: an autonomous NewMate turn may also start or address a conversation', CONVERSATION_TOOLS.every((name) => !NEWMATE_REQUEST_TOOLS.includes(name)));
-check('each definition carries a strict parameter schema', bridge.definitions.length === 3 && bridge.definitions.every((tool) => CONVERSATION_TOOLS.includes(tool.name) && tool.parameters?.type === 'object' && tool.parameters.additionalProperties === false && typeof tool.execute === 'function'));
+check('the four conversation tools are declared once, as NewMate run tools', CONVERSATION_TOOLS.every((name) => NEWMATE_RUN_TOOLS.includes(name)) && CONVERSATION_TOOLS.length === 4);
+check('they are not request-bound: an autonomous NewMate turn may also list, start or address a conversation', CONVERSATION_TOOLS.every((name) => !NEWMATE_REQUEST_TOOLS.includes(name)));
+check('each definition carries a strict parameter schema', bridge.definitions.length === 4 && bridge.definitions.every((tool) => CONVERSATION_TOOLS.includes(tool.name) && tool.parameters?.type === 'object' && tool.parameters.additionalProperties === false && typeof tool.execute === 'function'));
+check('discovery is the first name the persona introduces: an id a model cannot see is an id it has to invent', CONVERSATION_TOOLS[0] === 'newmate_conversation_list');
+
+// ---- list -----------------------------------------------------------------------------
+const sessionHeader = (id, createdAt, cwd = workspace, extra = {}) => ({ version: 'v4', id, createdAt, cwd, isSeeded: false, ...extra });
+corpus.set('older-session', { session: sessionHeader('older-session', 5), events: [] });
+corpus.set('newest-session', { session: sessionHeader('newest-session', 9, workspace, { agentPreset: 'rDev' }), events: [] });
+corpus.set('middle-session', { session: sessionHeader('middle-session', 3), events: [] });
+titleFolds.set('newest-session', '这两天的 DSH 对话');
+titleFolds.set('older-session', '较早的一条');
+
+const listed = await bridge.list();
+check('the corpus is listed without opening a single transcript', listed.ok === true && listed.source === 'corpus' && readSessionCalls === 0 && listSessionsCalls === 1);
+check('newest creation first, and every row carries the id the other tools need', listed.conversations.map((row) => row.sessionId).join(',') === 'newest-session,older-session,middle-session');
+check('a title the host folded is reported, and a session with no title reports null rather than an invented one', listed.conversations[0].title === '这两天的 DSH 对话' && listed.conversations[2].title === null);
+check('the row carries workspace, creation time, liveness and the preset when the header has one', listed.conversations[0].cwd === workspace && listed.conversations[0].createdAt === 9 && listed.conversations[0].live === false && listed.conversations[0].persisted === true && listed.conversations[0].agentPreset === 'rDev');
+check('nothing is marked self when the run is bound to no conversation', listed.conversations.every((row) => row.self === false));
+const selfList = await withNewMateContext({ conversation: { origin: 'older-session' } }, () => bridge.list());
+check('the conversation this run answers in is marked self, so the model can see what it must not address', selfList.conversations.find((row) => row.sessionId === 'older-session').self === true && selfList.conversations.find((row) => row.sessionId === 'newest-session').self === false);
+
+const paged = await bridge.list({ limit: 2 });
+check('a page reports the corpus size it left out instead of implying it saw everything', paged.conversations.length === 2 && paged.returned === 2 && paged.total === 3 && paged.truncated === true);
+const clampedList = await bridge.list({ limit: 100000 });
+check('an oversized page request is clamped to the documented bound', clampedList.ok === true && clampedList.conversations.length === 3);
+const defaulted = await bridge.list({ limit: 'lots' });
+check('a non-integer page request falls back to the default instead of throwing', defaulted.ok === true && defaulted.conversations.length === 3);
+
+const liveOnly = await build({ sessionQuery: () => undefined }).list();
+check('a host older than the session query lists its LIVE agents and says which source answered', liveOnly.ok === true && liveOnly.source === 'live' && liveOnly.conversations.every((row) => row.live === true && row.persisted === false));
+const noSource = await build({ sessionQuery: () => undefined, agents: () => undefined }).list();
+check('a host with neither source refuses by name rather than returning an empty list', refused(noSource, 'agents_unavailable'));
+const brokenList = await build({ sessionQuery: () => ({ listSessions: async () => { throw Error('corpus offline'); } }) }).list();
+check('a corpus that cannot be listed is refused by name, not reported as no conversations', refused(brokenList, 'list_unavailable') && brokenList.error.includes('corpus offline'));
+const noTitles = await build({ sessionQuery: () => ({ listSessions: sessionQuery.listSessions }) }).list();
+check('a host without the title fold still lists, with null titles', noTitles.ok === true && noTitles.conversations.every((row) => row.title === null));
 
 // ---- create ---------------------------------------------------------------------------
 const first = await bridge.create({ prompt: '梳理这个仓库的记忆结构' });
 check('a new conversation is created under a fresh id in the requested workspace', first.ok === true && typeof first.sessionId === 'string' && first.cwd === fs.realpathSync(workspace));
 check('the preset is recorded on the session metadata and mounted before publication', created[0].meta.agentPreset === 'dev' && mounted[0] === 'dev' && typeof created[0].setup === 'function');
-const firstSplice = order.indexOf('create:' + first.sessionId);
 check('the first message is delivered through the same runner contract as newmate_task', order.includes('followup:' + first.sessionId) && order.includes('flush:' + first.sessionId));
 check('a created conversation carries an explicit model selection', created[0].agentOptions?.provider === 'fixture' && created[0].agentOptions?.model === 'fixture');
 check('the conversation is added to its workspace only after its first message crossed the barrier, so a failed delivery never publishes an empty one', order.indexOf('attach:' + first.sessionId) > order.indexOf('flush:' + first.sessionId) && attached[0] === first.sessionId);
 check('the returned id is the one the host created, and the bridge retains its handle', bridge.created().includes(first.sessionId) && live.has(first.sessionId));
+const afterCreate = await build({ sessionQuery: () => undefined }).list();
+check('a conversation this bridge created is listed by the live-agent source, so the id it just returned is discoverable', afterCreate.conversations.some((row) => row.sessionId === first.sessionId && row.live === true));
 
 const relative = await bridge.create({ prompt: 'x', cwd: 'relative/path' });
 check('a relative workspace is refused rather than resolved against an unknown root', refused(relative, 'workspace_invalid'));
@@ -125,12 +177,25 @@ const bounded = await bridge.read({ sessionId: first.sessionId, limit: 2 });
 check('the newest messages win and the drop is reported rather than hidden', bounded.messages.length === 2 && bounded.messages[0].text === '用户的问题二' && bounded.truncated.messages === true && bounded.truncated.droppedMessages === 2);
 const clamped = await bridge.read({ sessionId: first.sessionId, limit: 10000, maxChars: 100000 });
 check('an oversized request is clamped to the documented bounds', clamped.ok === true && clamped.messages.length <= 4);
-persisted.set('persisted-session', { meta: { id: 'persisted-session', cwd: workspace, createdAt: 7, title: '历史对话' }, events: readEvents });
-const fromDisk = await bridge.read({ sessionId: 'persisted-session' });
-check('a conversation that is not live is read from persistence instead', fromDisk.ok === true && fromDisk.from === 'persisted' && fromDisk.title === '历史对话' && fromDisk.messages.length === 4);
-check('the read-only inspect path is preferred over load, which would commit a recovery write', loads === 0);
+
+// A conversation that is NOT live: the host's own read, plus the title fold the contract declares.
+corpus.get('older-session').events = readEvents;
+const fromCorpus = await bridge.read({ sessionId: 'older-session' });
+check('a conversation that is not live is read through the host session query instead', fromCorpus.ok === true && fromCorpus.from === 'persisted' && fromCorpus.title === '较早的一条' && fromCorpus.messages.length === 4);
+check('the corpus read is the replay-validated one, and no legacy recovery path was used', readSessionCalls === 1 && loads === 0);
 const absent = await bridge.read({ sessionId: 'never-existed' });
 check('an unknown conversation is refused rather than returning an empty transcript', refused(absent, 'unknown_conversation'));
+
+// Legacy host: no sessionQuery at all, so the pre-existing persistence pair must still work - and
+// the read-only inspect must be preferred over load, which would commit a recovery write.
+persisted.set('persisted-session', { meta: { id: 'persisted-session', cwd: workspace, createdAt: 7, title: '历史对话' }, events: readEvents });
+const legacyBridge = build({ sessionQuery: () => undefined });
+const fromDisk = await legacyBridge.read({ sessionId: 'persisted-session' });
+check('a host older than the session query is still read from persistence, heading preserved', fromDisk.ok === true && fromDisk.from === 'persisted' && fromDisk.title === '历史对话' && fromDisk.messages.length === 4);
+check('the read-only inspect path is preferred over load, which would commit a recovery write', loads === 0);
+const persistless = await build({ sessionQuery: () => undefined, persistence: () => undefined });
+const noStore = await persistless.read({ sessionId: 'persisted-session' });
+check('a host with neither a corpus nor persistence refuses the read by name', refused(noStore, 'unknown_conversation'));
 
 // ---- teardown -------------------------------------------------------------------------
 const ids = bridge.created();

@@ -1,5 +1,11 @@
 # Newmark Agent Project Taste
 
+## 2026-10-31 发布留痕：端点别写错，顺序别颠倒（Newmark2DSH 0.3.73）
+
+- **查 npm latest 只用 `https://registry.npmjs.org/-/package/<name>/dist-tags`**；`/<name>/dist-tags` 返回 `version not found: dist-tags`，那是错的端点，不是「还没发布」。
+- **发布顺序**：fetch → sync → commit → push 分支 → 最后推 tag。tag 触发工作流，推在落后基线上就是给错误的树发版。
+- **采样要有时间序列**：本轮 tag 到 latest 只用了约 3.5 分钟，但结论仍以带时间戳的多次采样为准。
+
 ## 2026-10-30 主动外发：报告 ≠ 关怀，且必须能拒绝（Newmark2DSH 0.3.73）
 
 - **出口按发起者分类**：用户回信 / 用户预约 / 组件自己。新增「主动发送」前先写清谁发起、什么时候允许；否则「主动」等于「随时」。

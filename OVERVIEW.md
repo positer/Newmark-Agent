@@ -7,6 +7,7 @@
 - **状态设计**：`emptyState()` 增加 `reports: []` 与 `stats.reports/reportFailed`；`read()` 的合并保留 `reports`，旧状态文件（无该键）不会报错。
 - **门禁**：`verify-newmate-wechat-channel` 121 → **134**（自带 sendmessage-only 假服务器，不依赖前面关闭的 fixture）；变异禁用重复判定 → 133/134 RED。回归 chat 25 / agent-loop 73 / memorylab-tools 182 / conversations 48 / heartbeat 75。
 - **安装与实测**：0.3.73（1,312,526 B / sha256 `B9911A43…`）rename 互换装好，119/119 全等；重新挂载后工具组含该工具，真实发送回执 `messageId 7521960525169980936 / chars 56 / remainingThisHour 5`，账本 `stats.reports=1` 一致。
+- **发布**：源码 `positer/Newmark-Agent` `0e33bf1e..4c64f1cd`；发布仓 `positer/newmark2dsh` `dd461c0..1c171fd` + tag `v0.3.73`；工作流 `runs/41092656654` success（00:44:46→00:48:20）；`dist-tags.latest = 0.3.73`，`time['0.3.73'] = 2026-10-30T16:48:08Z`，`shasum db774d97…`、`fileCount 120`。重启冷加载校验 0.3.73 / 119 文件、`toolsMissing: []`。
 
 ## 2026-10-30 0.3.72 输入提示贴回发送按钮（一行 CSS，三条门禁）
 

@@ -1,5 +1,12 @@
 # Newmark2DSH taste
 
+## 2026-10-31 0.3.73 发布：端点、顺序与采样
+
+- **dist-tags 的正确端点**是 `https://registry.npmjs.org/-/package/<name>/dist-tags`。写成 `/<name>/dist-tags` 会回 `version not found: dist-tags`——那不是「还没发布」，把它当证据会得出相反结论（本轮实测踩到一次）。
+- **顺序**（本轮实测可用）：源码仓库 fetch → 提交并推 master；发布仓库 fetch → `sync-release-repo`（copied 119 / changed 12 / removed 0）→ commit main → **push main** → 打 tag → **最后** push tag。tag 是触发器，推错基线就是给错误的树发布。
+- **tag 形态**：发布仓库用的是**轻量** tag（`git cat-file -t v0.3.70` = commit），新 tag 沿用同型，不混用 annotated。
+- **时间线可以很短**：tag 00:44:46 推上去，工作流 00:48:20 success，registry `time['0.3.73'] = 16:48:08Z` 同一分钟翻转；但**仍按 10 分钟量级采样**，不要因为一次没翻就断言失败。
+
 ## 2026-10-30 主动外发的默认边界：报告 ≠ 关怀（0.3.73）
 
 - **三条出口按「谁发起」区分**：reply（用户发微信）/ scheduled（用户约的时间）/ report（NewMate 自己）。要加第四条出口，先把「谁发起、什么条件下允许」写清楚，再谈实现；否则「主动」会变成「随时」。

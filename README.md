@@ -16,6 +16,8 @@
 
 **状态**：0.3.73 已打包（`newmark2dsh-0.3.73.tgz`，1,312,526 B / 119 条目 / sha256 `B9911A43…`）→ 已安装（rename 互换，119/119 与源码全等，备份 `0.3.72-before-0.3.73-20261030-234450`）→ 重新挂载后工具组里就有它 → **真的发出去了一条**：`{ok:true, chars:56, messageId:"7521960525169980936", remainingThisHour:5}`，账本 `stats.reports=1`、`reports[0].messageId` 与回执一致。
 
+**已发布 npm**：`positer/Newmark-Agent` `master` `0e33bf1e..4c64f1cd`、`positer/newmark2dsh` `main` `dd461c0..1c171fd` + tag `v0.3.73`；工作流 `runs/41092656654` success；`dist-tags.latest = 0.3.73`（`time['0.3.73'] = 2026-10-30T16:48:08Z`）。重启后冷加载校验：0.3.73 / 119 文件、`toolsMissing: []`。
+
 ## 2026-10-30 0.3.72：输入提示回到发送按钮旁边（一行 CSS + 三条门禁）
 
 **你的指令**：「输入提示没有正确保持在发送按钮旁边」（附截图）。

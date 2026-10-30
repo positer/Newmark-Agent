@@ -207,6 +207,15 @@ A release that does both a sub-component addition and anything else is recorded 
   - `newmate_conversation_read {"sessionId":"session-86562a46…","limit":3}` → `from:"persisted"`、`title:"强化五部分大纲细化"`、`total:44`、`messages:3`、`truncated.droppedMessages:41`、`droppedChars:62500`。**这条正是旧缺陷的现场：修复前它就是 `unknown_conversation`。**
 - **遗留**：`/newmark-core/update` 重启后 8 s 内未答（它会去问 registry），未作为版本判据；版本以安装字节 + `newmate_memory_context` 为准。
 
+**2026-10-31 00:53 — 0.3.73 已发布 npm（补记）。**
+
+- **重启校验**（用户：「重启安装检验更新」）：新进程 00:41:34 起，冷加载 `~/.dsh/profiles/desktop/node_modules/newmark2dsh` = **0.3.73 / 119 文件**；`newmate_memory_context` 的 `toolsMissing: []`，工具组含 `newmate_wechat_send_text` 与 `newmate_conversation_list`。
+- **源码仓库**：`positer/Newmark-Agent` `master` `0e33bf1e..4c64f1cd`（22 文件，+571/−46）。
+- **发布仓库**：`positer/newmark2dsh` `main` `dd461c0..1c171fd`（12 文件，+228/−32；`sync-release-repo` 报 `copied 119, changed 12, removed 0`），tag **`v0.3.73` → `1c171fd`**（轻量 tag，与 `v0.3.70` 一致）。
+- **工作流**：`runs/41092656654` `publish v0.3.73` **success**（开始 00:44:46，结束 00:48:20）。
+- **registry**：`dist-tags.latest = 0.3.73`；`time['0.3.73'] = 2026-10-30T16:48:08Z`（00:48:08 +08）；`shasum db774d9700610cfd46ef530f0ed6666abcf31d69`、`fileCount 120`、`unpackedSize 3,757,203`；版本序列 `0.3.66, 0.3.67, 0.3.70, 0.3.73`。
+- **采样口径（踩过一次）**：正确端点是 `https://registry.npmjs.org/-/package/newmark2dsh/dist-tags`；`https://registry.npmjs.org/newmark2dsh/dist-tags` 会回 `version not found: dist-tags`，把它当「还没发布」会得出相反结论。
+
 **2026-10-28 17:4x — 0.3.64 的安装与验证（补记）。** 打包 `newmark2dsh-0.3.64.tgz`（1,304,666 B / 119 条目 / sha256 `7B830CC5EB2131542D256DA688CDCAC9E1590DB968BE47FB1B44EF01E23FC05B`），装进 `~/.dsh/profiles/desktop` 并用**两阶段广播屏障**重启（`broadcast:true, ackMode:'auto'` → 3 个运行中会话全部 registered → commit；GUI 端口 57647→62684，未打断任何会话）。重启后实测 `GET /newmark-core/update` → `current:"0.3.64"`；安装态与源码 118 个可比文件 sha256 全等；`newmate_todo_add` 的描述从**运行中注册表**读回为新文案（`hasNewText=true, hasOldText=false`）。0.3.63 与 0.3.64 两个 tarball 解包后逐文件比对：119 个文件 7 处不同 = 6 个清单的 `version` + `components/newmate/lib/mcp.js`（差异清单：`archive/20261028-1540-install-0.3.63/TARBALL-DIFF-063-064.txt`）。npm 未发布，`latest` 仍为 0.3.62。
 
 **2026-10-28 17:48 — 0.3.64 已发布（补记）。** 主仓库 `positer/Newmark-Agent` 提交 `087328a1`（14 文件，+302/−19）并推送 `master`；发布仓库 `positer/newmark2dsh` 由 `sync-release-repo.mjs` 同步（copied 119 / changed 9 / removed 0）后提交 `7193473`、打 tag `v0.3.64`（`76f038c5…`）并推送。tag 触发 `publish.yml`（trusted publishing / OIDC）：run `40666442814`，09:43:16Z 创建 → 09:45:18Z success；npm `latest` 于 **09:45:42Z 由 0.3.62 翻转为 0.3.64**（tag→latest 2 分 26 秒）。发布 tarball `sha256 6DC1E99C637F35C07DB6CDF4E291CFD5C1F4F5385600A471C46131B531FC7D47`，与本机安装副本比对：120 文件中 106 个逐字节相同、12 个仅行尾不同（`.gitattributes eol=lf`，CI 在 Linux 打包）、`package.json` 仅差结尾换行（canonical JSON 相等）、`README.md` 只在发布包内（发布仓库根自带公开 README）。归档：`archive/20261028-1748-npm-release-0.3.64/`。

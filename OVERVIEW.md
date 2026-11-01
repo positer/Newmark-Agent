@@ -1,5 +1,51 @@
 # Newmark Agent Overview
 
+## 2026-11-01 0.3.79 广播重启与 NewMate 解耦（已安装，配对实验 +1 / +0）
+
+- 三处耦合全删：屏障通知不再写进 NewMate；更新重启不再给 NewMate 排 `update_report`；heartBeat 不再接收 `core`、不再投递 `destination='newmate'` 的任务。旧任务按名退役（`newmate_decoupled` / `restart_report_decoupled`）。
+- 门禁：heartbeat 78、restart-decoupling 6、其余 12 项全绿；0.3.79 已打包安装（1,330,518 B / 121 / sha256 `25CED1BE…`，差异 0）。
+- 配对：重启 #1 旧代码通知 17→18；重启 #2 新代码 18→18；最新通知时间戳停在 #1。
+- 历史里的 18 条旧通知未删除。归档 `archive/20261101-193709-decouple-restart-newmate/`。
+## 2026-11-01 0.3.78 安装与验收：第一轮活体失败，修好后 12 秒自己交接
+
+- **0.3.77 装上去了**（1,330,226 B / 121 文件 / sha256 `1927938A…`，备份 `0.3.73-before-0.3.77-20261101-175858`，逐文件差异 0，两阶段广播重启，GUI 49320→61583），工具面 28→32、四个 session 工具在列、`toolsMissing: []`，真实模型轮能列会话。
+- **但主动刷新没发生**：种子 82 条消息、3 小时前的会话，观测 120 s 无 `session_refresh` 任务。归因：维护轮要求 `environment().ready && !busy`，而 `busy` 在任何会话运行时为真（验收会话本身）、`ready` 要桌宠在线 → 真机上永不启动。
+- **0.3.78 修复**：删掉 `environment()` 判断；门禁新增「不看桌面/读者/别的会话忙不忙」断言，`verify-newmate-session-refresh` 64→**65**。
+- **复测通过**：12 秒内维护轮自己跑完，摘要 531 字符、`carried.by='self'`、`reason='self_refresh'`、消息 290→290（不发消息）；测后恢复 state（35 线程 / 208 消息 / active `03c37b1f`）。
+- 归档 `archive/20261101-175957-install-0.3.77-acceptance/`。
+## 2026-11-01 0.3.77 主动刷新 session（维护轮）
+
+- **要求**：「我需要的是主动刷新 session」。旧行为：软预算只在用户对话里请求、硬上限才机械交接 → 没人说话就不整理。
+- **改**：`component.js` 新增 `refreshSessionProactively()`（tick 里调用）+ 常量 `SESSION_REFRESH_IDLE_MS=30min`/`COOLDOWN=2h`/`MAX_FAILURES=3`；新增任务 kind `session_refresh`（维护轮：`automatic` 工具集、60s/4 步、不发布消息、记 `task.maintenance`）；`rotateSession` 的 `lastThreadRotation.reason` 对机械兜底保留 `maintenance_failed`；`chat()` 增加 `cancelMaintenance`（用户插话优先）；`sessionStatus().proactive`。
+- **兜底**：3 次未产出摘要 → 机械交接（by budget），计数清零。
+- **门禁**：`verify-newmate-session-refresh` 55→64；13 门禁回归全绿（`evidence/20261101-proactive-refresh/regressions.txt`）。
+- **状态**：0.3.77 源码候选，未打包/未安装/未重启。
+## 2026-10-31 0.3.76 Super-agent 手册落地：投机送达（prepared message）
+
+- **手册**：DeepSeek Harness《Super-agent 设计探索：迈向更自主的 Agent 系统》（2026-10-31），原型 `deepseek-ai/dsh-superagent-prototype`；本轮读到的是 IT之家/智东西报道正文，**原文未获得**。
+- **对应点**：手册「主动」= 观察事件、自行推进、不需要介入时安静；方法是两级过滤 + **投机执行**。两级过滤 NewMate 已有（`initiativeGate` → 模型 `notify`）；本轮补投机执行。
+- **改动**：`component.js` 增加 `PREPARED_TTL_MS=30*MINUTE`、`PREPARED_WAIT`、发布路径 `speculable` 分支（仅时序拒绝且内容/重复/静默都不成立时保留）、`deliverPrepared()`（tick 里先于新决定执行，零模型调用送达，送达前重跑闸）、`initiativeStatus().prepared`；`lib/proactive-message.js` 契约一句（不许写会被时间证伪的「刚刚/现在」）；`scripts/verify-newmate-initiative.mjs` 66→73；新增 `scripts/probe-newmate-proactive-subject.mjs`（上一轮）与 `scripts/probe-newmate-prepared-message.mjs`（本轮，零调用送达的复现）。
+- **证据**：`verify-newmate-initiative` 73 PASS；13 门禁回归全绿（归档 evidence/regressions.txt）。
+- **未做**：Trigger 对象化/链式召回、Worker 并行、Watchdog、异步 start/stop。
+- **状态**：0.3.76 源码候选，未打包/未安装/未重启/未发布。
+## 2026-10-31 0.3.75 主动能力：证据归送达，主题归模型
+
+- **用户要求**：「根据该技术手册优化现有 newMate 的主动能力」。手册（上一轮的微信文章）本机仍被验证页挡住，四条抓取路线全败；本轮依据是只读审计 + 两个离线 probe，文档标明了这一点。
+- **缺陷 1（证据被消耗）**：`probeInitiative()` 在 enqueue 处 `initiative.signals=[]` 并推进指纹 → `notify=false` / 被闸拦下 / 模型没跑成 三种情况都静默吃掉唯一证据，之后退回 `reason='check-in'`。修：`task.evidence={reason,memoryKey,marker,signals}` + `settleInitiativeEvidence()`；送达才清（保留运行期间新信号）、推进指纹并持久化；未送达保留，`MAX_EVIDENCE_ATTEMPTS=3` 后过期并写 `evidence.state='expired'`。
+- **缺陷 2（主题退化）**：dedupe key 回退到 `task.reason`，未命名主题的消息共用 `check-in` → 24h 内第二条不同内容被判 `duplicate_topic`。probe 改前 1 条 / 改后 2 条。修：`subject=reply.topic||''` 参与去重与 `recordMessage`；prompt 契约同步。
+- **文件**：`lib/initiative.js`（`MAX_EVIDENCE_ATTEMPTS`）、`component.js`（指纹持久化、probe 不消费、结算函数、subject 化 dedupe、prompt、status）、`scripts/verify-newmate-initiative.mjs`（57→66）、新增 `scripts/probe-newmate-proactive-subject.mjs`。
+- **证据**：`verify-newmate-initiative` 66 PASS；回归 chat 25 / agent-loop 73 / conversations 48 / memorylab-tools 182 / steer-handoff 24 / todo-activation 31 / session-refresh 55 / heartbeat 75 / reply-and-repeat 15 / proactive-format 21 / report-display 5 / workspace-diff 51 全绿（`evidence/20261031-233239-proactive/regressions.txt`）。
+- **状态**：六份 manifest → 0.3.75（源码候选）；未打包、未安装、未重启、未发布。归档 `archive/20261031-233239-newmate-proactive-evidence/`。
+## 2026-10-31 0.3.74 NewMate 自主刷新与管理自己的会话（`newmate_session_*`）
+
+- **用户要求**：「实现自主刷新对话 session，自主管理对话，session 应当可以脱离用户来手动管理」。附带的微信文章链接被微信「环境异常」验证页挡下（HTTP 200 / 2,252 B / 只有验证按钮），**正文未读到**；实现依据是这句话本身。
+- **改前事实**（代码）：「对话」（threads）只能由 `createThread()` 或 `rotateForMessage()` 的注意力启发式创建，模型没有入口；归档会话永久只读；每轮 prompt 只带最近 12 条（自主轮 6 条）→ 长会话是**可达性**问题。
+- **新增文件**：`components/newmate/lib/session-refresh.js`（纯决策：软 80/60000、硬 240/180000、摘要 2000、最少 4 条、机械摘要 24×300/2400，`sessionFacts`/`budgetCode`/`refreshDue`/`refreshForced`/`mechanicalSummary`）；`components/newmate/lib/sessions.js`（4 个工具定义 + 参数校验 + 全部具名拒绝）；`scripts/verify-newmate-session-refresh.mjs`（55 条）。
+- **改动文件**：`component.js`（ALS 加 `session:{id,taskId}`、prompt 加 `sessionBlock()`、`rotateSession`/`settleSessionBudget`/`applySessionChange`、5 个公开方法、tick 与 finally 的挂点、`NEWMATE_RUN_TOOLS` +4 而不进 request 组）；`index.js`（`createSessionBridge({services:{sessions:()=>mate}})` → `privateTools`，不进共享注册表）；`lib/persona.js`（会话边界一段）。
+- **不变量**：切换只发生在回合边界——refresh/resume 排队在任务上，回复落盘后执行；硬上限的机械交接只在无 pending/running 任务时发生（门禁专门钉住「排队的回合保留自己的会话」）。
+- **证据**：门禁 55 PASS 覆盖组内/非 request-bound/自动轮 offer、回合边界生效、旧会话归档可读、新会话 prompt 带交接、`session_changed` 身份守卫、软预算只提示、硬上限空闲自轮转、自主轮 prompt 有会话行、挂载后私有注册。回归 chat 25 / agent-loop 73 / conversations 48 / memorylab-tools 182 / wechat-channel 134 / short-memory-mcp 44 / initiative 57 / steer-handoff 24 / todo-activation 31 全绿。
+- **状态**：六份 manifest → 0.3.74（源码候选）；**未打包、未安装、未重启、未发布**，无活体验收。
+- **归档**：`archive/20261031-231419-newmate-session-refresh/`（before/after/evidence/REPORT.md，含逐条证据与「没跑完的门禁为什么没跑完」）。
 ## 2026-10-30 0.3.73 汇报出口：`newmate_wechat_send_text`
 
 - **用户要求**：「有事汇报时积极发信 clawbot 让用户了解」。此前主动消息不出微信，只到页面/桌宠。

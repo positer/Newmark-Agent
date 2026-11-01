@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 import {createNewMate} from '../packages/newmark-core/components/newmate/component.js';import {createShortMemory} from '../packages/newmark-core/components/memorylab/lib/short-memory.js';
 import {MINUTE,HOUR,DAY,isQuiet,initiativeGate} from '../packages/newmark-core/components/newmate/lib/initiative.js';
+import {PROACTIVE_STYLE} from '../packages/newmark-core/components/newmate/lib/proactive-message.js';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'newmate-initiative-'));const start=Date.parse('2026-10-12T01:00:00Z');let checks=0,serial=0;
 const check=(name,value)=>{assert.ok(value,name);console.log(`ok ${++checks} - ${name}`);};
 function fixture(options={}){let time=options.start??start;const env={ready:true,idleMs:2*MINUTE,...options.env};const calls=[],notices=[];const directory=path.join(root,String(++serial));
@@ -39,6 +40,148 @@ for(const [key,value]of [['busy',true],['ready',false],['idleMs',91*MINUTE]]){le
 const read=fixture();await read.enable();await read.due();read.mate.markRead(read.mate.state().activeThreadId,true,'read',1);check('reading an autonomous message counts as interest without requiring a typed reply',read.mate.state().initiative.unanswered===0&&read.mate.state().initiative.nextAttemptAt-read.time()===4*HOUR);read.mate.stop();
 const format=fixture({execute:async call=>({isError:false,value:call.arguments.prompt.includes('最终只输出一个合法 JSON 对象')?{ok:true,result:{structured:{notify:false,text:''}}}:{ok:false,code:'schema_violation',error:'provider answered prose'}})});await format.enable();await format.due();check('automatic inference requests explicit plain JSON even on providers without native response formatting',format.mate.state().tasks[0].status==='completed');format.mate.stop();
 const badFormat=fixture({execute:async()=>({isError:false,value:{ok:true,result:{structured:{notify:'true',text:'不能接受非布尔判断'}}}})});await badFormat.enable();await badFormat.due();check('malformed structured judgements fail closed and consume the check budget',badFormat.mate.state().tasks[0].status==='failed'&&badFormat.mate.state().messages.length===0&&badFormat.mate.state().initiative.attempts===1);badFormat.mate.stop();
+/**
+ * EVIDENCE: consumed by a CONTACT, not by an attempt.
+ *
+ * probeInitiative used to clear initiative.signals (and advance the memory fingerprints) as soon as it
+ * scheduled a check-in. Measured consequence: one file signal -> one silent run -> the signal is gone,
+ * and the next probe falls back to reason 'check-in' even though the real change was never mentioned.
+ * These assertions pin the fixed lifecycle: kept through a silent/failed attempt, spent by a delivered
+ * contact, and bounded so evidence that is genuinely not worth mentioning expires instead of repeating
+ * forever.
+ */
+{
+  const silentKeep=fixture({execute:async()=>({isError:false,value:{ok:true,result:{structured:{notify:false,text:''}}}})});
+  await silentKeep.enable();
+  fs.writeFileSync(path.join(silentKeep.root,'kept.txt'),'x');
+  silentKeep.mate.measure(silentKeep.root,'kept.txt');
+  await silentKeep.due();
+  check('a silent check-in keeps the evidence it was about instead of spending it', silentKeep.mate.state().initiative.signals.length===1 && silentKeep.mate.initiativeStatus().evidence.state==='pending');
+  silentKeep.advance(4*HOUR);
+  await silentKeep.mate.tick();
+  check('the retry still names the same evidence instead of a generic check-in', silentKeep.calls.length===2 && silentKeep.mate.state().initiative.lastReason==='file-change');
+  silentKeep.mate.stop();
+}
+{
+  const spent=fixture();
+  await spent.enable();
+  fs.writeFileSync(path.join(spent.root,'done.txt'),'y');
+  spent.mate.measure(spent.root,'done.txt');
+  await spent.due();
+  check('a delivered contact spends exactly the evidence it was about', spent.mate.state().initiative.signals.length===0 && spent.mate.initiativeStatus().evidence.state==='delivered' && spent.mate.state().messages.length===1);
+  spent.mate.stop();
+}
+{
+  const expires=fixture({execute:async()=>({isError:false,value:{ok:true,result:{structured:{notify:false,text:''}}}})});
+  await expires.enable();
+  fs.writeFileSync(path.join(expires.root,'stale.txt'),'z');
+  expires.mate.measure(expires.root,'stale.txt');
+  await expires.due();
+  for(let i=0;i<2;i++){expires.advance(4*HOUR);await expires.mate.tick();}
+  check('evidence that never became a contact expires after the bound and says so', expires.calls.length===3 && expires.mate.state().initiative.signals.length===0 && expires.mate.initiativeStatus().evidence.state==='expired');
+  expires.advance(4*HOUR);
+  await expires.mate.tick();
+  check('after expiry the next check-in is generic again rather than repeating the old change', expires.mate.state().initiative.lastReason==='check-in');
+  expires.mate.stop();
+}
+{
+  const failed=fixture({execute:async()=>{throw Error('offline');}});
+  await failed.enable();
+  fs.writeFileSync(path.join(failed.root,'offline.txt'),'w');
+  failed.mate.measure(failed.root,'offline.txt');
+  await failed.due();
+  check('a failed check-in neither claims the change was mentioned nor drops it', failed.mate.state().tasks[0].status==='failed' && failed.mate.state().initiative.signals.length===1 && failed.mate.initiativeStatus().evidence.state==='pending');
+  failed.mate.stop();
+}
+{
+  const persisted=fixture();
+  await persisted.enable();
+  await persisted.due();
+  createShortMemory(persisted.root,persisted.time).add({content:'重启之前写下的变化'});
+  persisted.advance(9*HOUR);
+  const restarted=createNewMate(persisted.dependencies);
+  persisted.advance(3*MINUTE);
+  await restarted.tick();
+  check('a memory change made between restarts is still evidence, because the fingerprint is persisted', persisted.calls.length===2 && restarted.state().initiative.lastReason==='memory-change');
+  restarted.stop();persisted.mate.stop();
+}
+
+{
+  /**
+   * The subject of a proactive message is what the model named. It must NOT fall back to the trigger:
+   * measured 2026-10-31, two completely different sentences were both tagged 'check-in' and the second
+   * was rejected as duplicate_topic, so one topic-less message silenced every other for 24 hours.
+   */
+  let sentences=0;
+  const untopiced=fixture({execute:async()=>({isError:false,value:{ok:true,result:{structured:{notify:true,text:'第'+(++sentences)+'条完全不同的事：'+'x'.repeat(sentences)}}}})});
+  await untopiced.enable();
+  await untopiced.due();
+  untopiced.advance(9*HOUR);
+  await untopiced.mate.tick();
+  check('two different topic-less check-ins are both delivered, because a trigger is not a subject', untopiced.calls.length===2 && untopiced.mate.state().messages.length===2);
+  untopiced.mate.stop();
+}
+{
+  const sameText=fixture({execute:async()=>({isError:false,value:{ok:true,result:{structured:{notify:true,text:'同一句话原样重复'}}}})});
+  await sameText.enable();
+  await sameText.due();
+  sameText.advance(9*HOUR);
+  await sameText.mate.tick();
+  check('a literal repeat is still suppressed as a duplicate without a topic', sameText.mate.state().messages.length===1 && sameText.mate.state().initiative.lastOutcome==='duplicate_topic');
+  sameText.mate.stop();
+}
+
+{
+  /**
+   * SPECULATIVE DELIVERY (Super-agent: 投机执行). The expensive half of a proactive turn is the model
+   * call; refusing a finished sentence because the person started typing throws that work away. A
+   * message refused by the TIMING gate alone is kept and delivered by the next suitable tick, without a
+   * second model call, inside a 30-minute window.
+   */
+  let typingEnv;
+  const prepared=fixture({execute:async()=>{if(typingEnv)typingEnv.idleMs=20000;return{isError:false,value:{ok:true,result:{structured:{notify:true,text:'刚看到你把周报补完了，需要我核对一下数字吗？',topic:'周报数字'}}}};}});
+  typingEnv=prepared.env;
+  await prepared.enable();
+  await prepared.due();
+  check('a sentence refused only because the person started typing is kept, not discarded', prepared.mate.state().messages.length===0 && prepared.calls.length===1 && prepared.mate.initiativeStatus().lastOutcome==='prepared:typing' && prepared.mate.initiativeStatus().prepared!==null);
+  prepared.env.idleMs=2*MINUTE;
+  await prepared.mate.tick();
+  check('the kept sentence is delivered when the moment fits, with no second model call', prepared.calls.length===1 && prepared.mate.state().messages.length===1 && prepared.mate.state().messages[0].preparedAt!==undefined && prepared.mate.initiativeStatus().prepared===null);
+  check('delivering a kept sentence still counts as a contact, so the next window is spaced out', prepared.notices.length===1 && prepared.mate.state().initiative.lastMessageAt>0 && prepared.mate.state().initiative.sent>=1);
+  prepared.mate.stop();
+}
+{
+  let typingEnv;
+  const stale=fixture({execute:async()=>{if(typingEnv)typingEnv.idleMs=20000;return{isError:false,value:{ok:true,result:{structured:{notify:true,text:'刚有变化，想和你说一句。'}}}};}});
+  typingEnv=stale.env;
+  await stale.enable();
+  await stale.due();
+  stale.advance(31*MINUTE);
+  await stale.mate.tick();
+  check('a kept sentence expires after half an hour and says so instead of arriving late', stale.mate.state().messages.length===0 && stale.mate.initiativeStatus().prepared===null && stale.mate.initiativeStatus().lastOutcome==='prepared_expired');
+  stale.mate.stop();
+}
+{
+  let typingEnv;
+  const talked=fixture({execute:async()=>{if(typingEnv)typingEnv.idleMs=20000;return{isError:false,value:{ok:true,result:{structured:{notify:true,text:'刚看到一条值得说的变化。'}}}};}});
+  typingEnv=talked.env;
+  await talked.enable();
+  await talked.due();
+  talked.env.idleMs=2*MINUTE;
+  talked.mate.markRead(talked.mate.state().activeThreadId,true,'read',1);
+  await talked.mate.tick();
+  check('a kept sentence is dropped when the person came back to the companion meanwhile', talked.mate.state().messages.length===0 && talked.mate.initiativeStatus().lastOutcome==='prepared_dropped:recent_conversation');
+  talked.mate.stop();
+}
+{
+  const report=fixture({execute:async()=>({isError:false,value:{ok:true,result:{structured:{notify:true,text:'我现在不能替你执行这件事。'}}}})});
+  await report.enable();
+  await report.due();
+  check('content refusals are never kept for later delivery', report.mate.initiativeStatus().prepared===null && report.mate.initiativeStatus().lastOutcome==='unprompted_capability_report');
+  report.mate.stop();
+}
+
+check('the proactive contract admits a sentence may go out up to half an hour later, and forbids "right now" phrasing', PROACTIVE_STYLE.includes('半小时内') && PROACTIVE_STYLE.includes('不要写「刚刚」'));
 const week=fixture();await week.enable();for(let i=0;i<7*24*6;i++){week.advance(10*MINUTE);await week.mate.tick();}
 const perDay={};for(const m of week.mate.state().messages){const d=new Date(m.at+8*HOUR).toISOString().slice(0,10);perDay[d]=(perDay[d]||0)+1;}
 check('a week without user initiation stays present, bounded by the gap rather than by a daily quota',week.mate.state().messages.length>0&&Math.max(...Object.values(perDay))<=6&&week.calls.length<=7*6);

@@ -1,0 +1,40 @@
+=== regression run 2026-10-31 23:24:52 +08:00
+=== verify-newmate-chat EXIT 0
+ok 25 - bubble-only delivery retains full messages and forces system=false
+PASS 25 NewMate history, preferences and proactive message checks
+=== verify-newmate-agent-loop EXIT 0
+ok 73 - the live thought is the newest text only, not a second transcript
+PASS 73 NewMate ComputerUse permission and live agent-loop checks
+=== verify-newmate-conversations EXIT 0
+ok 48 - teardown disposes exactly the conversations this bridge created
+SUMMARY passed=48 failed=0 total=48
+=== verify-memorylab-tools EXIT 0
+SUMMARY passed=182 failed=0 total=182
+PASS
+=== verify-newmate-steer-handoff EXIT 0
+ok 24 - no late assistant message edits the old history after explicit handoff
+PASS 24 steering, attention and thread handoff checks
+=== verify-newmate-todo-activation EXIT 0
+ok 31 - and the activation runs once the backoff expires
+PASS 31 scheduled conversation activation checks
+=== verify-newmate-session-refresh EXIT 0
+ok 55 - the mounted row's session tools act on the mounted companion
+PASS 55 NewMate session refresh checks
+=== verify-newmate-heartbeat EXIT 0
+ok 75 - component teardown leaves no registrations
+PASS 75 companion, restart and visual assertions. Isolated fixtures: C:\Users\12252\AppData\Local\Temp\newmark-companion-test-WGtRfB
+=== verify-newmate-reply-and-repeat EXIT 0
+ok 15 - a reminder without repeat stays one-shot
+PASS 15 NewMate reply-channel and repeat-rule checks
+=== verify-newmate-proactive-format EXIT 0
+ok 21 - external complete body remains separate from concise pet summary
+PASS 21 proactive content and user-response boundary checks
+=== verify-newmate-report-display EXIT 0
+ok 5 - a notify=true protocol answer is displayed as its text
+PASS 5 NewMate report display checks
+=== verify-newmate-workspace-diff EXIT 0
+ok 51 - the sweep never claims to know who wrote a file, only when it was written
+SUMMARY passed=51 failed=0 total=51
+=== verify-newmate-initiative EXIT 0
+{"scenario":"7 days, no user input, continuously available desktop, deterministic useful model decisions","modelChecks":8,"messages":8,"systemNotifications":0,"perDay":{"2026-10-12":2,"2026-10-13":1,"2026-10-14":1,"2026-10-15":1,"2026-10-16":1,"2026-10-17":1,"2026-10-18":1}}
+PASS 66 NewMate autonomous activation, low-disturbance and budget checks

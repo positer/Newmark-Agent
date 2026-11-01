@@ -36,7 +36,7 @@ check('toPlain shortens a long paragraph', toPlain('这是一句话。'.repeat(4
     tools: { execute: async () => ({ isError: false, value: { ok: true, result: { output: answer, structured: JSON.parse(answer) } } }) },
   });
   const state = JSON.parse(fs.readFileSync(path.join(root, 'newMate/state.json'), 'utf8'));
-  state.tasks.push({ id: 'r1', prompt: '报告', destination: 'newmate', threadId: 'default', status: 'pending', created: 6000000, kind: 'update_report' });
+  state.tasks.push({ id: 'r1', prompt: '报告', destination: 'newmate', threadId: 'default', status: 'pending', created: 6000000, kind: 'chat' });
   fs.writeFileSync(path.join(root, 'newMate/state.json'), JSON.stringify(state));
   await mate.tick();
   const message = mate.state().messages[0];

@@ -8,7 +8,10 @@
 - **缺陷**：该通行的 `application` 是 `failed`（apply 不能重新激活正在被替换的插件），旧代码据此写 `install_refused` + 一条假失败进 `errors.jsonl`。
 - **修复**：`runAutoUpdate({ installedAfter })` 安装后回读磁盘版本，等于目标即 `installed`；管理器词与 `detail` 仅作上下文；抛错也先读盘。
 - **门禁**：`verify-core-auto-update` 53 → 58；其余 8 项全绿（activation 57、core-update 288、config-panel 58、config-format 18、client 127、package 54、version 12、probe-compose 25）。
-- **发布**：源码 `68805aa5`（0.3.81）→ 本轮的 0.3.82 提交；发布仓 tag `v0.3.81`（run 42809253831 success，npm latest 19:44:06 翻到 0.3.81）。
+- **发布**：源码 `68805aa5`（0.3.81）、`7074cc03`（0.3.82）；发布仓 `79fcbca` + tag `v0.3.81`（run 42809253831 success，npm latest 19:44:06 翻到 0.3.81）、`c87468e` + tag `v0.3.82`（run 42810713595 success，19:54:53 翻到 0.3.82）。
+- **端到端闭环**：两块版本差各触发一次真下载安装（0.3.80→0.3.81、0.3.81→0.3.82），无重启；最终安装树 = 发布 tarball（124 文件差异 0），回执 `installed_current`。
+- **自伤与修复**：覆盖硬链接的 node_modules 改坏了 pnpm store 条目（`newmark2dsh@0.3.82` 被 `pnpm store status` 标出），已用 tarball 重铺安装目录；store 残留需在空闲时 `pnpm install --force`。
+- **归档**：`archive/20261110-200325-auto-update-e2e/`。
 
 ## 2026-11-10 0.3.81 版本管理新增「启动时自动更新」（已安装，开关打开，活体跑过一次）
 

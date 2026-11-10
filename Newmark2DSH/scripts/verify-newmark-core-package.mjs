@@ -276,6 +276,38 @@ check(
   /^- id: agent-preset-registry$[\s\S]*?^ {4}default: /m.test(patch),
 );
 
+/* ------------------------------------------------------------- the READMEs --- */
+
+/**
+ * A README carries no version numbers.
+ *
+ * This is the taste rule ("README 不写具体版本号") made mechanical, because a rule that is only
+ * written down is one a hurried release edits away. The version facts live in `VERSION.md`,
+ * GitHub Releases and `archive/`; a landing page that quotes a release number is wrong the next
+ * time anything is published, and it was wrong for months before this check existed.
+ *
+ * Both READMEs are read: the repo's own page and the bundle's npm page. `<version>` placeholders
+ * are allowed — they name a shape, not a release.
+ */
+const readmes = [
+  { label: 'the bundle README', file: path.join(workspace, 'README.md') },
+  { label: 'the repository README', file: path.join(workspace, '..', 'README.md') },
+];
+const VERSION_TOKEN = /\b0\.\d+\.\d+\b|\bv\d+\.\d+\.\d+\b|\bdev-\d+\.\d+\.\d+\b/g;
+for (const readme of readmes) {
+  if (!fs.existsSync(readme.file)) {
+    check(`${readme.label} exists`, false, readme.file);
+    continue;
+  }
+  const text = fs.readFileSync(readme.file, 'utf8');
+  const found = [...new Set(text.match(VERSION_TOKEN) || [])];
+  check(
+    `${readme.label} names no specific version`,
+    found.length === 0,
+    found.length === 0 ? undefined : `found ${found.join(', ')} — versions belong in VERSION.md / Releases`,
+  );
+}
+
 console.log('');
 console.log(`SUMMARY passed=${passed} failed=${failed} total=${passed + failed}`);
 if (failed > 0) {

@@ -162,6 +162,7 @@ const GOOD = {
   const root = tempRoot('installed');
   let installs = 0;
   const seen = [];
+  let disk = '0.3.80';
   const first = await runAutoUpdate({
     root,
     enabled: true,
@@ -171,8 +172,10 @@ const GOOD = {
     install: async (latest) => {
       installs += 1;
       seen.push(latest);
+      disk = '0.3.81';
       return { application: 'restart-required' };
     },
+    installedAfter: async () => disk,
     pid: 4242,
     now: () => '2026-11-10T12:00:00.000Z',
   });
@@ -236,6 +239,95 @@ const GOOD = {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
+/* ---------------------------------------------------------------------------------------
+ * MEASURED 2026-11-10 (0.3.81 live test): the plugin manager answered `application: 'failed'`
+ * about an install whose pnpm step had plainly succeeded ("newmark2dsh 0.3.80 -> 0.3.81"), because
+ * the pass ran inside the very plugin it was replacing and the apply step cannot re-activate it.
+ * These four cases pin the rule that replaced the old one — the DISK decides, the word is context.
+ * ------------------------------------------------------------------------------------- */
+
+{
+  const root = tempRoot('landed-but-word-failed');
+  const recorded = [];
+  let disk = '0.3.80';
+  const receipt = await runAutoUpdate({
+    root,
+    enabled: true,
+    installedVersion: '0.3.80',
+    runningVersion: '0.3.80',
+    readLatest: async () => GOOD,
+    install: async () => { disk = '0.3.81'; return { application: 'failed', error: { diagnostic: 'unmanaged-plugin' } }; },
+    installedAfter: async () => disk,
+    record: (failure) => recorded.push(failure),
+    pid: 7101,
+  });
+  check(
+    'a manager word of "failed" cannot overrule the version that is on disk',
+    receipt.reason === 'installed' && receipt.ok === true && recorded.length === 0,
+    JSON.stringify({ receipt, recorded }),
+  );
+  const state = readAutoUpdateState(root);
+  check(
+    'the receipt keeps the manager word as context beside the disk fact',
+    state.outcome === 'installed' &&
+      state.application === 'failed' &&
+      state.installedAfter === '0.3.81' &&
+      state.pendingRestart === true,
+    JSON.stringify(state),
+  );
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+{
+  const root = tempRoot('word-applied-but-disk-unchanged');
+  const recorded = [];
+  const receipt = await runAutoUpdate({
+    root,
+    enabled: true,
+    installedVersion: '0.3.80',
+    runningVersion: '0.3.80',
+    readLatest: async () => GOOD,
+    install: async () => ({ application: 'applied' }),
+    installedAfter: async () => '0.3.80',
+    record: (failure) => recorded.push(failure),
+    pid: 7102,
+  });
+  check(
+    'a manager word of "applied" cannot overrule a disk that still holds the old version',
+    receipt.reason === 'install_refused' && receipt.ok === false && recorded[0]?.code === 'auto_update_refused',
+    JSON.stringify({ receipt, recorded }),
+  );
+  check(
+    'the refusal names what the disk actually reads',
+    /installed reads 0.3.80/.test(String(recorded[0]?.message)),
+    String(recorded[0]?.message),
+  );
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+{
+  const root = tempRoot('threw-but-landed');
+  const recorded = [];
+  let disk = '0.3.80';
+  const receipt = await runAutoUpdate({
+    root,
+    enabled: true,
+    installedVersion: '0.3.80',
+    runningVersion: '0.3.80',
+    readLatest: async () => GOOD,
+    install: async () => { disk = '0.3.81'; throw new Error('the response channel closed'); },
+    installedAfter: async () => disk,
+    record: (failure) => recorded.push(failure),
+    pid: 7103,
+  });
+  check(
+    'an install call that threw is still judged by the disk it left behind',
+    receipt.reason === 'installed' && recorded.length === 0 && readAutoUpdateState(root).application === 'threw',
+    JSON.stringify({ receipt, recorded }),
+  );
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 {
   const root = tempRoot('check-failed');
   let recorded = 0;
@@ -267,6 +359,7 @@ const GOOD = {
     runningVersion: '0.3.80',
     readLatest: async () => GOOD,
     install: async () => { throw new Error('pnpm exited 1'); },
+    installedAfter: async () => '0.3.80',
     record: (failure) => failuresSeen.push(failure),
     pid: 7002,
   });
@@ -292,6 +385,7 @@ const GOOD = {
     runningVersion: '0.3.80',
     readLatest: async () => GOOD,
     install: async () => ({ application: 'failed', error: { diagnostic: 'registry refused' } }),
+    installedAfter: async () => '0.3.80',
     record: (failure) => failuresSeen.push(failure),
     pid: 7003,
   });
@@ -427,13 +521,19 @@ function registryStub(counter) {
   const root = tempRoot('mount-on');
   const counter = { calls: [] };
   const installs = [];
+  // The fake moves its own disk version on install, exactly as pnpm does. Without that, the pass
+  // would read the old version back and — correctly — refuse to call the update done.
+  let diskVersion = RUNNING_VERSION;
   const pluginManager = {
     listBundles: async () => [
-      { name: 'newmark2dsh', version: RUNNING_VERSION, availability: 'profile', enabled: true, installed: true },
+      { name: 'newmark2dsh', version: diskVersion, availability: 'profile', enabled: true, installed: true },
     ],
     installBundle: async (spec, options) => {
       installs.push({ spec, options });
-      return { application: 'restart-required', changed: true, stage: 'install', target: 'newmark2dsh', version: MOUNT_LATEST };
+      diskVersion = MOUNT_LATEST;
+      // The manager's own apply step fails here for the real reason it failed live: the plugin
+      // being replaced is the one calling it. The update must still be reported as having landed.
+      return { application: 'failed', changed: true, stage: 'install', target: 'newmark2dsh', version: MOUNT_LATEST };
     },
   };
   const previousFetch = globalThis.fetch;

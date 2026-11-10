@@ -1,5 +1,15 @@
 # Newmark Agent Overview
 
+## 2026-11-10 0.3.81 版本管理新增「启动时自动更新」（已安装，开关打开，活体跑过一次）
+
+- **要求**：「newmark2dsh 在此配置处新增自动更新开关，自动在启动时检查最新并静默更新，不主动重启，等待用户重启完成更新，不通知，不主动，全程静默」。
+- **新增**：`packages/newmark-core/lib/auto-update.js`（`planAutoUpdate` 纯决策 + `runAutoUpdate` 一次通行 + 回执 `<root>/core/auto-update.json` + `AUTO_UPDATE_DELAY_MS=3000`）、`scripts/verify-core-auto-update.mjs`（53）。
+- **改**：`lib/core-update.js` 加 `coreVersion()`/`compareVersions()`；`index.js` 加 Config `autoUpdate`（默认 false）、GET `update` 块、POST `component:'update'` 写回读、apply 启动轮（开关关闭时不排任何定时器）；`client.js` 版本管理卡加开关 + 三态读取 + 「上次启动检查」一行。
+- **门禁修复**：`verify-core-update` 自 0.3.68 起红在第一条（walker 不展开函数组件），改写为展开式渲染后 288 PASS；`probe-compose`/`verify-newmark-core-activation` 的工具计数 39→38；`verify-newmark-core` 的 MemoryLab 派发断言跟上 0.3.80 的 `executeOne`。
+- **实测**：安装 0.3.81（`install_bundle` 返回 `restart-required`，未重启），安装副本与 tarball 123 文件逐字节相同；配置写入触发插件行重载（snapshot `generatedAt` 逐次前进），host 半立即生效；开关打开后启动轮真跑：`latest=0.3.80` / `installed=0.3.81` → `installed_ahead`，无降级，回执 `pid 25068`。
+- **未做**：未发布 npm、未重启 DSH（重启是用户的动作，这个功能本身也以此为界）。
+- **归档**：`archive/20261110-133531-auto-update-switch/`（含伞形门禁 A/B：基线 162/51、本树 200/13，集合差 mine−baseline 为空）。
+
 ## 2026-11-01 0.3.79 广播重启与 NewMate 解耦（已安装，配对实验 +1 / +0）
 
 - 三处耦合全删：屏障通知不再写进 NewMate；更新重启不再给 NewMate 排 `update_report`；heartBeat 不再接收 `core`、不再投递 `destination='newmate'` 的任务。旧任务按名退役（`newmate_decoupled` / `restart_report_decoupled`）。

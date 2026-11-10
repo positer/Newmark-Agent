@@ -390,7 +390,10 @@ for (const name of [
       memorylabComponent.includes('agentApiPresence(tools)') &&
       memorylabComponent.includes('export const JUDGEMENT_TOOL = AGENT_API_PRESENCE_TOOL;') &&
       memorylabComponent.includes('name: JUDGEMENT_TOOL,') &&
-      memorylabComponent.includes('tools.execute({'),
+      // 0.3.80 routed the dispatch through `executeOne` (the batch adapter) because
+      // `ctx.tools.execute` became a batch call; the fact being asserted is unchanged — the tool
+      // that signals presence is the tool the judgement calls — so the shape is what moved.
+      memorylabComponent.includes('executeOne(tools, {'),
     'no service lookup, no second entry point: the registry is both the switch and the dispatch',
   );
   check(

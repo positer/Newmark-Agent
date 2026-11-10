@@ -126,10 +126,12 @@ try {
     both.rows.map((row) => `${row.key}:${row.origin}`).join(', '),
   );
   check(
-    /* MEASURED 2026-10-28: 39 tools (38 at HEAD, +1 for newmate_attachment_read in 0.3.62).
-     * The literal said 35, so it had been three behind the tree before this round. */
-    'the five components register all thirty-nine tools',
-    both.tools.size === 39,
+    /* MEASURED 2026-11-10: 38 tools. The count was 39 until 0.3.80 withdrew `newmate_ask` from the
+     * global registry (it is registered only inside a NewMate interaction turn now), and this
+     * literal — the copy of a list that goes stale in silence — had been failing since then. The
+     * named assertions below are the real contract; this one only catches a wholesale tool. */
+    'the five components register all thirty-eight tools',
+    both.tools.size === 38,
     `registered: ${[...both.tools.keys()].join(', ')}`,
   );
   for (const name of TOOL_NAMES.memoryLab) check(`MemoryLab registers ${name}`, both.tools.has(name));

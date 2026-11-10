@@ -176,8 +176,10 @@ taps.length = 0;
      * while (0.3.62 adds one — newmate_attachment_read — so HEAD held 38 and the number was three
      * behind the tree). Corrected to the measurement rather than to "35 + 1", because a count that
      * is silently three behind cannot tell a new tool from a lost one. */
-    'all thirty-nine component tools are registered',
-    names.length === 39,
+    /* 38 since 0.3.80 withdrew `newmate_ask` from the global registry (it is registered only
+   * inside a NewMate interaction turn now), which left this literal one ahead of the tree. */
+  'all thirty-eight component tools are registered',
+    names.length === 38,
     `${names.length}: ${names.join(', ')}`,
   );
   check(

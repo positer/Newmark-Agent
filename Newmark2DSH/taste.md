@@ -1,5 +1,13 @@
 # Newmark2DSH taste
 
+## 2026-11-17 重启的判据要按身份，不按路径；「预设」要读 selected 事件，不读 header（0.3.83 重启检查）
+
+- **「Electron profile 是否已释放」不能按可执行文件路径判断。** `restart.ps1` 用「有没有进程的 `ExecutablePath` 等于 DSH 主程序」当判据，于是**替代实例一旦在等待窗口内起来，就被当成旧进程还占着**：本轮实测 22:26:02 关闭、22:26:43 新实例已在跑、22:27:12 脚本写 `failed / Old DSH processes still hold the profile; no replacement launched` 并**放弃启动**。用户看到的就是「关了没重启」。正确形状：拿**杀之前冻结的进程身份**（`$targets` 的 pid+path+created）判断旧树是否已走；看到「同路径但不在旧树里」的进程时，应当把它当作替代实例，报 `running` 而不是失败。
+- **「重启后接续」和「重启是否成功」是两条独立的、都要有回执的证据。** 本轮接续任务 `de8d9a7b…` 被 `failed(final)`（3 次尝试），原因就是上面那条脚本判据；如果只看「DSH 现在起来了」就会误以为交接成功。**检查 restart 时同时读三样**：辅助程序 `status.json`、`heartBeat/state.json` 的 `tasks`/`terminated[]`、以及新主机进程的 StartTime。
+- **会话 header 里的 `agentPreset` 是创建时的默认值，不是当前生效的预设。** 本对话 header 写 `rdev`，同一会话里 `agent-preset/selected {agentPreset:"dev"}` 才是生效的那个——而实测工具面（`cordis_inspect_list` + `plugin_manager` + 新增的 schedule/office）也只有 dev 才有。**要判断「哪个预设生效」，读 `agent-preset/selected`，或者直接读本对话的工具暴露（`agent_api_catalog`，scope=conversation）。**
+- **验证「预设改动是否生效」的标准动作是读本对话自己的暴露**，不是读安装目录、也不是读一份会话日志：`agent_api_catalog` 返回 80 个名字，`schedule_create` 在就说明那一行真的挂上了；`plugin_market` 不在，是因为市场服务没被组合（**行在、工具不在**是这一行设计上的正常态，不是失败）。
+- **宿主 0.2.2 移除了 `agents.roots()`，现役方法是 `list()`。** `dsh-agent` 的 `AgentRegistry` 现在是 `get / list / resume / register / …`，`list(): Agent[]` 的注释就是「All live agents, in registration order」。组件里任何 `typeof service.roots === 'function'` 的判据在 0.2.2 上恒为假 —— 症状不是报错，而是**每个调用都回答「服务不可用」**。0.3.80 的 0.2.2 兼容轮只修了 `tools.execute` 批量签名与 `list-agents` 子路径，这类「能力探测式」判据要单独一遍。
+- **失败重试必须有上限和收敛条件。** 目标恢复在注册表不可用时每 **2.0 秒**写一行错误、`attempts` 单调增长（实测 448 秒 224 行，`errors.jsonl` 已 138,428 行 / 26.7 MB），而且持久记录根本没更新——这是「不收敛的重试」，比失败本身更糟：它把日志变成噪声，还让真问题和它混在一起。
 ## 2026-11-17 安装：`install_bundle` 说「已安装」时，换规格重装而不是先卸载；生效要单独证明（0.3.83）
 
 - **`install_bundle <name>@<version>` 对已是 profile 依赖的包直接拒绝**（`application: failed` / `code: already-installed`），并建议 `remove_bundle` 先卸载。**不要照做**：卸载会在本轮中途把正在提供工具的行摘掉，装上失败就没有回退。正确做法是改 **profile `package.json` 里的依赖规格**（tarball URL 带版本号），再 `pnpm install`——依赖的「来源」就是那句话，管理器的那条建议是给「从没装过」的场景写的。

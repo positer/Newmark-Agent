@@ -10,6 +10,9 @@
 - **实测**：`verify-preset-patch` 33/33 PASS；三条手工变异各自变红且逐字节还原；`verify-version-discipline` 12/12；总门禁 199/14/214 → **213/13/227**，消失的那条正是 `preset patch passes`，其余 13 条与改前逐条相同（既存环境/真机依赖项）。
 - **已发布（同日）**：源码 `d543b2b9` → 发布仓 `9a96cb4` + tag `v0.3.83` → CI run `44035788880` success → npm `latest` = 0.3.83（shasum `81be8dc0…`、124 文件）。
 - **已安装（同日）**：profile 依赖规格换 0.3.83 tarball 后 `pnpm install`，安装目录 0.3.83 / `cordis.patch.yml` 36,212 B / 124 文件，与注册表 tarball 逐文件 sha256 差异 **0**。**生效仍需一次 DSH 重启**（`set_bundle` 回 `restart-required / unmanaged-plugin`），本轮未替用户重启。
+- **重启与重启后检查（heartBeat）**：`heartbeat_restart {force:true}` → 辅助程序 22:26:02 关掉 DSH，22:27:12 写 `failed / Old DSH processes still hold the profile; no replacement launched`，但新主机 22:26:43 已在跑（端口 63079→64469）——**辅助程序的按路径判据把「替代实例已起来」误判成「旧进程仍占 profile」，于是放弃启动**；我登记的接续任务判 `failed(final)`，未送达。
+- **安装确实生效**：本对话（有效预设 dev，header 里的 `rdev` 只是创建默认）重启后工具暴露含 `schedule_create/_list/_view/_edit` 与 `office_render/_convert/_recalculate`，`plugin_market` 缺席（市场服务未组合，预期）。
+- **顺带查出两个既存缺陷（未修）**：`agents.roots()` 在 DSH 0.2.2-rc.3 已移除（现为 `list()`），heartBeat 因此永远 `agents_unavailable`；目标恢复每 2.0 秒重试一次不收敛，`errors.jsonl` 已 138,428 行 / 26.7 MB。
 - **未做**：重启后验收；预设行在挂载时读取，故活体会话要等下次安装/重启才具备这些工具。
 - **详细记录与归档**：`Newmark2DSH/OVERVIEW.md` 同日条目、`Newmark2DSH/archive/20261117-142000-preset-realign-0.3.83/`。
 

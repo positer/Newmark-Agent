@@ -1,5 +1,12 @@
 # Newmark Agent Project Taste
 
+## 2026-11-17 关闭 ≠ 重启：判据、接续、生效各是一条独立证据
+
+- **「进程没了」和「替代实例起来了」是两个判据，不能用一个按路径的检查代替。** 本轮辅助程序在等待窗口里看到同路径的新实例，判定「旧进程仍占 profile」并放弃启动；用户看到的是「关了没重启」。判据要按**身份**（冻结的 pid+path+created），看到不属于旧树的同路径进程应视为替代实例就绪。
+- **检查一次重启，至少读三样**：辅助程序的 `status.json`、`heartBeat` 状态里的 `tasks`/`terminated[]`、新主机进程的 StartTime。只看「现在有 DSH 在跑」会把失败的接续当成成功。
+- **会话 header 的 `agentPreset` 是创建默认值**，生效的是 `agent-preset/selected`；验证「某预设改动是否生效」直接读该对话的工具暴露（`agent_api_catalog`，scope=conversation），不要读安装目录或凭日志推断。
+- **宿主升级后，任何「能力探测式」判据（`typeof svc.member === 'function'`）都要单独复核**：本轮 `agents.roots()` 在 0.2.2 被 `list()` 取代，症状是每个调用都答「服务不可用」而不是报错。
+- **不收敛的重试比失败更糟**：每 2 秒一条错误日志、计数单调增长、持久记录还不更新——它会淹掉真问题（本轮 `errors.jsonl` 已 26.7 MB / 13.8 万行）。重试必须有上限和收敛条件。
 ## 2026-11-17 安装与发布的三种词，以及「已安装 ≠ 已生效」
 
 - **`application` 说哪一段，就只有那一段**：`applied`（运行中的树已换）、`restart-required`（文件到位、树没换）、`failed`（没装成）。对外只说「已安装」并附这个词与 `restartReason`。

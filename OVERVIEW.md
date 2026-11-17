@@ -1,5 +1,16 @@
 # Newmark Agent Overview
 
+## 2026-11-17 Newmark2DSH 0.3.83：Dev/rDev 重新对齐已安装的 DSH 0.2.2-rc.3（补 4 行工具、换 1 条废弃行、删 2 行死行）
+
+- **要求**：「重新对齐 newmark2dsh 的两种 preset：rDev 和 Dev，与现在的更新几轮后的 DSH 是否有工具缺失」。
+- **量到的事实**：DSH `0.2.2-rc.3`，插件 `newmark2dsh` 0.3.82。逐行比对 `packages/newmark-core/cordis.patch.yml` 与 asar 内 shipped 的 `presets/{standard,ptc,cordis}.patch.yml`：**Dev 缺 5 行、rDev 缺 6 行**（rDev 多缺的 `tool-cordis` 是身份），两侧多出 1 行 `tool-presentation`。缺的是 `time-context`、`tool-schedule`、`tool-office`、`tool-plugin-market`，以及被 `tool-presentation` 顶替的 `tool-executor-ptc`。
+- **补齐**：四行全部加上（Dev 的 `tool-plugin-market` 用 `profileContext` 门，rDev 用字面 `disabled: true`）；`tool-presentation: mode: ptc` → `tool-executor-ptc`（前者在 0.2.2-rc.3 已是 `@deprecated` 兼容壳）；删掉 `tool-subagent-codex`/`-claude-code`（0.2.1 起不在任何 shipped 预设，本机也没有对应 provider 被组合，两行本来就是 `disabled: true`）。三处差异（`interrupt_agent` 保留、`workflow-ptc`/`tool-workflow` 停用、`tool-ralph` 保留停用）**保留并写明理由**。
+- **门禁**：`verify-preset-patch.mjs` 新增「对着已安装 host 的 shipped 预设逐行比对」一节（26/28 → 33/33），并修掉两条前提已消失的陈旧断言（profile 副本、按废弃壳名找 PTC runtime，后者会空过）；`verify-newmark-core.mjs` 预设段 21/20 → 25/24 行、新增 12 条按包名断言、差异断言三处 → 四处；`measure-dev-rdev-mutations.mjs` 增一条变异。
+- **活体对照**（同一台机、两条会话的 `request/header`，探针 `archive/…/evidence/measure-session-tool-surface.mjs`）：`dev` 会话 `cc6a27ec`（ptc）请求里没有 `schedule_create` / `office_render` / `plugin_market`，而 `run_code` / `memory_lab_query` / `read` 都在；`cordis` 会话 `1601ee15`（native，74 条工具）**有** `schedule_create` 与 `schedule_edit` —— 同一宿主上，声明那一行就真的发工具，`plugin_market` 连 cordis 也没有（市场服务未组合）。
+- **实测**：`verify-preset-patch` 33/33 PASS；三条手工变异各自变红且逐字节还原；`verify-version-discipline` 12/12；总门禁 199/14/214 → **213/13/227**，消失的那条正是 `preset patch passes`，其余 13 条与改前逐条相同（既存环境/真机依赖项）。
+- **未做**：未打包、未安装、未重启、未发布；预设行在挂载时读取，故活体会话要等下次安装/重启才具备这些工具。
+- **详细记录与归档**：`Newmark2DSH/OVERVIEW.md` 同日条目、`Newmark2DSH/archive/20261117-142000-preset-realign-0.3.83/`。
+
 ## 2026-11-10 0.3.82 端到端测试暴露「管理器词 vs 磁盘事实」：判据改为回读版本
 
 - **测试方法（用户指令）**：本地降版 0.3.81 → 0.3.80 覆盖安装 → 发布 0.3.81 到 npm → 观察版本差。

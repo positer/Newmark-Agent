@@ -46,7 +46,7 @@ const mutations = [
       if (!text.includes(anchor)) throw new Error('Dev anchor not found');
       return text.replace(anchor, anchor + row('tool-drift', '@deepseek-ai/dsh-tool-drift'));
     },
-    expect: ['rDev mounts every row Dev mounts except tool-cordis', 'Dev carries all twenty-one plugins'],
+    expect: ['rDev mounts every row Dev mounts except tool-cordis', 'Dev carries all twenty-five plugins'],
   },
   {
     name: 'rDev given the runtime inspector back',
@@ -59,7 +59,7 @@ const mutations = [
         anchor.replace('          # --- PTC mode', `${row('tool-cordis', '@deepseek-ai/dsh-tool-cordis')}          # --- PTC mode`),
       );
     },
-    expect: ['rDev adds no row of its own', 'rDev mounts every row Dev mounts except tool-cordis', 'rDev carries all twenty'],
+    expect: ['rDev adds no row of its own', 'rDev mounts every row Dev mounts except tool-cordis', 'rDev carries all twenty-four'],
   },
   {
     name: 'rDev given the composition skills back — the case a presence regex missed',
@@ -72,7 +72,23 @@ const mutations = [
         "          - id: skill-filesystem\n            name: '@deepseek-ai/dsh-skill-filesystem'\n            config:\n              customSkillDirs:\n                - !!js process.getBuiltinModule('node:path').join('x')\n          - id: tool-skill",
       );
     },
-    expect: ['rDev keeps skill-filesystem as a plain two-line row', 'exactly three rows differ'],
+    expect: ['rDev keeps skill-filesystem as a plain two-line row', 'exactly these rows differ'],
+  },
+  {
+    name: 'rDev given the plugin-market gate back — a second row carrying the creator capability',
+    apply: (text) => {
+      const anchor =
+        "          - id: tool-plugin-market\n            name: '@deepseek-ai/dsh-plugin-market/tools'\n            disabled: true\n";
+      if (!text.includes(anchor)) throw new Error('rDev tool-plugin-market anchor not found');
+      return text.replace(
+        anchor,
+        "          - id: tool-plugin-market\n            name: '@deepseek-ai/dsh-plugin-market/tools'\n            disabled: !!js \"!ctx.get('profileContext')\"\n",
+      );
+    },
+    expect: [
+      'rDev disables the plugin market with a literal true and no other key',
+      'exactly these rows differ',
+    ],
   },
 ];
 

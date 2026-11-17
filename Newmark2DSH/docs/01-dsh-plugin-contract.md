@@ -191,17 +191,34 @@ the preset declared by `node_modules/@deepseek-ai/dsh-web-app/presets/cordis.pat
 (`id: cordis`), and the picker copy is `dsh-client-ui-agent-preset/lib/client.js`
 (`presetCordisName`). Its documented capability is "runtime inspection, persistent
 plugin management, and development guidance for Cordis plugins and Agent presets",
-and in that file that capability is exactly **three rows**:
+and in that file the kernel-modification capability is **four rows** (it was three until
+0.2.2-rc.3 added the market listing beside the manager — see §7.1a):
 
 | Row | Package | What it contributes |
 |---|---|---|
 | `tool-cordis` | `@deepseek-ai/dsh-tool-cordis` | `cordis_inspect_list` / `cordis_inspect_query` — the Service and Event directories, live Config schemas, the Slot tree, the tool catalog. Read-only: the provider declares `list*` methods only. |
 | `skill-filesystem` | `@deepseek-ai/dsh-skill-filesystem` | `config.customSkillDirs` pointing at `@deepseek-ai/dsh-agent-preset/skills`, which holds `agent-experience`, `cordis-composition-reference`, `cordis-plugin-development` and `editing-cordis-compositions`. |
 | `tool-plugin-manager` | `@deepseek-ai/dsh-plugin-manager/tools` | install / enable / disable / remove bundles and plugins. Gated `disabled: !!js "!ctx.get('profileContext')"` — without a profile patch there is nothing to manage. |
+| `tool-plugin-market` | `@deepseek-ai/dsh-plugin-market/tools` | `plugin_market` — the read-only listing of the configured indexes, whose results carry the exact install target for the row above. Same gate. The tool is registered inside `ctx.inject(['pluginMarket'], …)`, so on a deployment without the market bundle the row mounts and the tool stays absent. |
 
 A **mode is a tool list, not a privilege.** What a session may actually change is
 decided by its sandbox and approval settings; these rows decide only whether the
 agent can see the harness's own composition and act on it.
+
+### 7.1a The other rows a shipped preset mounts, and why a copy of one drifts
+
+The rows above are the *capability*; the rest of a shipped preset is the baseline every
+preset receives, and it changes between DSH releases. At 0.2.2-rc.3 that baseline includes
+`time-context`, `tool-schedule`, `tool-office` and — for PTC — `tool-executor-ptc`
+(`tool-agent-tool-presentation` is a deprecated shim that only forwards to it).
+
+**A preset declaration is a copy, and a copy does not follow the host.** Newmark's `Dev` and
+`rDev` were written against 0.2.0-rc.2 and were not re-derived afterwards, so 0.2.1's and
+0.2.2's additions were missing while the rows those releases dropped stayed behind — measured
+in `evidence/20261017-preset-break/parity.md` at 0.2.1-rc.1 and not fixed then, which is why
+0.3.83 had five rows to add and two dead rows to delete. The durable answer is the gate, not
+care: `scripts/verify-preset-patch.mjs` reads the shipped `standard`/`ptc`/`cordis` presets
+out of the installed `app.asar` and requires every row, compared by package name.
 
 ### 7.2 A preset's rows mount in the session's scope, not the root's
 

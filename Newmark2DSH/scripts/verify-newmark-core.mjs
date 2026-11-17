@@ -1028,16 +1028,16 @@ check('Dev keeps its roster position', /^ {8}order: 2\.5$/m.test(devBlock));
 check('rDev is its own identity, next to Dev in the roster', /^ {8}id: rdev$/m.test(rdevBlock) && /^ {8}name: rDev$/m.test(rdevBlock));
 check('rDev sits immediately after Dev', /^ {8}order: 2\.6$/m.test(rdevBlock));
 check(
-  'Dev carries all twenty-one plugins',
-  (devBlock.match(/^ {10}- id: /gm) || []).length === 21,
+  'Dev carries all twenty-five plugins',
+  (devBlock.match(/^ {10}- id: /gm) || []).length === 25,
   `Dev plugin rows: ${(devBlock.match(/^ {10}- id: /gm) || []).length}`,
 );
 check(
-  'rDev carries all twenty',
-  (rdevBlock.match(/^ {10}- id: /gm) || []).length === 20,
+  'rDev carries all twenty-four',
+  (rdevBlock.match(/^ {10}- id: /gm) || []).length === 24,
   `rDev plugin rows: ${(rdevBlock.match(/^ {10}- id: /gm) || []).length}`,
 );
-for (const id of ['persona', 'agent-instructions', 'tool-pwsh', 'planning', 'compaction', 'delegation', 'tool-presentation']) {
+for (const id of ['persona', 'agent-instructions', 'tool-pwsh', 'planning', 'compaction', 'delegation', 'tool-executor-ptc']) {
   check(`Dev still mounts ${id}`, new RegExp(`^ {10}- id: ${id}$`, 'm').test(devBlock));
   check(`rDev still mounts ${id}`, new RegExp(`^ {10}- id: ${id}$`, 'm').test(rdevBlock));
 }
@@ -1078,6 +1078,49 @@ check(
   devBlock.includes('创造模式内核修改权限'),
   'the picker shows the description, so a silent capability change is a description that lies',
 );
+/* ------------------------- the rows the installed host ships to every preset ---
+ *
+ * The two declarations began as copies of the shipped `cordis` preset at DSH 0.2.0-rc.2 and
+ * were never re-derived, so every row the update ADDED was absent here — no step clock, no
+ * reminder tools, no Office tools, no market listing — while every row it DROPPED stayed.
+ * `evidence/20261017-preset-break/parity.md` measured the 0.2.1 half of that gap and it was
+ * left unfixed; 0.2.2-rc.3 added a fifth row (the direct PTC executor) and deprecated the shim
+ * this patch still mounted.
+ *
+ * Asserted by exact `name`, not by id: a row id is this bundle's own word for a capability,
+ * while the package it mounts is the host's, so a rename on either side has to be red here.
+ * The set is named rather than counted — a count passes just as happily when one row is
+ * swapped for another, which is the failure this whole section exists to catch.
+ */
+for (const [id, name] of [
+  ['time-context', '@deepseek-ai/dsh-time-context'],
+  ['tool-schedule', '@deepseek-ai/dsh-tool-schedule'],
+  ['tool-office', '@deepseek-ai/dsh-tool-office'],
+  ['tool-executor-ptc', '@deepseek-ai/dsh-tool-executor-ptc'],
+  ['tool-plugin-market', '@deepseek-ai/dsh-plugin-market/tools'],
+]) {
+  for (const [label, block] of [
+    ['Dev', devBlock],
+    ['rDev', rdevBlock],
+  ]) {
+    check(
+      `${label} mounts the shipped ${id} row`,
+      block.includes(`          - id: ${id}\n            name: '${name}'`),
+      'this row is one every shipped preset mounts; its absence is the capability gap 0.3.83 closes',
+    );
+  }
+}
+check(
+  'neither preset still mounts the deprecated presentation shim',
+  !devBlock.includes('dsh-agent-tool-presentation') && !rdevBlock.includes('dsh-agent-tool-presentation'),
+  '0.2.2-rc.3 deprecates dsh-agent-tool-presentation; tool-executor-ptc is the row it forwards to',
+);
+check(
+  'no preset declares a subagent provider the installed harness does not register',
+  !/tool-subagent-codex|tool-subagent-claude-code/.test(devBlock) && !/tool-subagent-codex|tool-subagent-claude-code/.test(rdevBlock),
+  '0.2.1 removed both rows from every shipped preset, and 0.2.2-rc.3 composes neither provider',
+);
+
 check(
   'both presets keep the platform-gated shells rather than both at once',
   devBlock.includes("disabled: !!js process.platform === 'win32'") &&
@@ -1147,8 +1190,8 @@ check(
   JSON.stringify({ toolFsInRdev: rdevRows.has('tool-fs'), toolFsSearchInRdev: rdevRows.has('tool-fs-search'), rdevToolFs: rdevRows.get('tool-fs') }),
 );
 check(
-  'exactly three rows differ: tool-cordis is gone, skill-filesystem loses customSkillDirs, plugin-manager loses the gate',
-  JSON.stringify(differing) === JSON.stringify(['skill-filesystem', 'tool-plugin-manager']),
+  'exactly these rows differ: tool-cordis is gone, skill-filesystem loses customSkillDirs, plugin-manager and plugin-market lose the gate',
+  JSON.stringify(differing) === JSON.stringify(['skill-filesystem', 'tool-plugin-manager', 'tool-plugin-market']),
   `rows that differ beyond the dropped tool-cordis: ${JSON.stringify(differing)}`,
 );
 /* These two are asserted as WHOLE-ROW EQUALITY, not as presence. A presence regex is
@@ -1167,6 +1210,12 @@ check(
   rdevRows.get('tool-plugin-manager') ===
     "          - id: tool-plugin-manager\n            name: '@deepseek-ai/dsh-plugin-manager/tools'\n            disabled: true",
   JSON.stringify(rdevRows.get('tool-plugin-manager')),
+);
+check(
+  'rDev disables the plugin market with a literal true and no other key',
+  rdevRows.get('tool-plugin-market') ===
+    "          - id: tool-plugin-market\n            name: '@deepseek-ai/dsh-plugin-market/tools'\n            disabled: true",
+  JSON.stringify(rdevRows.get('tool-plugin-market')),
 );
 check(
   'rDev advertises that it is the restricted one',

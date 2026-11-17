@@ -1,5 +1,17 @@
 # Newmark2DSH taste
 
+## 2026-11-17 预设是拷贝，拷贝不会自己跟上宿主：缺行必须变成会红的断言（0.3.83）
+
+- **「不报错」不等于「不是问题」，而这正是它被放过的理由。** 2026-10-17 的 parity 审计在 0.2.1-rc.1 上量到了 `time-context`/`tool-schedule`/`tool-plugin-market` 三行缺失，结论写的是「Absence is not an error… capability gaps」，于是**没有修**。三轮宿主更新之后，缺口变成五行：宿主又加了 `tool-office`，并把 Dev/rDev 仍挂着的那一行标成 `@deprecated`。**能力缺口永远不报错，所以它只能由门禁发现**——量到了却不修，等于把它写进下一位读者的「已审计、无问题」。
+- **参照集要从宿主的文件里读，不要在脚本里再抄一份。** 对齐的判据是「已安装的 shipped 预设挂什么」，所以 `verify-preset-patch.mjs` 直接从 `app.asar` 读 `dsh-web-app/presets/{standard,ptc,cordis}.patch.yml`、逐行取 `id → name` 再比对。抄一份清单进脚本，下一个宿主版本就会同时过时——这跟「预设拷贝不跟上宿主」是同一个错误，只是换了个文件。
+- **比对按包名，不按行 id。** 行 id 是本仓库给能力起的名字，包名是宿主的；宿主改名而这里没改，必须红。同理**不要按数量断言**：一条 `count === 25` 在一行被换成另一行时照样通过。
+- **废弃要有第二代判据。** 宿主把一行标 `@deprecated` 并给出替代行时，挂在旧壳上仍然能跑（`dsh-agent-tool-presentation` 的 `apply` 就是一句 `ctx.plugin(PtcExecutor)`），所以「跑得通」不能作为保留旧壳的理由；要按新行迁移，并且**把按旧名过滤的门禁一起改**——本轮 PTC runtime 那条断言按废弃壳名过滤，换成新行后它会「没有行可查」而空过（`none ask` 也通过）。空过要变成红：额外要求「两份预设真的都挂了 PTC 行」。
+- **前提被满足掉的断言，要改写成它真正想要的，不是要求缺陷回来。** `verify-preset-patch` 有一条要求「live profile 里的 `preset-dev` 副本与 bundle 声明一致」，它当初是冲着 profile 里那份冻结的 0.2.0 拷贝写的；拷贝被删掉之后，它对着一个**正确**的 profile 变红。改写口径：**有副本就必须一致，没有副本就是 bundle 声明生效**（这正是层序想要的状态）。这类断言最危险的地方不是红，是它教人「为了让它绿，把缺陷加回去」。
+- **指向已不存在 provider 的 `disabled: true` 行是错误文档，不是可选能力。** `tool-subagent-codex`/`-claude-code` 两行从 0.2.1 起就不在任何 shipped 预设里，本机也没有 `codex`/`claude-code` provider 被组合（依赖装了 ≠ 组合了：`dsh-subagent-codex` 只是 profile 的 dependency，不在 `dsh.profile.bundles`）。删掉它们不改变任何行为，但删的同时要**写明重新启用的前提**（先组合 provider），否则下一个人会以为是手滑删的。反过来，包仍在、config 仍有效的停用行（`tool-ralph`）保留，理由写在声明里。
+- **差异断言的数量词跟着改。** `exactly three rows differ` 这类名字里带数量的断言，一旦差异从三处变成四处，名字就成了新的错误来源；本轮连同 `measure-dev-rdev-mutations` 的 `expect` 一起改，并**给新增的那一行补一条变异**（把 `plugin-market` 的门交还 rDev，必须红）。
+- **总门禁的结果要按「失败主体集合」比较，不是只看总数。** 本轮总门禁 199/14/214 → 213/13/227：断言数 +13，失败数 -1，而**消失的那一条正是 `preset patch passes`，其余 13 条与改前逐条相同**。只报「失败从 14 降到 13」会把一个已经红了很久的环境依赖项当成自己的功劳。
+- **变异测试要跑对解释器。** 在 PTC 运行里 `process.execPath` 是宿主可执行文件，不是 `node`：用它去 spawn 门禁，拿到的是 2 字节输出与 0 条红断言——**变异脚本会因此「全绿」**。要显式用 `C:\Program Files\nodejs\node.exe`。
+
 ## 2026-11-10 README 不写具体版本号（约束）
 
 - `README.md` 只描述**当前能力、安装与使用**，**不出现任何具体版本号**：`0.3.x`、`v0.3.x`、`dev-0.x.y`、「源码版本：…」、「已发布到 npm 的 x.y.z」都不行。

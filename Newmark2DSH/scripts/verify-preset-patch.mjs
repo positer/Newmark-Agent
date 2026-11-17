@@ -344,14 +344,26 @@ console.log('# the profile layer and the bundle declaration say the same thing')
   if (liveReadable) {
     const declared = capability(inserted.get('preset-dev'));
     const live = capability(liveEntry('preset-dev'));
+    /* ABSENCE OF THE PROFILE COPY IS THE INTENDED STATE, and these two checks used to require
+     * the opposite. They were written while the live profile carried a frozen 0.2.0-era
+     * duplicate of `preset-dev` written by an older installer: the first asked that duplicate
+     * to agree with the bundle, so it passed for exactly as long as the duplicate existed. The
+     * duplicate is gone — the bundle owns the declaration, and nothing in the shipped package
+     * writes a profile patch any more (check 16) — and the same assertion then went red against
+     * a profile that is CORRECT. An assertion whose premise was satisfied out of existence has
+     * to say what it wants instead of asking for the defect back: a copy may exist, and must
+     * then agree row for row; no copy means the bundle's declaration is what the registry
+     * mounts, which is the state the layer order is designed for. */
     check(
-      'the live profile copy of preset-dev carries the capability rows the bundle declares',
-      live !== null && JSON.stringify(live) === JSON.stringify(declared),
-      `declared ${JSON.stringify(declared)} vs live ${JSON.stringify(live)}`,
+      'the live profile copy of preset-dev, when one is stated, carries the capability rows the bundle declares',
+      live === null || JSON.stringify(live) === JSON.stringify(declared),
+      live === null
+        ? 'the profile states no copy: the bundle declaration is the one mounted'
+        : `declared ${JSON.stringify(declared)} vs live ${JSON.stringify(live)}`,
     );
     check(
-      'neither copy disables the declaration, so the row is enabled wherever it is composed',
-      declared === null || (declared.declaration === null && live?.declaration === null),
+      'no copy of the declaration is disabled, wherever it is composed',
+      declared === null || (declared.declaration === null && (live === null || live.declaration === null)),
       'the no-op `disabled` inside `config` is accepted, persisted and does nothing — an id-targeted `disabled: true` at row level is the one that would bite',
     );
     const liveSelector = liveEntry(SELECTOR_ENTRY_ID);
@@ -553,14 +565,111 @@ if (host === null) {
    * is checked separately — that is the precondition, not a wiring detail. */
   const ptcAskers = presets.filter((preset) =>
     presetRows(preset.row?.config?.plugins).some(
-      (row) => row.name === '@deepseek-ai/dsh-agent-tool-presentation' && row.config?.mode === 'ptc',
+      (row) =>
+        row.name === '@deepseek-ai/dsh-tool-executor-ptc' ||
+        (row.name === '@deepseek-ai/dsh-agent-tool-presentation' && row.config?.mode === 'ptc'),
     ),
   );
+  /* Asserted as a non-vacuity requirement as well as a resolution one: the previous version
+   * filtered on the DEPRECATED shim's name, so replacing the row with the direct PTC executor
+   * would have left this check green while checking nothing ("none ask"). A check that can be
+   * satisfied by declaring no row at all is not a check of the row. */
   check(
-    `the preset that asks for PTC presentation finds the PTC runtime in the installed host (${ptcAskers.map((preset) => preset.id).join(', ') || 'none ask'})`,
+    `both presets mount a PTC transport (${ptcAskers.map((preset) => preset.id).join(', ') || 'none ask'})`,
+    ptcAskers.length === presets.length,
+    'a preset that declares no PTC row gives its model no run_code at all',
+  );
+  check(
+    'the presets that present PTC find the PTC runtime in the installed host',
     ptcAskers.every(() => host.has('/dsh/node_modules/@deepseek-ai/dsh-ptc-runtime-node/package.json')),
     'PTC mode against a deployment that composes no runtime fails at mount, named in the preset activation audit',
   );
+
+  /* --------------------------------- F: parity with the host's own presets ---
+   *
+   * Resolvability (above) proves a row CAN mount; it says nothing about whether the row is
+   * there at all, which is the defect that outlived every green run of this gate. Both
+   * declarations were copied from the shipped `cordis` preset at DSH 0.2.0-rc.2 and never
+   * re-derived, so the 0.2.1 update's additions — the step clock, the four reminder tools, the
+   * market listing — were simply absent, and `evidence/20261017-preset-break/parity.md` §1c
+   * recorded exactly that. It was left unfixed at the time, and 0.2.2-rc.3 added a fifth row
+   * (a direct PTC executor, deprecating the shim these presets still mounted).
+   *
+   * So the comparison is made against the INSTALLED host rather than against a remembered
+   * list: what the shell ships to `standard`, `ptc` and `cordis` is read out of the same
+   * asar the rows resolve against, and every row must appear here under the same package
+   * name. rDev is allowed exactly one absence — `tool-cordis` — because that absence is its
+   * identity. Nothing else may be missing from either preset, and a row this gate cannot read
+   * is reported rather than silently dropped from the comparison. */
+  const SHIPPED_PRESETS = ['standard', 'ptc', 'cordis'];
+  const shippedRows = new Map();
+  const unreadableShipped = [];
+  for (const name of SHIPPED_PRESETS) {
+    const entry = `/dsh/node_modules/@deepseek-ai/dsh-web-app/presets/${name}.patch.yml`;
+    const text = host.read(entry);
+    if (text === null) {
+      unreadableShipped.push(`${name}: absent`);
+      continue;
+    }
+    const parsed = parsePatch(text, path.dirname(LIVE_PROFILE_PATCH));
+    if (parsed?.ok !== true) {
+      unreadableShipped.push(`${name}: ${String(parsed?.reason)}`);
+      continue;
+    }
+    /* A shipped preset file states its declaration inside an `insert` list, exactly as this
+     * bundle's own patch does - the wrapper has no id of its own, so the declaration is the row
+     * INSIDE the insert. Reading the top level and finding no `id` is what made the first
+     * version of this check report `0 rows across 3 presets`. */
+    const declared = parsed.document
+      .toJS()
+      .flatMap((entryRow) => (Array.isArray(entryRow?.insert) ? entryRow.insert : [entryRow]));
+    for (const entryRow of declared) {
+      if (entryRow === null || typeof entryRow !== 'object' || entryRow.id !== `preset-${name}`) continue;
+      for (const child of presetRows(entryRow.config?.plugins)) shippedRows.set(child.id, { preset: name, name: child.name });
+    }
+  }
+  check(
+    `the shipped presets are readable from the installed host (${SHIPPED_PRESETS.join(', ')})`,
+    unreadableShipped.length === 0 && shippedRows.size > 0,
+    unreadableShipped.join(', ') || `${shippedRows.size} rows across ${SHIPPED_PRESETS.length} presets`,
+  );
+  if (unreadableShipped.length > 0 || shippedRows.size === 0) {
+    skip(
+      'Dev declares every row the installed host ships to its own presets',
+      'the shipped presets could not be read, so there is no reference set to compare against',
+    );
+    skip(
+      'rDev declares every one of those rows except tool-cordis',
+      'the shipped presets could not be read, so there is no reference set to compare against',
+    );
+  } else {
+    const ownRows = (loaderId) =>
+      new Map(presetRows(inserted.get(loaderId)?.config?.plugins).map((row) => [row.id, row]));
+    const devOwn = ownRows('preset-dev');
+    const rdevOwn = ownRows('preset-rdev');
+    /** `id -> name` disagreements, kept as text so the failure prints what is wrong, not that something is. */
+    const missingFrom = (own, allowedAbsences) =>
+      [...shippedRows]
+        .filter(([id, shipped]) => !allowedAbsences.includes(id) && own.get(id)?.name !== shipped.name)
+        .map(([id, shipped]) => `${id} (${shipped.preset}: ${shipped.name}) -> ${own.get(id)?.name ?? 'absent'}`);
+    const missingDev = missingFrom(devOwn, []);
+    const missingRdev = missingFrom(rdevOwn, ['tool-cordis']);
+    check(
+      `Dev declares every row the installed host ships to its own presets (${shippedRows.size} rows)`,
+      missingDev.length === 0,
+      `absent or renamed: ${missingDev.join(', ') || 'none'}`,
+    );
+    check(
+      'rDev declares every one of those rows except tool-cordis',
+      missingRdev.length === 0,
+      `absent or renamed: ${missingRdev.join(', ') || 'none'} — tool-cordis is the one allowed absence`,
+    );
+    check(
+      'neither preset still mounts the deprecated presentation shim',
+      ![...devOwn.values(), ...rdevOwn.values()].some((row) => row.name === '@deepseek-ai/dsh-agent-tool-presentation'),
+      '0.2.2-rc.3 deprecates it and forwards to dsh-tool-executor-ptc, which is the row to mount',
+    );
+  }
   host.close();
 }
 

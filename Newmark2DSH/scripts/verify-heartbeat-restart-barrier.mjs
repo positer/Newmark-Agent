@@ -282,7 +282,9 @@ await section('case 3 mounted', async () => {
   check('3- the mounted cancel tool reaches the state machine and refuses an unknown intent', wiredCancel?.ok === false && wiredCancel.phase === 'refused' && wiredCancel.reason === 'unknown_intent', JSON.stringify(wiredCancel));
   const indexSource = fs.readFileSync(HEARTBEAT_INDEX, 'utf8');
   const legacyAt = indexSource.indexOf('if (a.broadcast !== true) {');
-  const globalAt = indexSource.indexOf('beat.globalRestart()');
+  /* 0.3.84: the forced branch passes the requester identity and prompt, so the anchor is the call
+   * with its options object - a plain `beat.globalRestart()` no longer exists in the wrapper. */
+  const globalAt = indexSource.indexOf('beat.globalRestart({');
   const immediateAt = indexSource.indexOf('return { ok: true, restarting: true, forced: true };');
   /* Since 0.3.49 a plain restart is TWO steps: the wrapper probes who else is running and refuses
    * with confirmation_required unless force:true, and only the forced branch reaches the controller.
@@ -360,18 +362,27 @@ await section('case 6', async () => {
 });
 
 /* ================================================================== case 7 =====
- * requester's own continuation not registered -> aborted, reason requester_not_registered,
- * no restart launched. */
+ * THE REQUESTER NEED NOT REGISTER ANYTHING (0.3.84). This case used to assert the opposite: an
+ * unregistered requester aborted the commit with requester_not_registered. That turned "the
+ * requester forgot to say it wants to come back" into "the restart does not happen" - and on the
+ * forced path into "the restart happens and that conversation stays dead", which is what was
+ * measured on 2026-11-17. Being woken is now the component's obligation, so what is asserted is:
+ * the commit succeeds, the receipt the requester never gave is recorded as this component's own
+ * (`ackSource: 'auto'`, not dressed up as the requester's), and exactly one continuation with the
+ * default sentence is armed for it. */
 await section('case 7', async () => {
   const s = scenario();
   s.add('R');
   s.add('C', { running: true });
   const begun = await s.beat.beginBarrier({ ackMode: 'agent' }, s.exec('R'));
   await s.beat.acknowledge({ intentId: begun.intentId, continuation: 'none' }, s.exec('C'));
-  const aborted = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
-  check('7- a requester without its own receipt cannot commit', aborted.ok === false && aborted.phase === 'aborted' && aborted.reason === 'requester_not_registered', JSON.stringify(aborted));
-  check('7- no restart was launched', s.calls.restart === 0 && s.calls.commits === 0, JSON.stringify(s.calls));
-  check('7- the intent closed into history with that reason', s.state().intent === null && s.state().intents.at(-1)?.abortReason === 'requester_not_registered');
+  const committed = await s.beat.commitBarrier({ intentId: begun.intentId }, s.exec('R'));
+  check('7- a requester that registered nothing is still woken, and the commit succeeds', committed.ok === true && committed.phase === 'committed', JSON.stringify(committed));
+  const requesterAck = (committed.acks ?? []).find(entry => entry.sessionId === 'R');
+  check('7- the receipt it never gave is recorded as this component\'s auto registration', requesterAck?.ack === 'registered' && requesterAck?.ackSource === 'auto', JSON.stringify(committed.acks));
+  const queued = s.state().tasks.filter(task => task.status === 'armed' && task.destination === 'R');
+  check('7- exactly one continuation is armed for the requester, with the default sentence', queued.length === 1 && queued[0].prompt === HEARTBEAT.RESTART_DEFAULT_PROMPT, JSON.stringify(queued.map(task => task.prompt)));
+  check('7- the restart was launched once', s.calls.restart === 1, JSON.stringify(s.calls));
 });
 
 /* ================================================================== case 8 =====
@@ -693,7 +704,10 @@ await section('case 14', async () => {
   const destinations = queued.map(t => t.destination);
   check('14- the update restart queues a continuation for the running conversation', destinations.includes('WORK'), JSON.stringify(destinations));
   check('14- the update restart does not wake the idle conversation', !destinations.includes('IDLE'), JSON.stringify(destinations));
-  check('14- the companion update notice is still queued', destinations.includes('newmate'), JSON.stringify(destinations));
+  /* STALE SINCE 0.3.79, and it was RED before 0.3.84 touched anything: the companion was decoupled
+   * from restarts, so an update restart deliberately queues no 'newmate' task. Asserting the removed
+   * behaviour kept this line red and unread, which is exactly what a stale assertion is worth. */
+  check('14- an update restart queues no companion task (decoupled at 0.3.79)', !destinations.includes('newmate'), JSON.stringify(destinations));
   check('14- it reports exactly which conversations it continued', Array.isArray(helper.continued) && helper.continued.includes('WORK') && !helper.continued.includes('IDLE'), JSON.stringify(helper.continued));
   helper.commit();
   const folder = helper.folder;
@@ -769,6 +783,76 @@ await section('backward compatibility', async () => {
   fs.writeFileSync(path.join(root, 'heartBeat', 'state.json'), JSON.stringify({ schema: 2, tasks: [{ id: 'legacy', prompt: '旧任务', destination: 'old', status: 'waiting', created: 1 }], receipts: [] }));
   const beat = createHeartBeat({ root, core: () => null, agents: () => null, version: '0.3.16', pid: 1, now: () => 1 });
   check('B- a schema-2 state file still reads and keeps its tasks', beat.state().tasks[0]?.id === 'legacy' && beat.state().tasks[0]?.prompt === '旧任务');
+});
+
+/* =============================================================== case 17 =====
+ * THE TWO GUARANTEES OF 0.3.84, and the host-API shape that makes them reachable at all.
+ *
+ *   1. A stop this component performs must end with a host. The relaunch is MANDATORY, and a
+ *      replacement that is already up counts as the restart succeeding instead of being mistaken for
+ *      the old tree still holding the profile (measured 2026-11-17 22:26: the app was back at
+ *      22:26:43, the helper declared "Old DSH processes still hold the profile" at 22:27:12 and
+ *      launched nothing, so the user started DSH by hand).
+ *   2. The conversation that asked for the restart is woken afterwards, with the caller's prompt or
+ *      the default sentence, whether or not it registered anything.
+ *
+ * Plus the reason #2 was dead on the installed host: DSH 0.2.2 removed `AgentRegistry.roots()` and
+ * exposes `list(): Agent[]`, so a `roots`-only reader answered "agents unavailable" to every caller.
+ */
+await section('case 17', async () => {
+  check('17- the default continuation sentence is the documented one', HEARTBEAT.RESTART_DEFAULT_PROMPT === 'DSH已重启，继续完成当前任务', JSON.stringify(HEARTBEAT.RESTART_DEFAULT_PROMPT));
+
+  /* 2a. a forced restart, no prompt given -> the default sentence, one task, armed on commit */
+  const forced = scenario();
+  forced.add('R', { title: 'requester' });
+  const prepared = await forced.beat.prepare('0.3.84');
+  const helper = await forced.beat.restart(prepared.ticket, false, { requesterSessionId: 'R', requesterAgent: forced.service.get('R'), prompt: undefined });
+  const waiting = forced.state().tasks.filter(task => task.status === 'waiting' && task.destination === 'R');
+  check('17- a forced restart with no prompt registers the default continuation for the requester', helper.requester?.registered === true && waiting.length === 1 && waiting[0].prompt === HEARTBEAT.RESTART_DEFAULT_PROMPT, JSON.stringify({ requester: helper.requester, queued: waiting.map(t => t.prompt) }));
+  helper.commit();
+  const armed = forced.state().tasks.filter(task => task.status === 'armed' && task.destination === 'R');
+  check('17- commit arms that continuation with the restart\'s helper folder', armed.length === 1 && armed[0].folder === helper.folder, JSON.stringify(armed));
+
+  /* 2b. an explicit prompt is honoured, and it is not duplicated */
+  const withPrompt = scenario();
+  withPrompt.add('R');
+  const prepared2 = await withPrompt.beat.prepare('0.3.84');
+  const helper2 = await withPrompt.beat.restart(prepared2.ticket, false, { requesterSessionId: 'R', prompt: '继续把 0.3.84 验完' });
+  const tasks2 = withPrompt.state().tasks.filter(task => task.destination === 'R');
+  check('17- a caller-named prompt is the text it wakes up to', helper2.requester?.prompt === '继续把 0.3.84 验完' && tasks2.length === 1 && tasks2[0].prompt === '继续把 0.3.84 验完', JSON.stringify(tasks2.map(t => t.prompt)));
+  const prepared3 = await withPrompt.beat.prepare('0.3.85');
+  await withPrompt.beat.restart(prepared3.ticket, false, { requesterSessionId: 'R', prompt: '另一句' });
+  const tasks3 = withPrompt.state().tasks.filter(task => task.destination === 'R');
+  check('17- a registered continuation is reused instead of duplicated', tasks3.length === 1, JSON.stringify(tasks3.map(t => t.prompt)));
+
+  /* 2c. a restart nobody asked for from a conversation still registers nothing */
+  const anonymous = scenario();
+  anonymous.add('IDLE');
+  const prepared4 = await anonymous.beat.prepare('0.3.84');
+  const helper4 = await anonymous.beat.restart(prepared4.ticket, false, {});
+  check('17- a restart with no requester registers no continuation and says so', helper4.requester?.ok === false && helper4.requester?.reason === 'no_requester' && anonymous.state().tasks.length === 0, JSON.stringify(helper4.requester));
+
+  /* 1a. the host-API shape: list() only (what 0.2.2-rc.3 really exposes) is read, roots() is not needed */
+  const listOnly = scenario();
+  const made = listOnly.add('WORK', { running: true, title: '工作中的对话' });
+  delete listOnly.service.roots;
+  listOnly.service.list = () => [made.agent];
+  const activity = listOnly.beat.activity(listOnly.exec('R'));
+  check('17- a registry that exposes only list() is read (roots() is gone in DSH 0.2.2)', activity.ok === true && activity.count === 1 && activity.self === null, JSON.stringify(activity));
+  const stillReadsRoots = scenario();
+  const legacy = stillReadsRoots.add('OLD', { running: true });
+  stillReadsRoots.service.list = undefined;
+  const legacyActivity = stillReadsRoots.beat.activity(stillReadsRoots.exec('R'));
+  check('17- a registry that still exposes only roots() keeps working', legacyActivity.ok === true && legacyActivity.count === 1, JSON.stringify(legacyActivity));
+
+  /* 1b. the helper script's two promises, asserted on the shipped text */
+  const helperScript = fs.readFileSync(path.join(PACKAGE, 'lib', 'core-restart.ps1'), 'utf8');
+  /* The quoted history in the helper's own comment mentions the old sentence, so the assertion is
+   * about the REFUSAL CODE, not about the phrase: what must be gone is the throw that refused to
+   * relaunch, and what must be there is the running receipt for a replacement. */
+  check('17- the helper accepts a replacement that is already up instead of calling it a blocker', helperScript.includes('A replacement host was already running after the stop') && !helperScript.includes("throw 'Old DSH processes still hold the profile"), 'the path-based wait was what refused to relaunch');
+  check('17- the relaunch window is mandatory and bounded in minutes, not three attempts', helperScript.includes('AddSeconds(300)') && !helperScript.includes('attempt $attempts of 3'), 'a stop must end with a host');
+  check('17- the old tree is judged by identity, not by executable path', helperScript.includes('$targets | Where-Object {SameProcess $_}') && helperScript.includes('$replacement=@(Get-CimInstance Win32_Process'), 'both halves must be present');
 });
 
 /* ------------------------------------------------------------------ report --- */

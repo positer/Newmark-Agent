@@ -56,7 +56,11 @@ const MUTATIONS = [
     anchor: "if (missing.length && !(proceed && at > intent.deadline)) return abort('missing_acks');",
     replacement: "if (false) return abort('missing_acks');" },
   { id: 'M4', file: 'component', protects: 'case 3: the legacy path really prepares and restarts',
-    anchor: "const prepared = await controller.prepare(installedVersion()); return this.restart(prepared.ticket);",
+    /* 0.3.84 moved this anchor: globalRestart now hands the requester identity and prompt through
+     * restart's third argument, so the one-line call it used to match no longer exists. An anchor
+     * that cannot be planted reports UNPROTECTED - which is a false alarm about coverage, and a
+     * mutation table full of false alarms is one nobody reads. */
+    anchor: "const prepared = await controller.prepare(installedVersion());\n      return this.restart(prepared.ticket, false, options);",
     replacement: "return { commit() {}, cancel() {} };" },
   { id: 'M5', file: 'component', protects: 'case 4: a none declaration is terminal',
     anchor: "const TERMINAL_ACKS = ['registered', 'none', 'closed'];",
@@ -67,9 +71,17 @@ const MUTATIONS = [
   { id: 'M7', file: 'component', protects: 'case 6: a second beginBarrier is rejected with the in-progress intent',
     anchor: "if (running) return { ok: false, phase: 'rejected', reason: 'intent_in_progress', intentId: running.id, progress: progressOf(running) };",
     replacement: "if (running && false) return { ok: false, phase: 'rejected', reason: 'intent_in_progress', intentId: running.id, progress: progressOf(running) };" },
-  { id: 'M8', file: 'component', protects: 'case 7: the requester must have registered its own continuation',
-    anchor: "if (!requester || requester.ack !== 'registered') return abort('requester_not_registered');",
-    replacement: "if (false) return abort('requester_not_registered');" },
+  { id: 'M8', file: 'component', protects: 'case 7: a requester without its own receipt is woken anyway (0.3.84 contract)',
+    /* The mutation plants the OLD contract back: abort the commit when the requester never gave a
+     * receipt. Case 7 now asserts the opposite, so this shape must turn it red. */
+    anchor: "      const requester = participantOf(store.read().intent, requesterSessionId);\n      if (!requester) return abort('requester_not_registered');",
+    replacement: "      const requester = participantOf(store.read().intent, requesterSessionId);\n      if (!requester || requester.ack !== 'registered') return abort('requester_not_registered');" },
+  { id: 'M35', file: 'component', protects: 'case 17: a restart always registers the requester continuation',
+    anchor: "const requester = ensureRequesterContinuation(options.requesterSessionId ?? null, options.prompt, options.requesterAgent ?? null);",
+    replacement: "const requester = { ok: false, registered: false, reason: 'planted' };" },
+  { id: 'M36', file: 'component', protects: 'case 17: a registry that exposes only list() is readable (DSH 0.2.2)',
+    anchor: "const read = typeof service.list === 'function'\n      ? () => service.list()",
+    replacement: "const read = false\n      ? () => service.list()" },
   { id: 'M9', file: 'component', protects: 'case 8: a commit after the deadline aborts',
     anchor: "if (at > intent.deadline && !proceed) return abort('deadline_exceeded');",
     replacement: "if (false) return abort('deadline_exceeded');" },

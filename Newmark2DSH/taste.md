@@ -1,5 +1,13 @@
 # Newmark2DSH taste
 
+## 2026-11-17 安装：`install_bundle` 说「已安装」时，换规格重装而不是先卸载；生效要单独证明（0.3.83）
+
+- **`install_bundle <name>@<version>` 对已是 profile 依赖的包直接拒绝**（`application: failed` / `code: already-installed`），并建议 `remove_bundle` 先卸载。**不要照做**：卸载会在本轮中途把正在提供工具的行摘掉，装上失败就没有回退。正确做法是改 **profile `package.json` 里的依赖规格**（tarball URL 带版本号），再 `pnpm install`——依赖的「来源」就是那句话，管理器的那条建议是给「从没装过」的场景写的。
+- **装完要逐文件比对注册表 tarball，不是只读 `package.json` 的版本号。** `Invoke-WebRequest` 下 tarball → 解包 → 两侧 SHA256 逐文件比：文件集合与内容都要等于 0 差异。版本号相同而内容不同，是这个工作区真实踩过的故障形态。
+- **pnpm 会顺手重链与本次无关的包，而运行中的宿主占着文件** → `ERR_PNPM_EPERM`，并在 `node_modules` 留下 `*_tmp_<pid>_<n>` 孤儿目录。判据不是「pnpm 有没有报错」，而是**那个包本身是否完好**：本轮 `dsh-pighub` 报 EPERM，但在用的目录 1.0.8 / 168 文件完整、活体 `pighub_about` 返回 ok，孤儿目录是旧 1.0.6 的副本。**报错要落到「哪个包、状不状态好」，不能一句「安装有警告」带过。**
+- **`application` 的三种词要分清**：`applied` = 已在运行的树里生效；`restart-required` = 文件到位、树没换（本轮 `restartReason: unmanaged-plugin`，因为包不是管理器自己装的）；`failed` = 没装成。**预设行在挂载时读取**，所以对一个 preset 改动，`applied` 也要新会话才算生效，`restart-required` 则必须重启。
+- **重启是用户的动作时，不要用「已安装」冒充「已生效」。** 本轮停在 `restart-required` 并把验收命令写进归档；用一次重启换一句「已生效」，只有在自己能确认连续性时才划算（本轮 `heartbeat_activity` 恰好报 `agents_unavailable`，所以更不该赌）。
+- **`heartbeat_*` 报 `agents_unavailable` 时，先用宿主的 `list_agents` 交叉验证。** 宿主能列出 `lead` 就说明服务在，坏的是组件的读取——这是组件侧缺陷，不是「重启就好」的运行时抖动。
 ## 2026-11-17 预设是拷贝，拷贝不会自己跟上宿主：缺行必须变成会红的断言（0.3.83）
 
 - **「不报错」不等于「不是问题」，而这正是它被放过的理由。** 2026-10-17 的 parity 审计在 0.2.1-rc.1 上量到了 `time-context`/`tool-schedule`/`tool-plugin-market` 三行缺失，结论写的是「Absence is not an error… capability gaps」，于是**没有修**。三轮宿主更新之后，缺口变成五行：宿主又加了 `tool-office`，并把 Dev/rDev 仍挂着的那一行标成 `@deprecated`。**能力缺口永远不报错，所以它只能由门禁发现**——量到了却不修，等于把它写进下一位读者的「已审计、无问题」。

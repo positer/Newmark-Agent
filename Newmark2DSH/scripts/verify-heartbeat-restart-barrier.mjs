@@ -845,6 +845,28 @@ await section('case 17', async () => {
   const legacyActivity = stillReadsRoots.beat.activity(stillReadsRoots.exec('R'));
   check('17- a registry that still exposes only roots() keeps working', legacyActivity.ok === true && legacyActivity.count === 1, JSON.stringify(legacyActivity));
 
+  /* 2d. the TOOLS themselves: prompt optional on both, and omitting it applies the default sentence.
+   * The constant being right and the tool NOT using it is exactly the shape a paraphrase drifts into,
+   * so the sentence is measured through the tool the model calls, not through the import. */
+  const mountedRoot = fs.mkdtempSync(path.join(ROOT_BASE, 'default-prompt-'));
+  const mounted = await mountHeartbeatTools(mountedRoot);
+  try {
+    const afterRestart = mounted.tools.get('heartbeat_after_restart');
+    const required = afterRestart?.parameters?.required ?? [];
+    check('17- heartbeat_after_restart does not require a prompt', !required.includes('prompt'), JSON.stringify(required));
+    /* The execution shape the host hands a tool: the conversation identity lives on the agent's
+     * session, and currentConversation reads it from there (never from an argument). */
+    const execution = { agent: { session: { id: 'mounted-requester' } } };
+    const registered = await afterRestart.execute({}, execution);
+    const tasks = JSON.parse(fs.readFileSync(path.join(mountedRoot, 'heartBeat', 'state.json'), 'utf8')).tasks ?? [];
+    /* The destination is the host-scoped id (currentConversation prefixes it as 'dsh-session:<id>'),
+     * so the assertion looks at the task's TEXT and count rather than at one spelling of its id. */
+    const queued = tasks.filter(task => task.prompt === HEARTBEAT.RESTART_DEFAULT_PROMPT);
+    check('17- omitting the prompt registers the default sentence for that conversation', registered?.ok === true && tasks.length === 1 && queued.length === 1 && String(tasks[0].destination).endsWith('mounted-requester'), JSON.stringify({ registered, tasks: tasks.map(task => ({ destination: task.destination, prompt: task.prompt })) }));
+  } finally {
+    mounted.dispose();
+  }
+
   /* 1b. the helper script's two promises, asserted on the shipped text */
   const helperScript = fs.readFileSync(path.join(PACKAGE, 'lib', 'core-restart.ps1'), 'utf8');
   /* The quoted history in the helper's own comment mentions the old sentence, so the assertion is

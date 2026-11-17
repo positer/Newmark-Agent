@@ -4,7 +4,7 @@
 
 - **要求**：「heartBeat 的进程停止后重启不再成为选项而是强制要求每个走 heartBeat 的进程停止必定完整托管重启，且对于发起 heartBeat 的对话不论是否传入重启激活的 prompt 都在 heartBeat 重启后激活对话，不传入时默认为『DSH已重启，继续完成当前任务』」。
 - **改了什么**：`lib/core-restart.ps1` 的旧树判据从「同路径进程」改为**冻结身份**，同路径而**非旧树**的进程即替代实例（报 `running` 而不是 `failed`），启动窗口从 3 次改为 **5 分钟强制窗口**；`component.js` 新增 `RESTART_DEFAULT_PROMPT` 与 `ensureRequesterContinuation()`，在**所有**重启路径上为发起对话登记接续（已登记则复用），广播提交时发起方缺回执改为自动登记并标 `ackSource:'auto'`；`heartbeat_restart` 新增 `prompt`，`heartbeat_after_restart` 的 `prompt` 变可选；`liveAgents()` 改用 0.2.2 的 `list()`（保留 `roots()` 回退），目标恢复的 settle 记录补 `bootPid`/`candidates` 修掉 2 秒一条错误的不收敛循环。
-- **门禁**：`verify-heartbeat-restart-barrier` 108 → **115/115 PASS**（新增 case 17 + 修两条陈旧断言，其中 case 14 那条自 0.3.79 起就红着）；`measure-heartbeat-restart-barrier-mutations` **36/36 detected / unprotected none**（修 M4/M8 失效锚点，新增 M35/M36）；`verify-version-discipline` 12/12、`verify-newmark-core-package` 56/56。既存红项 `verify-newmate-heartbeat` 第 16 条非本轮引入。
+- **门禁**：`verify-heartbeat-restart-barrier` 108 → **117/117 PASS**（新增 case 17 + 修两条陈旧断言，其中 case 14 那条自 0.3.79 起就红着）；`measure-heartbeat-restart-barrier-mutations` **36/36 detected / unprotected none**（修 M4/M8 失效锚点，新增 M35/M36）；`verify-version-discipline` 12/12、`verify-newmark-core-package` 56/56。既存红项 `verify-newmate-heartbeat` 第 16 条非本轮引入。
 - **边界**：本轮未重启、未发布、未安装——新辅助程序要等 0.3.84 跑起来后的下一次重启才会被使用，所以「强制托管重启」的活体验收只能由那次重启给出。
 - **归档**：`Newmark2DSH/archive/20261117-231000-heartbeat-managed-restart-0.3.84/`。
 ## 2026-11-17 Newmark2DSH 0.3.83：Dev/rDev 重新对齐已安装的 DSH 0.2.2-rc.3（补 4 行工具、换 1 条废弃行、删 2 行死行）

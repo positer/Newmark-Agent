@@ -7,6 +7,8 @@
 - **门禁**：`verify-heartbeat-restart-barrier` 108 → **117/117 PASS**（新增 case 17 + 修两条陈旧断言，其中 case 14 那条自 0.3.79 起就红着）；`measure-heartbeat-restart-barrier-mutations` **36/36 detected / unprotected none**（修 M4/M8 失效锚点，新增 M35/M36）；`verify-version-discipline` 12/12、`verify-newmark-core-package` 56/56。既存红项 `verify-newmate-heartbeat` 第 16 条非本轮引入。
 - **总门禁**：`verify-newmark-core` 213/13/227，与 0.3.83 基线逐条相同（失败项全是既存环境/真机依赖，无一条与 heartBeat 相关）。
 - **边界**：本轮未重启、未发布、未安装——新辅助程序要等 0.3.84 跑起来后的下一次重启才会被使用，所以「强制托管重启」的活体验收只能由那次重启给出。
+- **发布与安装（2026-11-18）**：发布仓 `5db1668` + tag `v0.3.84`，CI run `44269638264` success，npm `latest` = 0.3.84（shasum `0021f900…`、124 文件）；**`latest` 翻转后 tarball 有约 9 分钟 404**（npm「being processed」；此时 `npm pack` 报误导性的 “package name is not valid”），验收因此以「能下载并校验 tarball」为准。安装目录 0.3.84 / 124 文件，与 tarball 逐文件差异 0。
+- **活体验收**：新辅助程序 `b5b19c0d…` 把 DSH 自己拉起来（`status.json running / DSH host ready after 1 attempt(s)`、`desktop.stdout.log` 207 B 含新端口 58812，旧 64469）；`heartbeat_activity` 由 `agents_unavailable` 变 `ok:true`；目标恢复一次收敛（`bootPid:72888`、attempts 5）不再刷屏；发起对话被 continuation `b7b3553e…` 自动唤醒。**默认句子尚未活体验收**（本轮显式传了 prompt）。
 - **归档**：`Newmark2DSH/archive/20261117-231000-heartbeat-managed-restart-0.3.84/`。
 ## 2026-11-17 Newmark2DSH 0.3.83：Dev/rDev 重新对齐已安装的 DSH 0.2.2-rc.3（补 4 行工具、换 1 条废弃行、删 2 行死行）
 

@@ -1524,6 +1524,11 @@ for (const [label, script] of [
    * field carries at ten, so 0.1.9 is followed by 0.1.10. This gate is what makes that a
    * constraint instead of a convention. */
   ['version discipline', 'verify-version-discipline.mjs'],
+  /* The profile's pnpm release-age entry: the one piece of shared configuration this bundle
+   * writes. It must stay this package's own bare name — MEASURED 2026-11-19, a version-pinned
+   * list went stale and made every install in the profile fail, and an exemption that names
+   * another package is the permission overflow the user forbade. */
+  ['release-age gate', 'verify-core-release-age.mjs'],
   ['memorylab tools', 'verify-memorylab-tools.mjs'],
   /* The agent-api component carries the bundle's own agent-run contract —the envelope, the
    * error classification, the four tools —and its gate drives the REAL loop and the REAL seam

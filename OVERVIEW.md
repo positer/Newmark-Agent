@@ -1,5 +1,25 @@
 # Newmark Agent Overview
 
+## 2026-11-19 检查 dsh-pighub 1.0.12 的权限约束（代码在范围内，机器状态未解除）
+
+- pighub 的改法：版本地板搬进 `~/.PigHub/version-floor.json`、只装「发布满 24h」的版本、安装带一次性 `--config.minimumReleaseAgeStrict=true`，并有越权守卫测试（20 PASS）。**代码范围通过。**
+- 我的独立测量：live profile 的 lockfile 仍钉 `dsh-pighub@1.0.11`（磁盘 1.0.12）→ 宿主口径的 frozen 安装**仍失败**，只剩它一条（`newmark2dsh` 已不出现）；把这条也豁免后（实验）frozen 安装会把磁盘**回退**到 1.0.11（实测）。`1.0.11` 于 **2026-11-19T10:59:46Z（18:59 +08）** 过期，`1.0.12` 于 **2026-11-20T03:24:34Z** 成熟。
+- 两种做法的代价：pighub 等成熟期（自己更新延迟、已装上的年轻版本连坐别人最多 24h）；newmark2dsh 0.3.85 豁免自己的裸包名（发布即可装、结构上不连坐）。**本轮不改代码**，归档 `Newmark2DSH/archive/20261119-120500-pighub-scope-check/`。
+
+## 2026-11-19 Newmark2DSH 0.3.85：发布年龄豁免收回到本插件（裸包名、只写自己、挂载即修）
+
+- **要求**：「版本回退锁只能在本插件内限制本插件的版本回退，不允许权限溢出行为，修复newmark2dsh导致的其他插件pnpm更新失败问题，以及newmark2dsh插件在启用状态下无法更新dsh的问题」。
+- **现场**：更新 `dsh-opencode-go` 时 pnpm 以 `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` 拒绝整份 lockfile（30 条），点名 `dsh-pighub@1.0.11` 与 `newmark2dsh@0.3.84` 太新。
+- **根因（实测）**：pnpm 11.11.0 默认 `minimumReleaseAge` 1440 分钟并校验**整份 lockfile**；宿主用 `--frozen-lockfile`，pnpm 没有「自己补豁免」的窗口（解析阶段会自动补，冻结阶段直接失败）。profile 里本插件的豁免是**按版本写死**的（写到 0.3.82，装的是 0.3.84），所以**每次发版都让整个 profile 装不上**——别的插件的更新与 DSH 自身更新一起被挡住。
+- **改动**：新增 `packages/newmark-core/lib/release-age.js`（`applySelfExemption` 纯文本、只重写 `minimumReleaseAgeExclude` 一块，把本插件条目收成**裸包名** `newmark2dsh`，别的包条目逐字保留；`ensureSelfExemption` 原子写入、幂等、没有 workspace 文件不凭空创建、**永不写 `minimumReleaseAge`**）；`index.js` 挂载时跑一次 + 自我安装前再跑一次，回执 `<root>/core/release-age.json`；`auto-update.js` 新增 `held_by_release_age`（被策略暂缓不写失败日志，下次启动重试）；`client.js` 删掉「exact tarball 能绕过年龄策略」这句被实测推翻的注释，并在版本管理卡里只在真修过时显示一行。
+- **门禁**：新增 `scripts/verify-core-release-age.mjs` **42 PASS**，`--mutations` **5/5 变红并逐字节还原**；总门禁加入该门禁后 **215/12/228**（`ok 208 - release-age gate passes`），**改前改后失败集合逐条相同**（HEAD 三个源文件的基线 214/12/227，`Compare-Object` 两向皆空）。
+- **实测对照（live profile 副本，frozen）**：修前 **2 条失败**（`dsh-pighub` + `newmark2dsh`）→ 修后 **1 条失败**（只剩 `dsh-pighub`）→ 把 `dsh-pighub` 也换成裸名（**对照实验，不是产品改动**）**0 条失败**。这条对照就是「豁免确实只覆盖一个包」的证据。
+- **本机 profile 已修好**：用同一模块对 `~/.dsh/profiles/desktop/pnpm-workspace.yaml` 执行一次，`e38315d0…` → `1d3c6558…`，removed 1 条 / added 1 条，`dsh-pighub` 条目原样保留。
+- **并发写入（观察，未定因）**：11:11:54 修好之后，11:32:19 这份文件被本会话以外的写入者**整份重写**（旧条目回来、`dsh-pighub` 条目被抹掉）；同窗口 `node_modules`/ `cordis.patch.yml` 也变了，但 `pnpm-lock.yaml` 未变、`.plugin-manager/pnpm.log` 无新记录。11:44:20 用同一模块再修一次。这正是「每次挂载都重做、只改自己那一块」的理由。
+- **残项**：`dsh-pighub@1.0.11` 仍会挡 frozen 安装到 2026-11-19T11:03:04Z（它自己的发布年龄；替它写豁免正是被禁止的权限溢出）。
+- **版本**：0.3.85（六个 manifest + `VERSION.md` 一行，`core`，patch +1）。**源码候选：未打包、未发布、未安装。**
+- **归档**：`Newmark2DSH/archive/20261119-111500-release-age-scope-0.3.85/`。
+
 ## 2026-11-17 Newmark2DSH 0.3.84：重启不再是选项（托管重启 + 发起者必定被唤醒）
 
 - **要求**：「heartBeat 的进程停止后重启不再成为选项而是强制要求每个走 heartBeat 的进程停止必定完整托管重启，且对于发起 heartBeat 的对话不论是否传入重启激活的 prompt 都在 heartBeat 重启后激活对话，不传入时默认为『DSH已重启，继续完成当前任务』」。

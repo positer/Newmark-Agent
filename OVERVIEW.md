@@ -18,6 +18,8 @@
 - **并发写入（观察，未定因）**：11:11:54 修好之后，11:32:19 这份文件被本会话以外的写入者**整份重写**（旧条目回来、`dsh-pighub` 条目被抹掉）；同窗口 `node_modules`/ `cordis.patch.yml` 也变了，但 `pnpm-lock.yaml` 未变、`.plugin-manager/pnpm.log` 无新记录。11:44:20 用同一模块再修一次。这正是「每次挂载都重做、只改自己那一块」的理由。
 - **残项**：`dsh-pighub@1.0.11` 仍会挡 frozen 安装到 2026-11-19T11:03:04Z（它自己的发布年龄；替它写豁免正是被禁止的权限溢出）。
 - **版本**：0.3.85（六个 manifest + `VERSION.md` 一行，`core`，patch +1）。**源码候选：未打包、未发布、未安装。**
+- **发布与安装（12:50–13:00，补记；上一条「未发布」已作废）**：源码 `ff39a0df` → 发布仓 `7218ad8` + tag `v0.3.85` → CI run 44461022435 success → npm `latest` 04:55:24Z = **0.3.85**（shasum `ab5ad3e9…`、125 文件）；发布物与源码「仅行尾 11、实质 0」；**已装进 profile（125 文件，与 tarball 逐文件相同）**，`pnpm-workspace.yaml` 未被改写，安装后 frozen 复测通过；**重启后生效**。
+- **同期外部变化**：`dsh-pighub` 1.0.13（12:09 +08）也把自己的条目改成裸包名，上一轮的残项消失。归档 `Newmark2DSH/archive/20261119-125900-release-0.3.85-publish-install/`。
 - **归档**：`Newmark2DSH/archive/20261119-111500-release-age-scope-0.3.85/`。
 
 ## 2026-11-17 Newmark2DSH 0.3.84：重启不再是选项（托管重启 + 发起者必定被唤醒）

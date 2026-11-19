@@ -313,6 +313,12 @@ check(
   "the auto-update recognises pnpm's own code",
   autoUpdateSource.includes('ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION'),
 );
+check(
+  'the mount-time receipt is written on every pass, so "it ran and found nothing to do" is observable',
+  /checkedAt: new Date\(\)\.toISOString\(\)/.test(hostSource) &&
+    !/if \(answer\.changed \|\| !answer\.ok\)/.test(hostSource),
+  'MEASURED 2026-11-19: after the 0.3.85 restart the receipt was missing, so the mount-time pass could not be evidenced',
+);
 
 /* ---------------------------------------------------------------- mutations --- */
 
@@ -340,6 +346,12 @@ const MUTATIONS = [
     file: 'lib/release-age.js',
     find: '  if (!plan.changed) {',
     replace: '  if (false) {',
+  },
+  {
+    label: 'M6 the receipt is written only when something changed',
+    file: 'index.js',
+    find: '    try { releaseAgeState.change((current) => { current.last = receipt; }); } catch { /* receipt only */ }',
+    replace: '    if (answer.changed || !answer.ok) { try { releaseAgeState.change((current) => { current.last = receipt; }); } catch { /* receipt only */ } }',
   },
   {
     label: 'M5 a release-age hold-back is reported as a failure',

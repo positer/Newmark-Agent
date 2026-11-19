@@ -20,6 +20,7 @@
 - **版本**：0.3.85（六个 manifest + `VERSION.md` 一行，`core`，patch +1）。**源码候选：未打包、未发布、未安装。**
 - **发布与安装（12:50–13:00，补记；上一条「未发布」已作废）**：源码 `ff39a0df` → 发布仓 `7218ad8` + tag `v0.3.85` → CI run 44461022435 success → npm `latest` 04:55:24Z = **0.3.85**（shasum `ab5ad3e9…`、125 文件）；发布物与源码「仅行尾 11、实质 0」；**已装进 profile（125 文件，与 tarball 逐文件相同）**，`pnpm-workspace.yaml` 未被改写，安装后 frozen 复测通过；**重启后生效**。
 - **同期外部变化**：`dsh-pighub` 1.0.13（12:09 +08）也把自己的条目改成裸包名，上一轮的残项消失。归档 `Newmark2DSH/archive/20261119-125900-release-0.3.85-publish-install/`。
+- **重启后校验（13:06）**：运行中版本 = **0.3.85**（`/newmark-core/update` 的 `current`，且组件路由出现 0.3.85 才有的 `update.releaseAge` 键）；profile 两条裸名未变；frozen 副本 exit 0；工具面 81 项正常。**②失败**：挂载期回执 `~/.Newmark/core/release-age.json` 不存在——0.3.85 只在「改了/失败」时写回执，于是「跑了但无需改」与「没跑」不可区分。**0.3.86** 改为每次挂载都写一条（`checkedAt`），门禁 42 → 43、变异 6/6。
 - **归档**：`Newmark2DSH/archive/20261119-111500-release-age-scope-0.3.85/`。
 
 ## 2026-11-17 Newmark2DSH 0.3.84：重启不再是选项（托管重启 + 发起者必定被唤醒）

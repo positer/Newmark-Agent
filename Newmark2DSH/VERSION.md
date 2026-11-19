@@ -205,6 +205,13 @@ A release that does both a sub-component addition and anything else is recorded 
 
 | 0.3.86 | 2026-11-19 | core | **重启后校验发现回执缺失：一次「什么都没改」的挂载期检查没有留下任何证据。** 0.3.85 的挂载期修复只在 `changed` 或失败时写 `<root>/core/release-age.json`，于是 13:06 重启之后那份文件**不存在**——「检查跑了、发现 profile 已经正确」与「检查根本没跑」成了同一个观察，正是回执存在的意义所在。改为**每次挂载都写一条**（新增 `checkedAt`；`changed:false` 也写，日志仍只在真的改了时打一行）；profile 解析失败（`not_installed_under_node_modules` 等）也照样落一条，不再静默返回。门禁 `verify-core-release-age` 42 → **43**，新增一条断言（回执必须无条件写、旧守卫字符串必须消失）与一条变异（M6：把守卫加回去必须变红），`--mutations` **55 PASS / 6-6 检出**。未新增子组件，`patch` +1。 |
 
+**2026-11-19 13:10–13:17 — 0.3.86 已发布并安装，重启后五项全过（补记）。**
+
+- **源码仓** `4d74873b`；**发布仓** `e6df8a0` + tag `v0.3.86`；CI run **44463255220** success；npm `latest` = **0.3.86**（shasum `2c6fe84c…`、**125 文件**、回拉 1,360,593 B 一致）。
+- **已安装**：profile 规格换成 0.3.86 tarball，`pnpm install` exit 0（8.9 s），`pnpm-workspace.yaml` **未被改写**（仍两条裸名）。
+- **重启校验（13:16，0.3.86 活体）五项全过**：①`current` = **0.3.86**；②挂载期回执存在且 `changed:false` 也写了（`checkedAt 2026-11-19T05:16:51.368Z`、`specs ["newmark2dsh","dsh-pighub"]`）——这正是 0.3.85 缺的那条证据；③profile 两条裸名未变（sha `c38a0730…`）；④frozen 副本 exit 0；⑤工具面 81 项正常。
+- **对照**：第一次重启（13:06，0.3.85）五项里 ② 失败（回执 MISSING），其余四项通过——所以 0.3.86 的修复是被这条失败**逼出来**的，不是预防性改动。
+- **归档**：`archive/20261119-131700-post-restart-0.3.86/`。
 **2026-11-19 12:50–13:00 — 0.3.85 已推送、已发布、已安装（补记，取代该行末尾的「源码候选」）。**
 
 - **源码仓** `positer/Newmark-Agent` `master`：`a1cd6197..ff39a0df`（17 文件 / +781 / −14；只暂存本轮文件）。

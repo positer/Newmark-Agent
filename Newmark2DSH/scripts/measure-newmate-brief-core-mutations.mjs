@@ -22,6 +22,7 @@ const CONTEXT = path.join(workspace, 'packages/newmark-core/components/newmate/l
 const PERSONA = path.join(workspace, 'packages/newmark-core/components/newmate/lib/persona.js');
 const WORKSPACE = path.join(workspace, 'packages/newmark-core/components/newmate/lib/workspace-diff.js');
 const DIGEST = path.join(workspace, 'packages/newmark-core/components/newmate/lib/change-digest.js');
+const DSHDIGEST = path.join(workspace, 'packages/newmark-core/components/newmate/lib/dsh-digest.js');
 
 const MUTATIONS = [
   {
@@ -29,7 +30,7 @@ const MUTATIONS = [
     claim: 'the check-in prompt is built from the survey (the brief block, not the old one-liner)',
     file: COMPONENT,
     gate: 'verify-newmate-initiative.mjs',
-    find: '${briefBlock(task)}当前任务：',
+    find: '${briefBlock(task,dsh)}当前任务：',
     replace: '工作区最近变动（稀疏监控的浅层事实）：${store.read().watch?.lastDescription||\'（本机尚无对比结果）\'}\n当前任务：',
   },
   {
@@ -87,6 +88,38 @@ const MUTATIONS = [
     gate: 'verify-newmate-workspace-diff.mjs',
     find: "  const partial = (entry) => Boolean(entry?.coverage && (entry.coverage.omittedDirectories || entry.coverage.omittedFiles));",
     replace: '  const partial = (entry) => false;',
+  },
+  {
+    id: 'M13',
+    claim: 'the check-in prompt carries the last-ten-conversations digest and asks for a suggestion',
+    file: COMPONENT,
+    gate: 'verify-newmate-dsh-digest.mjs',
+    find: "    if(dsh)lines.push('- '+dsh.text);",
+    replace: "    if(false&&dsh)lines.push('- '+dsh.text);",
+  },
+  {
+    id: 'M14',
+    claim: 'a quoted message is clipped instead of carried whole into the prompt',
+    file: DSHDIGEST,
+    gate: 'verify-newmate-dsh-digest.mjs',
+    find: "export const DSH_DIGEST_DEFAULTS = Object.freeze({\n  maxSessions: 10,\n  excerptMessages: 2,\n  excerptChars: 90,",
+    replace: "export const DSH_DIGEST_DEFAULTS = Object.freeze({\n  maxSessions: 10,\n  excerptMessages: 2,\n  excerptChars: 100000,",
+  },
+  {
+    id: 'M11',
+    claim: 'only a turn a person started may publish an interim sentence',
+    file: COMPONENT,
+    gate: 'verify-newmate-interim.mjs',
+    find: "if (task.kind !== 'chat') return { ok: false, code: 'interim_not_conversational'",
+    replace: "if (false) return { ok: false, code: 'interim_not_conversational'",
+  },
+  {
+    id: 'M12',
+    claim: 'an interim sentence is never the reply (its id is derived from the task, not equal to it)',
+    file: COMPONENT,
+    gate: 'verify-newmate-interim.mjs',
+    find: "const id = task.id + ':interim:' + (sentSoFar.length + 1);",
+    replace: "const id = task.id;",
   },
   {
     id: 'M10',

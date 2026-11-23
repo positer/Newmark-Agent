@@ -1567,6 +1567,18 @@ for (const [label, script] of [
    * shape and never the text, and the one tool that returns the text refuses outside a NewMate run.
    * Its mutations are in measure-newmate-brief-core-mutations.mjs. */
   ['NewMate core memory gate', 'verify-newmate-core-memory.mjs'],
+  /* The interim reply: a sentence INTO the conversation while the loop keeps running. The gate holds
+   * the properties that make it safe rather than noisy - only a person's own turn may speak, the count/
+   * length/gap bounds are enforced, an autonomous or maintenance run refuses by name, and the message is
+   * never mistaken for the reply (its id is derived from the task but never equal to it, which is what
+   * keeps the WeChat forwarder and the todo settlement pointed at the final answer). */
+  ['NewMate interim reply gate', 'verify-newmate-interim.mjs'],
+  /* The conversations half of "what is going on": the check-in reads the ten most recent host
+   * conversations (bounded list + bounded read, two quoted messages each), states how many it did not
+   * read, and asks the model for ONE actionable suggestion. The gate holds the bounds, the degradation
+   * when a transcript cannot be read, the "unreadable" answer when the host has no listing, and the rule
+   * that a user-initiated turn does not read the host's conversations at all. */
+  ['NewMate DSH conversations digest gate', 'verify-newmate-dsh-digest.mjs'],
   /* The two entrances a FILE can use to reach NewMate: the page's byte route and the WeChat
    * ClawBot channel's inbound media. One store, one chat() argument, one reader - and the reader
    * can only see what the store wrote. The gate drives the real channel against a fake media CDN

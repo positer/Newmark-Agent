@@ -108,6 +108,13 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmate-wechat-gate-'));
 // A mate double: chat() records the call and returns a task id; state() serves the reply later.
 const chatCalls = [];
 let replyReady = false;
+/**
+ * The interim sentence is published BEFORE the final answer (2026-11-24): the person on the phone
+ * should hear "still looking" while the turn is running, then the conclusion. The forwarding rules
+ * under test: same peer, in order, claimed once, and dropped if the answer already went out.
+ */
+let interimReady = false;
+const INTERIM_PLAIN = '还在读代码，先把结论前的一句发给你';
 const messages = [{ id: 'proactive-1', threadId: 'thread-A', role: 'assistant', text: 'PROACTIVE-RICH', plain: 'PROACTIVE-PLAIN', proactive: true }];
 const todos = [];
 const mate = {
@@ -119,7 +126,11 @@ const mate = {
     return {
       activeThreadId: 'thread-A',
       threads: [{ id: 'thread-A' }],
-      messages: replyReady ? [...messages, { id: 'task-1', threadId: 'thread-A', role: 'assistant', text: RICH, plain: PLAIN, proactive: false }] : messages,
+      messages: [
+        ...messages,
+        ...(interimReady ? [{ id: 'task-1:interim:1', taskId: 'task-1', threadId: 'thread-A', role: 'assistant', text: 'RICH-INTERIM', plain: INTERIM_PLAIN, interim: true, at: Date.now() }] : []),
+        ...(replyReady ? [{ id: 'task-1', threadId: 'thread-A', role: 'assistant', text: RICH, plain: PLAIN, proactive: false }] : []),
+      ],
       tasks: [{ id: 'task-1', status: replyReady ? 'completed' : 'running' }],
       todos,
     };
@@ -172,18 +183,27 @@ try {
   const afterTwo = JSON.parse(fs.readFileSync(channel.statePath, 'utf8'));
   check('steer: 两条入站共用一个待回复 task', Object.keys(afterTwo.awaiting).length === 1 && afterTwo.awaiting['task-1'], JSON.stringify(Object.keys(afterTwo.awaiting)));
 
+  // ---- 4.5 中间回复：它先到，而且只发纯文字 ----
+  interimReady = true;
+  await sleep(1600);
+  check('outbound: 中间回复在最终回复之前到达微信', calls.sends.length === 1, 'sends=' + calls.sends.length);
+  check('outbound: 中间回复发的是纯文字版，而不是页面渲染版', calls.sends[0]?.msg?.item_list?.[0]?.text_item?.text === INTERIM_PLAIN, String(calls.sends[0]?.msg?.item_list?.[0]?.text_item?.text));
+  check('outbound: 中间回复用同一个 context_token 与目标用户', calls.sends[0]?.msg?.context_token === 'ctx-2' && calls.sends[0]?.msg?.to_user_id === USER);
+
   // ---- 5. 最终回复：只发 plain ----
   replyReady = true;
   await sleep(1800);
   // Wait past another timer tick: a slow send must not let a second forward start.
   await sleep(2200);
-  check('outbound: 只发了一条微信消息（慢发送也不重复）', calls.sends.length === 1, 'sends=' + calls.sends.length);
-  const sent = calls.sends[0]?.msg;
+  check('outbound: 中间回复 + 最终回复一共两条，慢发送也不重复', calls.sends.length === 2, 'sends=' + calls.sends.length);
+  const sent = calls.sends[1]?.msg;
   check('outbound: 正文是纯文字气泡版', sent?.item_list?.[0]?.text_item?.text === PLAIN, String(sent?.item_list?.[0]?.text_item?.text));
   check('outbound: 没有转发渲染版或主动消息', !JSON.stringify(calls.sends).includes('PROACTIVE') && !JSON.stringify(calls.sends).includes('标题'));
   check('outbound: 用最后一条入站的 context_token', sent?.context_token === 'ctx-2', sent?.context_token);
   check('outbound: 目标用户正确', sent?.to_user_id === USER, sent?.to_user_id);
   check('outbound: 机器人的 from_user_id 为空', sent?.from_user_id === '', JSON.stringify(sent?.from_user_id));
+  const afterReplyState = JSON.parse(fs.readFileSync(channel.statePath, 'utf8'));
+  check('outbound: 中间回复单独计数，final 才计入 replies', afterReplyState.stats.replies === 1 && afterReplyState.stats.interim === 1, JSON.stringify(afterReplyState.stats));
 
   // ---- 5.5 发文件：getuploadurl → CDN 密文 → file_item，且失败可区分 ----
   // The slow send above proved dedupe; the file section measures field values, so it does not need

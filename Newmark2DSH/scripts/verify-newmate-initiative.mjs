@@ -226,7 +226,9 @@ const simulation={scenario:'7 days, no user input, continuously available deskto
   prompt=String(prompt||brief.calls.at(-1)?.arguments.prompt||'');
   check('the reminder is built from the runtime\'s quick-facts bundle',prompt.includes('可较快获取的信息')&&prompt.includes('距最近一次用户互动或主动联系')&&prompt.includes('短期记忆')&&prompt.includes('待办：未投递'),JSON.stringify({calls:brief.calls.length,tasks:brief.mate.state().tasks.map(t=>[t.kind,t.status,t.error||'']),head:prompt.slice(0,160)}));
   check('the bundle carries the SURVEY as an overview: projects, directories, kinds and ages',prompt.includes('可信工作区变动概览')&&prompt.includes('目录：')&&prompt.includes('其中 代码')&&prompt.includes('文件：'));
-  check('the bundle states the three-step order it implements',prompt.includes('先通读上面的工作区变动概览')&&prompt.includes('整理成一句自己的判断')&&prompt.includes('写进 brief'));
+  // The order gained a step when the check-in started reading the host conversations (2026-11-24): the
+// judgement now has to end in ONE actionable suggestion, so the contract asserted here is the new one.
+check('the bundle states the order it implements: survey -> conversations -> one judgement with a suggestion -> the sentence',prompt.includes('先通读上面的工作区变动概览')&&prompt.includes('最近 DSH 对话')&&prompt.includes('整理成一句自己的判断')&&prompt.includes('一条可以立刻执行的建议')&&prompt.includes('写 text'));
   check('the survey is metadata only: a changed file\'s CONTENT never enters the prompt',!prompt.includes('PRIVATE-SOURCE-文本不得进入提示'));
   const produced=brief.mate.state().messages.at(-1);
   check('the model\'s own summary of step two is stored beside the sentence',produced.brief==='src 新增了几个模块，docs 也动过；值得提一句'&&produced.proactive===true);

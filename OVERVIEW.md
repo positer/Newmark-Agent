@@ -1,5 +1,13 @@
 # Newmark Agent Overview
 
+## 2026-11-24 Newmark2DSH 0.3.92：NewMate 中间回复（loop 中途说一句、纯文字气泡、微信转发）
+
+- 新增私有工具 `newmate_progress`：只在用户发起的对话里可用，每轮 ≤3 条、同句不重复、间隔 ≥4 s；每条同时生成纯文字版本（模型给 `plain` 或自动 `toPlain`）、立刻推桌宠气泡，并按顺序转发微信（最终回复发出后迟到的中间回复丢弃）。中间消息 id 由 taskId 派生但永不相等，所以定时项与微信回复仍只认最终答案。
+- 门禁：`verify-newmate-interim` **24 PASS**、`verify-newmate-wechat-channel` 134→**138 PASS**、变异 **12/12**；其余 NewMate 门禁全绿。
+- 本机：装 0.3.92 后运行组 33 条含该工具（参数 text/plain），26 条 todo 无一条被中间消息结算。
+- 同期：0.3.91 已发布，npm `latest` = **0.3.91**（CI success）。
+- 未发布 0.3.92。归档 `Newmark2DSH/archive/20261124-013000-interim-reply-0.3.92/`。
+
 ## 2026-11-24 Newmark2DSH 0.3.91：静默时段半小时一段 + 静默区间开关（本机安装）
 
 - 静默起止从整点小时改成**分钟/半小时网格**（0–1410），旧状态里的 23/8 在启动时迁移成 1380/480；新增 `quietEnabled` 开关（关闭只取消窗口、保留起止）；设置页换成 48 档下拉 + 「启用静默区间」，关闭时置灰。

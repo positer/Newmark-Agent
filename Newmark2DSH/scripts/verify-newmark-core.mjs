@@ -1560,6 +1560,13 @@ for (const [label, script] of [
    * directly (scan, diff, score, settle) and the companion half against a real temp workspace, so
    * "compares against the previous run" is measured rather than asserted in prose. */
   ['NewMate workspace monitor gate', 'verify-newmate-workspace-diff.mjs'],
+  /* The core memory: the stable 用户画像 / 对话风格 kernel, with a CODE-enforced 5000-character
+   * ceiling on what it puts into NewMate's context. The gate holds the four properties that are
+   * easy to lose one at a time: the sections cannot grow by appending, the budget refuses instead
+   * of truncating (and the renderer still caps a hand-edited file), the payload readers expose the
+   * shape and never the text, and the one tool that returns the text refuses outside a NewMate run.
+   * Its mutations are in measure-newmate-brief-core-mutations.mjs. */
+  ['NewMate core memory gate', 'verify-newmate-core-memory.mjs'],
   /* The two entrances a FILE can use to reach NewMate: the page's byte route and the WeChat
    * ClawBot channel's inbound media. One store, one chat() argument, one reader - and the reader
    * can only see what the store wrote. The gate drives the real channel against a fake media CDN

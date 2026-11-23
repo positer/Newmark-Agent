@@ -45,6 +45,7 @@ import { createAgentApi, eventView, THINKING_LIVE_LIMIT } from '../packages/newm
 import { computerUseCaller, computerUseOwner, withComputerUseOwner } from '../packages/newmark-core/lib/cu-caller.js';
 import { newMateContext, withNewMateContext } from '../packages/newmark-core/lib/newmate-context.js';
 import { callRoute } from './lib/mount-newmark-core.mjs';
+import { hostTools } from './lib/host-call.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmate-agent-loop-'));
 const clock = Date.parse('2026-10-21T02:00:00Z');
@@ -75,8 +76,7 @@ try {
 
   const dispatched = [];
   let mate;
-  const tools = {
-    execute: async (call) => {
+  const tools = hostTools(async (call) => {
       dispatched.push({ name: call.name, action: call.arguments?.action, allow: call.arguments?.tools?.allow, owner: computerUseOwner({}), caller: computerUseCaller({}) });
       if (call.name === 'agent_api_send') {
         const context = newMateContext();
@@ -103,8 +103,7 @@ try {
       }
       if (call.name === 'computer_use') return { isError: false, value: { ok: true, released_owner: NEWMATE_CU_OWNER, action: call.arguments?.action } };
       throw Error('unexpected dispatch ' + call.name);
-    },
-  };
+  });
   mate = createNewMate({ root: path.join(root, 'chat'), now: () => clock, agents: () => null, tools });
   mate.chat('请帮我打开记事本，写一行字然后关掉。', { agent: { session: { id: 'origin-session' } } });
   await mate.tick();
@@ -128,7 +127,7 @@ try {
   /* -------------------------------------------------------- a run without the desktop --- */
 
   const plain = [];
-  const plainMate = createNewMate({ root: path.join(root, 'plain'), now: () => clock, agents: () => null, tools: { execute: async (call) => {
+  const plainMate = createNewMate({ root: path.join(root, 'plain'), now: () => clock, agents: () => null, tools: hostTools(async (call) => {
     plain.push(call.name);
     if (call.name !== 'agent_api_send') throw Error('no release is expected when ComputerUse was never used');
     const context = newMateContext();
@@ -136,7 +135,7 @@ try {
     context.onEvent({ type: 'turn_start', turn: 1 });
     context.onEvent({ type: 'agent_end', turn: null, stop_reason: 'stop' });
     return { isError: false, value: { ok: true, result: { output: '好的。' } } };
-  } } });
+  }) });
   plainMate.chat('你好');
   await plainMate.tick();
   check('a run that never touched the desktop issues no lease release', plain.length === 1 && plainMate.loopStatus().phase === 'done');
@@ -145,7 +144,7 @@ try {
   /* ------------------------------------------------------------ the autonomous run --- */
 
   const autoRoot = path.join(root, 'auto');
-  createNewMate({ root: autoRoot, now: () => clock, agents: () => null, tools: { execute: async () => ({ isError: false, value: { ok: true } }) } }).stop();
+  createNewMate({ root: autoRoot, now: () => clock, agents: () => null, tools: hostTools(async () => ({ isError: false, value: { ok: true } })) }).stop();
   const autoFile = path.join(autoRoot, 'newMate', 'state.json');
   const autoState = JSON.parse(fs.readFileSync(autoFile, 'utf8'));
   autoState.settings.companion = true;
@@ -153,29 +152,29 @@ try {
   autoState.tasks.push({ id: 'auto-run-1', kind: 'self_activation', reason: 'check-in', status: 'pending', prompt: '主动陪伴稀疏检查', destination: 'newmate', threadId: autoState.activeThreadId, created: clock });
   fs.writeFileSync(autoFile, JSON.stringify(autoState));
   let autoAllow = null;
-  const autoMate = createNewMate({ root: autoRoot, now: () => clock, agents: () => null, environment: () => ({ ready: true, idleMs: 120000, busy: true }), tools: { execute: async (call) => {
+  const autoMate = createNewMate({ root: autoRoot, now: () => clock, agents: () => null, environment: () => ({ ready: true, idleMs: 120000, busy: true }), tools: hostTools(async (call) => {
     autoAllow = call.arguments?.tools?.allow ?? null;
     return { isError: false, value: { ok: true, result: { structured: { notify: true, text: '轻量问候' } } } };
-  } } });
+  }) });
   await autoMate.tick();
   check('an autonomous check-in never receives the desktop tools', Array.isArray(autoAllow) && !autoAllow.includes('computer_use') && !autoAllow.includes('screen_capture'));
   check('the autonomous run still completes and publishes its live outcome', autoMate.loopStatus().phase === 'done' && autoMate.state().tasks.find((task) => task.id === 'auto-run-1').status === 'completed');
 
   /* --------------------------------------------------------------- a failed run --- */
 
-  const failMate = createNewMate({ root: path.join(root, 'fail'), now: () => clock, agents: () => null, tools: { execute: async () => {
+  const failMate = createNewMate({ root: path.join(root, 'fail'), now: () => clock, agents: () => null, tools: hostTools(async () => {
     const context = newMateContext();
     context.onEvent({ type: 'agent_start', turn: null });
     context.onEvent({ type: 'turn_start', turn: 1 });
     throw Error('provider offline');
-  } } });
+  }) });
   failMate.chat('试试');
   await failMate.tick();
   check('a failed run settles the live view as failed with the task error', failMate.loopStatus().phase === 'failed' && failMate.loopStatus().running === false && /provider offline/.test(failMate.loopStatus().error));
 
   /* ------------------------------------------------------------- boundedness --- */
 
-  const burstMate = createNewMate({ root: path.join(root, 'burst'), now: () => clock, agents: () => null, tools: { execute: async (call) => {
+  const burstMate = createNewMate({ root: path.join(root, 'burst'), now: () => clock, agents: () => null, tools: hostTools(async (call) => {
     if (call.name === 'computer_use') return { isError: false, value: { ok: true } };
     const context = newMateContext();
     context.onEvent({ type: 'agent_start', turn: null });
@@ -184,7 +183,7 @@ try {
       context.onEvent({ type: 'tool_execution_end', turn: (index % 3) + 1, tool: 'computer_use', call_id: 'c' + index, is_error: false, result: 'ok' });
     }
     return { isError: false, value: { ok: true, result: { output: 'done' } } };
-  } } });
+  }) });
   burstMate.chat('burst');
   await burstMate.tick();
   const burst = burstMate.loopStatus();
@@ -216,7 +215,7 @@ try {
     llm: { async listModels() { return [{ id: 'fixture-model', provider: 'fixture' }]; }, stream(request) { requests.push(request); return (script.shift() || turn([{ type: 'text', text: 'done' }]))(); } },
     tools: {
       schemas: () => [{ name: 'memory_lab_query', description: '', parameters: { type: 'object' } }, { name: 'computer_use', description: '', parameters: { type: 'object' } }, { name: 'screen_capture', description: '', parameters: { type: 'object' } }],
-      execute: async (exec) => { executed.push({ name: exec.name, owner: computerUseOwner({}), arguments: exec.arguments }); return { isError: false, value: { ok: true, matches: [] } }; },
+      ...hostTools(async (exec) => { executed.push({ name: exec.name, owner: computerUseOwner({}), arguments: exec.arguments }); return { isError: false, value: { ok: true, matches: [] } }; }),
     },
   };
   const api = createAgentApi({ root: path.join(root, 'api'), services: () => apiView });
@@ -303,7 +302,7 @@ try {
   const held = new Promise((resolve) => { releaseDispatch = resolve; });
   const routeTools = {
     schemas: () => [],
-    execute: async (call) => {
+    ...hostTools(async (call) => {
       if (call.name !== 'agent_api_send') throw Error('unexpected dispatch ' + call.name);
       const context = newMateContext();
       routePrefix = String(context.prefix ?? '');
@@ -312,7 +311,7 @@ try {
       await held;
       context.onEvent({ type: 'agent_end', turn: null, stop_reason: 'stop' });
       return { isError: false, value: { ok: true, result: { output: '路由检查的回复。' } } };
-    },
+    }),
   };
   const ctx = {
     effect(callback) { const disposer = callback(); if (typeof disposer === 'function') disposers.push(disposer); return disposer; },

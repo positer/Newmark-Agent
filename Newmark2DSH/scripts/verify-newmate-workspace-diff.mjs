@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MONITOR_DEFAULTS, enumerateDirectories, scanWorkspace, diffSnapshots, scoreDiff, settle, evaluateWorkspaces, attributeDiff, dedupeRoots } from '../packages/newmark-core/components/newmate/lib/workspace-diff.js';
+import { MONITOR_DEFAULTS, enumerateDirectories, scanWorkspace, diffSnapshots, scoreDiff, settle, evaluateWorkspaces, attributeDiff, uniqueRoots, planWorkspaces, heatOf } from '../packages/newmark-core/components/newmate/lib/workspace-diff.js';
+import { DIGEST_DEFAULTS, classifyPath, directoryOf, surveyChanges, summariseChanges, digestBlock } from '../packages/newmark-core/components/newmate/lib/change-digest.js';
 import { createNewMate } from '../packages/newmark-core/components/newmate/component.js';
 
 let checks = 0;
@@ -32,10 +33,39 @@ try { fs.symlinkSync(path.join(root, 'elsewhere'), linked, 'dir'); } catch { /* 
 check('a symlinked directory is not followed', !enumerateDirectories(root, { depth: 3 }).directories.some((dir) => dir.includes('linked')));
 
 // ---- nested registered workspaces (measured on this machine: Code and Code/Newmark Agent) -----
-const deduped = dedupeRoots([path.join(root, 'outer', 'inner'), path.join(root, 'outer'), path.join(root, 'sibling'), path.join(root, 'outer', 'inner')]);
-check('a root nested inside another is dropped, so the same files are not counted twice', deduped.length === 2 && deduped.includes(path.join(root, 'outer')) && deduped.includes(path.join(root, 'sibling')) && !deduped.includes(path.join(root, 'outer', 'inner')));
-check('siblings survive and duplicates collapse', dedupeRoots([path.join(root, 'a'), path.join(root, 'a')]).length === 1);
-check('relative paths are never watched', dedupeRoots(['relative/path', '']).length === 0);
+/**
+ * THE COLLAPSE IS GONE, AND THESE ASSERTIONS CHANGED MEANING WITH IT (2026-11-23).
+ *
+ * The old contract was "a root nested inside another is DROPPED". It stopped double counting, which was
+ * right, and it starved the nested workspace, which was not: measured under "…/Files/Code", the user's
+ * main repository (64 sessions) had ZERO files in the snapshot and the proactive brief said "新增 0".
+ * The contract now is a CARVE-OUT: every registered workspace keeps its own scan and budget, and a
+ * parent simply does not descend into a child that is a workspace of its own. The property that matters
+ * is unchanged - no file is counted twice - and the new assertions say so directly.
+ */
+const outer = path.join(root, 'outer');
+const inner = path.join(outer, 'inner');
+const sibling = path.join(root, 'sibling');
+const planned = planWorkspaces([inner, outer, sibling, inner]);
+check('every registered workspace is planned, including one nested inside another', planned.length === 3 && planned.some((entry) => entry.root === inner) && planned.some((entry) => entry.root === outer));
+const outerPlan = planned.find((entry) => entry.root === outer);
+check('the parent does not descend into the nested workspace, so nothing is counted twice', outerPlan.skip.length === 1 && outerPlan.skip[0] === inner);
+check('duplicates collapse and relative paths are never watched', uniqueRoots([path.join(root, 'a'), path.join(root, 'a')]).length === 1 && uniqueRoots(['relative/path', '']).length === 0);
+{
+  const carveRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-diff-carve-'));
+  const parent = path.join(carveRoot, 'parent');
+  const child = path.join(parent, 'child');
+  fs.mkdirSync(path.join(parent, 'own'), { recursive: true });
+  fs.mkdirSync(child, { recursive: true });
+  fs.writeFileSync(path.join(parent, 'own', 'p.js'), 'p');
+  fs.writeFileSync(path.join(child, 'c.js'), 'c');
+  const parentSnap = scanWorkspace(parent, { at: 1000, depth: 4, skip: [child] });
+  const childSnap = scanWorkspace(child, { at: 1000, depth: 4 });
+  check('a carved-out parent sees its own files and none of the child\'s', Object.keys(parentSnap.files).join(',') === 'own/p.js' && parentSnap.truncated.skipped === 1);
+  check('the nested workspace is scanned as itself, with its own files', Object.keys(childSnap.files).join(',') === 'c.js');
+  check('coverage is reported per scan, including what a cap left out', parentSnap.coverage.directories === 2 && parentSnap.coverage.sampledFiles === 1 && parentSnap.coverage.omittedFiles === 0);
+  fs.rmSync(carveRoot, { recursive: true, force: true });
+}
 
 // ---- the diff: exactly what the user asked to compare ------------------------------------
 const snap2 = JSON.parse(JSON.stringify(snap1));
@@ -95,7 +125,9 @@ check('the same edits score far lower when a DSH turn explains them', asDsh.scor
 const empty = path.join(root, 'empty');
 fs.mkdirSync(empty, { recursive: true });
 fs.writeFileSync(path.join(workspace, 'src', 'extra.js'), 'SECRET_MARKER');
-const evaluated = evaluateWorkspaces({ roots: [workspace, empty], previous: { [snap1.root]: snap1 }, settings: { threshold: 0.05 }, at: 2000 });
+// snap1 was taken at depth 3, so the comparison must be made at depth 3 as well: a different walk shape
+// is a baseline (see the shape section below), not a diff.
+const evaluated = evaluateWorkspaces({ roots: [workspace, empty], previous: { [snap1.root]: snap1 }, settings: { threshold: 0.05, depth: 3 }, at: 2000 });
 check('every workspace is snapshotted and diffed in one pass', evaluated.perWorkspace.length === 2 && evaluated.snapshots[snap1.root]?.count === 4);
 check('a quieter workspace cannot add its score to a noisier one', Math.abs(evaluated.score - Math.max(...evaluated.perWorkspace.map((entry) => entry.score))) < 1e-9);
 check('the description states facts about counts and names, never content', /新增 1/.test(evaluated.description) && !evaluated.description.includes('SECRET_MARKER'));
@@ -155,6 +187,10 @@ check('the DSH weight is part of the settings surface and defaults low', mate.wa
 check('disabled means no comparison at all', mate.sweepWorkspaces([workspace]).skipped === 'disabled');
 // A DSH-attributed change must not reach the same score as a user change of the same size.
 await mate.configure({ watchEnabled: true, pace: 'active', watchDshWeight: 0.05 });
+// The depth changed above (6 -> 2), which makes the next pass a BASELINE by design (a sample taken
+// through a different window is not comparable). One pass re-establishes it, so the two scores below
+// measure the same shape.
+mate.sweepWorkspaces([workspace]);
 fs.writeFileSync(path.join(workspace, 'src', 'agent.js'), 'written by the agent');
 const dshSweep = mate.sweepWorkspaces([workspace]);
 const userScore = dshSweep.fileScore;
@@ -166,7 +202,186 @@ fs.writeFileSync(path.join(workspace, 'src', 'agent2.js'), 'written by the agent
 clock += 30 * 60000;
 const attributedSweep = mate.sweepWorkspaces([workspace]);
 check('a change recorded inside a DSH turn is reported as DSH-caused', (attributedSweep.workspaces[0].dsh?.added || 0) >= 1);
-check('the DSH-attributed change scores lower than the same size of user change', attributedSweep.fileScore < userScore);
+check('the DSH-attributed change scores lower than the same size of user change', attributedSweep.fileScore < userScore, JSON.stringify({ userScore, attributed: attributedSweep.fileScore, user: attributedSweep.workspaces[0] && attributedSweep.workspaces[0].user, dsh: attributedSweep.workspaces[0] && attributedSweep.workspaces[0].dsh, rebased: attributedSweep.workspaces[0] && attributedSweep.workspaces[0].rebased }));
 check('the sweep never claims to know who wrote a file, only when it was written', !JSON.stringify(attributedSweep).includes('written by the agent'));
 
+
+// ---- the change BRIEF: read the overview, then summarise it -------------------------------
+/**
+ * The user's proactive instruction has three steps, and these are the first two: survey what changed
+ * in the trusted workspaces, then turn the survey into a reading order. Both are pure functions here,
+ * so "what would it have seen" is reproducible without a clock, a filesystem or a model.
+ */
+check('a changed path is classified by name and extension only, never by opening it',
+  classifyPath('README.md') === 'docs' && classifyPath('src/app.ts') === 'code' && classifyPath('package.json') === 'config'
+  && classifyPath('tests/thing.js') === 'test' && classifyPath('assets/logo.png') === 'asset' && classifyPath('data/rows.csv') === 'data'
+  && classifyPath('LICENSE') === 'docs' && classifyPath('Makefile') === 'other');
+check('the overview groups by the changed file\'s own directory', directoryOf('src/deep/a.ts') === 'src/deep' && directoryOf('a.ts') === '.');
+
+const digestChanges = [
+  { name: 'src/a.js', kind: 'add', mtime: 3000 },
+  { name: 'README.md', kind: 'change', mtime: 2000 },
+  { name: 'docs/old.md', kind: 'remove', mtime: 0 },
+  { name: 'src/deep/b.ts', kind: 'add', mtime: 1000 },
+];
+const digestSurvey = surveyChanges([{ root: path.join(root, 'app'), added: 2, removed: 1, changed: 1, countDelta: 1, timeDelta: 1000, first: false, dsh: { added: 0, removed: 0, changed: 0 }, user: { added: 2, removed: 1, changed: 1 }, dshWeight: 0.1, changes: digestChanges }], { at: 10000, stat: () => 1234 });
+check('every changed file is carried with its kind, age and size', digestSurvey.workspaces[0].files.length === 4 && digestSurvey.workspaces[0].files.every((file) => file.kind && typeof file.at === 'number' && (file.change === 'remove' ? file.bytes === null : typeof file.bytes === 'number')));
+check('the newest change is listed first', digestSurvey.workspaces[0].files[0].name === 'src/a.js');
+check('a removal carries no size, because there is no file left to measure', digestSurvey.workspaces[0].files.find((file) => file.change === 'remove').bytes === null);
+check('the directory roll-up counts every change, not just the sample', digestSurvey.workspaces[0].dirs.find((dir) => dir.directory === 'src').added === 1 && digestSurvey.workspaces[0].dirs.find((dir) => dir.directory === 'src/deep').added === 1 && digestSurvey.workspaces[0].dirs.length === 4);
+check('the kind roll-up says what sort of work moved', digestSurvey.workspaces[0].byKind.code === 2 && digestSurvey.workspaces[0].byKind.docs === 2);
+const boundedSurvey = surveyChanges([{ root: path.join(root, 'app'), changes: digestChanges }], { at: 10000, stat: () => 1, limits: { maxFiles: 2 } });
+check('a bounded sample states how many names it left out instead of reading as a small change', boundedSurvey.workspaces[0].files.length === 2 && boundedSurvey.truncated.files === 2 && boundedSurvey.workspaces[0].omittedFiles === 2);
+
+const digestText = summariseChanges(digestSurvey, { now: 10000 });
+check('the summary names the project, the directory roll-up and the kinds', digestText.includes('app：新增 2') && digestText.includes('目录：') && digestText.includes('其中 代码 2') && digestText.includes('文档 2'));
+check('the summary is deterministic: the same survey reads the same way twice', digestText === summariseChanges(digestSurvey, { now: 10000 }));
+const tinyText = summariseChanges(digestSurvey, { now: 10000, maxChars: 160 });
+check('a tight character budget drops the file list first and still states the project and the counts', tinyText.length <= 160 && tinyText.includes('app：新增 2') && !tinyText.includes('文件：'));
+check('the brief states its own age, so a late reader cannot mistake it for this minute', digestText.includes('扫描于') && digestText.includes('距现在'));
+check('an empty survey renders no brief at all', digestBlock(null) === null && digestBlock({ at: 1, workspaces: [] }) === null);
+check('a survey older than the bound is marked stale rather than presented as news', digestBlock(digestSurvey, { now: 10000 + DIGEST_DEFAULTS.maxAgeMs + 1 }).stale === true && digestBlock(digestSurvey, { now: 10000 + 60000 }).stale === false);
+
+// The companion half: the survey is persisted with the monitor state and survives a quiet pass.
+{
+  const briefRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-diff-brief-'));
+  const briefWs = path.join(briefRoot, 'ws');
+  fs.mkdirSync(path.join(briefWs, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(briefWs, 'src', 'kept.js'), 'x');
+  let clock = 9000000;
+  const briefMate = createNewMate({ root: path.join(briefRoot, 'root'), now: () => clock, agents: () => null, tools: { execute: async () => ({ results: [] }) } });
+  await briefMate.configure({ companion: true, pace: 'active' });
+  briefMate.sweepWorkspaces([briefWs]);
+  fs.writeFileSync(path.join(briefWs, 'src', 'one.js'), 'PRIVATE-BODY');
+  fs.writeFileSync(path.join(briefWs, 'src', 'two.js'), 'PRIVATE-BODY');
+  fs.writeFileSync(path.join(briefWs, 'NOTES.md'), '# notes');
+  clock += 6 * 60000;
+  const surveyed = briefMate.sweepWorkspaces([briefWs]);
+  check('a pass that moves the score also stores the survey it was measured from', surveyed.brief.surveyed === true && surveyed.brief.files >= 3 && surveyed.brief.chars > 0);
+  const stored = briefMate.state().watch.digest.workspaces[0];
+  check('the stored survey carries names and kinds, and no file content at all', stored.files.some((file) => file.name === 'src/one.js') && !JSON.stringify(stored).includes('PRIVATE-BODY'));
+  check('the monitor status exposes the survey as data, with its age', briefMate.watchStatus().brief.at > 0 && briefMate.watchStatus().brief.stale === false && briefMate.watchStatus().brief.files >= 3);
+  clock += 30 * 60000;
+  const quietPass = briefMate.sweepWorkspaces([briefWs]);
+  check('a pass with nothing to survey keeps the previous overview instead of erasing it', quietPass.brief.surveyed === false && briefMate.watchStatus().brief.at > 0 && briefMate.state().watch.digest.workspaces[0].files.length > 0);
+  briefMate.stop();
+}
+
+
+// ---- visibility: own budget per workspace, recency decides what a short budget sees -----------
+/**
+ * Measured 2026-11-23, and this is why the defaults moved: depth 3 could not reach
+ * <project>/<pkg>/<lib>/<file>; the directory budget was spent breadth-first, so which project was
+ * visible depended on filesystem order; and a nested workspace was collapsed into its parent, where it
+ * had ZERO files in the snapshot while the brief said "新增 0".
+ */
+check('the defaults were raised: depth 6, 512 directories, 4096 files, each reported when hit',
+  MONITOR_DEFAULTS.depth === 6 && MONITOR_DEFAULTS.maxDirectories === 512 && MONITOR_DEFAULTS.maxFiles === 4096 && MONITOR_DEFAULTS.branchShare === 0.25);
+{
+  const visRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-diff-vis-'));
+  fs.mkdirSync(path.join(visRoot, 'proj', 'src', 'lib', 'leaf'), { recursive: true });
+  fs.writeFileSync(path.join(visRoot, 'proj', 'src', 'lib', 'leaf', 'deep.js'), 'x');
+  const at6 = scanWorkspace(visRoot, { at: 1000, depth: 6 });
+  const at3 = scanWorkspace(visRoot, { at: 1000, depth: 3 });
+  check('depth 6 reaches code at <project>/<pkg>/<lib>/<sub>/<file>', Object.keys(at6.files).includes('proj/src/lib/leaf/deep.js'));
+  check('and depth 3 is the blind spot it replaced: the same file is out of reach', !Object.keys(at3.files).includes('proj/src/lib/leaf/deep.js'));
+
+  fs.mkdirSync(path.join(visRoot, 'cold'), { recursive: true });
+  fs.mkdirSync(path.join(visRoot, 'hot'), { recursive: true });
+  fs.writeFileSync(path.join(visRoot, 'cold', 'c.js'), 'c');
+  fs.writeFileSync(path.join(visRoot, 'hot', 'h.js'), 'h');
+  // The heat values are real mtimes (same epoch as the directories'), so the fixture uses a real clock:
+  // a synthetic small number would rank below every directory's own mtime and prove nothing.
+  const heat = new Map([['hot', Date.now() + 60_000]]);
+  const short = scanWorkspace(visRoot, { at: Date.now(), depth: 2, maxDirectories: 2, heat });
+  check('a short budget is spent on the branch that moved last time, not on filesystem order', Object.keys(short.files).includes('hot/h.js') && !Object.keys(short.files).includes('cold/c.js'));
+  check('and what the cap left out is reported, never silently dropped', short.truncated.directories >= 1 && short.coverage.omittedDirectories >= 1);
+
+  const carveRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-diff-carve2-'));
+  const parent = path.join(carveRoot, 'parent');
+  const child = path.join(parent, 'child');
+  fs.mkdirSync(path.join(parent, 'own'), { recursive: true });
+  fs.mkdirSync(child, { recursive: true });
+  fs.writeFileSync(path.join(parent, 'own', 'p.js'), 'p');
+  fs.writeFileSync(path.join(child, 'c.js'), 'c');
+  const first = evaluateWorkspaces({ roots: [parent, child], previous: {}, settings: { threshold: 0.05 }, at: 1000 });
+  check('a nested workspace and its parent are BOTH monitored, each as itself', first.perWorkspace.length === 2 && first.perWorkspace.some((entry) => entry.root === child));
+  const parentEntry = first.perWorkspace.find((entry) => entry.root === parent);
+  const childEntry = first.perWorkspace.find((entry) => entry.root === child);
+  check('the parent does not count the child\'s files as its own', Object.keys(first.snapshots[parent].files).join(',') === 'own/p.js' && Object.keys(first.snapshots[child].files).join(',') === 'c.js');
+  check('each snapshot states its own coverage', parentEntry.coverage.sampledFiles === 1 && childEntry.coverage.sampledFiles === 1 && parentEntry.coverage.skippedWorkspaces === 1);
+  fs.writeFileSync(path.join(child, 'c.js'), 'changed');
+  fs.writeFileSync(path.join(child, 'new.js'), 'n');
+  const second = evaluateWorkspaces({ roots: [parent, child], previous: first.snapshots, settings: { threshold: 0.05 }, at: 5000 });
+  const secondParent = second.perWorkspace.find((entry) => entry.root === parent);
+  const secondChild = second.perWorkspace.find((entry) => entry.root === child);
+  check('a change in the nested workspace is seen there and not double counted in the parent', secondChild.changed === 1 && secondChild.added === 1 && secondParent.changed === 0 && secondParent.added === 0);
+  fs.rmSync(carveRoot, { recursive: true, force: true });
+  fs.rmSync(visRoot, { recursive: true, force: true });
+}
+
+// ---- what the brief says about a partial or quiet view ---------------------------------------
+{
+  const quiet = { root: path.join(root, 'quiet-ws'), name: 'quiet-ws', added: 0, removed: 0, changed: 0, countDelta: 0, timeDelta: 0, dirs: [], files: [], byKind: { code: 0 }, coverage: { directories: 40, omittedDirectories: 0, sampledFiles: 90 } };
+  const partialEntry = { root: path.join(root, 'big-ws'), name: 'big-ws', added: 3, removed: 1, changed: 0, countDelta: 2, timeDelta: 60000, dirs: [], files: [{ name: 'src/a.js', change: 'add', kind: 'code', at: 9000, bytes: 10 }], byKind: { code: 3 }, coverage: { directories: 512, omittedDirectories: 481, sampledFiles: 4096, omittedFiles: 5135 } };
+  const text = summariseChanges({ at: 10000, workspaces: [quiet, partialEntry] }, { now: 10000 });
+  check('a workspace with nothing to describe is counted, not given a line of its own', text.includes('另有 1 个可信工作区本次没有变动') && !/quiet-ws：/.test(text));
+  check('a partly walked workspace says so in the brief, so "0 changes" cannot be read as "nothing happened"', text.includes('big-ws') && text.includes('这次只走了 512 个目录') && text.includes('还有 481 个目录没走'));
+  const quietPartial = { ...quiet, name: 'quiet-partial', coverage: { directories: 512, omittedDirectories: 300, sampledFiles: 4096, omittedFiles: 0 } };
+  const allQuiet = summariseChanges({ at: 10000, workspaces: [quietPartial] }, { now: 10000 });
+  check('when every workspace is quiet the brief says it once, and flags a partial walk as the reason it may be wrong', allQuiet.includes('本次都没有可描述的变动') && allQuiet.includes('部分遍历'));
+  const complete = summariseChanges({ at: 10000, workspaces: [quiet] }, { now: 10000 });
+  check('and a complete walk with no changes does not hedge', complete.includes('本次都没有可描述的变动') && !complete.includes('部分遍历'));
+  check('digestBlock carries the partial flag for callers that need to weigh the overview', digestBlock({ at: 10000, workspaces: [partialEntry] }, { now: 10000 }).partial === true && digestBlock({ at: 10000, workspaces: [quiet] }, { now: 10000 }).partial === false);
+}
+
+
+// ---- a changed window is not a changed file ------------------------------------------------
+{
+  const shapeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-diff-shape-'));
+  fs.mkdirSync(path.join(shapeRoot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(shapeRoot, 'src', 'a.js'), 'a');
+  const shallow = scanWorkspace(shapeRoot, { at: 1000, depth: 2 });
+  fs.writeFileSync(path.join(shapeRoot, 'src', 'b.js'), 'b');
+  const sameShape = evaluateWorkspaces({ roots: [shapeRoot], previous: { [shapeRoot]: shallow }, settings: { depth: 2 }, at: 2000 });
+  check('a change is a change while the walk parameters hold', sameShape.perWorkspace[0].added === 1 && sameShape.perWorkspace[0].rebased === false);
+  const wider = evaluateWorkspaces({ roots: [shapeRoot], previous: { [shapeRoot]: shallow }, settings: { depth: 5 }, at: 2000 });
+  check('a snapshot taken at a different depth is a BASELINE, not a difference', wider.perWorkspace[0].rebased === true && wider.perWorkspace[0].first === true && wider.perWorkspace[0].added === 0);
+  const snapshotShape = Object.keys(wider.snapshots[shapeRoot]).includes('scanVersion') && wider.snapshots[shapeRoot].scanShape.depth === 5;
+  check('the snapshot records the shape it was taken under, which is what makes that judgement possible', snapshotShape);
+  const briefText = summariseChanges({ at: 2000, workspaces: [{ name: 'shape', added: 3, removed: 1, changed: 0, first: false, rebased: true, dirs: [], files: [], byKind: {} }] }, { now: 2000 });
+  check('and a rebaselined workspace is not announced as a change in the brief', briefText.includes('重新建立了基线') && !briefText.includes('新增 3'));
+  fs.rmSync(shapeRoot, { recursive: true, force: true });
+}
+
+
+// ---- a rebase must replace the stored overview, not preserve an incomparable one --------------
+{
+  const rebaseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-diff-rebase-'));
+  const ws = path.join(rebaseRoot, 'ws');
+  fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(ws, 'src', 'a.js'), 'a');
+  let clock = 7000000;
+  const rebaseMate = createNewMate({ root: path.join(rebaseRoot, 'root'), now: () => clock, agents: () => null, tools: { execute: async () => ({ results: [] }) } });
+  await rebaseMate.configure({ companion: true, pace: 'active', watchDepth: 1 });
+  rebaseMate.sweepWorkspaces([ws]);
+  fs.writeFileSync(path.join(ws, 'src', 'b.js'), 'b');
+  clock += 5 * 60000;
+  const changedPass = rebaseMate.sweepWorkspaces([ws]);
+  check('with an unchanged window a real change still produces a survey', changedPass.brief.surveyed === true);
+  await rebaseMate.configure({ watchDepth: 4 });
+  clock += 5 * 60000;
+  const rebasePass = rebaseMate.sweepWorkspaces([ws]);
+  check('changing the window reports a rebase, not a change', rebasePass.fired === false || rebasePass.brief.surveyed === false);
+  const afterRebase = rebaseMate.watchStatus().brief;
+  check('and the stored overview is replaced, so the previous (incomparable) numbers cannot be quoted again', rebaseMate.state().watch.digest.workspaces.every((entry) => entry.rebased === true || entry.files.length === 0));
+  check('the status still says when the stored overview was taken', typeof afterRebase.at === 'number' && afterRebase.at === clock);
+  rebaseMate.stop();
+  fs.rmSync(rebaseRoot, { recursive: true, force: true });
+}
+
 console.log('SUMMARY passed=' + checks + ' failed=0 total=' + checks);
+// The umbrella gate judges a child by a verdict LINE (`PASS`), not by a substring or by exit 0
+// alone: measured 2026-11-23, this gate exited 0 here and the umbrella still called it "exited 0
+// without printing a verdict", so its 69 green assertions counted as one red.
+console.log('PASS ' + checks + ' workspace monitor, change survey and brief checks');

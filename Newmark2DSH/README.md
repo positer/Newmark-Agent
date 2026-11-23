@@ -79,7 +79,8 @@ NewMate 是一位亲近、务实的私人秘书式 Agent。它拥有独立聊天
 
 **日常对话**
 
-- 初始化上下文在首轮推理前一次给全：**人格 prompt**（身份、风格、记忆写入规则与权限边界）、**完整的 MemoryLab 标签树**（全部标签与每个记忆节点的名称/所属标签，不含正文）、**全部短期记忆**（每行含 createdAt/expiresAt/expired）与**本轮工具组 schema**。工具组取自 NewMate 自己的 allow list，按**当前注册表暴露做只读投影**（不执行任何工具），兼容插件提供的工具；暴露里没有的组内工具写进 `toolsMissing`，不会冒充可调用。当前的组是 19 条（含 `computer_use`、`screen_capture`、`newmate_search`），本机活库实测前缀约 3.14 万字符（104 标签、19 节点、11 条短期；其中 ComputerUse 参数 schema 约 0.59 万、搜索 schema 约 0.03 万）。
+- 初始化上下文在首轮推理前一次给全：**人格 prompt**（身份、风格、记忆写入规则与权限边界）、**核心记忆**（用户画像、对话风格、长期偏好、当前重点，代码强制 ≤5000 字符，见下）、**完整的 MemoryLab 标签树**（全部标签与每个记忆节点的名称/所属标签，不含正文）、**全部短期记忆**（每行含 createdAt/expiresAt/expired）与**本轮工具组 schema**。工具组取自 NewMate 自己的 allow list，按**当前注册表暴露做只读投影**（不执行任何工具），兼容插件提供的工具；暴露里没有的组内工具写进 `toolsMissing`，不会冒充可调用。当前的组是 33 条（含 `computer_use`、`screen_capture`、`newmate_search`、`newmate_core_memory`）；本机活库实测（2026-11-23，工具参数用占位）前缀约 3.53 万字符，其中人格 2,442 字符、标签树与全部短期记忆 109 标签 / 21 节点 / 36 条，真实的 ComputerUse 与搜索 schema 另计。
+- **核心记忆是一小块稳定的内核，不是第二个记忆库。** 它只放四类东西：用户画像、对话风格、长期偏好、当前重点，每类固定一节，**代码强制总占用不超过 5000 字符**（写入会先算渲染后的长度，超了直接拒绝并给出「写后多少、现在多少、最长的是哪一节」，渲染器对被手工改过的文件也会硬裁到 5000 并标记截断）。它**只有「替换某一节的全文」，没有「新增一条」**：随着人变化改写对应小节，只有某个核心维度确实缺失时才第一次写入。它存在 `~/.Newmark/newMate/core-memory.json`，**不在 `Memory Lab/` 下**，所以 MemoryLab 的查询工具读不到它；注入也只发生在 NewMate 自己的系统前缀里——`newmate_memory_context` 与 `newmate_state` 只返回它的形状（预算、占用、各节字符数），正文只经 NewMate 自己的 `newmate_core_memory` 返回，而那个工具在非 NewMate 回合按 `core_memory_outside_newmate` 拒绝。
 - 当前轮运行时可以继续补充要求，输入作为实时引导在模型／工具边界生效；用户工作优先于后台任务。
 - 支持只读历史与关注保护，结合阅读、草稿、输入和任务状态决定是否适合自动换新对话，旧记录保留。
 - 回复中的真实文件链接在 NewMate 侧栏调用 DSH 已注册的原生预览；无法预览时定位到文件管理器。
@@ -88,6 +89,7 @@ NewMate 是一位亲近、务实的私人秘书式 Agent。它拥有独立聊天
 **低打扰陪伴**
 
 - 提供主动开关、安静／适中／活跃频率、静默时段与暂停设置。输入、阅读、宿主工作、CU 忙碌等状态会延后后台激活。
+- **先通读、再整理、最后才说话。** 监控的加权分数越过主动性阈值时，运行时会先对**宿主注册的可信工作区**做一次概览式通读（每个变更文件的名字、增删改、修改时间与大小，加上目录与文件类型汇总——**只读元数据，不读文件内容**），再把这份概览整理成分层可裁的摘要，连同安静时长、未回应次数、主动性级别与阈值、记忆规模、待办与会话大小一起交给模型；模型的任务顺序被写死为「① 通读概览 → ② 整理成一句判断（回传为 `brief`，随消息留存）→ ③ 写提醒正文」。概览超过两小时会标成过期，提示里明确「只能当作最近的背景，不能写成刚刚/现在」。
 - 有可信且有用的新内容才主动发信，通常保持简短；没有合适内容就安静，连续未回应会逐步降低打扰频率。
 - 新消息通过共享桌宠气泡提示，完整正文留在聊天；主动消息不自动弹出主窗口。双击桌宠或点击消息可进入 NewMate。
 - 桌宠沿用浅色／深色／系统主题，支持大小配置与右键设置入口；退出陪伴释放陪伴的所有权，CU 可继续使用共享桌宠。
@@ -120,7 +122,7 @@ NewMate 是一位亲近、务实的私人秘书式 Agent。它拥有独立聊天
 
 陪伴关闭时两种模式都等待，并同样记录原因（`companion_off`「陪伴未开启」）。稳定任务身份和消息回执用于防止重启后重复激活或提醒；失败和运行中崩溃不会自动重试。
 
-主要工具：`newmate_chat`、`newmate_task_status`、`newmate_memory_context`、`newmate_state`、`newmate_message`、`newmate_todo_add`、`newmate_todo_list`、`newmate_todo_cancel`、`newmate_mcp_info`、`newmate_wechat_send_file`。有宿主绑定的原对话时，`newmate_task` 可把具体后续任务交回该对话；模型参数不能另选目标。`newmate_state` 与 `newmate_task_status` 都带 `agentLoop`（运行中或上一轮的循环快照）。`newmate_search` 是 NewMate 的原生搜索入口，供它在用户明确要求查资料时调用。
+主要工具：`newmate_chat`、`newmate_task_status`、`newmate_memory_context`、`newmate_core_memory`、`newmate_state`、`newmate_message`、`newmate_todo_add`、`newmate_todo_list`、`newmate_todo_cancel`、`newmate_mcp_info`、`newmate_wechat_send_file`。有宿主绑定的原对话时，`newmate_task` 可把具体后续任务交回该对话；模型参数不能另选目标。`newmate_state` 与 `newmate_task_status` 都带 `agentLoop`（运行中或上一轮的循环快照）。`newmate_search` 是 NewMate 的原生搜索入口，供它在用户明确要求查资料时调用。
 
 **找到「哪个对话」再读它。** NewMate 有四个对话级工具：`newmate_conversation_list` 只读列出宿主看得见的 DSH 对话——id、标题、工作区、创建时间，最新在前，分页并报告省略了多少条，`self:true` 标出它自己所在的那个（那个不能发信）；`newmate_conversation_read` 读某个对话的近期正文（只有用户与助手文本）；`newmate_conversation_send` 往已有对话投递一条消息；`newmate_conversation_new` 在工作区新建对话并给它第一条消息。清单里的 id 全部来自宿主——`sessionQuery` 的统一语料，老宿主上退回活会话注册表并把来源写在回执里（`source: corpus` / `live`）——所以模型不需要记住或猜 id，重启后旧对话也仍然读得到。标题缺失就是 `null`，不编造；不加全文检索、不删对话、不遍历会话目录。
 

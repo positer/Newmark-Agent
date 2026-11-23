@@ -24,7 +24,7 @@
 | **MemoryLab** | 长期树状记忆（用户画像、知识图谱）与短期到期列表（跨对话任务交接） |
 | **ComputerUse** | 观察屏幕与应用，执行鼠标、键盘及窗口操作 |
 | **Agent API** | 用统一接口发现工具、派发工具、调用授权模型完成一次 Agent 运行 |
-| **NewMate** | 带记忆的对话、低打扰主动联系、定时待办、自己刷新与管理会话 |
+| **NewMate** | 带记忆的对话、稳定核心记忆（5k 上限）、先通读工作区变动再提醒的低打扰主动联系、定时待办、自己刷新与管理会话 |
 | **heartBeat** | 登记重启后任务，在宿主恢复后可靠交接并留下消费回执 |
 
 写法、配置页、版本管理与更新说明在 [Newmark2DSH 产品页](Newmark2DSH/README.md)；完整文件树与实现记录见 [OVERVIEW.md](Newmark2DSH/OVERVIEW.md) 与 [维护约定](Newmark2DSH/taste.md)。

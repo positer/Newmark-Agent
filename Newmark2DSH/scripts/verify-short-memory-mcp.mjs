@@ -8,6 +8,7 @@ import { createMemoryContext } from '../packages/newmark-core/components/newmate
 import { createNewMate, NEWMATE_RUN_TOOLS } from '../packages/newmark-core/components/newmate/component.js';
 import { createNewMateMcp } from '../packages/newmark-core/components/newmate/lib/mcp.js';
 import { newMateContext } from '../packages/newmark-core/lib/newmate-context.js';
+import { hostTools } from './lib/host-call.mjs';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'newmark-short-mcp-'));
 let now=Date.parse('2026-10-11T00:00:00Z'),passed=0;
 function check(label,value){assert.ok(value,label);console.log(`ok ${++passed} - ${label}`);}
@@ -42,7 +43,7 @@ check('every short row is exposed with its own expiry, and the payload accounts 
 check('the tool-group schema aligns with the live exposure and reports what it lacks',c.tools.length===NEWMATE_RUN_TOOLS.length-1&&c.tools.every(tool=>tool.parameters&&tool.parameters.type==='object')&&c.toolsMissing.length===1&&c.toolsMissing[0]==='newmate_todo_list'&&!c.tools.some(tool=>tool.name==='plugin_memory_bridge')&&c.prefix.includes('"toolsMissing"'));
 check('the initialization persona is the first thing in the prefix',c.prefix.startsWith('你是由 MemoryLab 驱动的定制陪伴 Agent NewMate')&&c.prefix.includes('增量更新'));
 let seen;
-const mate=createNewMate({root,now:()=>now,agents:()=>undefined,tools:{schemas:()=>toolSchemas,execute:async call=>{seen={context:newMateContext(),call};return{isError:false,value:{ok:true,result:{output:'已记住你的计划'}}};}}});
+const mate=createNewMate({root,now:()=>now,agents:()=>undefined,tools:{schemas:()=>toolSchemas,...hostTools(async call=>{seen={context:newMateContext(),call};return{isError:false,value:{ok:true,result:{output:'已记住你的计划'}}};})}});
 mate.chat('现在陪我规划');await mate.tick();
 check('first model dispatch already carries the persona, complete tag tree, every short row and the tool schema',seen.call.name==='agent_api_send'&&seen.context.tree.tags.length===2&&seen.context.tree.components.length===1&&seen.context.shortMemory.length===14&&seen.context.shortMemoryTotal===14&&seen.context.tools.length===NEWMATE_RUN_TOOLS.length-1&&seen.context.toolsMissing.length===1&&seen.context.prefix.startsWith('你是由 MemoryLab 驱动的定制陪伴 Agent NewMate')&&seen.context.prefix.includes('新计划'));
 check('native context does not leak to ordinary conversation dispatch',newMateContext()===undefined);
@@ -50,7 +51,7 @@ check('companion has scoped memory writes, reminders, and the two ComputerUse to
 const publicContext=mate.memoryContext();publicContext.tree.components.length=0;publicContext.tools.length=0;
 check('public memory inspection cannot mutate cached model context',mate.memoryContext().tree.components.length===1&&mate.memoryContext().tools.length===NEWMATE_RUN_TOOLS.length-1);
 let wakeEnabled=false,woken=[];
-const bound=createNewMate({root:path.join(root,'bound'),agents:()=>({get:()=>({options:{provider:'fixture-provider',model:'fixture-model'},session:{snapshotEvents:()=>[]},ctx:{get:()=>({flush:async()=>true})},followup:message=>woken.push(message)})}),tools:{execute:async call=>{wakeEnabled=call.arguments.tools.allow.includes('newmate_task');bound.wake('请在本体继续处理',{});return{isError:false,value:{ok:true,result:{output:'已唤起原对话'}}};}}});
+const bound=createNewMate({root:path.join(root,'bound'),agents:()=>({get:()=>({options:{provider:'fixture-provider',model:'fixture-model'},session:{snapshotEvents:()=>[]},ctx:{get:()=>({flush:async()=>true})},followup:message=>woken.push(message)})}),tools:hostTools(async call=>{wakeEnabled=call.arguments.tools.allow.includes('newmate_task');bound.wake('请在本体继续处理',{});return{isError:false,value:{ok:true,result:{output:'已唤起原对话'}}}})});
 bound.chat('需要本体继续处理',{agent:{session:{id:'origin-session'}}});await bound.tick();await bound.tick();
 check('host-bound companion can autonomously wake only original conversation',wakeEnabled&&bound.state().tasks.at(-1).destination==='origin-session'&&woken.length===1);
 bound.stop();

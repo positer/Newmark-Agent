@@ -1,5 +1,26 @@
 # Newmark Agent Overview
 
+## 2026-11-23 Newmark2DSH 0.3.88–0.3.90：可信工作区从「折叠」改成「切出」（本机安装并验收）
+
+- **起因**：检查「主动检查用的可信工作区有哪些、是否对齐 DSH 本体」——集合对上了（`monitored == dedupe(registry)`），**可见性没对上**：7 个注册工作区里 4 个被折叠进父目录，主仓库在快照里 0 个文件、概览写「新增 0」。
+- **修法**：`planWorkspaces` 切出（父目录跳过子工作区，各自拥有预算）+ `heatOf` 按上次活动排队 + 二级路径限额 25% + 默认 depth 6 / 512 目录 / 4096 文件 + `coverage` 贯穿摘要与状态 + 快照 `scanVersion/scanShape`（形状变了就是基线）+ rebase 替换旧概览 + 沉默轮保留 `brief`。
+- **验收**：本机三次安装、三次托管重启；`watch.workspaces = 7`、`Newmark Agent` 覆盖 512 目录 / 3515 文件（原 0）；最终概览写出「Newmark Agent：新增 1、删除 0、改动 9…」并指向 `Newmark2DSH/packages/newmark-core/components/newmate`；`Code` 不再报「新增 2998」；连续扫描 churn 0。
+- **门禁**：workspace-diff **94 PASS**、initiative **86 PASS**、变异 **10/10**；其余 NewMate 门禁全绿。
+- **未做**：未发布；静默时段内不触发主动消息。
+- **详见**：[Newmark2DSH/OVERVIEW.md](Newmark2DSH/OVERVIEW.md)、[taste.md](Newmark2DSH/taste.md)、归档 `Newmark2DSH/archive/20261123-234000-workspace-carveout-0.3.90/`。
+
+## 2026-11-23 Newmark2DSH 0.3.87：主动联系三步走（通读概览 → 整理 → 提醒），核心记忆 5k 硬上限且只注入 NewMate
+
+- **两条要求（用户原话）**：①「优化newMate的主动发起对话机制，在达到触发对话的阈值后，先通读概览可信工作区的文件变动，再整理总结，最后根据所有可较快获取的信息生成回复提醒」；②「为newMate新增核心记忆机制，主要包含用户画像、对话风格等，通过代码约束强制限制核心记忆的上下文占用5k以内，并积极提示其核心的稳定性与核心性质，推荐更替更新而不是新增。核心记忆当且仅当在newMate中注入，不溢出到dsh本体对话」。
+- **①的做法**：阈值命中后新增 `lib/change-digest.js` 对宿主注册的可信工作区做**概览式通读**（变更文件的名字/增删改/修改时间/大小 + 目录汇总 + 文件类型汇总，**不读文件内容**），确定性整理成分层可裁的摘要并持久化到 `watch.digest`；检查轮把这份概览与安静时长、未回应次数、主动性级别、记忆规模、待办、会话大小一起交给模型，顺序写死为「通读 → 整理（回传 `brief`，随消息落盘）→ 写提醒」；概览超 2 小时标 `stale`，禁止写成「刚刚/现在」。
+- **②的做法**：新增 `lib/core-memory.js`，四个固定小节（用户画像/对话风格/长期偏好/当前重点），**只有替换整节、没有新增条目**；预算 5000 字符由代码强制（超预算的写入被拒并给出数字；渲染器对手改文件也硬裁并标截断）；存储 `<root>/newMate/core-memory.json` 不在 `Memory Lab/` 下，注入只发生在 NewMate 的前缀，`newmate_memory_context`/`newmate_state` 只给形状，正文只经私有工具 `newmate_core_memory` 返回且非 NewMate 回合按名拒绝。
+- **顺带修好四道自 0.2.2 起就「跑不起来」的门禁**：chat / initiative / short-memory-MCP / agent-loop 的假注册表停在 0.2.2 之前的单次调用形状（且缺 0.3.80 引入的按回合注册），断言从未执行。新增 `scripts/lib/host-call.mjs` 换回宿主口径后：**25 / 73（本轮 +11 → 84）/ 44 / 73 PASS**。
+- **门禁**：新增 `verify-newmate-core-memory.mjs` **45 PASS**、`measure-newmate-brief-core-mutations.mjs` **6/6 变异变红并逐字节还原**；`verify-newmate-workspace-diff` 51→**69**、`verify-newmate-initiative` 73→**84**。
+- **回归**：umbrella **221 passed / 7 failed / 1 skipped / 229**（两次连跑相同），7 条失败全是既有项（memorylab tools 的 11 条标签与 HEAD 逐字相同、agent-api、heartbeat ok 15 逐字相同、conversation tools 是「48/48 全绿但无裁决行」的包装器口径、attachment ok 32 逐字相同、win32 真机采集、cu sweep 真鼠标注入）；9 道同族既有红门禁在 HEAD 快照上重跑，失败标签与断言消息**逐字相同**（既存欠账，本轮不夹带）。
+- **未做**：未打包、未发布、未安装、未重启（源码候选）。版本号只写在六份 manifest 与 `Newmark2DSH/VERSION.md`。
+- **详见**：[Newmark2DSH/OVERVIEW.md](Newmark2DSH/OVERVIEW.md) 同日条目、[Newmark2DSH/taste.md](Newmark2DSH/taste.md)、归档 `Newmark2DSH/archive/20261123-213000-newmate-brief-core-memory/`。
+
+
 ## 2026-11-19 检查 dsh-pighub 1.0.12 的权限约束（代码在范围内，机器状态未解除）
 
 - pighub 的改法：版本地板搬进 `~/.PigHub/version-floor.json`、只装「发布满 24h」的版本、安装带一次性 `--config.minimumReleaseAgeStrict=true`，并有越权守卫测试（20 PASS）。**代码范围通过。**

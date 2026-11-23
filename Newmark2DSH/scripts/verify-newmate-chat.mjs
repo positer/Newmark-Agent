@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createNewMate} from '../packages/newmark-core/components/newmate/component.js';
+import {hostTools} from './lib/host-call.mjs';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'newmate-chat-'));
 let time=10000000,checks=0;
 const check=(name,value)=>{assert.ok(value,name);console.log(`ok ${++checks} - ${name}`);};
@@ -10,7 +11,7 @@ fs.mkdirSync(path.join(root,'newMate'));
 const legacy={schema:1,messages:[{id:'old',role:'user',text:'原有历史',at:123}],tasks:[],measurements:{},lastResponse:0};
 fs.writeFileSync(path.join(root,'newMate/state.json'),JSON.stringify(legacy));
 const notices=[],switches=[],prompts=[];
-const mate=createNewMate({root,now:()=>time,agents:()=>null,onNotify:async m=>notices.push(m),onCompanion:async v=>switches.push(v),tools:{execute:async call=>{prompts.push(call.arguments.prompt);return{isError:false,value:{ok:true,result:{output:'独立回复'}}};}}});
+const mate=createNewMate({root,now:()=>time,agents:()=>null,onNotify:async m=>notices.push(m),onCompanion:async v=>switches.push(v),tools:hostTools(async call=>{prompts.push(call.arguments.prompt);return{isError:false,value:{ok:true,result:{output:'独立回复'}}}})});
 check('legacy messages migrate without deletion',mate.state().messages[0].text==='原有历史'&&mate.state().messages[0].threadId==='default');
 check('companion defaults off',mate.state().settings.companion===false);
 await assert.rejects(mate.message('主动提醒'));checks++;
@@ -23,7 +24,7 @@ check('the prompt states the run time and the user message time as LOCAL stamps 
   /最后一条用户消息发送于：\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}/.test(prompts[0]) &&
   !/当前时间：\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z/.test(prompts[0]));
 // The send time is the anchor even when the run starts later (a queued or steered turn).
-const late=createNewMate({root:path.join(root,'late'),now:()=>time,agents:()=>null,tools:{execute:async call=>{latePrompt=call.arguments.prompt;return{isError:false,value:{ok:true,result:{output:'好'}}}}}});
+const late=createNewMate({root:path.join(root,'late'),now:()=>time,agents:()=>null,tools:hostTools(async call=>{latePrompt=call.arguments.prompt;return{isError:false,value:{ok:true,result:{output:'好'}}}})});
 let latePrompt='';
 late.chat('五分钟后才轮到我');time+=5*60000;await late.tick();
 check('a delayed run quotes the user message time, not the run time, for "你发消息时"',

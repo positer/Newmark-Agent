@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';import fs from 'node:fs';import os from 
 import {createNewMate} from '../packages/newmark-core/components/newmate/component.js';import {createShortMemory} from '../packages/newmark-core/components/memorylab/lib/short-memory.js';
 import {MINUTE,HOUR,DAY,isQuiet,initiativeGate} from '../packages/newmark-core/components/newmate/lib/initiative.js';
 import {PROACTIVE_STYLE} from '../packages/newmark-core/components/newmate/lib/proactive-message.js';
+import {hostTools} from './lib/host-call.mjs';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'newmate-initiative-'));const start=Date.parse('2026-10-12T01:00:00Z');let checks=0,serial=0;
 const check=(name,value)=>{assert.ok(value,name);console.log(`ok ${++checks} - ${name}`);};
 function fixture(options={}){let time=options.start??start;const env={ready:true,idleMs:2*MINUTE,...options.env};const calls=[],notices=[];const directory=path.join(root,String(++serial));
- const dependencies={root:directory,now:()=>time,agents:()=>null,environment:()=>env,onNotify:async m=>notices.push(m),tools:{execute:async call=>{calls.push(call);if(options.execute)return options.execute(call,calls.length);return{isError:false,value:{ok:true,result:call.arguments.output_schema?{structured:{notify:true,text:'轻量主动消息 '+calls.length,topic:'topic-'+calls.length}}:{output:'手动回复'}}};}}};
+ const dependencies={root:directory,now:()=>time,agents:()=>null,environment:()=>env,onNotify:async m=>notices.push(m),tools:hostTools(async call=>{calls.push(call);if(options.execute)return options.execute(call,calls.length);return{isError:false,value:{ok:true,result:call.arguments.output_schema?{structured:{notify:true,text:'轻量主动消息 '+calls.length,topic:'topic-'+calls.length}}:{output:'手动回复'}}};})};
  const mate=createNewMate(dependencies);return{mate,env,calls,notices,root:directory,dependencies,time:()=>time,set:t=>time=t,advance:t=>time+=t,enable:()=>mate.configure({companion:true}),due:async()=>{time+=21*MINUTE;await mate.tick();}};}
 const off=fixture();await off.due();check('companion off never schedules autonomous inference',off.calls.length===0);off.mate.stop();
 const f=fixture();await f.enable();f.advance(19*MINUTE);await f.mate.tick();check('initial warmup does not immediately greet after install or enable',f.calls.length===0);f.advance(2*MINUTE);await f.mate.tick();
@@ -187,4 +188,78 @@ const perDay={};for(const m of week.mate.state().messages){const d=new Date(m.at
 check('a week without user initiation stays present, bounded by the gap rather than by a daily quota',week.mate.state().messages.length>0&&Math.max(...Object.values(perDay))<=6&&week.calls.length<=7*6);
 check('a week of unacknowledged companionship sends no OS notifications',week.notices.filter(n=>n.system).length===0);
 const simulation={scenario:'7 days, no user input, continuously available desktop, deterministic useful model decisions',modelChecks:week.calls.length,messages:week.mate.state().messages.length,systemNotifications:week.notices.filter(n=>n.system).length,perDay};if(process.argv[2])fs.writeFileSync(process.argv[2],JSON.stringify(simulation,null,2));console.log(JSON.stringify(simulation));week.mate.stop();
+
+/**
+ * THE CHECK-IN PIPELINE, end to end in the order the user asked for it:
+ *   ① 通读概览可信工作区的文件变动   ② 整理总结   ③ 生成回复提醒.
+ *
+ * The runtime does ① and ② before the model is called (a survey of the monitored workspaces, then a
+ * deterministic summary), and the model's own step-② judgement comes back as `brief` beside the
+ * sentence. These checks drive the whole sequence through the real sweep and the real tick.
+ */
+{
+  const marker='PRIVATE-SOURCE-文本不得进入提示';
+  let reply='';
+  const brief=fixture({execute:async call=>{return {isError:false,value:{ok:true,result:{structured:{notify:true,text:reply||'看到你把 src 里的几个文件补齐了。',topic:'src',brief:'src 新增了几个模块，docs 也动过；值得提一句'}}}}}});
+  await brief.enable();
+  // The check-in gate has a 20-minute warm-up after the companion is switched on; the survey step is
+  // measured after it, so a cooldown is not mistaken for a missing brief.
+  brief.advance(21*MINUTE);
+  fs.mkdirSync(path.join(brief.root,'src'),{recursive:true});
+  fs.writeFileSync(path.join(brief.root,'src','a.js'),'a');
+  const baseline=brief.mate.sweepWorkspaces([brief.root]);
+  check('the first comparison is a baseline and fires nothing', baseline.fired===false&&baseline.brief.surveyed===false);
+  for(const name of ['b.js','c.js','d.ts','e.ts','f.js','g.js'])fs.writeFileSync(path.join(brief.root,'src',name),marker);
+  fs.mkdirSync(path.join(brief.root,'docs'),{recursive:true});
+  fs.writeFileSync(path.join(brief.root,'docs','OVERVIEW.md'),'# 概览');
+  brief.advance(6*MINUTE);
+  const swept=brief.mate.sweepWorkspaces([brief.root]);
+  check('crossing the threshold surveys the trusted workspaces before anything is said',swept.fired===true&&swept.brief.surveyed===true&&swept.brief.files>=7);
+  check('the fired signal names the survey it produced',brief.mate.state().initiative.signals.some(s=>s.kind==='workspace-diff'&&s.digested===true&&s.digestAt>0));
+  check('the survey is bounded and reports how much it dropped',typeof swept.brief.chars==='string'||typeof swept.brief.chars==='number'?swept.brief.chars>0:false);
+  // A check-in is allowed by a TIMING gate, so "the tick ran it" is not the same claim as "a tick
+  // happened": wait (bounded) until the model was actually called, exactly as the production loop
+  // retries at the next tick. Measured 2026-11-23: judged on a single tick, this block flaked once
+  // inside the umbrella gate and never outside it.
+  let prompt='';
+  for(let attempt=0;attempt<5;attempt+=1){if(attempt)brief.advance(MINUTE);await brief.mate.tick();prompt=String(brief.calls.at(-1)?.arguments.prompt||'');if(prompt.includes('可较快获取的信息'))break;}
+  prompt=String(prompt||brief.calls.at(-1)?.arguments.prompt||'');
+  check('the reminder is built from the runtime\'s quick-facts bundle',prompt.includes('可较快获取的信息')&&prompt.includes('距最近一次用户互动或主动联系')&&prompt.includes('短期记忆')&&prompt.includes('待办：未投递'),JSON.stringify({calls:brief.calls.length,tasks:brief.mate.state().tasks.map(t=>[t.kind,t.status,t.error||'']),head:prompt.slice(0,160)}));
+  check('the bundle carries the SURVEY as an overview: projects, directories, kinds and ages',prompt.includes('可信工作区变动概览')&&prompt.includes('目录：')&&prompt.includes('其中 代码')&&prompt.includes('文件：'));
+  check('the bundle states the three-step order it implements',prompt.includes('先通读上面的工作区变动概览')&&prompt.includes('整理成一句自己的判断')&&prompt.includes('写进 brief'));
+  check('the survey is metadata only: a changed file\'s CONTENT never enters the prompt',!prompt.includes('PRIVATE-SOURCE-文本不得进入提示'));
+  const produced=brief.mate.state().messages.at(-1);
+  check('the model\'s own summary of step two is stored beside the sentence',produced.brief==='src 新增了几个模块，docs 也动过；值得提一句'&&produced.proactive===true);
+  check('the sentence itself is what the user gets, not the summary',produced.text==='看到你把 src 里的几个文件补齐了。');
+  // A survey older than the bound is background, and the prompt says so instead of letting the model
+  // call it "just now".
+  reply='过了一天再看，项目里的改动还是那些。';
+  brief.advance(13*HOUR);
+  await brief.mate.tick();
+  const stalePrompt=String(brief.calls.at(-1)?.arguments.prompt||'');
+  check('an old survey is labelled as background and cannot be spoken about as "just now"',stalePrompt.includes('只能当作「最近」的背景')&&stalePrompt.includes('不能写成「刚刚」「现在」'));
+  brief.mate.stop();
+}
+
+
+/**
+ * A ROUND THAT STAYED SILENT STILL MADE A JUDGEMENT, AND IT IS KEPT.
+ *
+ * Measured live 2026-11-23: the first check-in on this machine ran 16 s on the file-change evidence,
+ * answered notify=false, and the only surviving trace was `not_actionable` - the model's own summary
+ * (brief) was dropped because nothing was published. The operator's next question is exactly "what did
+ * it think it saw", so the brief now lands on the task receipt whatever the outcome.
+ */
+{
+  const silentBrief=fixture({execute:async()=>({isError:false,value:{ok:true,result:{structured:{notify:false,text:'',brief:'只有别的项目的旧文件，不值得此刻打扰'}}}})});
+  await silentBrief.enable();
+  fs.writeFileSync(path.join(silentBrief.root,'quiet.txt'),'x');
+  silentBrief.mate.measure(silentBrief.root,'quiet.txt');
+  await silentBrief.due();
+  const receipt=silentBrief.mate.state().tasks.at(-1);
+  check('a silent round publishes nothing but keeps the judgement it made', receipt.status==='completed'&&receipt.suppressed==='not_actionable'&&silentBrief.mate.state().messages.length===0);
+  check('and the brief it wrote is on the receipt, so "what did it see" is answerable after the fact', receipt.brief==='只有别的项目的旧文件，不值得此刻打扰');
+  silentBrief.mate.stop();
+}
+
 console.log(`PASS ${checks} NewMate autonomous activation, low-disturbance and budget checks`);

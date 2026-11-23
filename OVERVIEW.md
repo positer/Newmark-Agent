@@ -1,5 +1,12 @@
 # Newmark Agent Overview
 
+## 2026-11-24 Newmark2DSH 0.3.91：静默时段半小时一段 + 静默区间开关（本机安装）
+
+- 静默起止从整点小时改成**分钟/半小时网格**（0–1410），旧状态里的 23/8 在启动时迁移成 1380/480；新增 `quietEnabled` 开关（关闭只取消窗口、保留起止）；设置页换成 48 档下拉 + 「启用静默区间」，关闭时置灰。
+- 门禁：`verify-newmate-initiative` 86→**100 PASS**；config-panel 58 / config-format 18 / core-client 127 / newmate-chat 25 / workspace-diff 94 / settings / version-discipline 全绿。
+- 活体验收：`settings 1380/480/true`、`initiativeStatus.quiet {enabled,start:1380,end:480,23:00/08:00}`；开关来回切换后起止不变。
+- 未发布、未推送。归档 `Newmark2DSH/archive/20261124-001800-quiet-halfhour-0.3.91/`。
+
 ## 2026-11-23 Newmark2DSH 0.3.88–0.3.90：可信工作区从「折叠」改成「切出」（本机安装并验收）
 
 - **起因**：检查「主动检查用的可信工作区有哪些、是否对齐 DSH 本体」——集合对上了（`monitored == dedupe(registry)`），**可见性没对上**：7 个注册工作区里 4 个被折叠进父目录，主仓库在快照里 0 个文件、概览写「新增 0」。
@@ -7,6 +14,7 @@
 - **验收**：本机三次安装、三次托管重启；`watch.workspaces = 7`、`Newmark Agent` 覆盖 512 目录 / 3515 文件（原 0）；最终概览写出「Newmark Agent：新增 1、删除 0、改动 9…」并指向 `Newmark2DSH/packages/newmark-core/components/newmate`；`Code` 不再报「新增 2998」；连续扫描 churn 0。
 - **门禁**：workspace-diff **94 PASS**、initiative **86 PASS**、变异 **10/10**；其余 NewMate 门禁全绿。
 - **未做**：未发布；静默时段内不触发主动消息。
+- **发布（2026-11-23 23:39–23:57）**：源码 `834e415f` → 发布仓 `e1d337c` + tag `v0.3.90` → CI run 45208014487 success → npm `latest` = **0.3.90**（shasum `de332e94…`、127 文件）；tarball 在 latest 翻转后约 6 分钟才可下载（实测 15:55:43Z 200），发布物与发布仓「实质差异 0、行尾 11」；profile 规格改为 registry URL 并装成**与发布物逐文件相同**的 127 文件。
 - **详见**：[Newmark2DSH/OVERVIEW.md](Newmark2DSH/OVERVIEW.md)、[taste.md](Newmark2DSH/taste.md)、归档 `Newmark2DSH/archive/20261123-234000-workspace-carveout-0.3.90/`。
 
 ## 2026-11-23 Newmark2DSH 0.3.87：主动联系三步走（通读概览 → 整理 → 提醒），核心记忆 5k 硬上限且只注入 NewMate

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 import {createNewMate} from '../packages/newmark-core/components/newmate/component.js';import {createShortMemory} from '../packages/newmark-core/components/memorylab/lib/short-memory.js';
-import {MINUTE,HOUR,DAY,isQuiet,initiativeGate} from '../packages/newmark-core/components/newmate/lib/initiative.js';
+import {MINUTE,HOUR,DAY,isQuiet,initiativeGate,quietWindow,quietClock} from '../packages/newmark-core/components/newmate/lib/initiative.js';
 import {PROACTIVE_STYLE} from '../packages/newmark-core/components/newmate/lib/proactive-message.js';
 import {hostTools} from './lib/host-call.mjs';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'newmate-initiative-'));const start=Date.parse('2026-10-12T01:00:00Z');let checks=0,serial=0;
@@ -261,5 +261,42 @@ const simulation={scenario:'7 days, no user input, continuously available deskto
   check('and the brief it wrote is on the receipt, so "what did it see" is answerable after the fact', receipt.brief==='只有别的项目的旧文件，不值得此刻打扰');
   silentBrief.mate.stop();
 }
+
+
+/**
+ * QUIET HOURS: HALF-HOUR SLOTS AND A SWITCH (2026-11-24).
+ *
+ * The requirement was「静默时间段设置调整为半小时一段，并提供静默区间开关」. The representation moved from
+ * whole hours to MINUTES on a 30-minute grid, so the boundary assertions now sit on :00/:30 instead of
+ * the hour, and a switch can turn the whole window off while keeping the chosen boundaries.
+ */
+{
+  const at=(h,m)=>Date.parse('2026-10-12T' + String((h+16)%24).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':00Z'); // +16 = 北京时区下的 UTC 小时
+  const window={quietEnabled:true,quietStart:23*60+30,quietEnd:8*60};
+  check('a half-hour boundary is honoured at :30 and only at :30',isQuiet(window,at(23,29))===false&&isQuiet(window,at(23,30))===true&&isQuiet(window,at(7,59))===true&&isQuiet(window,at(8,0))===false);
+  check('the old whole-hour shape still means what it meant (23 and 8 are hours, not minutes)',isQuiet({quietStart:23,quietEnd:8},at(23,30))===isQuiet({quietStart:23*60,quietEnd:8*60},at(23,30)));
+  check('a window that does not cross midnight works too',isQuiet({quietStart:13*60,quietEnd:14*60+30},at(14,0))===true&&isQuiet({quietStart:13*60,quietEnd:14*60+30},at(14,30))===false);
+  check('identical boundaries mean "no window"',isQuiet({quietStart:0,quietEnd:0},at(3,0))===false);
+  check('the switch turns the window off without losing it',isQuiet({quietEnabled:false,quietStart:23*60,quietEnd:8*60},at(2,0))===false&&quietWindow({quietEnabled:false,quietStart:23*60,quietEnd:8*60}).start===23*60);
+  check('the gate does not answer quiet_hours when the switch is off',initiativeGate({companion:true,initiative:true,pace:'balanced',quietEnabled:false,quietStart:0,quietEnd:24*60-30,snoozeUntil:0},{},at(2,0),{ready:true,idleMs:2*MINUTE},0,0).reason!=='quiet_hours');
+  check('boundaries are rendered as clock labels for receipts',quietClock(23*60+30)==='23:30'&&quietClock(8*60)==='08:00'&&quietClock(23)==='23:00');
+  const legacy=fixture();
+  legacy.mate.state();
+  fs.writeFileSync(path.join(legacy.root,'newMate','state.json'),JSON.stringify({schema:2,threads:[{id:'default',title:'t',created:1,updated:1,archived:false}],activeThreadId:'default',settings:{companion:false,notifications:false,initiative:true,pace:'balanced',quietStart:23,quietEnd:8,snoozeUntil:0},messages:[],tasks:[],measurements:{},lastResponse:0}));
+  const migrated=createNewMate(legacy.dependencies);
+  check('a state written in hours is migrated to minutes once, in place',migrated.state().settings.quietStart===23*60&&migrated.state().settings.quietEnd===8*60&&migrated.state().settings.quietEnabled===true);
+  check('and the status reports the window it will actually use',migrated.initiativeStatus().quiet.startLabel==='23:00'&&migrated.initiativeStatus().quiet.endLabel==='08:00'&&migrated.initiativeStatus().quiet.enabled===true);
+  await migrated.configure({quietStart:22*60+30,quietEnd:6*60+30,quietEnabled:false});
+  check('the host accepts half-hour boundaries and the switch, and reports both back',migrated.state().settings.quietStart===22*60+30&&migrated.state().settings.quietEnd===6*60+30&&migrated.state().settings.quietEnabled===false);
+  const bad=await migrated.configure({quietStart:45}).then(()=>null).catch(e=>e);
+  check('a value off the half-hour grid is refused rather than snapped',bad instanceof Error&&/半小时/.test(bad.message));
+  const pastEnd=await migrated.configure({quietStart:24*60}).then(()=>null).catch(e=>e);
+  check('a boundary past 23:30 is refused',pastEnd instanceof Error&&/半小时/.test(pastEnd.message));
+  const badSwitch=await migrated.configure({quietEnabled:'yes'}).then(()=>null).catch(e=>e);
+  check('the switch only accepts a boolean',badSwitch instanceof Error);
+  migrated.stop();legacy.mate.stop();
+}
+const clientSource=fs.readFileSync(new URL('../packages/newmark-core/client.js',import.meta.url),'utf8');
+check('the settings page offers 48 half-hour slots and a switch for the window',clientSource.includes('length: 48')&&clientSource.includes('nmc-quiet-enabled')&&clientSource.includes('启用静默区间'));
 
 console.log(`PASS ${checks} NewMate autonomous activation, low-disturbance and budget checks`);

@@ -13,7 +13,7 @@ let todo=add();check('new reminders default to conversation activation',todo.mod
 env.readerFocused=true;env.busy=true;env.idleMs=50;env.ready=false;
 mate.presence(true,'fixture',1);mate.attention(mate.state().activeThreadId,true,'draft',1);
 const shanghaiHour=Number(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',hour:'2-digit',hourCycle:'h23'}).format(new Date(now)));
-await mate.configure({quietStart:shanghaiHour,quietEnd:(shanghaiHour+1)%24,snoozeUntil:now+60000});
+await mate.configure({quietStart:shanghaiHour*60,quietEnd:((shanghaiHour+1)%24)*60,snoozeUntil:now+60000});
 await mate.tick();todo=mate.state().todos[0];
 check('a host session, reading, typing, a draft, quiet hours, snooze and the desktop do not hold an activation',calls===1&&todo.status==='completed');
 check('quiet hours mute the bubble without postponing the activation',notices.length===0);

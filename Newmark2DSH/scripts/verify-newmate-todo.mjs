@@ -52,7 +52,7 @@ isoCheck('a second reminder inside the 30-minute bubble cooldown is stored but d
 
 // 3) quiet hours keep the message and only mute the bubble - the reminder is still delivered
 const quiet=iso.todoAdd({content:'静默时段照样到账',activateAt:due()}).todo;
-await iso.configure({quietStart:Number(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',hour:'2-digit',hourCycle:'h23'}).format(new Date(isoTime))),quietEnd:(Number(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',hour:'2-digit',hourCycle:'h23'}).format(new Date(isoTime)))+1)%24});
+{const hour=Number(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',hour:'2-digit',hourCycle:'h23'}).format(new Date(isoTime)));await iso.configure({quietStart:hour*60,quietEnd:((hour+1)%24)*60});}
 isoTime+=2000;await iso.tick();
 const quietRow=iso.state().todos.find(t=>t.id===quiet.id);
 isoCheck('quiet hours do not delay the message itself',quietRow.status==='delivered');

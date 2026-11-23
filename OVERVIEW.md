@@ -1,5 +1,13 @@
 # Newmark Agent Overview
 
+## 2026-11-24 Newmark2DSH 0.3.94：主动检查读最近 10 条 DSH 对话并给建议；投递实测 + 发布
+
+- 检查轮通过对话桥的有界只读接缝读最近 10 条 DSH 对话（标题/工作区/最近活动 + 每会话最近两句 ≤90 字符），摘要硬预算 1100 字符、读不到就降级或写「不可读」，并让提示在 brief 末尾给一条可执行建议；只有检查轮读、普通回合不读。
+- 投递实测两轮：中间回复 → 工具 → 最终回复，turns/tools/stop 正常、任务 completed、无残留；静默开时气泡被静音、关时气泡与 `lastInterruptAt` 均生效。
+- 门禁：新增 `verify-newmate-dsh-digest` **17 PASS**、interim 30、initiative 100、wechat 138；变异 **14/14**。
+- 发布：源码 `170131c1` → 发布仓 `7d83abf` + tag `v0.3.94` → CI run 45238059805 success → npm `latest` **0.3.94**（129 文件，实质差异 0）；profile 已换成 registry 规格 129 文件。
+- 归档 `Newmark2DSH/archive/20261124-023000-dsh-digest-0.3.94/`。
+
 ## 2026-11-24 Newmark2DSH 0.3.92：NewMate 中间回复（loop 中途说一句、纯文字气泡、微信转发）
 
 - 新增私有工具 `newmate_progress`：只在用户发起的对话里可用，每轮 ≤3 条、同句不重复、间隔 ≥4 s；每条同时生成纯文字版本（模型给 `plain` 或自动 `toPlain`）、立刻推桌宠气泡，并按顺序转发微信（最终回复发出后迟到的中间回复丢弃）。中间消息 id 由 taskId 派生但永不相等，所以定时项与微信回复仍只认最终答案。
